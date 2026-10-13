@@ -16,3 +16,26 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     added_at INTEGER
 );
 "#;
+
+pub const CREATE_VPN_PROFILES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS vpn_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    interface_address TEXT NOT NULL,
+    dns_servers TEXT NOT NULL,
+    requires_auth INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+"#;
+
+pub const CREATE_SEED_TIME_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS seed_time_records (
+    info_hash TEXT PRIMARY KEY,
+    torrent_name TEXT NOT NULL,
+    seeding_time_seconds INTEGER DEFAULT 0,
+    required_seeding_seconds INTEGER DEFAULT 0,
+    is_shield_satisfied INTEGER DEFAULT 0
+);
+"#;
