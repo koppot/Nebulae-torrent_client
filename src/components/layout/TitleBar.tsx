@@ -14,14 +14,10 @@ import {
   Search,
   X,
   Sparkles,
-  Film,
-  HardDrive,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
   const {
-    viewMode,
-    setViewMode,
     setShowSettings,
     setShowHelp,
     setShowAddTorrent,
@@ -177,37 +173,6 @@ export const TitleBar: React.FC = () => {
               <X className="w-3 h-3" />
             </button>
           )}
-        </div>
-
-        {/* Divider */}
-        <div className="h-4 w-[1px] bg-[#262626]" />
-
-        {/* Compact View Switcher: Torrents vs Media */}
-        <div className="flex items-center p-0.5 rounded bg-[#1f1f1f] border border-[#333333]">
-          <button
-            onClick={() => setViewMode('manager')}
-            className={`flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium transition ${
-              viewMode === 'manager'
-                ? 'bg-[#e50914] text-white'
-                : 'text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Desktop Torrent Workbench"
-          >
-            <HardDrive className="w-3 h-3" />
-            <span>Torrents</span>
-          </button>
-          <button
-            onClick={() => setViewMode('media')}
-            className={`flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium transition ${
-              viewMode === 'media'
-                ? 'bg-[#e50914] text-white'
-                : 'text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Media Cinema View"
-          >
-            <Film className="w-3 h-3" />
-            <span>Media</span>
-          </button>
         </div>
       </div>
     </header>

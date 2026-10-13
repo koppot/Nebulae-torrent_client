@@ -1,0 +1,111 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae Cinematic Desktop Splash Backdrop — Original Cosmic Artboard -->
+  <defs>
+    <!-- Deep Space Void Gradient -->
+    <radialGradient id="spDeepSpace" cx="960" cy="460" r="1020" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#181D2E"/>
+      <stop offset="0.45" stop-color="#10131D"/>
+      <stop offset="0.8" stop-color="#090B12"/>
+      <stop offset="1" stop-color="#05060A"/>
+    </radialGradient>
+
+    <!-- Central Cosmic Bloom (Indigo to Violet to Magenta) -->
+    <radialGradient id="spCentralBloom" cx="960" cy="420" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.42"/>
+      <stop offset="0.35" stop-color="#8B5CF6" stop-opacity="0.28"/>
+      <stop offset="0.7" stop-color="#D946EF" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#10131D" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Warm Amber Peer Center Flare -->
+    <radialGradient id="spAmberFlare" cx="960" cy="420" r="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity="0.48"/>
+      <stop offset="0.5" stop-color="#F59E0B" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Atmospheric Peripheral Glows -->
+    <radialGradient id="spTealAtmosphere" cx="1680" cy="780" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.18"/>
+      <stop offset="0.6" stop-color="#22D3EE" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#090B12" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="spIndigoAtmosphere" cx="240" cy="260" r="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.25"/>
+      <stop offset="0.65" stop-color="#6366F1" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#090B12" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="spMagentaAtmosphere" cx="1620" cy="220" r="460" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D946EF" stop-opacity="0.22"/>
+      <stop offset="0.6" stop-color="#D946EF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#090B12" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Deep space base background -->
+  <rect width="1920" height="1080" fill="url(#spDeepSpace)"/>
+
+  <!-- Secondary corner cosmic clouds -->
+  <rect width="1920" height="1080" fill="url(#spIndigoAtmosphere)"/>
+  <rect width="1920" height="1080" fill="url(#spMagentaAtmosphere)"/>
+  <rect width="1920" height="1080" fill="url(#spTealAtmosphere)"/>
+
+  <!-- Central stellar nebula bloom -->
+  <circle cx="960" cy="420" r="560" fill="url(#spCentralBloom)"/>
+  <circle cx="960" cy="420" r="220" fill="url(#spAmberFlare)"/>
+
+  <!-- Orbital constellation coordinate rings -->
+  <circle cx="960" cy="420" r="260" fill="none" stroke="#6366F1" stroke-width="1" stroke-opacity="0.14" stroke-dasharray="3,6"/>
+  <circle cx="960" cy="420" r="380" fill="none" stroke="#8B5CF6" stroke-width="1.2" stroke-opacity="0.12" stroke-dasharray="6,10"/>
+  <circle cx="960" cy="420" r="520" fill="none" stroke="#D946EF" stroke-width="1" stroke-opacity="0.08" stroke-dasharray="8,16"/>
+  <circle cx="960" cy="420" r="680" fill="none" stroke="#22D3EE" stroke-width="1" stroke-opacity="0.05" stroke-dasharray="10,20"/>
+
+  <!-- Constellation guide lines & subtle geometric grid -->
+  <line x1="280" y1="420" x2="1640" y2="420" stroke="#6366F1" stroke-width="0.75" stroke-opacity="0.08" stroke-dasharray="12,24"/>
+  <line x1="960" y1="80" x2="960" y2="820" stroke="#D946EF" stroke-width="0.75" stroke-opacity="0.08" stroke-dasharray="12,24"/>
+
+  <!-- Star field: Major stars -->
+  <circle cx="280" cy="180" r="2" fill="#F8FAFC" opacity="0.6"/>
+  <circle cx="420" cy="320" r="2.5" fill="#22D3EE" opacity="0.7"/>
+  <circle cx="1520" cy="220" r="2" fill="#F8FAFC" opacity="0.65"/>
+  <circle cx="1680" cy="380" r="2.5" fill="#F59E0B" opacity="0.7"/>
+  <circle cx="340" cy="820" r="2" fill="#F8FAFC" opacity="0.5"/>
+  <circle cx="1590" cy="790" r="2.5" fill="#6366F1" opacity="0.65"/>
+  <circle cx="820" cy="160" r="1.75" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="1120" cy="190" r="2.25" fill="#F59E0B" opacity="0.6"/>
+  <circle cx="680" cy="620" r="1.5" fill="#D946EF" opacity="0.5"/>
+  <circle cx="1260" cy="640" r="1.8" fill="#22D3EE" opacity="0.55"/>
+
+  <!-- Star field: Minor twinkling stars -->
+  <circle cx="140" cy="460" r="1.2" fill="#F8FAFC" opacity="0.35"/>
+  <circle cx="220" cy="680" r="1" fill="#F8FAFC" opacity="0.3"/>
+  <circle cx="490" cy="140" r="1.2" fill="#F8FAFC" opacity="0.4"/>
+  <circle cx="580" cy="270" r="1" fill="#22D3EE" opacity="0.35"/>
+  <circle cx="720" cy="200" r="1.2" fill="#F8FAFC" opacity="0.4"/>
+  <circle cx="1200" cy="250" r="1.2" fill="#F8FAFC" opacity="0.4"/>
+  <circle cx="1380" cy="160" r="1.5" fill="#D946EF" opacity="0.4"/>
+  <circle cx="1440" cy="480" r="1" fill="#F8FAFC" opacity="0.3"/>
+  <circle cx="1740" cy="560" r="1.2" fill="#22D3EE" opacity="0.4"/>
+  <circle cx="1820" cy="310" r="1.5" fill="#F8FAFC" opacity="0.35"/>
+  <circle cx="180" cy="890" r="1.2" fill="#F8FAFC" opacity="0.3"/>
+  <circle cx="510" cy="840" r="1" fill="#6366F1" opacity="0.35"/>
+  <circle cx="860" cy="880" r="1.2" fill="#F8FAFC" opacity="0.35"/>
+  <circle cx="1080" cy="860" r="1.2" fill="#F8FAFC" opacity="0.35"/>
+  <circle cx="1340" cy="890" r="1" fill="#F59E0B" opacity="0.3"/>
+  <circle cx="1710" cy="880" r="1.2" fill="#F8FAFC" opacity="0.35"/>
+  <circle cx="1800" cy="740" r="1" fill="#F8FAFC" opacity="0.3"/>
+
+  <!-- Faint star dust cross flares -->
+  <g stroke="#F8FAFC" stroke-width="0.75" opacity="0.35">
+    <line x1="420" y1="316" x2="420" y2="324"/>
+    <line x1="416" y1="320" x2="424" y2="320"/>
+
+    <line x1="1680" y1="376" x2="1680" y2="384"/>
+    <line x1="1676" y1="380" x2="1684" y2="380"/>
+
+    <line x1="1520" y1="216" x2="1520" y2="224"/>
+    <line x1="1516" y1="220" x2="1524" y2="220"/>
+  </g>
+</svg>
