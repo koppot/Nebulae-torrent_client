@@ -1,10 +1,10 @@
-# ADC Privacy & Security Architecture
+# Nebulae Privacy & Security Architecture
 
 ## 1. Core Privacy Philosophy
 
-ADC is engineered on a strict **local-first, zero-telemetry** architecture.
+Nebulae (Torrent Client by Asian DVD Club) is engineered on a strict **local-first, zero-telemetry** architecture.
 
-- **Zero Phone-Home / Analytics**: ADC does not include Google Analytics, Sentry, Mixpanel, telemetry pingbacks, or background usage tracking.
+- **Zero Phone-Home / Analytics**: Nebulae does not include Google Analytics, Sentry, Mixpanel, telemetry pingbacks, or background usage tracking.
 - **No Cloud Account Mandatory**: All core BitTorrent operations, settings, and media management function entirely on your local machine without requiring any account.
 - **Your Data Remains Yours**: Download histories, torrent files, configurations, and peer statistics are stored exclusively in your local SQLite database on your own storage drive.
 

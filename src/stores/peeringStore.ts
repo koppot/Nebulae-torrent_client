@@ -63,7 +63,7 @@ export const usePeeringStore = create<PeeringState>((set) => ({
             disconnect_count: 0,
             timeout_count: 0,
             choke_events: 0,
-            client_name: 'ADC/1.0 (Nebula)',
+            client_name: 'Nebulae/1.0',
             locality_tier: 'Lan',
             country_code: 'JP',
             utp: true,

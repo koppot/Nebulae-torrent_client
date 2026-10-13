@@ -1,5 +1,5 @@
 {
-  "name": "nebula-torrent",
+  "name": "nebulae-torrent-client",
   "private": true,
   "version": "0.1.0",
   "type": "module",

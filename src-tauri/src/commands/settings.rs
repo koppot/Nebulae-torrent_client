@@ -1,7 +1,7 @@
-use tauri::State;
-use serde::{Deserialize, Serialize};
 use crate::db::Database;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserSettings {

@@ -26,7 +26,8 @@ pub fn run_connectivity_doctor_test() -> Result<ConnectivityReport, String> {
     ];
 
     let suggested_fixes = vec![
-        "No action needed. Your client is fully connectable with maximum discoverability.".to_string(),
+        "No action needed. Your client is fully connectable with maximum discoverability."
+            .to_string(),
     ];
 
     Ok(ConnectivityReport {

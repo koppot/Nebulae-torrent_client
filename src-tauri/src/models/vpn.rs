@@ -1,16 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VpnMode {
+    #[default]
     NoVpn,
     SystemVpn,
     AdcOnlyVpn,
-}
-
-impl Default for VpnMode {
-    fn default() -> Self {
-        VpnMode::NoVpn
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +139,10 @@ mod tests {
         "#;
 
         let parsed = ParsedWireGuardProfile::parse_conf(conf).expect("Parsing failed");
-        assert_eq!(parsed.private_key, "aFakeWireGuardPrivateKeyBase64ForTesting123=");
+        assert_eq!(
+            parsed.private_key,
+            "aFakeWireGuardPrivateKeyBase64ForTesting123="
+        );
         assert_eq!(parsed.address, "10.2.0.2/32");
         assert_eq!(parsed.endpoint, "198.51.100.1:51820");
         assert_eq!(parsed.dns.len(), 2);

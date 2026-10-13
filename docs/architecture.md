@@ -1,10 +1,11 @@
-# Nebula Torrent Client (ADC) — Technical Architecture
+# Nebulae — Technical Architecture
 
 ## 1. Overview & Identity
 
-- **Application Brand**: Nebula Torrent Client
-- **Binary & Executable Name**: **ADC** (`ADC.exe`, `ADC.app`, `ADC`)
-- **Bundle Identifier**: `org.nebula.adc`
+- **Application Brand**: Nebulae
+- **Product Subtitle**: Torrent Client by Asian DVD Club
+- **Binary & Executable Name**: `nebulae` (`nebulae.exe`, `Nebulae.app`)
+- **Bundle Identifier**: `org.asiandvdclub.nebulae`
 - **Protocol Schemes**: `adc://`, `magnet:?`
 - **Primary Goals**:
   - Native desktop BitTorrent client for Windows and macOS.

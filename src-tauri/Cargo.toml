@@ -1,11 +1,11 @@
 [package]
-name = "nebula-torrent"
+name = "nebulae_torrent_client"
 version = "0.1.0"
-description = "ADC — Nebula | Torrent Client by Asian DVD Club"
+description = "Nebulae — Torrent Client by Asian DVD Club"
 edition = "2021"
 
 [lib]
-name = "nebula_torrent_lib"
+name = "nebulae_torrent_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]

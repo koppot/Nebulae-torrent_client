@@ -1,10 +1,10 @@
 pub mod schema;
 
-use rusqlite::{Connection, Result, params};
+use crate::models::tracker::SeedTimeRecord;
+use crate::models::vpn::{VpnProfile, VpnProtocol};
+use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use std::sync::Mutex;
-use crate::models::vpn::{VpnProfile, VpnProtocol};
-use crate::models::tracker::SeedTimeRecord;
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -82,7 +82,7 @@ impl Database {
     pub fn list_vpn_profiles(&self) -> Result<Vec<VpnProfile>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, protocol, endpoint, interface_address, dns_servers, requires_auth, created_at FROM vpn_profiles ORDER BY created_at DESC")?;
-        
+
         let profile_iter = stmt.query_map([], |row| {
             let protocol_str: String = row.get(2)?;
             let dns_json: String = row.get(5)?;
@@ -108,12 +108,7 @@ impl Database {
             })
         })?;
 
-        let mut list = Vec::new();
-        for p in profile_iter {
-            if let Ok(profile) = p {
-                list.push(profile);
-            }
-        }
+        let list = profile_iter.flatten().collect();
         Ok(list)
     }
 
@@ -157,12 +152,7 @@ impl Database {
             })
         })?;
 
-        let mut list = Vec::new();
-        for r in iter {
-            if let Ok(record) = r {
-                list.push(record);
-            }
-        }
+        let list = iter.flatten().collect();
         Ok(list)
     }
 }

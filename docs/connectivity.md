@@ -1,10 +1,10 @@
-# ADC Connectivity Doctor & ADC Connect Guide
+# Nebulae Connectivity Doctor Guide
 
 ## 1. Overview & Positioning
 
-> **"ADC helps you understand and improve your connection. The Connectivity Doctor checks your port, NAT, IPv6, DNS, VPN binding, and tracker connection, then provides clear steps to improve reliability. ADC cannot change restrictions imposed by routers, ISPs, workplaces, or other networks."**
+> **"Nebulae helps you understand and improve your connection. The Connectivity Doctor checks your port, NAT, IPv6, DNS, VPN binding, and tracker connection, then provides clear steps to improve reliability. Nebulae cannot change restrictions imposed by routers, ISPs, workplaces, or other networks."**
 
-ADC is designed to maximize transfer performance and swarm discoverability while providing clear, plain-language diagnostics for complex networking concepts.
+Nebulae is designed to maximize transfer performance and swarm discoverability while providing clear, plain-language diagnostics for complex networking concepts.
 
 ---
 

@@ -1,4 +1,7 @@
+use crate::engine::{EngineStatus, MockTorrentEngine, TorrentEngine};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TorrentItem {
@@ -21,79 +24,43 @@ pub struct TorrentItem {
 }
 
 #[tauri::command]
-pub fn list_torrents() -> Result<Vec<TorrentItem>, String> {
-    // Scaffold initial representative items for UI preview & mode verification
-    Ok(vec![
-        TorrentItem {
-            id: "sample-1".to_string(),
-            name: "Tokyo Story (1953) [4K Restoration]".to_string(),
-            total_bytes: 34_500_000_000,
-            downloaded_bytes: 34_500_000_000,
-            uploaded_bytes: 52_000_000_000,
-            download_rate: 0,
-            upload_rate: 1_250_000,
-            progress: 1.0,
-            status: "Seeding".to_string(),
-            eta_seconds: None,
-            seeds: 42,
-            peers: 8,
-            ratio: 1.51,
-            category: "Movies".to_string(),
-            is_media: true,
-            poster_url: None,
-        },
-        TorrentItem {
-            id: "sample-2".to_string(),
-            name: "Seven Samurai (1954) [Criterion Remaster]".to_string(),
-            total_bytes: 48_200_000_000,
-            downloaded_bytes: 26_510_000_000,
-            uploaded_bytes: 4_300_000_000,
-            download_rate: 14_800_000,
-            upload_rate: 850_000,
-            progress: 0.55,
-            status: "Downloading".to_string(),
-            eta_seconds: Some(1460),
-            seeds: 88,
-            peers: 24,
-            ratio: 0.16,
-            category: "Movies".to_string(),
-            is_media: true,
-            poster_url: None,
-        },
-        TorrentItem {
-            id: "sample-3".to_string(),
-            name: "Arch Linux 2026.10 x86_64 Installation ISO".to_string(),
-            total_bytes: 950_000_000,
-            downloaded_bytes: 950_000_000,
-            uploaded_bytes: 2_100_000_000,
-            download_rate: 0,
-            upload_rate: 320_000,
-            progress: 1.0,
-            status: "Completed".to_string(),
-            eta_seconds: None,
-            seeds: 154,
-            peers: 12,
-            ratio: 2.21,
-            category: "Software".to_string(),
-            is_media: false,
-            poster_url: None,
-        },
-    ])
+pub fn list_torrents(engine: State<Arc<MockTorrentEngine>>) -> Result<Vec<TorrentItem>, String> {
+    engine.list_torrents()
 }
 
 #[tauri::command]
-pub fn add_torrent_stub(source: String, _download_dir: Option<String>) -> Result<String, String> {
-    Ok(format!("Intake queued for source (stub): {}", if source.starts_with("magnet:") { "magnet link" } else { "file" }))
+pub fn add_torrent_stub(
+    source: String,
+    download_dir: Option<String>,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<String, String> {
+    engine.add_torrent(&source, download_dir.as_deref())
 }
 
 #[tauri::command]
-pub fn pause_torrent_stub(id: String) -> Result<(), String> {
-    println!("Stub pause: {id}");
-    Ok(())
+pub fn pause_torrent_stub(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+    engine.pause_torrent(&id)
 }
 
 #[tauri::command]
-pub fn resume_torrent_stub(id: String) -> Result<(), String> {
-    println!("Stub resume: {id}");
-    Ok(())
+pub fn resume_torrent_stub(
+    id: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
+    engine.resume_torrent(&id)
+}
+
+#[tauri::command]
+pub fn get_engine_status(engine: State<Arc<MockTorrentEngine>>) -> Result<EngineStatus, String> {
+    Ok(engine.engine_status())
+}
+
+#[tauri::command]
+pub fn trigger_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+    engine.trigger_kill_switch()
+}
+
+#[tauri::command]
+pub fn reset_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+    engine.reset_kill_switch()
 }

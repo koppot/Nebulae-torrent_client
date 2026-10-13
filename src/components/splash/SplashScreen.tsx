@@ -92,7 +92,7 @@ export const SplashScreen: React.FC = () => {
 
         {/* Brand Name & Subtitle */}
         <h1 className="text-3xl font-bold tracking-tight text-adc-ivory mb-1 flex items-center gap-2">
-          <span>Nebula</span>
+          <span>Nebulae</span>
           <Sparkles className="w-4 h-4 text-adc-gold" />
         </h1>
         <p className="text-xs text-adc-ivory/80 mb-8 font-mono">

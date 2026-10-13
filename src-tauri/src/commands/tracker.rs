@@ -1,12 +1,13 @@
-use tauri::State;
-use std::sync::Arc;
-use chrono::Utc;
-use crate::models::tracker::{AdcTrackerProfile, SeedTimeRecord};
 use crate::db::Database;
+use crate::models::tracker::{AdcTrackerProfile, SeedTimeRecord};
+use chrono::Utc;
+use std::sync::Arc;
+use tauri::State;
 
 #[tauri::command]
 pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerProfile, String> {
-    let is_linked = db.get_setting("adc_linked")
+    let is_linked = db
+        .get_setting("adc_linked")
         .unwrap_or(None)
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -28,25 +29,36 @@ pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerPro
         });
     }
 
-    let username = db.get_setting("adc_username").unwrap_or(None).unwrap_or_else(|| "Member".to_string());
-    let masked_passkey = db.get_setting("adc_masked_passkey").unwrap_or(None).unwrap_or_else(|| "••••••••".to_string());
-    let uploaded: u64 = db.get_setting("adc_uploaded")
+    let username = db
+        .get_setting("adc_username")
+        .unwrap_or(None)
+        .unwrap_or_else(|| "Member".to_string());
+    let masked_passkey = db
+        .get_setting("adc_masked_passkey")
+        .unwrap_or(None)
+        .unwrap_or_else(|| "••••••••".to_string());
+    let uploaded: u64 = db
+        .get_setting("adc_uploaded")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
         .unwrap_or(185_400_000_000); // 185.4 GB
-    let downloaded: u64 = db.get_setting("adc_downloaded")
+    let downloaded: u64 = db
+        .get_setting("adc_downloaded")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
         .unwrap_or(68_200_000_000); // 68.2 GB
-    let bonus: f32 = db.get_setting("adc_bonus_points")
+    let bonus: f32 = db
+        .get_setting("adc_bonus_points")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
         .unwrap_or(3_420.50);
-    let freeleech = db.get_setting("adc_freeleech")
+    let freeleech = db
+        .get_setting("adc_freeleech")
         .unwrap_or(None)
         .map(|v| v == "true")
         .unwrap_or(true);
-    let seed_hours: u32 = db.get_setting("adc_required_seed_hours")
+    let seed_hours: u32 = db
+        .get_setting("adc_required_seed_hours")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
         .unwrap_or(72);
@@ -84,14 +96,22 @@ pub fn link_adc_account(
 
     let masked = AdcTrackerProfile::mask_passkey(&passkey);
 
-    db.set_setting("adc_linked", "true").map_err(|e| e.to_string())?;
-    db.set_setting("adc_username", &username).map_err(|e| e.to_string())?;
-    db.set_setting("adc_masked_passkey", &masked).map_err(|e| e.to_string())?;
-    db.set_setting("adc_uploaded", "185400000000").map_err(|e| e.to_string())?;
-    db.set_setting("adc_downloaded", "68200000000").map_err(|e| e.to_string())?;
-    db.set_setting("adc_bonus_points", "3420.50").map_err(|e| e.to_string())?;
-    db.set_setting("adc_freeleech", "true").map_err(|e| e.to_string())?;
-    db.set_setting("adc_required_seed_hours", "72").map_err(|e| e.to_string())?;
+    db.set_setting("adc_linked", "true")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_username", &username)
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_masked_passkey", &masked)
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_uploaded", "185400000000")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_downloaded", "68200000000")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_bonus_points", "3420.50")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_freeleech", "true")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_required_seed_hours", "72")
+        .map_err(|e| e.to_string())?;
 
     // Seed default seed-time records if empty
     let existing = db.list_seed_time_records().unwrap_or_default();
@@ -119,9 +139,12 @@ pub fn link_adc_account(
 
 #[tauri::command]
 pub fn unlink_adc_account(db: State<Arc<Database>>) -> Result<(), String> {
-    db.set_setting("adc_linked", "false").map_err(|e| e.to_string())?;
-    db.set_setting("adc_username", "").map_err(|e| e.to_string())?;
-    db.set_setting("adc_masked_passkey", "").map_err(|e| e.to_string())?;
+    db.set_setting("adc_linked", "false")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_username", "")
+        .map_err(|e| e.to_string())?;
+    db.set_setting("adc_masked_passkey", "")
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -136,5 +159,9 @@ pub fn calculate_ratio_projection(
     downloaded: u64,
     additional_download: u64,
 ) -> Result<f32, String> {
-    Ok(AdcTrackerProfile::project_ratio(uploaded, downloaded, additional_download))
+    Ok(AdcTrackerProfile::project_ratio(
+        uploaded,
+        downloaded,
+        additional_download,
+    ))
 }

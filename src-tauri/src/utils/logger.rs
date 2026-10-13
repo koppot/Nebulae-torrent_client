@@ -1,7 +1,7 @@
-use std::path::Path;
+use chrono::Local;
 use std::fs::OpenOptions;
 use std::io::Write;
-use chrono::Local;
+use std::path::Path;
 
 pub struct SafeLogger;
 
@@ -32,7 +32,11 @@ impl SafeLogger {
         let line = format!("[{timestamp}] [{level}] {clean_msg}\n");
 
         let log_file_path = logs_dir.join("adc_session.log");
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file_path) {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file_path)
+        {
             let _ = file.write_all(line.as_bytes());
         }
     }

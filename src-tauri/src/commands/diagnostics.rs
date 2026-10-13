@@ -1,9 +1,9 @@
-use tauri::State;
+use crate::db::Database;
+use crate::utils::paths::AppPaths;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use crate::utils::paths::AppPaths;
-use crate::db::Database;
 use std::sync::Arc;
+use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiagnosticSummary {
@@ -52,12 +52,17 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
         .unwrap_or(0);
 
     Ok(DiagnosticSummary {
-        app_name: "Nebula".to_string(),
+        app_name: "Nebulae".to_string(),
         executable_name: "nebulae".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
-        database_status: if paths.db_file.exists() { "Connected (Internal)" } else { "Uninitialized" }.to_string(),
+        database_status: if paths.db_file.exists() {
+            "Connected (Internal)"
+        } else {
+            "Uninitialized"
+        }
+        .to_string(),
         engine_status: "Initialized (rqbit local-first)".to_string(),
         internal_storage_status: "Isolated in ADC/internal/".to_string(),
         total_logs_size_bytes: logs_size,
@@ -67,14 +72,12 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
 #[tauri::command]
 pub fn clear_cache(paths: State<Arc<AppPaths>>) -> Result<String, String> {
     if paths.cache_dir.exists() {
-        for entry in fs::read_dir(&paths.cache_dir).map_err(|e| e.to_string())? {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file() {
-                    let _ = fs::remove_file(path);
-                } else if path.is_dir() {
-                    let _ = fs::remove_dir_all(path);
-                }
+        for entry in fs::read_dir(&paths.cache_dir).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let _ = fs::remove_file(path);
+            } else if path.is_dir() {
+                let _ = fs::remove_dir_all(path);
             }
         }
     }
@@ -83,7 +86,8 @@ pub fn clear_cache(paths: State<Arc<AppPaths>>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn reset_settings(db: State<Arc<Database>>) -> Result<String, String> {
-    db.reset_all_settings().map_err(|e| format!("Failed to reset settings: {e}"))?;
+    db.reset_all_settings()
+        .map_err(|e| format!("Failed to reset settings: {e}"))?;
     Ok("Settings have been reset to factory defaults.".to_string())
 }
 

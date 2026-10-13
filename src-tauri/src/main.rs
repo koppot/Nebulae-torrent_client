@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    nebula_torrent_lib::run();
+    nebulae_torrent_client_lib::run();
 }

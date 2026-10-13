@@ -5,11 +5,18 @@ node_modules/
 # Build outputs
 dist/
 dist-ssr/
+*.dmg
+*.exe
+*.msi
+*.zip
+*.tar.gz
+*.app/
 
 # Rust / Cargo build artifacts
 src-tauri/target/
 target/
 **/*.rs.bk
+Cargo.lock.bk
 
 # Tauri temporary files
 src-tauri/gen/
@@ -30,7 +37,22 @@ ehthumbs.db
 *.pem
 *.key
 *.p12
+*.ovpn
+*.conf
+secrets/
 
-# Internal application data (if run locally)
+# Internal application data, caches, databases, and logs
 internal/
 ADC/
+/logs/
+/cache/
+/debug/
+/diagnostics/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.log
+!src-tauri/src/engine/
+!src-tauri/src/engine/**

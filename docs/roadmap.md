@@ -1,19 +1,19 @@
-# Nebula Torrent (ADC) — Project Roadmap
+# Nebulae — Project Roadmap
 
-This document outlines the phased development plan for **ADC** (Nebula Torrent).
+This document outlines the phased development plan for **Nebulae** (Torrent Client by Asian DVD Club).
 
 ---
 
 ## Phase 1: Architecture, Scaffolding & Design (Completed)
-- [x] Select and evaluate BitTorrent engine (`librqbit`).
-- [x] Configure desktop naming conventions: executable/package as `ADC`, brand as `Nebula Torrent`.
+- [x] Select and evaluate BitTorrent engine architecture and adapter interfaces.
+- [x] Configure desktop naming conventions: product as `Nebulae`, executable as `nebulae` / `nebulae.exe`, subtitle as `Torrent Client by Asian DVD Club`.
 - [x] Scaffold Tauri 2 + Rust + React + Vite + TypeScript + Tailwind CSS structure.
 - [x] Implement cinematic multicolor splash screen with community invitation (`asiandvdclub.org`).
-- [x] Implement UI mode switcher (Simple Media Mode vs Torrent Manager Mode).
+- [x] Implement UI mode switcher (Simple Media Mode vs Torrent Manager Mode vs Compact Bar).
 - [x] Implement in-app beginner-friendly Installation & User Guide with platform tabs.
-- [x] Implement user-friendly Settings with hidden Advanced Diagnostics panel.
+- [x] Implement user-friendly Settings with hidden Advanced Diagnostics panel (*Der Sperre*).
 - [x] Implement isolated internal directory architecture (`ADC/internal/{db, logs, cache, engine, diagnostics}`).
-- [x] Establish sanitized logging with privacy safeguards (no magnet links or private keys in logs).
+- [x] Establish sanitized logging with privacy safeguards (no magnet links, passkeys, or private keys in logs).
 - [x] Create comprehensive `docs/installation.md` for Windows x64, macOS Apple Silicon, and macOS Intel.
 
 ---

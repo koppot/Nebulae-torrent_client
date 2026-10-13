@@ -45,7 +45,7 @@ export const TitleBar: React.FC = () => {
         />
         <div>
           <div className="flex items-center gap-1.5 leading-none">
-            <span className="text-sm font-semibold text-adc-ivory tracking-tight">Nebula</span>
+            <span className="text-sm font-semibold text-adc-ivory tracking-tight">Nebulae</span>
             <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-adc-crimson/40 border border-adc-crimsonBright/50 text-adc-ivory font-semibold">
               v0.1.0
             </span>

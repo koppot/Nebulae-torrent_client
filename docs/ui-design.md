@@ -1,10 +1,12 @@
-# Nebula Torrent Client (ADC) — UI Design Specification
+# Nebulae — UI Design Specification
 
 ## 1. Visual Identity & Brand Philosophy
 
-- **Application Brand**: Nebula Torrent Client
-- **Executable Identity**: **ADC**
-- **Public Application Icon**: Official ADC Crest (`src/assets/app-icon.png`)
+- **Application Brand**: Nebulae
+- **Product Subtitle**: Torrent Client by Asian DVD Club
+- **Executable Identity**: `nebulae` / `nebulae.exe`
+- **Application Bundle**: `Nebulae.app`
+- **Public Application Icon**: Original Nebulae App Icon (`src/assets/app-icon.png`)
 - **Developer Icon**: *Der Sperre* (`src/assets/dev-icon.png`), used exclusively in the Advanced Diagnostics and internal developer subsystem.
 - **Design Inspiration**: Premium Asian-cinema archive aesthetic blended with modern, clean desktop minimalism.
 - **Tone**: Cinematic, focused, high contrast, non-intrusive.
@@ -55,8 +57,8 @@
 
 ## 5. Startup Splash Screen
 - Anamorphic multicolor ambient lighting.
-- Monogram mark: **ADC**.
-- Subtitle: **Nebula Torrent**.
+- Product Title: **Nebulae**.
+- Subtitle: **Torrent Client by Asian DVD Club**.
 - Community Callout:
   ```text
   Consider joining our community

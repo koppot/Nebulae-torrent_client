@@ -1,12 +1,14 @@
 pub mod commands;
 pub mod db;
+pub mod engine;
 pub mod models;
 pub mod utils;
 
-use std::sync::Arc;
-use utils::paths::AppPaths;
 use db::Database;
+use engine::MockTorrentEngine;
+use std::sync::Arc;
 use utils::logger::SafeLogger;
+use utils::paths::AppPaths;
 
 pub fn run() {
     // 1. Initialize isolated internal directory layout: ADC/internal/
@@ -27,12 +29,20 @@ pub fn run() {
         }
     };
 
-    SafeLogger::log_to_file(&paths.logs_dir, "INFO", "ADC application initialized successfully");
+    // 3. Initialize engine adapter (MockTorrentEngine for offline and test isolation)
+    let engine = Arc::new(MockTorrentEngine::new());
+
+    SafeLogger::log_to_file(
+        &paths.logs_dir,
+        "INFO",
+        "Nebulae application initialized successfully",
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(paths)
         .manage(db)
+        .manage(engine)
         .invoke_handler(tauri::generate_handler![
             // Diagnostics
             commands::diagnostics::open_logs_folder,
@@ -43,11 +53,14 @@ pub fn run() {
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
-            // Torrent
+            // Torrent & Engine
             commands::torrent::list_torrents,
             commands::torrent::add_torrent_stub,
             commands::torrent::pause_torrent_stub,
             commands::torrent::resume_torrent_stub,
+            commands::torrent::get_engine_status,
+            commands::torrent::trigger_kill_switch_command,
+            commands::torrent::reset_kill_switch_command,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,
@@ -72,5 +85,5 @@ pub fn run() {
             commands::tracker::calculate_ratio_projection,
         ])
         .run(tauri::generate_context!())
-        .expect("Error while running ADC application");
+        .expect("Error while running Nebulae application");
 }

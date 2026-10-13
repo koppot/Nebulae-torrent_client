@@ -1,18 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PeeringMode {
+    #[default]
     Balanced,
     SpeedFirst,
     LatencyFirst,
     LocalFirst,
     PrivacyFirst,
-}
-
-impl Default for PeeringMode {
-    fn default() -> Self {
-        PeeringMode::Balanced
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -56,14 +51,14 @@ impl PeerTelemetry {
     pub fn compute_quality_score(&self, mode: PeeringMode) -> f32 {
         // Normalize throughput: 10 MiB/s = 1.0
         let norm_tp = (self.sustained_dl_bps as f32 / (10.0 * 1024.0 * 1024.0)).clamp(0.0, 1.0);
-        
+
         // Normalize latency: 10ms = 1.0, 500ms = 0.0
         let norm_lat = (1.0 - (self.rtt_ms as f32 / 500.0)).clamp(0.0, 1.0);
-        
+
         // Reliability based on stability and timeouts
         let timeout_penalty = (self.timeout_count as f32 * 0.1).clamp(0.0, 0.5);
         let norm_rel = (self.stability_score - timeout_penalty).clamp(0.0, 1.0);
-        
+
         // Locality bonus
         let norm_loc = match self.locality_tier {
             LocalityTier::Lan => 1.0,

@@ -1,7 +1,7 @@
-use tauri::State;
-use std::sync::Arc;
-use crate::models::peering::{PeerTelemetry, PeeringSettings, LocalityTier};
 use crate::db::Database;
+use crate::models::peering::{LocalityTier, PeerTelemetry, PeeringSettings};
+use std::sync::Arc;
+use tauri::State;
 
 #[tauri::command]
 pub fn get_peering_settings(db: State<Arc<Database>>) -> Result<PeeringSettings, String> {
@@ -15,9 +15,13 @@ pub fn get_peering_settings(db: State<Arc<Database>>) -> Result<PeeringSettings,
 }
 
 #[tauri::command]
-pub fn save_peering_settings(settings: PeeringSettings, db: State<Arc<Database>>) -> Result<(), String> {
+pub fn save_peering_settings(
+    settings: PeeringSettings,
+    db: State<Arc<Database>>,
+) -> Result<(), String> {
     let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-    db.set_setting("peering_settings_json", &json).map_err(|e| e.to_string())?;
+    db.set_setting("peering_settings_json", &json)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -38,7 +42,7 @@ pub fn get_peer_telemetry(_torrent_id: String) -> Result<Vec<PeerTelemetry>, Str
             disconnect_count: 0,
             timeout_count: 0,
             choke_events: 0,
-            client_name: "ADC/1.0 (Nebula)".to_string(),
+            client_name: "Nebulae/1.0".to_string(),
             locality_tier: LocalityTier::Lan,
             country_code: Some("JP".to_string()),
             asn: None,

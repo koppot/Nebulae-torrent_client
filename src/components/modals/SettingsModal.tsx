@@ -59,7 +59,7 @@ export const SettingsModal: React.FC = () => {
     } catch {
       const fallback = JSON.stringify(
         {
-          app_name: 'Nebula',
+          app_name: 'Nebulae',
           executable_name: 'nebulae',
           version: '0.1.0',
           internal_storage_status: 'Isolated in ADC/internal/',

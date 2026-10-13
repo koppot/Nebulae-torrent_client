@@ -70,7 +70,7 @@ export const TrackerModal: React.FC = () => {
             </div>
             <div>
               <h2 className="text-lg font-semibold tracking-wide text-white">AsianDVDClub Tracker Integration</h2>
-              <p className="text-xs text-adc-muted">Official passkey link, Ratio Coach & Seed Time Shield</p>
+              <p className="text-xs text-adc-muted">Community passkey link, Ratio Coach & Seed Time Shield</p>
             </div>
           </div>
           <button
@@ -94,7 +94,7 @@ export const TrackerModal: React.FC = () => {
                 />
                 <h3 className="text-base font-semibold text-white">Link AsianDVDClub Account</h3>
                 <p className="text-xs text-adc-muted">
-                  Connect your account securely using your tracker passkey. Nebula monitors your ratio and ensures you satisfy all required seed-time guidelines.
+                  Connect your account securely using your tracker passkey. Nebulae monitors your ratio and ensures you satisfy all required seed-time guidelines.
                 </p>
               </div>
 
@@ -298,7 +298,7 @@ export const TrackerModal: React.FC = () => {
           <div className="p-3.5 rounded-lg border border-white/10 bg-black/40 text-xs text-adc-muted leading-relaxed flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-adc-muted shrink-0 mt-0.5" />
             <p>
-              AsianDVDClub integration operates strictly through official community tracker protocols. Private torrent flags are always respected, and passkeys are never transmitted anywhere other than the official tracker announce endpoint.
+              AsianDVDClub tracker integration operates strictly through standard community BitTorrent tracker protocols. Private torrent flags are always respected, and passkeys are never transmitted anywhere other than the tracker announce endpoint.
             </p>
           </div>
         </div>

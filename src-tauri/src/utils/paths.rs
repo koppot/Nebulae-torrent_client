@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
@@ -32,7 +32,8 @@ impl AppPaths {
 
         // Ensure all internal isolated directories exist
         fs::create_dir_all(&logs_dir).map_err(|e| format!("Failed to create logs dir: {e}"))?;
-        fs::create_dir_all(&diagnostics_dir).map_err(|e| format!("Failed to create diagnostics dir: {e}"))?;
+        fs::create_dir_all(&diagnostics_dir)
+            .map_err(|e| format!("Failed to create diagnostics dir: {e}"))?;
         fs::create_dir_all(&db_dir).map_err(|e| format!("Failed to create db dir: {e}"))?;
         fs::create_dir_all(&cache_dir).map_err(|e| format!("Failed to create cache dir: {e}"))?;
         fs::create_dir_all(&engine_dir).map_err(|e| format!("Failed to create engine dir: {e}"))?;

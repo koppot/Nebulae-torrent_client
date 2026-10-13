@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "nebulae",
+  "productName": "Nebulae",
   "version": "0.1.0",
-  "identifier": "org.nebula.adc",
+  "identifier": "org.asiandvdclub.nebulae",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Nebula — Torrent Client by Asian DVD Club",
+        "title": "Nebulae — Torrent Client by Asian DVD Club",
         "width": 1280,
         "height": 840,
         "minWidth": 980,

@@ -1,47 +1,52 @@
-# ADC Installation and User Guide
+# Nebulae Installation and User Guide
 
-This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **ADC** (executable name for **Nebula Torrent**) on Windows and macOS.
+This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **Nebulae** (Subtitle: **Torrent Client by Asian DVD Club**) on Windows and macOS.
 
 ---
 
 ## Table of Contents
 
-1. [Understanding ADC and Nebula Torrent](#understanding-adc-and-nebula-torrent)
+1. [Understanding Nebulae](#understanding-nebulae)
 2. [Windows x64 Installation (NSIS Installer)](#1-windows-x64-installation-nsis-installer)
    - [System Requirements](#windows-system-requirements)
-   - [Downloading ADC-Setup-x64.exe](#downloading-adc-setup-x64exe)
+   - [Downloading Nebulae-Setup-x64.exe](#downloading-nebulae-setup-x64exe)
    - [Windows SmartScreen & Antivirus Notice](#windows-smartscreen--antivirus-notice)
    - [Step-by-Step Installation Walkthrough](#step-by-step-installation-walkthrough)
    - [First Launch & Windows Firewall Configuration](#first-launch--windows-firewall-configuration)
    - [Adding Your First Torrent](#adding-your-first-torrent-windows)
-   - [Updating ADC on Windows](#updating-adc-on-windows)
-   - [Uninstalling ADC on Windows](#uninstalling-adc-on-windows)
+   - [Updating Nebulae on Windows](#updating-nebulae-on-windows)
+   - [Uninstalling Nebulae on Windows](#uninstalling-nebulae-on-windows)
    - [Windows Troubleshooting & Log Locations](#windows-troubleshooting)
 3. [macOS Apple Silicon Installation (M1, M2, M3, M4)](#2-macos-apple-silicon-installation)
    - [Confirming Apple Silicon](#confirming-apple-silicon)
-   - [Downloading ADC-macOS-arm64.dmg](#downloading-adc-macos-arm64dmg)
+   - [Downloading Nebulae-macOS-arm64.dmg](#downloading-nebulae-macos-arm64dmg)
    - [Step-by-Step Installation Walkthrough](#step-by-step-macos-installation)
    - [macOS Gatekeeper Verification](#macos-gatekeeper-verification)
    - [First Launch & Permissions](#first-launch--permissions-macos)
    - [Adding Your First Torrent](#adding-your-first-torrent-macos)
-   - [Updating ADC on macOS](#updating-adc-on-macos)
-   - [Uninstalling ADC on macOS](#uninstalling-adc-on-macos)
+   - [Updating Nebulae on macOS](#updating-nebulae-on-macos)
+   - [Uninstalling Nebulae on macOS](#uninstalling-nebulae-on-macos)
    - [macOS Troubleshooting & Log Locations](#macos-troubleshooting)
 4. [macOS Intel Installation (x86_64)](#3-macos-intel-installation-x86_64)
    - [Confirming an Intel Mac](#confirming-an-intel-mac)
-   - [Downloading ADC-macOS-x64.dmg](#downloading-adc-macos-x64dmg)
+   - [Downloading Nebulae-macOS-x64.dmg](#downloading-nebulae-macos-x64dmg)
    - [Installation & Gatekeeper Walkthrough](#installation--gatekeeper-intel)
 5. [Isolated Internal Storage & Diagnostics](#isolated-internal-storage--diagnostics)
 
 ---
 
-## Understanding Nebula and ADC
+## Understanding Nebulae
 
-- **Application Name**: **Nebula**
-- **Subtitle**: **Torrent Client by Asian DVD Club**
-- **Shipped Executable & Package Name**: **nebulae** (e.g., `nebulae.exe`, `nebulae.app`, `nebulae-Setup-x64.exe`, `nebulae-macOS-arm64.dmg`, `nebulae-macOS-x64.dmg`).
-- **Startup Splash Screen**: On launch, Nebula presents a cinematic startup splash screen with internal initialization progress and a community invitation to visit `asiandvdclub.org`. The splash screen can be skipped immediately or disabled in Settings.
-- **Hidden Internal Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`ADC/internal/`) and never exposed in the standard interface.
+- **Product Name**: **Nebulae**
+- **Product Subtitle**: **Torrent Client by Asian DVD Club**
+- **Executable Name**: **`nebulae`** (`nebulae.exe` on Windows)
+- **macOS Application Bundle**: **`Nebulae.app`**
+- **Installers & Disk Images**:
+  - Windows: **`Nebulae-Setup-x64.exe`**
+  - macOS Apple Silicon: **`Nebulae-macOS-arm64.dmg`**
+  - macOS Intel: **`Nebulae-macOS-x64.dmg`**
+- **Startup Splash Screen**: On launch, Nebulae presents a startup splash screen displaying internal initialization progress and a community invitation to visit `asiandvdclub.org`. The splash screen can be skipped immediately or disabled in Settings.
+- **Isolated Technical Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`ADC/internal/`) and never exposed in the standard interface.
 
 ---
 
@@ -57,75 +62,66 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 | **Disk Storage** | 120 MB free space for application + storage for downloaded media |
 | **Network** | Broadband internet connection |
 
-### Downloading nebulae-Setup-x64.exe
+### Downloading Nebulae-Setup-x64.exe
 
-1. Navigate to the official releases repository: `https://github.com/nebula-torrent/nebula-torrent/releases`
+1. Navigate to the official releases repository: `https://github.com/asiandvdclub/Nebulae-torrent_client/releases`
 2. Under the latest release header, locate the **Assets** section.
-3. Download **`nebulae-Setup-x64.exe`**.
+3. Download **`Nebulae-Setup-x64.exe`**.
 
 ### Windows SmartScreen & Antivirus Notice
 
 When running newly released open-source software on Windows, **Windows Defender SmartScreen** or third-party antivirus utilities may display a warning dialog stating:
 > *"Windows protected your PC — Microsoft Defender SmartScreen prevented an unrecognized app from starting."*
 
-#### Why this happens:
-Open-source software distributed without purchasing expensive corporate Extended Validation (EV) code-signing certificates triggers SmartScreen until thousands of global users establish reputation with Microsoft's servers.
-
-#### How to safely proceed:
-1. Verify the download originated from the official GitHub Releases page.
-2. Click **More info** (underlined text in the dialog).
-3. Click the **Run anyway** button that appears.
+#### How to Proceed Safely:
+1. Click the text link labeled **"More info"**.
+2. A button labeled **"Run anyway"** will appear in the bottom-right corner.
+3. Click **"Run anyway"** to launch the installer.
 
 ---
 
 ### Step-by-Step Installation Walkthrough
 
-1. Double-click **`ADC-Setup-x64.exe`** in your Downloads folder.
-2. If prompted by **User Account Control (UAC)**, click **Yes** to allow the installer to make changes.
-3. **Choose Install Location**: The installer installs to your user profile (`%LOCALAPPDATA%\Programs\ADC`) by default, requiring no administrative privileges. Click **Next**.
-4. **Choose Shortcuts**: Ensure *Create Desktop Shortcut* and *Create Start Menu Shortcut* are selected. Click **Install**.
-5. **Finish**: Check **Launch ADC** and click **Finish**.
+1. Double-click the downloaded **`Nebulae-Setup-x64.exe`** file.
+2. Select your language (**English**) and click **OK**.
+3. Choose your destination directory (default is `C:\Program Files\Nebulae` or `%LOCALAPPDATA%\Programs\Nebulae`).
+4. Choose whether to create a Desktop Shortcut and Start Menu icon.
+5. Click **Install**.
+6. When the installation finishes, check **"Launch Nebulae"** and click **Finish**.
 
 ---
 
 ### First Launch & Windows Firewall Configuration
 
-When ADC launches for the first time, Windows Defender Firewall will prompt:
-> *"Windows Defender Firewall has blocked some features of ADC on all public and private networks."*
+When Nebulae launches for the first time, Windows Defender Firewall will prompt you to allow network access:
 
-#### Why Firewall permission is required:
-BitTorrent is a decentralized peer-to-peer network. To receive piece data and discover peers, ADC must accept inbound and outbound TCP/UDP connections on its designated listening port (default: `6881`).
-
-#### What to select:
-1. Check **Private networks, such as my home or work network**.
-2. Uncheck Public networks (unless you are on public Wi-Fi).
-3. Click **Allow access**.
+1. Check both **Private networks** (home or work) and **Public networks**.
+2. Click **Allow access**.
+3. If this dialog does not appear, open **Windows Defender Firewall** → **Allow an app through firewall** → verify that `nebulae.exe` is checked for both Private and Public networks.
 
 ---
 
 ### Adding Your First Torrent (Windows)
 
-You can add torrents using three intuitive methods:
-1. **Magnet Links**: Click the pink **+ Add Torrent** button at the top right, paste your magnet link (`magnet:?xt=urn:btih:...` or `adc://...`), and click **Start Download**.
-2. **File Drag-and-Drop**: Drag any `.torrent` file from Windows Explorer directly onto the ADC window. The screen will highlight with a pink drop border.
-3. **File Association**: Double-click any `.torrent` file on your computer; Windows will automatically launch ADC and begin the transfer.
+- **Magnet Links**: Click any `magnet:?xt=...` link in your web browser. Nebulae will handle the protocol.
+- **Torrent Files**: Drag and drop any `.torrent` file directly onto the Nebulae window.
+- **Manual Input**: Click **+ Add Torrent** in the top title bar to paste magnet links or inspect file details.
 
 ---
 
-### Updating ADC on Windows
+### Updating Nebulae on Windows
 
-1. Download the new `ADC-Setup-x64.exe` from GitHub Releases.
-2. Run the installer. It will automatically detect your existing installation, upgrade the executable, and preserve all settings, torrent metadata, and downloaded files.
+1. Download the latest **`Nebulae-Setup-x64.exe`** from GitHub Releases.
+2. Run the installer. It will automatically detect your existing installation, update the application files, and preserve your database, settings, and active torrent transfers.
 
 ---
 
-### Uninstalling ADC on Windows
+### Uninstalling Nebulae on Windows
 
-1. Open **Windows Settings** (Windows Key + I).
-2. Go to **Apps** → **Installed apps** (or *Apps & features*).
-3. Scroll down or search for **ADC**.
-4. Click the three dots (`...`) and select **Uninstall**.
-5. Follow the uninstallation wizard. (Downloaded media files remain in your Downloads folder).
+1. Open **Windows Settings** (Win + I) → **Apps** → **Installed apps**.
+2. Find **Nebulae** in the list.
+3. Click the three dots (...) and select **Uninstall**.
+4. To remove all database state and logs, delete the directory `%APPDATA%\ADC\`.
 
 ---
 
@@ -133,10 +129,9 @@ You can add torrents using three intuitive methods:
 
 | Symptom | Cause | Solution |
 | :--- | :--- | :--- |
-| **App does not open / missing DLL** | Missing VC++ Runtime | Install the [Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) from Microsoft. |
-| **Downloads stuck at 0% / "Finding peers"** | Firewall or router blocking port | Check Windows Firewall rules for ADC; verify UPnP is enabled in **Settings → Network**. |
-| **Antivirus false positive** | Heuristic signature detection | Add `%LOCALAPPDATA%\Programs\ADC\ADC.exe` to your antivirus exclusion list. |
-| **Where logs and settings are stored** | Internal isolated directory | Open `%APPDATA%\ADC\internal\logs\` to inspect `adc_session.log`. |
+| **SmartScreen blocks installer** | App reputation score on new release | Click "More info" → "Run anyway". |
+| **Zero peer connections** | Windows Firewall blocking port 6881 | Open Windows Firewall settings and allow `nebulae.exe`. |
+| **Crashes on startup** | Corrupted piece cache or SQLite lock | Open Settings → Show Advanced Diagnostics → Clear Internal Cache, or delete `%APPDATA%\ADC\internal\cache\`. |
 
 ---
 
@@ -149,70 +144,70 @@ You can add torrents using three intuitive methods:
 3. In the summary window, find the line labeled **Chip**.
 4. If it says **Apple M1, Apple M2, Apple M3, Apple M4** (or Pro / Max / Ultra), your Mac has Apple Silicon.
 
-### Downloading nebulae-macOS-arm64.dmg
+### Downloading Nebulae-macOS-arm64.dmg
 
-1. Visit `https://github.com/nebula-torrent/nebula-torrent/releases`.
-2. Download **`nebulae-macOS-arm64.dmg`**.
+1. Visit `https://github.com/asiandvdclub/Nebulae-torrent_client/releases`.
+2. Download **`Nebulae-macOS-arm64.dmg`**.
 
 ---
 
 ### Step-by-Step macOS Installation
 
-1. Double-click the downloaded **`nebulae-macOS-arm64.dmg`** file.
-2. A window opens showing **nebulae.app** and a shortcut arrow pointing to your **Applications** folder.
-3. Drag **`nebulae.app`** into **Applications**.
+1. Double-click the downloaded **`Nebulae-macOS-arm64.dmg`** file.
+2. A window opens showing **`Nebulae.app`** and a shortcut arrow pointing to your **Applications** folder.
+3. Drag **`Nebulae.app`** into **Applications**.
 4. In Finder, click the **Eject (⏏)** icon next to the mounted disk image.
-5. Open **Applications** (or Launchpad) and double-click **nebulae**.
+5. Open **Applications** (or Launchpad) and double-click **Nebulae**.
 
 ---
 
 ### macOS Gatekeeper Verification
 
 If using an unsigned or newly tagged community build, macOS Gatekeeper may display:
-> *"ADC cannot be opened because Apple cannot check it for malicious software."*
+> *"Nebulae cannot be opened because Apple cannot check it for malicious software."*
 
 #### Step-by-Step Bypass:
 1. Open **Finder** → **Applications**.
-2. **Right-click** (or hold `Control` and click) on **`ADC.app`**.
+2. **Right-click** (or hold `Control` and click) on **`Nebulae.app`**.
 3. Select **Open** from the context menu.
 4. A prompt appears asking: *"Are you sure you want to open it?"* Click **Open**.
-5. *Alternative method*: Open **System Settings** → **Privacy & Security** → scroll down to the *Security* section → click **Open Anyway** next to the notice about ADC.
+5. *Alternative method*: Open **System Settings** → **Privacy & Security** → scroll down to the *Security* section → click **Open Anyway** next to the notice about Nebulae.
 
 #### Quarantine Flag Fix (Terminal):
-If macOS displays *"ADC is damaged and can't be opened"*, open the Terminal app and paste:
+If macOS displays *"Nebulae is damaged and can't be opened"*, open Terminal and run:
 ```bash
-xattr -cr /Applications/ADC.app
+xattr -cr /Applications/Nebulae.app
 ```
-Press Enter. ADC will open immediately.
+Press Enter. Nebulae will open immediately.
 
 ---
 
 ### First Launch & Permissions (macOS)
 
-1. **Download Location Access**: When saving files to `~/Downloads` or an external drive, macOS will prompt: *"ADC would like to access files in your Downloads folder"*. Click **OK**.
+1. **Download Location Access**: When saving files to `~/Downloads` or an external drive, macOS will prompt: *"Nebulae would like to access files in your Downloads folder"*. Click **OK**.
 2. **Speed Limits**: Open **Settings** to set upload and download limits to preserve your connection bandwidth.
 
 ---
 
 ### Adding Your First Torrent (macOS)
 
-- Drag any `.torrent` file from Finder onto the ADC window.
+- Drag any `.torrent` file from Finder onto the Nebulae window.
 - Click **+ Add Torrent** to paste an `adc://` or `magnet:?xt=...` link.
 
 ---
 
-### Updating ADC on macOS
+### Updating Nebulae on macOS
 
-1. Download the new `ADC-macOS-arm64.dmg`.
-2. Drag `ADC.app` into Applications and click **Replace**.
+1. Download the new `Nebulae-macOS-arm64.dmg`.
+2. Drag `Nebulae.app` into Applications and click **Replace**.
 3. All preferences and torrent history remain safe in `~/Library/Application Support/ADC/`.
 
 ---
 
-### Uninstalling ADC on macOS
+### Uninstalling Nebulae on macOS
 
-1. Quit ADC (Command + Q).
-2. Open Finder → **Applications** → Drag **`ADC.app`** to the **Trash**.
+1. Quit Nebulae (Command + Q).
+2. Open Finder → **Applications** → Drag **`Nebulae.app`** to the **Trash**.
 3. To delete all saved data, open Terminal and run:
    ```bash
    rm -rf ~/Library/Application\ Support/ADC
@@ -224,8 +219,8 @@ Press Enter. ADC will open immediately.
 
 | Symptom | Cause | Solution |
 | :--- | :--- | :--- |
-| **"ADC is damaged" warning** | macOS Quarantine extended attribute | Run `xattr -cr /Applications/ADC.app` in Terminal. |
-| **Cannot save to external drive** | Missing macOS Folder Permission | Open **System Settings** → **Privacy & Security** → **Files and Folders** → enable ADC for removable volumes. |
+| **"Nebulae is damaged" warning** | macOS Quarantine extended attribute | Run `xattr -cr /Applications/Nebulae.app` in Terminal. |
+| **Cannot save to external drive** | Missing macOS Folder Permission | Open **System Settings** → **Privacy & Security** → **Files and Folders** → enable Nebulae for removable volumes. |
 | **Where internal files and logs are stored** | Isolated internal directory | Stored at `~/Library/Application Support/ADC/internal/logs/adc_session.log`. |
 
 ---
@@ -238,25 +233,25 @@ Press Enter. ADC will open immediately.
 2. Look at the line labeled **Processor**.
 3. If it displays **Intel Core i5, Intel Core i7, Intel Core i9, or Intel Xeon**, your Mac uses an Intel CPU.
 
-### Downloading nebulae-macOS-x64.dmg
+### Downloading Nebulae-macOS-x64.dmg
 
-- Download **`nebulae-macOS-x64.dmg`** from GitHub Releases.
-- *Note*: Intel Macs cannot run the ARM64 build. Always verify you download `nebulae-macOS-x64.dmg`.
+- Download **`Nebulae-macOS-x64.dmg`** from GitHub Releases.
+- *Note*: Intel Macs cannot run the ARM64 build. Always verify you download `Nebulae-macOS-x64.dmg`.
 
 ### Installation & Gatekeeper (Intel)
 
-1. Open `nebulae-macOS-x64.dmg` and drag `nebulae.app` into **Applications**.
-2. If Gatekeeper prompts that the developer cannot be verified, right-click `nebulae.app` → **Open** → **Open**.
+1. Open `Nebulae-macOS-x64.dmg` and drag `Nebulae.app` into **Applications**.
+2. If Gatekeeper prompts that the developer cannot be verified, right-click `Nebulae.app` → **Open** → **Open**.
 3. If quarantine triggers, run:
    ```bash
-   xattr -cr /Applications/nebulae.app
+   xattr -cr /Applications/Nebulae.app
    ```
 
 ---
 
 ## Isolated Internal Storage & Diagnostics
 
-To maintain a clean and reliable interface, ADC strictly isolates technical files:
+To maintain a clean and reliable interface, Nebulae strictly isolates technical files:
 
 ```text
 [macOS]   ~/Library/Application Support/ADC/internal/

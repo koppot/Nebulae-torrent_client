@@ -2018,7 +2018,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nebula-torrent"
+name = "nebulae_torrent_client"
 version = "0.1.0"
 dependencies = [
  "chrono",

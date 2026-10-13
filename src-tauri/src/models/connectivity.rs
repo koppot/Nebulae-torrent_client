@@ -48,15 +48,27 @@ impl ConnectivityReport {
         vpn_bound: bool,
         vpn_adapter: Option<&str>,
     ) -> String {
-        let connectable_str = if port_status == PortStatus::Open { "Yes" } else { "Limited" };
+        let connectable_str = if port_status == PortStatus::Open {
+            "Yes"
+        } else {
+            "Limited"
+        };
         let port_str = match port_status {
             PortStatus::Open => format!("Port {port} Reachable"),
             PortStatus::Closed => format!("Port {port} Closed/Firewalled"),
             PortStatus::Stealth => format!("Port {port} Stealth/Blocked"),
             PortStatus::Testing => format!("Port {port} Probing"),
         };
-        let ipv6_str = if ipv6_healthy { "IPv6 Ready" } else { "IPv4 Only" };
-        let tracker_str = if tracker_reachable { "Tracker Healthy" } else { "Tracker Blocked" };
+        let ipv6_str = if ipv6_healthy {
+            "IPv6 Ready"
+        } else {
+            "IPv4 Only"
+        };
+        let tracker_str = if tracker_reachable {
+            "Tracker Healthy"
+        } else {
+            "Tracker Blocked"
+        };
         let vpn_str = if vpn_bound {
             format!("VPN Bound ({})", vpn_adapter.unwrap_or("Active"))
         } else {

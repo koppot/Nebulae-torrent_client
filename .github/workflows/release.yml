@@ -15,13 +15,13 @@ jobs:
       include:
         - platform: 'macos-latest'
           target: 'aarch64-apple-darwin'
-          artifact_name: 'nebulae-macOS-arm64.dmg'
+          artifact_name: 'Nebulae-macOS-arm64.dmg'
         - platform: 'macos-13'
           target: 'x86_64-apple-darwin'
-          artifact_name: 'nebulae-macOS-x64.dmg'
+          artifact_name: 'Nebulae-macOS-x64.dmg'
         - platform: 'windows-latest'
           target: 'x86_64-pc-windows-msvc'
-          artifact_name: 'nebulae-Setup-x64.exe'
+          artifact_name: 'Nebulae-Setup-x64.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,14 +53,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Nebula ${{ github.ref_name }}'
+          releaseName: 'Nebulae ${{ github.ref_name }}'
           releaseBody: |
-            ## Nebula — Torrent Client by Asian DVD Club (${{ github.ref_name }})
+            ## Nebulae — Torrent Client by Asian DVD Club (${{ github.ref_name }})
             
-            ### Official Native Packages:
-            - **Windows x64**: `nebulae-Setup-x64.exe` (installs `nebulae.exe`)
-            - **macOS Apple Silicon (M1/M2/M3/M4)**: `nebulae-macOS-arm64.dmg` (mounts `nebulae.app`)
-            - **macOS Intel (x86_64)**: `nebulae-macOS-x64.dmg` (mounts `nebulae.app`)
+            ### Package Artifacts:
+            - **Windows x64**: `Nebulae-Setup-x64.exe` (installs `nebulae.exe`)
+            - **macOS Apple Silicon (M1/M2/M3/M4)**: `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`)
+            - **macOS Intel (x86_64)**: `Nebulae-macOS-x64.dmg` (mounts `Nebulae.app`)
             
             Refer to [Installation Guide](docs/installation.md) for step-by-step instructions.
           releaseDraft: true

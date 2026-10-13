@@ -28,7 +28,11 @@ impl AdcTrackerProfile {
 
     pub fn calculate_ratio(uploaded: u64, downloaded: u64) -> f32 {
         if downloaded == 0 {
-            if uploaded > 0 { 999.0 } else { 1.0 }
+            if uploaded > 0 {
+                999.0
+            } else {
+                1.0
+            }
         } else {
             (uploaded as f64 / downloaded as f64) as f32
         }
@@ -84,9 +88,9 @@ mod tests {
 
     #[test]
     fn test_ratio_projection() {
-        let uploaded = 100_000_000_000;   // 100 GB
-        let downloaded = 50_000_000_000;   // 50 GB -> Ratio 2.0
-        let new_dl = 25_000_000_000;       // +25 GB -> 100 / 75 = 1.33
+        let uploaded = 100_000_000_000; // 100 GB
+        let downloaded = 50_000_000_000; // 50 GB -> Ratio 2.0
+        let new_dl = 25_000_000_000; // +25 GB -> 100 / 75 = 1.33
 
         let proj = AdcTrackerProfile::project_ratio(uploaded, downloaded, new_dl);
         assert!((proj - 1.333).abs() < 0.01);

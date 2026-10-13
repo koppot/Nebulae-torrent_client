@@ -11,7 +11,12 @@ pub struct AdaptiveSwarmConfig {
 }
 
 impl AdaptiveSwarmConfig {
-    pub fn auto_tune(swarm_size: u32, avg_rtt_ms: u32, measured_rate_bps: u64, remaining_pieces: u32) -> Self {
+    pub fn auto_tune(
+        swarm_size: u32,
+        avg_rtt_ms: u32,
+        measured_rate_bps: u64,
+        remaining_pieces: u32,
+    ) -> Self {
         // 1. Connection limits based on swarm size
         let active_connections_limit = if swarm_size < 10 {
             swarm_size.max(4)
