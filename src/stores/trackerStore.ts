@@ -47,22 +47,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
       set({ seedTimeRecords: res });
     } catch {
       set({
-        seedTimeRecords: [
-          {
-            info_hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
-            torrent_name: 'Seven Samurai (1954) [Criterion Remux 1080p]',
-            seeding_time_seconds: 58 * 3600,
-            required_seeding_seconds: 72 * 3600,
-            is_shield_satisfied: false,
-          },
-          {
-            info_hash: 'b2c3d4e5f60718293a4b5c6d7e8f90123456789a',
-            torrent_name: 'Tokyo Story (1953) [BFI Restoration 1080p]',
-            seeding_time_seconds: 84 * 3600,
-            required_seeding_seconds: 72 * 3600,
-            is_shield_satisfied: true,
-          },
-        ],
+        seedTimeRecords: [],
       });
     }
   },

@@ -17,6 +17,14 @@ impl Default for MockTorrentEngine {
 
 impl MockTorrentEngine {
     pub fn new() -> Self {
+        Self {
+            torrents: Mutex::new(Vec::new()),
+            kill_switch_active: AtomicBool::new(false),
+            bound_interface: Mutex::new(Some("utun3".to_string())),
+        }
+    }
+
+    pub fn with_sample_data() -> Self {
         let initial_items = vec![
             TorrentItem {
                 id: "swarm-test-1".to_string(),

@@ -5,14 +5,12 @@ use nebulae_torrent_client_lib::models::swarm::AdaptiveSwarmConfig;
 fn test_engine_initialization_and_listing() {
     let engine = MockTorrentEngine::new();
     let torrents = engine.list_torrents().expect("list torrents failed");
-    assert_eq!(torrents.len(), 2);
-    assert_eq!(torrents[0].status, "Seeding");
-    assert_eq!(torrents[1].status, "Downloading");
+    assert_eq!(torrents.len(), 0, "Default torrent engine must initialize with zero torrents");
 }
 
 #[test]
 fn test_engine_pause_and_resume() {
-    let engine = MockTorrentEngine::new();
+    let engine = MockTorrentEngine::with_sample_data();
 
     // Pause torrent 2
     engine.pause_torrent("swarm-test-2").expect("pause failed");
@@ -31,7 +29,7 @@ fn test_engine_pause_and_resume() {
 
 #[test]
 fn test_vpn_kill_switch_fail_closed_behavior() {
-    let engine = MockTorrentEngine::new();
+    let engine = MockTorrentEngine::with_sample_data();
 
     // Both torrents active initially
     let status = engine.engine_status();

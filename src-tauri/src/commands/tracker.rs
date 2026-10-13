@@ -113,27 +113,6 @@ pub fn link_adc_account(
     db.set_setting("adc_required_seed_hours", "72")
         .map_err(|e| e.to_string())?;
 
-    // Seed default seed-time records if empty
-    let existing = db.list_seed_time_records().unwrap_or_default();
-    if existing.is_empty() {
-        let sample1 = SeedTimeRecord {
-            info_hash: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678".to_string(),
-            torrent_name: "Seven Samurai (1954) [Criterion Remux 1080p]".to_string(),
-            seeding_time_seconds: 58 * 3600, // 58 hours seeded out of 72
-            required_seeding_seconds: 72 * 3600,
-            is_shield_satisfied: false,
-        };
-        let sample2 = SeedTimeRecord {
-            info_hash: "b2c3d4e5f60718293a4b5c6d7e8f90123456789a".to_string(),
-            torrent_name: "Tokyo Story (1953) [BFI Restoration 1080p]".to_string(),
-            seeding_time_seconds: 84 * 3600, // 84 hours seeded -> Satisfied
-            required_seeding_seconds: 72 * 3600,
-            is_shield_satisfied: true,
-        };
-        let _ = db.upsert_seed_time_record(&sample1);
-        let _ = db.upsert_seed_time_record(&sample2);
-    }
-
     get_adc_tracker_profile(db)
 }
 

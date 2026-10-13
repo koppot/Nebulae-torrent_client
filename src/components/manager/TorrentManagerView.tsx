@@ -193,6 +193,16 @@ export const TorrentManagerView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 font-mono text-adc-ivory">
+              {filteredTorrents.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="py-20 text-center text-adc-muted">
+                    <p className="text-sm font-sans font-medium text-white/70 mb-1">No torrents in list</p>
+                    <p className="text-xs font-sans text-white/40">
+                      Click <strong className="text-adc-gold font-semibold">+ Add Torrent</strong> in the top navigation or drop a <code className="text-white/60">.torrent</code> file to begin
+                    </p>
+                  </td>
+                </tr>
+              )}
               {filteredTorrents.map((t) => (
                 <tr
                   key={t.id}
