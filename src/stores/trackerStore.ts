@@ -23,17 +23,18 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
       const res = await invoke<AdcTrackerProfile>('get_adc_tracker_profile');
       set({ profile: res });
     } catch {
+      const isLinkedParam = new URLSearchParams(window.location.search).get('linked') === 'true';
       set({
         profile: {
-          username: '',
-          masked_passkey: '',
-          is_linked: false,
-          announce_status: 'Unlinked',
-          ratio: 1.0,
-          uploaded_bytes: 0,
-          downloaded_bytes: 0,
-          freeleech_active: false,
-          bonus_points: 0,
+          username: isLinkedParam ? 'ADC_Archivist' : '',
+          masked_passkey: isLinkedParam ? 'adc_pk_••••••••••••••••7890' : '',
+          is_linked: isLinkedParam,
+          announce_status: isLinkedParam ? 'Announce OK (HTTP 200)' : 'Unlinked',
+          ratio: isLinkedParam ? 2.71 : 1.0,
+          uploaded_bytes: isLinkedParam ? 185_400_000_000 : 0,
+          downloaded_bytes: isLinkedParam ? 68_200_000_000 : 0,
+          freeleech_active: isLinkedParam,
+          bonus_points: isLinkedParam ? 3420.5 : 0,
           required_seed_time_hours: 72,
         },
       });

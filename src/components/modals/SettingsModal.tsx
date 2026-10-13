@@ -26,7 +26,9 @@ export const SettingsModal: React.FC = () => {
   const { settings, saveSettings } = useSettingsStore();
 
   const [activeTab, setActiveTab] = useState<'general' | 'network' | 'appearance' | 'splash'>('general');
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(
+    () => new URLSearchParams(window.location.search).get('diagnostics') === 'true'
+  );
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -57,8 +59,8 @@ export const SettingsModal: React.FC = () => {
     } catch {
       const fallback = JSON.stringify(
         {
-          app_name: 'Nebula Torrent',
-          executable_name: 'ADC',
+          app_name: 'Nebula',
+          executable_name: 'nebulae',
           version: '0.1.0',
           internal_storage_status: 'Isolated in ADC/internal/',
           database_status: 'Connected (Internal)',

@@ -32,6 +32,40 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
+
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get('view');
+    const modalParam = params.get('modal');
+    const tabParam = params.get('tab');
+    const splashParam = params.get('splash');
+
+    if (splashParam === 'true') {
+      useUiStore.getState().setSplashDismissed(false);
+    } else if (splashParam === 'false' || viewParam || modalParam) {
+      useUiStore.getState().setSplashDismissed(true);
+    }
+
+    if (viewParam === 'manager') {
+      useUiStore.getState().setViewMode('manager');
+    } else if (viewParam === 'media') {
+      useUiStore.getState().setViewMode('media');
+    }
+
+    if (tabParam === 'peers' || tabParam === 'files' || tabParam === 'trackers' || tabParam === 'general') {
+      useUiStore.getState().setActiveManagerTab(tabParam as any);
+    }
+
+    if (modalParam === 'doctor') {
+      useUiStore.getState().setShowConnectivityDoctor(true);
+    } else if (modalParam === 'vpn') {
+      useUiStore.getState().setShowVpnManager(true);
+    } else if (modalParam === 'tracker') {
+      useUiStore.getState().setShowTrackerDashboard(true);
+    } else if (modalParam === 'settings') {
+      useUiStore.getState().setShowSettings(true);
+    } else if (modalParam === 'help') {
+      useUiStore.getState().setShowHelp(true);
+    }
   }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile]);
 
   const handleDragOver = (e: React.DragEvent) => {
