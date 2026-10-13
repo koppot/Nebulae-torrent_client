@@ -3,9 +3,10 @@ import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { X, Plus, Magnet, FileUp, Folder, FileCheck, CheckCircle2, FolderSearch } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 
 export const AddTorrentModal: React.FC = () => {
-  const { showAddTorrent, setShowAddTorrent } = useUiStore();
+  const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource } = useUiStore();
   const { addTorrent, selectTorrentFile, selectDownloadDirectory, getSystemPathPresets } = useTorrentStore();
   const { settings } = useSettingsStore();
 
@@ -20,6 +21,50 @@ export const AddTorrentModal: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!showAddTorrent) return;
+
+    const unlistenList: Array<() => void> = [];
+
+    listen<{ paths?: string[] }>('tauri://drag-drop', (event) => {
+      const paths = event.payload?.paths;
+      if (paths && paths.length > 0) {
+        const filePath = paths[0];
+        const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
+        setSelectedFileName(name);
+        setSelectedFileSize(null);
+        setTorrentSource(filePath);
+      }
+    })
+      .then((un) => unlistenList.push(un))
+      .catch(() => {});
+
+    listen<string>('nebulae://file-dropped', (event) => {
+      if (event.payload) {
+        const filePath = event.payload;
+        const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
+        setSelectedFileName(name);
+        setSelectedFileSize(null);
+        setTorrentSource(filePath);
+      }
+    })
+      .then((un) => unlistenList.push(un))
+      .catch(() => {});
+
+    return () => {
+      for (const un of unlistenList) un();
+    };
+  }, [showAddTorrent]);
+
+  useEffect(() => {
+    if (initialAddTorrentSource) {
+      setTorrentSource(initialAddTorrentSource);
+      const name = initialAddTorrentSource.split('/').pop()?.split('\\').pop() || initialAddTorrentSource;
+      setSelectedFileName(name);
+      setInitialAddTorrentSource(null);
+    }
+  }, [initialAddTorrentSource, setInitialAddTorrentSource]);
 
   useEffect(() => {
     getSystemPathPresets().then((res) => {
@@ -72,11 +117,10 @@ export const AddTorrentModal: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      if (file.name.endsWith('.torrent') || file.type.includes('bittorrent')) {
-        setSelectedFileName(file.name);
-        setSelectedFileSize(file.size);
-        setTorrentSource(file.name);
-      }
+      const source = (file as any).path || file.name;
+      setSelectedFileName(file.name);
+      setSelectedFileSize(file.size);
+      setTorrentSource(source);
     }
   };
 
@@ -151,7 +195,7 @@ export const AddTorrentModal: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".torrent,application/x-bittorrent"
+          accept=".torrent,.adc,application/x-bittorrent,application/x-asiandvdclub-torrent"
           onChange={handleFileInputChange}
           className="hidden"
         />
@@ -171,7 +215,7 @@ export const AddTorrentModal: React.FC = () => {
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
               <FileUp className="w-3.5 h-3.5 text-adc-gold" />
-              <span>Torrent Metainfo File</span>
+              <span>Torrent / ADC Metainfo File</span>
             </label>
 
             {selectedFileName ? (
@@ -230,7 +274,7 @@ export const AddTorrentModal: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-xs text-white font-medium block">
-                    Click to browse and select <code className="text-adc-gold">.torrent</code> file
+                    Click to browse and select <code className="text-adc-gold">.torrent</code> or <code className="text-adc-gold">.adc</code> file
                   </span>
                   <span className="text-[11px] text-slate-400 mt-0.5 block">
                     or drag and drop metainfo file into this window
@@ -242,7 +286,7 @@ export const AddTorrentModal: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <div className="flex-1 h-[1px] bg-slate-800"></div>
-            <span className="text-[10px] uppercase font-mono text-slate-500">Or enter magnet link</span>
+            <span className="text-[10px] uppercase font-mono text-slate-500">Or enter magnet or ADC link</span>
             <div className="flex-1 h-[1px] bg-slate-800"></div>
           </div>
 
@@ -250,11 +294,11 @@ export const AddTorrentModal: React.FC = () => {
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
               <Magnet className="w-3.5 h-3.5 text-adc-crimson" />
-              <span>Magnet Link or URL</span>
+              <span>Magnet Link or ADC Protocol URL</span>
             </label>
             <textarea
               rows={2}
-              placeholder="magnet:?xt=urn:btih:... or adc://..."
+              placeholder="magnet:?xt=urn:btih:... or adc://... or adc:?..."
               value={selectedFileName ? '' : torrentSource}
               disabled={!!selectedFileName}
               onChange={(e) => setTorrentSource(e.target.value)}

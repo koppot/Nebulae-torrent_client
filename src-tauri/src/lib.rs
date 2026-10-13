@@ -38,11 +38,39 @@ pub fn run() {
         "Nebulae application initialized successfully",
     );
 
-    tauri::Builder::default()
+    let initial_payloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    for arg in std::env::args().skip(1) {
+        let trimmed = arg.trim();
+        if trimmed.starts_with("magnet:")
+            || trimmed.starts_with("adc:")
+            || trimmed.ends_with(".torrent")
+            || trimmed.ends_with(".adc")
+            || std::path::Path::new(trimmed).is_file()
+        {
+            if let Ok(mut lock) = initial_payloads.lock() {
+                lock.push(trimmed.to_string());
+            }
+        }
+    }
+    let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
+
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(paths)
         .manage(db)
         .manage(engine)
+        .manage(pending_payloads)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(drag_event) = event {
+                if let tauri::DragDropEvent::Drop { paths, .. } = drag_event {
+                    use tauri::Emitter;
+                    for path in paths {
+                        let path_str = path.to_string_lossy().to_string();
+                        let _ = window.emit("nebulae://file-dropped", path_str);
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Diagnostics
             commands::diagnostics::open_logs_folder,
@@ -64,6 +92,10 @@ pub fn run() {
             commands::torrent::select_torrent_file,
             commands::torrent::select_download_directory,
             commands::torrent::get_system_path_presets,
+            // File & Protocol Associations
+            commands::association::get_pending_open_payloads,
+            commands::association::check_associations_status,
+            commands::association::register_protocol_associations,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,
@@ -87,6 +119,28 @@ pub fn run() {
             commands::tracker::get_seed_time_records,
             commands::tracker::calculate_ratio_projection,
         ])
-        .run(tauri::generate_context!())
-        .expect("Error while running Nebulae application");
+        .build(tauri::generate_context!())
+        .expect("Error while building Nebulae application");
+
+    let event_payloads = initial_payloads.clone();
+    app.run(move |app_handle, event| {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let tauri::RunEvent::Opened { urls } = event {
+            use tauri::Emitter;
+            for url in urls {
+                let payload = if url.scheme() == "file" {
+                    url.to_file_path()
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| url.to_string())
+                } else {
+                    url.to_string()
+                };
+                if let Ok(mut lock) = event_payloads.lock() {
+                    lock.push(payload.clone());
+                }
+                let _ = app_handle.emit("nebulae://open-uri", payload);
+            }
+        }
+    });
 }

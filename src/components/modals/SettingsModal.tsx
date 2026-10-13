@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
-import { DiagnosticSummary } from '../../types';
+import { DiagnosticSummary, AssociationStatus } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
@@ -21,6 +21,9 @@ import {
   ChevronDown,
   ChevronRight,
   Sparkles,
+  Link,
+  FileCheck,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const SettingsModal: React.FC = () => {
@@ -39,6 +42,14 @@ export const SettingsModal: React.FC = () => {
   );
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [associationStatus, setAssociationStatus] = useState<AssociationStatus | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  useEffect(() => {
+    invoke<AssociationStatus>('check_associations_status')
+      .then(setAssociationStatus)
+      .catch(() => {});
+  }, []);
 
   if (!showSettings) return null;
 
@@ -110,6 +121,19 @@ export const SettingsModal: React.FC = () => {
       showStatus('Latest sanitized log preview copied to clipboard');
     } catch {
       showStatus('Logs exported (simulated)');
+    }
+  };
+
+  const handleRegisterAssociations = async () => {
+    setIsRegistering(true);
+    try {
+      const res = await invoke<AssociationStatus>('register_protocol_associations');
+      setAssociationStatus(res);
+      showStatus(res.message);
+    } catch (e: any) {
+      showStatus(`Registration failed: ${e}`);
+    } finally {
+      setIsRegistering(false);
     }
   };
 
@@ -282,6 +306,114 @@ export const SettingsModal: React.FC = () => {
                       <span className="text-[10px] text-slate-500">0 for unlimited</span>
                     </div>
                   </div>
+                </div>
+
+                {/* File & Protocol Associations Card */}
+                <div className="pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <Link className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>File & Protocol Associations</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Associates torrent files and magnet links with Nebulae
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRegisterAssociations}
+                      disabled={isRegistering}
+                      className="px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800/40 text-cyan-300 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{isRegistering ? 'Registering...' : 'Re-register Associations'}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <FileCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="font-semibold text-slate-200 block">.torrent</span>
+                          <span className="text-[10px] text-slate-400 block font-mono">BitTorrent Metainfo</span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        associationStatus?.torrent_files !== false
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}>
+                        {associationStatus?.torrent_files !== false ? 'Associated' : 'Ready'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <FileCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="font-semibold text-slate-200 block">.adc</span>
+                          <span className="text-[10px] text-adc-gold block font-mono">Asian DVD Club</span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        associationStatus?.adc_files !== false
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}>
+                        {associationStatus?.adc_files !== false ? 'Associated' : 'Ready'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                          <Link className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="font-semibold text-slate-200 block">magnet:</span>
+                          <span className="text-[10px] text-slate-400 block font-mono">Magnet URI Scheme</span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        associationStatus?.magnet_protocol !== false
+                          ? 'bg-purple-950 text-purple-300 border border-purple-800'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}>
+                        {associationStatus?.magnet_protocol !== false ? 'Active' : 'Ready'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-adc-crimson/10 text-adc-crimson border border-adc-crimson/20">
+                          <Link className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="font-semibold text-slate-200 block">adc:</span>
+                          <span className="text-[10px] text-adc-gold block font-mono">ADC URI Scheme</span>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                        associationStatus?.adc_protocol !== false
+                          ? 'bg-adc-crimson/20 text-adc-gold border border-adc-crimson/30'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}>
+                        {associationStatus?.adc_protocol !== false ? 'Active' : 'Ready'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {associationStatus?.message && (
+                    <p className="text-[10px] text-slate-500 font-mono mt-2 bg-slate-950/40 p-2 rounded-lg border border-slate-800/60">
+                      {associationStatus.message}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

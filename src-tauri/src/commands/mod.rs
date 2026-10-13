@@ -5,3 +5,4 @@ pub mod settings;
 pub mod torrent;
 pub mod tracker;
 pub mod vpn;
+pub mod association;

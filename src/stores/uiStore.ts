@@ -14,6 +14,7 @@ interface UiState {
   activeManagerTab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
   managerCategoryFilter: string;
   searchQuery: string;
+  initialAddTorrentSource: string | null;
 
   setViewMode: (mode: ViewMode) => void;
   setTheme: (theme: 'dark' | 'light') => void;
@@ -28,6 +29,8 @@ interface UiState {
   setActiveManagerTab: (tab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log') => void;
   setManagerCategoryFilter: (filter: string) => void;
   setSearchQuery: (query: string) => void;
+  setInitialAddTorrentSource: (source: string | null) => void;
+  openAddTorrentWithSource: (source: string) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -43,6 +46,7 @@ export const useUiStore = create<UiState>((set) => ({
   activeManagerTab: 'general',
   managerCategoryFilter: 'all',
   searchQuery: '',
+  initialAddTorrentSource: null,
 
   setViewMode: (viewMode) => set({ viewMode }),
   setTheme: (theme) => {
@@ -64,4 +68,10 @@ export const useUiStore = create<UiState>((set) => ({
   setActiveManagerTab: (activeManagerTab) => set({ activeManagerTab }),
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
+  openAddTorrentWithSource: (source: string) => set({
+    initialAddTorrentSource: source,
+    showAddTorrent: true,
+    splashDismissed: true,
+  }),
 }));

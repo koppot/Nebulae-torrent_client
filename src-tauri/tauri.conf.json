@@ -35,13 +35,39 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["torrent"],
+        "name": "BitTorrent Metainfo",
+        "description": "BitTorrent Metainfo File",
+        "mimeType": "application/x-bittorrent",
+        "role": "Editor",
+        "rank": "Default"
+      },
+      {
+        "ext": ["adc"],
+        "name": "Asian DVD Club Metainfo",
+        "description": "Asian DVD Club Metainfo File",
+        "mimeType": "application/x-asiandvdclub-torrent",
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "org.asiandvdclub.adc",
+          "conformsTo": [
+            "public.data",
+            "public.item"
+          ]
+        }
+      }
+    ],
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "11.0",
       "exceptionDomain": "",
       "signingIdentity": null,
       "providerShortName": null,
-      "entitlements": null
+      "entitlements": null,
+      "infoPlist": "Info.plist"
     },
     "windows": {
       "certificateThumbprint": null,
@@ -52,7 +78,8 @@
         "headerImage": null,
         "sidebarImage": null,
         "installMode": "currentUser",
-        "languages": ["English"]
+        "languages": ["English"],
+        "installerHooks": "nsis/hooks.nsh"
       }
     }
   }

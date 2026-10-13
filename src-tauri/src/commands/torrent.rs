@@ -71,7 +71,7 @@ pub fn select_torrent_file() -> Result<Option<String>, String> {
     {
         let output = std::process::Command::new("osascript")
             .arg("-e")
-            .arg("try\nPOSIX path of (choose file of type {\"torrent\", \"public.data\"} with prompt \"Select .torrent file\")\non error\n\"\"\nend try")
+            .arg("try\nPOSIX path of (choose file of type {\"torrent\", \"adc\", \"public.data\"} with prompt \"Select .torrent or .adc file\")\non error\n\"\"\nend try")
             .output()
             .map_err(|e| format!("Failed to open file picker: {e}"))?;
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -86,8 +86,8 @@ pub fn select_torrent_file() -> Result<Option<String>, String> {
         let script = r#"
 Add-Type -AssemblyName System.Windows.Forms
 $f = New-Object System.Windows.Forms.OpenFileDialog
-$f.Filter = "Torrent Files (*.torrent)|*.torrent|All Files (*.*)|*.*"
-$f.Title = "Select .torrent file"
+$f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
+$f.Title = "Select .torrent or .adc file"
 if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     $f.FileName
 }

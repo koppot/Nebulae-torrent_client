@@ -43,6 +43,15 @@ export interface DiagnosticSummary {
   total_logs_size_bytes: number;
 }
 
+export interface AssociationStatus {
+  torrent_files: boolean;
+  adc_files: boolean;
+  magnet_protocol: boolean;
+  adc_protocol: boolean;
+  platform: string;
+  message: string;
+}
+
 export * from './peering';
 export * from './connectivity';
 export * from './vpn';

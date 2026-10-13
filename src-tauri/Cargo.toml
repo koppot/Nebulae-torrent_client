@@ -28,3 +28,4 @@ uuid = { version = "1.8", features = ["v4", "fast-rng"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
+url = "2"

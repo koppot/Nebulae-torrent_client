@@ -16,11 +16,13 @@ import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorM
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { FileUp } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
-  const { viewMode, splashDismissed } = useUiStore();
+  const { viewMode, splashDismissed, openAddTorrentWithSource } = useUiStore();
   const { loadSettings } = useSettingsStore();
-  const { fetchTorrents, addTorrent } = useTorrentStore();
+  const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
   const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
@@ -32,6 +34,66 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
+
+    // Check for pending launch payload (file or protocol URI)
+    invoke<string[]>('get_pending_open_payloads')
+      .then((payloads) => {
+        if (payloads && payloads.length > 0) {
+          openAddTorrentWithSource(payloads[0]);
+        }
+      })
+      .catch(() => {});
+
+    // Listen for live opened URIs / files from macOS LaunchServices or secondary process
+    const unlistenFns: Array<() => void> = [];
+
+    listen<string>('nebulae://open-uri', (event) => {
+      if (event.payload) {
+        openAddTorrentWithSource(event.payload);
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    // Listen for native OS drag & drop events emitted by Tauri
+    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', () => {
+      setIsDragging(true);
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-over', () => {
+      setIsDragging(true);
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen<void>('tauri://drag-leave', () => {
+      setIsDragging(false);
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
+      setIsDragging(false);
+      const paths = event.payload?.paths;
+      if (paths && paths.length > 0) {
+        for (const filePath of paths) {
+          openAddTorrentWithSource(filePath);
+        }
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen<string>('nebulae://file-dropped', (event) => {
+      setIsDragging(false);
+      if (event.payload) {
+        openAddTorrentWithSource(event.payload);
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
 
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get('view');
@@ -66,7 +128,11 @@ export const App: React.FC = () => {
     } else if (modalParam === 'help') {
       useUiStore.getState().setShowHelp(true);
     }
-  }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile]);
+
+    return () => {
+      for (const un of unlistenFns) un();
+    };
+  }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -83,7 +149,8 @@ export const App: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      await addTorrent(file.name);
+      const source = (file as any).path || file.name;
+      openAddTorrentWithSource(source);
     }
   };
 
@@ -111,8 +178,8 @@ export const App: React.FC = () => {
           <div className="p-4 rounded-full bg-adc-crimson/20 text-adc-crimson-light mb-4 animate-bounce">
             <FileUp className="w-12 h-12" />
           </div>
-          <h3 className="text-xl font-bold text-white mb-1">Drop .torrent to Start Transfer</h3>
-          <p className="text-xs text-adc-muted font-mono">Payload will be placed into default downloads</p>
+          <h3 className="text-xl font-bold text-white mb-1">Drop .torrent or .adc to Start Transfer</h3>
+          <p className="text-xs text-adc-muted font-mono">Payload will be configured for download</p>
         </div>
       )}
 
