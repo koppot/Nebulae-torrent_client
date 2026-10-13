@@ -11,17 +11,17 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: 'macos-latest'
-            target: 'aarch64-apple-darwin'
-            artifact_name: 'nebular_torrent-macOS-arm64.dmg'
-          - platform: 'macos-13'
-            target: 'x86_64-apple-darwin'
-            artifact_name: 'nebular_torrent-macOS-x64.dmg'
-          - platform: 'windows-latest'
-            target: 'x86_64-pc-windows-msvc'
-            artifact_name: 'nebular_torrent-Setup-x64.exe'
+    matrix:
+      include:
+        - platform: 'macos-latest'
+          target: 'aarch64-apple-darwin'
+          artifact_name: 'nebulae-macOS-arm64.dmg'
+        - platform: 'macos-13'
+          target: 'x86_64-apple-darwin'
+          artifact_name: 'nebulae-macOS-x64.dmg'
+        - platform: 'windows-latest'
+          target: 'x86_64-pc-windows-msvc'
+          artifact_name: 'nebulae-Setup-x64.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,14 +53,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'ADC — Nebula ${{ github.ref_name }}'
+          releaseName: 'Nebula ${{ github.ref_name }}'
           releaseBody: |
             ## Nebula — Torrent Client by Asian DVD Club (${{ github.ref_name }})
             
             ### Official Native Packages:
-            - **Windows x64**: `nebular_torrent-Setup-x64.exe`
-            - **macOS Apple Silicon (M1/M2/M3/M4)**: `nebular_torrent-macOS-arm64.dmg`
-            - **macOS Intel (x86_64)**: `nebular_torrent-macOS-x64.dmg`
+            - **Windows x64**: `nebulae-Setup-x64.exe` (installs `nebulae.exe`)
+            - **macOS Apple Silicon (M1/M2/M3/M4)**: `nebulae-macOS-arm64.dmg` (mounts `nebulae.app`)
+            - **macOS Intel (x86_64)**: `nebulae-macOS-x64.dmg` (mounts `nebulae.app`)
             
             Refer to [Installation Guide](docs/installation.md) for step-by-step instructions.
           releaseDraft: true

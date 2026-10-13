@@ -53,7 +53,7 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
 
     Ok(DiagnosticSummary {
         app_name: "Nebula".to_string(),
-        executable_name: "nebular_torrent".to_string(),
+        executable_name: "nebulae".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),

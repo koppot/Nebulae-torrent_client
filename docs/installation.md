@@ -39,7 +39,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 
 - **Application Name**: **Nebula**
 - **Subtitle**: **Torrent Client by Asian DVD Club**
-- **Shipped Executable & Package Name**: **nebular_torrent** (e.g., `nebular_torrent.exe`, `nebular_torrent.app`, `nebular_torrent-Setup-x64.exe`, `nebular_torrent-macOS-arm64.dmg`, `nebular_torrent-macOS-x64.dmg`).
+- **Shipped Executable & Package Name**: **nebulae** (e.g., `nebulae.exe`, `nebulae.app`, `nebulae-Setup-x64.exe`, `nebulae-macOS-arm64.dmg`, `nebulae-macOS-x64.dmg`).
 - **Startup Splash Screen**: On launch, Nebula presents a cinematic startup splash screen with internal initialization progress and a community invitation to visit `asiandvdclub.org`. The splash screen can be skipped immediately or disabled in Settings.
 - **Hidden Internal Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`ADC/internal/`) and never exposed in the standard interface.
 
@@ -57,11 +57,11 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 | **Disk Storage** | 120 MB free space for application + storage for downloaded media |
 | **Network** | Broadband internet connection |
 
-### Downloading nebular_torrent-Setup-x64.exe
+### Downloading nebulae-Setup-x64.exe
 
 1. Navigate to the official releases repository: `https://github.com/nebula-torrent/nebula-torrent/releases`
 2. Under the latest release header, locate the **Assets** section.
-3. Download **`nebular_torrent-Setup-x64.exe`**.
+3. Download **`nebulae-Setup-x64.exe`**.
 
 ### Windows SmartScreen & Antivirus Notice
 
@@ -149,20 +149,20 @@ You can add torrents using three intuitive methods:
 3. In the summary window, find the line labeled **Chip**.
 4. If it says **Apple M1, Apple M2, Apple M3, Apple M4** (or Pro / Max / Ultra), your Mac has Apple Silicon.
 
-### Downloading nebular_torrent-macOS-arm64.dmg
+### Downloading nebulae-macOS-arm64.dmg
 
 1. Visit `https://github.com/nebula-torrent/nebula-torrent/releases`.
-2. Download **`nebular_torrent-macOS-arm64.dmg`**.
+2. Download **`nebulae-macOS-arm64.dmg`**.
 
 ---
 
 ### Step-by-Step macOS Installation
 
-1. Double-click the downloaded **`nebular_torrent-macOS-arm64.dmg`** file.
-2. A window opens showing **nebular_torrent.app** and a shortcut arrow pointing to your **Applications** folder.
-3. Drag **`nebular_torrent.app`** into **Applications**.
+1. Double-click the downloaded **`nebulae-macOS-arm64.dmg`** file.
+2. A window opens showing **nebulae.app** and a shortcut arrow pointing to your **Applications** folder.
+3. Drag **`nebulae.app`** into **Applications**.
 4. In Finder, click the **Eject (⏏)** icon next to the mounted disk image.
-5. Open **Applications** (or Launchpad) and double-click **nebular_torrent**.
+5. Open **Applications** (or Launchpad) and double-click **nebulae**.
 
 ---
 
@@ -238,18 +238,18 @@ Press Enter. ADC will open immediately.
 2. Look at the line labeled **Processor**.
 3. If it displays **Intel Core i5, Intel Core i7, Intel Core i9, or Intel Xeon**, your Mac uses an Intel CPU.
 
-### Downloading nebular_torrent-macOS-x64.dmg
+### Downloading nebulae-macOS-x64.dmg
 
-- Download **`nebular_torrent-macOS-x64.dmg`** from GitHub Releases.
-- *Note*: Intel Macs cannot run the ARM64 build. Always verify you download `nebular_torrent-macOS-x64.dmg`.
+- Download **`nebulae-macOS-x64.dmg`** from GitHub Releases.
+- *Note*: Intel Macs cannot run the ARM64 build. Always verify you download `nebulae-macOS-x64.dmg`.
 
 ### Installation & Gatekeeper (Intel)
 
-1. Open `nebular_torrent-macOS-x64.dmg` and drag `nebular_torrent.app` into **Applications**.
-2. If Gatekeeper prompts that the developer cannot be verified, right-click `nebular_torrent.app` → **Open** → **Open**.
+1. Open `nebulae-macOS-x64.dmg` and drag `nebulae.app` into **Applications**.
+2. If Gatekeeper prompts that the developer cannot be verified, right-click `nebulae.app` → **Open** → **Open**.
 3. If quarantine triggers, run:
    ```bash
-   xattr -cr /Applications/nebular_torrent.app
+   xattr -cr /Applications/nebulae.app
    ```
 
 ---

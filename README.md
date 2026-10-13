@@ -55,13 +55,13 @@ ADC does not host, index, search, recommend, or distribute content.
 
 ## Shipped Executables & Packages
 
-All published binaries, installers, and packages use the executable name **nebular_torrent**:
+All published binaries, installers, and packages use the executable name **nebulae**:
 
 | Platform | Target Architecture | Package / Executable |
 | :--- | :--- | :--- |
-| **Windows x64** | `x86_64-pc-windows-msvc` | `nebular_torrent-Setup-x64.exe` (installs `nebular_torrent.exe`) |
-| **macOS Apple Silicon** | `aarch64-apple-darwin` | `nebular_torrent-macOS-arm64.dmg` (mounts `nebular_torrent.app`) |
-| **macOS Intel** | `x86_64-apple-darwin` | `nebular_torrent-macOS-x64.dmg` (mounts `nebular_torrent.app`) |
+| **Windows x64** | `x86_64-pc-windows-msvc` | `nebulae-Setup-x64.exe` (installs `nebulae.exe`) |
+| **macOS Apple Silicon** | `aarch64-apple-darwin` | `nebulae-macOS-arm64.dmg` (mounts `nebulae.app`) |
+| **macOS Intel** | `x86_64-apple-darwin` | `nebulae-macOS-x64.dmg` (mounts `nebulae.app`) |
 | **Protocol Handler** | Cross-platform | `adc://` and `magnet:?` |
 
 ---
