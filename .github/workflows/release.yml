@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v0.1.0-beta.1)'
+        required: false
+        default: 'v0.1.0-beta.1'
 
 jobs:
   build-release:
@@ -11,17 +17,20 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-    matrix:
-      include:
-        - platform: 'macos-latest'
-          target: 'aarch64-apple-darwin'
-          artifact_name: 'Nebulae-macOS-arm64.dmg'
-        - platform: 'macos-13'
-          target: 'x86_64-apple-darwin'
-          artifact_name: 'Nebulae-macOS-x64.dmg'
-        - platform: 'windows-latest'
-          target: 'x86_64-pc-windows-msvc'
-          artifact_name: 'Nebulae-Setup-x64.exe'
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-arm64.dmg'
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            args: '--target x86_64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-x64.dmg'
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            args: ''
+            artifact_name: 'Nebulae-Setup-x64.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -48,20 +57,107 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Tauri Application
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Nebulae ${{ github.ref_name }}'
+          tagName: ${{ github.event.inputs.tag_name || github.ref_name }}
+          releaseName: 'Nebulae ${{ github.event.inputs.tag_name || github.ref_name }}'
+          args: ${{ matrix.args }}
           releaseBody: |
-            ## Nebulae — Torrent Client by Asian DVD Club (${{ github.ref_name }})
+            ## Nebulae — Torrent Client by Asian DVD Club (${{ github.event.inputs.tag_name || github.ref_name }})
             
-            ### Package Artifacts:
-            - **Windows x64**: `Nebulae-Setup-x64.exe` (installs `nebulae.exe`)
-            - **macOS Apple Silicon (M1/M2/M3/M4)**: `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`)
+            Native cross-platform torrent client for reliable, high-scale seeding on Windows and macOS.
+            
+            ### Shipped Packages & Executables
+            - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
+            - **Windows x64 Executable**: `nebulae.exe`
+            - **macOS Apple Silicon**: `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`)
             - **macOS Intel (x86_64)**: `Nebulae-macOS-x64.dmg` (mounts `Nebulae.app`)
             
-            Refer to [Installation Guide](docs/installation.md) for step-by-step instructions.
-          releaseDraft: true
-          prerelease: false
+            ### Verification
+            All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
+            
+            Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
+          releaseDraft: false
+          prerelease: true
+
+      - name: Prepare and upload named artifact (macOS)
+        if: runner.os == 'macOS'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          if [ -n "$DMG_FILE" ]; then
+            cp "$DMG_FILE" "${{ matrix.artifact_name }}"
+          else
+            APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
+            if [ -n "$APP_DIR" ]; then
+              hdiutil create -volname "Nebulae" -srcfolder "$APP_DIR" -ov -format UDZO "${{ matrix.artifact_name }}"
+            fi
+          fi
+          if [ -f "${{ matrix.artifact_name }}" ]; then
+            shasum -a 256 "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256"
+            gh release upload "$TAG" "${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" --clobber || true
+          fi
+
+      - name: Prepare and upload named artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = if ("${{ github.event.inputs.tag_name }}") { "${{ github.event.inputs.tag_name }}" } else { "${{ github.ref_name }}" }
+          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if ($exe) {
+            Copy-Item $exe.FullName -Destination "${{ matrix.artifact_name }}"
+            $hash = (Get-FileHash -Path "${{ matrix.artifact_name }}" -Algorithm SHA256).Hash.ToLower()
+            "$hash  ${{ matrix.artifact_name }}" | Out-File -FilePath "${{ matrix.artifact_name }}.sha256" -Encoding utf8
+            gh release upload "$tag" "${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" --clobber
+          }
+          $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
+          if ($bin) {
+            Copy-Item $bin.FullName -Destination "nebulae.exe"
+            $binHash = (Get-FileHash -Path "nebulae.exe" -Algorithm SHA256).Hash.ToLower()
+            "$binHash  nebulae.exe" | Out-File -FilePath "nebulae.exe.sha256" -Encoding utf8
+            gh release upload "$tag" "nebulae.exe" "nebulae.exe.sha256" --clobber
+          }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}
+            ${{ matrix.artifact_name }}.sha256
+            nebulae.exe
+            nebulae.exe.sha256
+          if-no-files-found: warn
+
+  aggregate-release:
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate unified SHA256SUMS and attach to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          mkdir -p dist-assets
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" \) -exec cp {} dist-assets/ \;
+          cd dist-assets
+          sha256sum * > ../SHA256SUMS.txt
+          cd ..
+          cat SHA256SUMS.txt
+          gh release upload "$TAG" SHA256SUMS.txt --clobber || true
