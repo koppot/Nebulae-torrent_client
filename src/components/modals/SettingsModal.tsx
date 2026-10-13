@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
 import { DiagnosticSummary } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
   Sliders,
   Folder,
+  FolderSearch,
   Network,
   Palette,
   ShieldAlert,
@@ -24,6 +26,12 @@ import {
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
   const { settings, saveSettings } = useSettingsStore();
+  const { selectDownloadDirectory, getSystemPathPresets } = useTorrentStore();
+  const [presets, setPresets] = useState<SystemPathPresets | null>(null);
+
+  useEffect(() => {
+    getSystemPathPresets().then(setPresets);
+  }, [getSystemPathPresets]);
 
   const [activeTab, setActiveTab] = useState<'general' | 'network' | 'appearance' | 'splash'>('general');
   const [showDiagnostics, setShowDiagnostics] = useState(
@@ -169,17 +177,80 @@ export const SettingsModal: React.FC = () => {
             {activeTab === 'general' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">
-                    Default Download Location
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
+                    <Folder className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Default Download Location</span>
                   </label>
-                  <input
-                    type="text"
-                    value={settings.download_directory}
-                    onChange={(e) => saveSettings({ download_directory: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono focus:outline-none focus:border-pink-500"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Folder where newly added torrent files and media are stored.
+                  <div
+                    onClick={async () => {
+                      const dir = await selectDownloadDirectory();
+                      if (dir) saveSettings({ download_directory: dir });
+                    }}
+                    className="border border-slate-700 hover:border-cyan-500/60 bg-slate-950/60 hover:bg-slate-950 rounded-xl p-3 transition cursor-pointer flex items-center justify-between group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="p-2 rounded-lg bg-cyan-950/60 text-cyan-400 border border-cyan-800/40 flex-shrink-0">
+                        <FolderSearch className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] text-slate-400 block font-mono uppercase tracking-wider">
+                          Active Save Directory:
+                        </span>
+                        <span className="text-xs font-mono text-white font-medium truncate block max-w-[320px]">
+                          {settings.download_directory || 'Click to select folder...'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 text-[11px] text-cyan-400 group-hover:text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/40 border border-cyan-800/30 flex-shrink-0">
+                      <span>Browse Folder...</span>
+                    </div>
+                  </div>
+
+                  {/* Quick Pick Presets */}
+                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                    <span className="text-[10px] text-slate-500 uppercase font-mono mr-0.5">Quick Pick:</span>
+                    {presets?.downloads && (
+                      <button
+                        type="button"
+                        onClick={() => saveSettings({ download_directory: presets.downloads! })}
+                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                          settings.download_directory === presets.downloads
+                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        Downloads
+                      </button>
+                    )}
+                    {presets?.movies && (
+                      <button
+                        type="button"
+                        onClick={() => saveSettings({ download_directory: presets.movies! })}
+                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                          settings.download_directory === presets.movies
+                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        Movies
+                      </button>
+                    )}
+                    {presets?.desktop && (
+                      <button
+                        type="button"
+                        onClick={() => saveSettings({ download_directory: presets.desktop! })}
+                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                          settings.download_directory === presets.desktop
+                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        Desktop
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    Folder where newly added torrent files and media payloads are stored.
                   </p>
                 </div>
 

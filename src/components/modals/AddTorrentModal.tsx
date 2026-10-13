@@ -1,12 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
-import { useTorrentStore } from '../../stores/torrentStore';
+import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { X, Plus, Magnet, FileUp, Folder, FileCheck, CheckCircle2, FolderSearch } from 'lucide-react';
 
 export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent } = useUiStore();
-  const { addTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
+  const { addTorrent, selectTorrentFile, selectDownloadDirectory, getSystemPathPresets } = useTorrentStore();
   const { settings } = useSettingsStore();
 
   const [torrentSource, setTorrentSource] = useState('');
@@ -15,8 +15,20 @@ export const AddTorrentModal: React.FC = () => {
   const [selectedFileSize, setSelectedFileSize] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isManualPathEdit, setIsManualPathEdit] = useState(false);
+  const [presets, setPresets] = useState<SystemPathPresets | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    getSystemPathPresets().then((res) => {
+      setPresets(res);
+      if (!downloadDir && res.downloads) {
+        setDownloadDir(res.downloads);
+      }
+    });
+  }, [getSystemPathPresets]);
 
   if (!showAddTorrent) return null;
 
@@ -73,9 +85,24 @@ export const AddTorrentModal: React.FC = () => {
       const folder = await selectDownloadDirectory();
       if (folder) {
         setDownloadDir(folder);
+        return;
       }
     } catch {
-      //
+      // Fall through
+    }
+
+    // Fallback to webkitdirectory folder picker
+    folderInputRef.current?.click();
+  };
+
+  const handleFolderInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const path = (files[0] as any).path;
+      if (path) {
+        const dir = path.substring(0, path.lastIndexOf('/'));
+        if (dir) setDownloadDir(dir);
+      }
     }
   };
 
@@ -120,12 +147,21 @@ export const AddTorrentModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Hidden HTML5 File Input for WebKit / WebView native picker */}
+        {/* Hidden HTML5 File & Folder Inputs */}
         <input
           ref={fileInputRef}
           type="file"
           accept=".torrent,application/x-bittorrent"
           onChange={handleFileInputChange}
+          className="hidden"
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          // @ts-ignore
+          webkitdirectory="true"
+          directory=""
+          onChange={handleFolderInputChange}
           className="hidden"
         />
 
@@ -226,27 +262,113 @@ export const AddTorrentModal: React.FC = () => {
             />
           </div>
 
-          {/* Destination Directory */}
+          {/* Destination Directory (Interactive Folder Selection) */}
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
-              <Folder className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Save Destination Directory</span>
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={downloadDir}
-                onChange={(e) => setDownloadDir(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-adc-gold"
-              />
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                <Folder className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Save Destination Directory</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setIsManualPathEdit(!isManualPathEdit)}
+                className="text-[11px] text-slate-400 hover:text-white transition underline"
+              >
+                {isManualPathEdit ? 'Pick via Directory Dialog' : 'Edit path manually'}
+              </button>
+            </div>
+
+            {!isManualPathEdit ? (
+              <div
+                onClick={handleBrowseFolder}
+                className="border border-slate-700 hover:border-cyan-500/60 bg-slate-950/60 hover:bg-slate-950 rounded-xl p-3 transition cursor-pointer flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-2 rounded-lg bg-cyan-950/60 text-cyan-400 border border-cyan-800/40 flex-shrink-0">
+                    <FolderSearch className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-slate-400 block font-mono uppercase tracking-wider">
+                      Target Folder:
+                    </span>
+                    <span className="text-xs font-mono text-white font-medium truncate block max-w-[310px]">
+                      {downloadDir || 'Click to select folder...'}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 text-[11px] text-cyan-400 group-hover:text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/40 border border-cyan-800/30 flex-shrink-0">
+                  <span>Browse Folder...</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={downloadDir}
+                  onChange={(e) => setDownloadDir(e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-adc-gold"
+                  placeholder="e.g. /Users/username/Downloads"
+                />
+                <button
+                  type="button"
+                  onClick={handleBrowseFolder}
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 text-xs transition border border-slate-700"
+                  title="Browse Directory"
+                >
+                  <FolderSearch className="w-3.5 h-3.5" />
+                  <span>Browse...</span>
+                </button>
+              </div>
+            )}
+
+            {/* Quick Preset Location Pills */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-[10px] text-slate-500 uppercase font-mono mr-0.5">Quick Pick:</span>
+              {presets?.downloads && (
+                <button
+                  type="button"
+                  onClick={() => setDownloadDir(presets.downloads!)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                    downloadDir === presets.downloads
+                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  Downloads
+                </button>
+              )}
+              {presets?.movies && (
+                <button
+                  type="button"
+                  onClick={() => setDownloadDir(presets.movies!)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                    downloadDir === presets.movies
+                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  Movies
+                </button>
+              )}
+              {presets?.desktop && (
+                <button
+                  type="button"
+                  onClick={() => setDownloadDir(presets.desktop!)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                    downloadDir === presets.desktop
+                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
+                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  Desktop
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleBrowseFolder}
-                className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 text-xs transition border border-slate-700"
-                title="Browse Directory"
+                className="px-2 py-0.5 rounded text-[11px] font-mono text-adc-gold hover:text-amber-300 bg-amber-950/20 border border-amber-800/40 transition"
               >
-                <FolderSearch className="w-3.5 h-3.5" />
-                <span>Browse...</span>
+                + Choose Other Folder...
               </button>
             </div>
           </div>

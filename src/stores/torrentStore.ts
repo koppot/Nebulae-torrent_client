@@ -2,6 +2,13 @@ import { create } from 'zustand';
 import { TorrentItem } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
+export interface SystemPathPresets {
+  downloads?: string | null;
+  movies?: string | null;
+  desktop?: string | null;
+  documents?: string | null;
+}
+
 interface TorrentState {
   torrents: TorrentItem[];
   selectedId: string | null;
@@ -13,6 +20,7 @@ interface TorrentState {
   addTorrent: (source: string, downloadDir?: string) => Promise<void>;
   selectTorrentFile: () => Promise<string | null>;
   selectDownloadDirectory: () => Promise<string | null>;
+  getSystemPathPresets: () => Promise<SystemPathPresets>;
 }
 
 export const useTorrentStore = create<TorrentState>((set, get) => ({
@@ -104,6 +112,19 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       return await invoke<string | null>('select_download_directory');
     } catch {
       return null;
+    }
+  },
+
+  getSystemPathPresets: async () => {
+    try {
+      return await invoke<SystemPathPresets>('get_system_path_presets');
+    } catch {
+      return {
+        downloads: null,
+        movies: null,
+        desktop: null,
+        documents: null,
+      };
     }
   },
 }));

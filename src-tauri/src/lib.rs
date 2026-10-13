@@ -63,6 +63,7 @@ pub fn run() {
             commands::torrent::reset_kill_switch_command,
             commands::torrent::select_torrent_file,
             commands::torrent::select_download_directory,
+            commands::torrent::get_system_path_presets,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,

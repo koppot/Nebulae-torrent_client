@@ -151,3 +151,21 @@ if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         Ok(None)
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemPathPresets {
+    pub downloads: Option<String>,
+    pub movies: Option<String>,
+    pub desktop: Option<String>,
+    pub documents: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
+    Ok(SystemPathPresets {
+        downloads: dirs::download_dir().map(|p| p.to_string_lossy().to_string()),
+        movies: dirs::video_dir().map(|p| p.to_string_lossy().to_string()),
+        desktop: dirs::desktop_dir().map(|p| p.to_string_lossy().to_string()),
+        documents: dirs::document_dir().map(|p| p.to_string_lossy().to_string()),
+    })
+}
