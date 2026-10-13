@@ -10,6 +10,7 @@ export const SplashScreen: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const flashRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLImageElement>(null);
+  const sealRef = useRef<HTMLDivElement>(null);
 
   const [uiState, setUiState] = useState({
     logoLive: false,
@@ -262,8 +263,13 @@ export const SplashScreen: React.FC = () => {
       const raw = now - T0;
       const introP = Math.min(1, raw / INTRO_DUR);
       const loopT = (raw % LOOP) / LOOP;
-      const cx = W / 2;
-      const cy = H / 2 - 20;
+      let cx = W / 2;
+      let cy = H / 2 - 20;
+      if (sealRef.current) {
+        const rect = sealRef.current.getBoundingClientRect();
+        cx = rect.left + rect.width / 2;
+        cy = rect.top + rect.height / 2;
+      }
 
       ctx.clearRect(0, 0, W, H);
 
@@ -644,7 +650,7 @@ export const SplashScreen: React.FC = () => {
       {/* 4. Central Asian DVD Club Cinematic UI */}
       <div className="absolute inset-0 w-full h-full z-20 flex flex-col items-center justify-center pointer-events-none">
         {/* ADC Circular Seal & Breathing Logo */}
-        <div className="relative w-[300px] h-[300px] mb-5">
+        <div ref={sealRef} className="relative w-[300px] h-[300px] mb-5">
           <img
             ref={logoRef}
             src="/adc-logo.png"

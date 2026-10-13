@@ -48,7 +48,7 @@ export const StatusBar: React.FC = () => {
         <div className="flex items-center gap-1.5 text-white" title="Global Download Rate & Total Downloaded">
           <span
             className={`font-bold transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#737373]'
+              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
             }`}
           >
             ▼
@@ -62,7 +62,7 @@ export const StatusBar: React.FC = () => {
         <div className="flex items-center gap-1.5 text-white" title="Global Upload Rate & Total Uploaded">
           <span
             className={`font-bold transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#737373]'
+              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
             }`}
           >
             ▲
