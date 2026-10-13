@@ -31,7 +31,7 @@ impl SafeLogger {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let line = format!("[{timestamp}] [{level}] {clean_msg}\n");
 
-        let log_file_path = logs_dir.join("adc_session.log");
+        let log_file_path = logs_dir.join("nebulae_session.log");
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
             .append(true)

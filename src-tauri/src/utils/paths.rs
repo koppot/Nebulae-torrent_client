@@ -16,18 +16,18 @@ pub struct AppPaths {
 
 impl AppPaths {
     pub fn init() -> Result<Self, String> {
-        // Resolve platform standard app data directory for "ADC"
+        // Resolve platform standard app data directory for "Nebulae"
         let data_dir = dirs::data_dir()
             .ok_or_else(|| "Failed to resolve platform standard data directory".to_string())?
-            .join("ADC");
+            .join("Nebulae");
 
         let internal_dir = data_dir.join("internal");
         let logs_dir = internal_dir.join("logs");
         let diagnostics_dir = internal_dir.join("diagnostics");
         let db_dir = internal_dir.join("db");
-        let db_file = db_dir.join("nebula.db");
+        let db_file = db_dir.join("nebulae.db");
         let cache_dir = internal_dir.join("cache");
-        let engine_dir = internal_dir.join("engine");
+        let engine_dir = internal_dir.join("engine-state");
         let debug_dir = internal_dir.join("debug");
 
         // Ensure all internal isolated directories exist

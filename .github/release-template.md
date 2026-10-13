@@ -15,7 +15,7 @@ Nebulae is a modern, general-purpose peer-to-peer file-transfer client built for
 - Connectivity Doctor with guided router port forwarding and dual-stack IPv4/IPv6 health tests.
 - Application-Only VPN mode with WireGuard / OpenVPN profile support and integrated kill switch.
 - AsianDVDClub integration framework with OS Keychain passkey security and private swarm safeguards.
-- Hidden internal technical area (`ADC/internal/`) isolating databases and session logs.
+- Hidden internal technical area (`Nebulae/internal/`) isolating databases and session logs.
 
 ### Installation Instructions
 For beginner-friendly, step-by-step setup walkthroughs, SmartScreen notices, Gatekeeper verifications, and firewall permissions, please see our [Installation Guide](docs/installation.md).

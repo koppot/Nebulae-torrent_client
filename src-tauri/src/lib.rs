@@ -11,7 +11,7 @@ use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
 pub fn run() {
-    // 1. Initialize isolated internal directory layout: ADC/internal/
+    // 1. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
         Err(e) => {

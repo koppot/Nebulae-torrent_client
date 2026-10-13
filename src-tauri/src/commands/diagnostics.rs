@@ -47,7 +47,7 @@ pub fn open_logs_folder(paths: State<Arc<AppPaths>>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticSummary, String> {
-    let logs_size = fs::metadata(paths.logs_dir.join("adc_session.log"))
+    let logs_size = fs::metadata(paths.logs_dir.join("nebulae_session.log"))
         .map(|m| m.len())
         .unwrap_or(0);
 
@@ -64,7 +64,7 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
         }
         .to_string(),
         engine_status: "Initialized (rqbit local-first)".to_string(),
-        internal_storage_status: "Isolated in ADC/internal/".to_string(),
+        internal_storage_status: "Isolated in Nebulae/internal/".to_string(),
         total_logs_size_bytes: logs_size,
     })
 }
@@ -93,7 +93,7 @@ pub fn reset_settings(db: State<Arc<Database>>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn export_logs(paths: State<Arc<AppPaths>>) -> Result<String, String> {
-    let log_path = paths.logs_dir.join("adc_session.log");
+    let log_path = paths.logs_dir.join("nebulae_session.log");
     if log_path.exists() {
         let content = fs::read_to_string(&log_path).map_err(|e| e.to_string())?;
         // Return latest 100 lines for diagnostic review

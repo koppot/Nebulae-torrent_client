@@ -10,9 +10,9 @@ export const SplashScreen: React.FC = () => {
   const [progress, setProgress] = useState(15);
 
   const steps = [
-    'Verifying isolated internal storage (ADC/internal)...',
-    'Opening internal SQLite persistence (nebula.db)...',
-    'Initializing local-first BitTorrent engine (rqbit)...',
+    'Verifying isolated internal storage (Nebulae/internal)...',
+    'Opening internal SQLite persistence (nebulae.db)...',
+    'Initializing local-first BitTorrent engine...',
     'Ready',
   ];
 

@@ -46,7 +46,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
   - macOS Apple Silicon: **`Nebulae-macOS-arm64.dmg`**
   - macOS Intel: **`Nebulae-macOS-x64.dmg`**
 - **Startup Splash Screen**: On launch, Nebulae presents a startup splash screen displaying internal initialization progress and a community invitation to visit `asiandvdclub.org`. The splash screen can be skipped immediately or disabled in Settings.
-- **Isolated Technical Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`ADC/internal/`) and never exposed in the standard interface.
+- **Isolated Technical Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`Nebulae/internal/`) and never exposed in the standard interface.
 
 ---
 
@@ -131,7 +131,7 @@ When Nebulae launches for the first time, Windows Defender Firewall will prompt 
 | :--- | :--- | :--- |
 | **SmartScreen blocks installer** | App reputation score on new release | Click "More info" → "Run anyway". |
 | **Zero peer connections** | Windows Firewall blocking port 6881 | Open Windows Firewall settings and allow `nebulae.exe`. |
-| **Crashes on startup** | Corrupted piece cache or SQLite lock | Open Settings → Show Advanced Diagnostics → Clear Internal Cache, or delete `%APPDATA%\ADC\internal\cache\`. |
+| **Crashes on startup** | Corrupted piece cache or SQLite lock | Open Settings → Show Advanced Diagnostics → Clear Internal Cache, or delete `%LOCALAPPDATA%\Nebulae\internal\cache\`. |
 
 ---
 
@@ -221,7 +221,7 @@ Press Enter. Nebulae will open immediately.
 | :--- | :--- | :--- |
 | **"Nebulae is damaged" warning** | macOS Quarantine extended attribute | Run `xattr -cr /Applications/Nebulae.app` in Terminal. |
 | **Cannot save to external drive** | Missing macOS Folder Permission | Open **System Settings** → **Privacy & Security** → **Files and Folders** → enable Nebulae for removable volumes. |
-| **Where internal files and logs are stored** | Isolated internal directory | Stored at `~/Library/Application Support/ADC/internal/logs/adc_session.log`. |
+| **Where internal files and logs are stored** | Isolated internal directory | Stored at `~/Library/Application Support/Nebulae/internal/logs/nebulae_session.log`. |
 
 ---
 
@@ -254,12 +254,12 @@ Press Enter. Nebulae will open immediately.
 To maintain a clean and reliable interface, Nebulae strictly isolates technical files:
 
 ```text
-[macOS]   ~/Library/Application Support/ADC/internal/
-[Windows] %APPDATA%\ADC\internal\
-          ├── db/             # SQLite metadata database (nebula.db)
-          ├── logs/           # Rotated session logs (adc_session.log)
+[macOS]   ~/Library/Application Support/Nebulae/internal/
+[Windows] %LOCALAPPDATA%\Nebulae\internal\
+          ├── db/             # SQLite metadata database (nebulae.db)
+          ├── logs/           # Rotated session logs (nebulae_session.log)
           ├── cache/          # Fast resume state & piece cache
-          ├── engine/         # BitTorrent engine checkpoints
+          ├── engine-state/   # BitTorrent engine checkpoints
           └── diagnostics/    # Crash and panic reports
 ```
 

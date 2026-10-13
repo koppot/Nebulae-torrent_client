@@ -12,7 +12,7 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 - [x] Implement UI mode switcher (Simple Media Mode vs Torrent Manager Mode vs Compact Bar).
 - [x] Implement in-app beginner-friendly Installation & User Guide with platform tabs.
 - [x] Implement user-friendly Settings with hidden Advanced Diagnostics panel (*Der Sperre*).
-- [x] Implement isolated internal directory architecture (`ADC/internal/{db, logs, cache, engine, diagnostics}`).
+- [x] Implement isolated internal directory architecture (`Nebulae/internal/{db, logs, cache, engine-state, diagnostics}`).
 - [x] Establish sanitized logging with privacy safeguards (no magnet links, passkeys, or private keys in logs).
 - [x] Create comprehensive `docs/installation.md` for Windows x64, macOS Apple Silicon, and macOS Intel.
 

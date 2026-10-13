@@ -52,17 +52,17 @@
 |  |                 v                         v                                     |  |
 |  |   +-------------------------------------------------------------------------+   |  |
 |  |   |                   Isolated Internal Storage Manager                     |   |  |
-|  |   |                         ADC/internal/                                   |   |  |
-|  |   |   ├── db/          -> Local SQLite store (nebula.db)                    |   |  |
-|  |   |   ├── logs/        -> Redacted session logs (adc_session.log)           |   |  |
+|  |   |                         Nebulae/internal/                               |   |  |
+|  |   |   ├── db/          -> Local SQLite store (nebulae.db)                   |   |  |
+|  |   |   ├── logs/        -> Redacted session logs (nebulae_session.log)       |   |  |
 |  |   |   ├── cache/       -> Fast resume states & temp piece cache             |   |  |
-|  |   |   ├── engine/      -> librqbit session checkpoints & DHT cache          |   |  |
+|  |   |   ├── engine-state/-> Engine session checkpoints & DHT cache            |   |  |
 |  |   |   └── diagnostics/ -> Crash & panic reports                             |   |  |
 |  |   +-------------------------------------------------------------------------+   |  |
 |  |                                           |                                         |  |
 |  |                                           v                                         |  |
 |  |   +-------------------------------------------------------------------------+   |  |
-|  |   |                     BitTorrent Engine: librqbit                         |   |  |
+|  |   |                     BitTorrent Engine Architecture                      |   |  |
 |  |   |   - Tokio 1.x async runtime                                             |   |  |
 |  |   |   - BEP 3 (core), BEP 5 (DHT), BEP 9 (metadata/magnet), BEP 20 (PEX)    |   |  |
 |  |   |   - Sequential piece ordering for media preview                         |   |  |
@@ -74,18 +74,18 @@
 
 ---
 
-## 3. Storage Isolation: `ADC/internal/`
+## 3. Storage Isolation: `Nebulae/internal/`
 
 All technical data is segregated from the user experience:
 
-- **Windows**: `%APPDATA%\ADC\internal\`
-- **macOS**: `~/Library/Application Support/ADC/internal/`
+- **Windows**: `%LOCALAPPDATA%\Nebulae\internal\`
+- **macOS**: `~/Library/Application Support/Nebulae/internal/`
 
 ### Subdirectory Mapping:
-1. `internal/db/`: Contains `nebula.db` (SQLite 3), storing user preferences, torrent labels, tags, and RSS feeds.
-2. `internal/logs/`: Contains `adc_session.log`. All entries pass through `SafeLogger`, which strictly sanitizes magnet URIs, passkeys, and authentication tokens.
+1. `internal/db/`: Contains `nebulae.db` (SQLite 3), storing user preferences, torrent labels, tags, and RSS feeds.
+2. `internal/logs/`: Contains `nebulae_session.log`. All entries pass through `SafeLogger`, which strictly sanitizes magnet URIs, passkeys, and authentication tokens.
 3. `internal/cache/`: Temporary piece buffer and resume checkpoints.
-4. `internal/engine/`: `librqbit` state files and DHT routing tables.
+4. `internal/engine-state/`: Engine state files and DHT routing checkpoints.
 5. `internal/diagnostics/`: Panic hooks and crash reports.
 
 The main UI never presents direct filesystem paths to these files. Access is restricted to the **Show Advanced Diagnostics** section in Settings.

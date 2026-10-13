@@ -79,15 +79,15 @@ Detailed installation instructions covering Windows SmartScreen, macOS Gatekeepe
 
 Technical files are strictly isolated from the main user interface:
 
-- **macOS**: `~/Library/Application Support/ADC/internal/`
-- **Windows**: `%APPDATA%\ADC\internal\`
+- **macOS**: `~/Library/Application Support/Nebulae/internal/`
+- **Windows**: `%LOCALAPPDATA%\Nebulae\internal\`
 
 ```text
-ADC/internal/
-├── db/             # Local SQLite database (nebula.db)
-├── logs/           # Redacted session logs (adc_session.log)
+internal/
+├── db/             # Local SQLite database (nebulae.db)
+├── logs/           # Redacted session logs (nebulae_session.log)
 ├── cache/          # Fast-resume state & temporary piece cache
-├── engine/         # BitTorrent engine checkpoints & DHT cache
+├── engine-state/   # BitTorrent engine checkpoints & DHT cache
 └── diagnostics/    # Crash and panic reports
 ```
 

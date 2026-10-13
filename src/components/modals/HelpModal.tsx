@@ -148,8 +148,8 @@ export const HelpModal: React.FC = () => {
                 </h3>
                 <ul className="space-y-1.5 text-slate-400">
                   <li><strong>App does not start:</strong> Ensure the Microsoft Visual C++ 2015–2022 Redistributable (x64) is installed if on a fresh Windows 10 installation.</li>
-                  <li><strong>Internal Data & Logs:</strong> Technical files, SQLite database, and sanitized logs are stored in <code className="text-pink-300">%APPDATA%\ADC\internal\</code> and isolated from the main interface.</li>
-                  <li><strong>Uninstalling:</strong> Windows Settings → Apps → Installed apps → Find <strong>ADC</strong> → Uninstall.</li>
+                  <li><strong>Internal Data & Logs:</strong> Technical files, SQLite database, and sanitized logs are stored in <code className="text-pink-300">%LOCALAPPDATA%\Nebulae\internal\</code> and isolated from the main interface.</li>
+                  <li><strong>Uninstalling:</strong> Windows Settings → Apps → Installed apps → Find <strong>Nebulae</strong> → Uninstall.</li>
                 </ul>
               </section>
             </div>
@@ -203,9 +203,9 @@ export const HelpModal: React.FC = () => {
                   3. Troubleshooting & Internal Files
                 </h3>
                 <ul className="space-y-1.5 text-slate-400">
-                  <li><strong>"nebulae is damaged" quarantine prompt:</strong> Open Terminal and execute: <code className="text-pink-300 select-all">xattr -cr /Applications/nebulae.app</code></li>
-                  <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/ADC/internal/</code>.</li>
-                  <li><strong>Uninstall:</strong> Drag <code className="text-slate-200">nebulae.app</code> to Trash and optionally delete <code className="text-slate-200">~/Library/Application Support/ADC/</code>.</li>
+                  <li><strong>"Nebulae is damaged" quarantine prompt:</strong> Open Terminal and execute: <code className="text-pink-300 select-all">xattr -cr /Applications/Nebulae.app</code></li>
+                  <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/Nebulae/internal/</code>.</li>
+                  <li><strong>Uninstall:</strong> Drag <code className="text-slate-200">Nebulae.app</code> to Trash and optionally delete <code className="text-slate-200">~/Library/Application Support/Nebulae/</code>.</li>
                 </ul>
               </section>
             </div>
@@ -223,7 +223,7 @@ export const HelpModal: React.FC = () => {
                   Click the <strong>Apple menu ()</strong> → <strong>About This Mac</strong>. Confirm the <strong>Processor</strong> line reads <strong>Intel Core i5, i7, i9, or Xeon</strong>.
                 </p>
                 <p className="text-slate-400 mt-1">
-                  Download package: <code className="text-pink-300">nebulae-macOS-x64.dmg</code> (native x86_64 binary).
+                  Download package: <code className="text-pink-300">Nebulae-macOS-x64.dmg</code> (native x86_64 binary).
                 </p>
               </section>
 
@@ -233,9 +233,9 @@ export const HelpModal: React.FC = () => {
                   2. Installation Steps
                 </h3>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-                  <li>Double-click <code className="text-pink-300">nebulae-macOS-x64.dmg</code> to mount.</li>
-                  <li>Drag <strong>nebulae.app</strong> to Applications.</li>
-                  <li>Eject the disk image and launch nebulae.</li>
+                  <li>Double-click <code className="text-pink-300">Nebulae-macOS-x64.dmg</code> to mount.</li>
+                  <li>Drag <strong>Nebulae.app</strong> to Applications.</li>
+                  <li>Eject the disk image and launch Nebulae.</li>
                 </ol>
               </section>
 
@@ -245,7 +245,7 @@ export const HelpModal: React.FC = () => {
                   <span>macOS Gatekeeper Verification</span>
                 </div>
                 <p>
-                  Right-click <strong>nebulae.app</strong> → select <strong>Open</strong> → confirm <strong>Open</strong>.
+                  Right-click <strong>Nebulae.app</strong> → select <strong>Open</strong> → confirm <strong>Open</strong>.
                 </p>
               </section>
 
@@ -255,8 +255,8 @@ export const HelpModal: React.FC = () => {
                   3. Troubleshooting & Internal Files
                 </h3>
                 <ul className="space-y-1.5 text-slate-400">
-                  <li><strong>Quarantine removal:</strong> <code className="text-pink-300 select-all">xattr -cr /Applications/nebulae.app</code></li>
-                  <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/ADC/internal/</code>.</li>
+                  <li><strong>Quarantine removal:</strong> <code className="text-pink-300 select-all">xattr -cr /Applications/Nebulae.app</code></li>
+                  <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/Nebulae/internal/</code>.</li>
                 </ul>
               </section>
             </div>

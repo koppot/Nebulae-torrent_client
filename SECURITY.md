@@ -39,9 +39,9 @@ Nebulae implements defense-in-depth principles across all platform layers:
 
 ### 1. Isolated Application Storage
 All application databases, configuration files, and logs reside strictly within an isolated application directory:
-- **macOS**: `~/Library/Application Support/ADC/internal/`
-- **Windows**: `%LOCALAPPDATA%\ADC\internal\`
-- **Linux**: `~/.local/share/ADC/internal/`
+- **macOS**: `~/Library/Application Support/Nebulae/internal/`
+- **Windows**: `%LOCALAPPDATA%\Nebulae\internal\`
+- **Linux**: `~/.local/share/Nebulae/internal/`
 
 Runtime state is never mixed with user document folders or exposed publicly.
 
