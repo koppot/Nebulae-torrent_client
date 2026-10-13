@@ -64,3 +64,90 @@ pub fn trigger_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Res
 pub fn reset_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
     engine.reset_kill_switch()
 }
+
+#[tauri::command]
+pub fn select_torrent_file() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("try\nPOSIX path of (choose file of type {\"torrent\", \"public.data\"} with prompt \"Select .torrent file\")\non error\n\"\"\nend try")
+            .output()
+            .map_err(|e| format!("Failed to open file picker: {e}"))?;
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.OpenFileDialog
+$f.Filter = "Torrent Files (*.torrent)|*.torrent|All Files (*.*)|*.*"
+$f.Title = "Select .torrent file"
+if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    $f.FileName
+}
+"#;
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to open file picker: {e}"))?;
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub fn select_download_directory() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("try\nPOSIX path of (choose folder with prompt \"Select Download Directory\")\non error\n\"\"\nend try")
+            .output()
+            .map_err(|e| format!("Failed to open directory picker: {e}"))?;
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.FolderBrowserDialog
+$f.Description = "Select Download Directory"
+if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    $f.SelectedPath
+}
+"#;
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to open directory picker: {e}"))?;
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(None)
+    }
+}
