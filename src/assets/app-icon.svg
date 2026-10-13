@@ -1,0 +1,50 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae — Peer Constellation app icon (master, 1024x1024) -->
+  <!-- Original artwork for org.asiandvdclub.nebulae. Not derived from any existing brand. -->
+  <defs>
+    <radialGradient id="bgGrad" gradientUnits="userSpaceOnUse" cx="512" cy="290" r="920">
+      <stop offset="0" stop-color="#1A1F31"/>
+      <stop offset="0.55" stop-color="#121522"/>
+      <stop offset="1" stop-color="#0B0D15"/>
+    </radialGradient>
+    <radialGradient id="bloomGrad" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="470">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.42"/>
+      <stop offset="0.45" stop-color="#8B5CF6" stop-opacity="0.26"/>
+      <stop offset="0.78" stop-color="#D946EF" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#D946EF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="amberGlow" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="185">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity="0.40"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="sq"><rect width="1024" height="1024" rx="224"/></clipPath>
+  </defs>
+
+  <!-- Rounded-square deep-space frame -->
+  <g clip-path="url(#sq)">
+    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+    <!-- Restrained cosmic bloom behind the symbol -->
+    <circle cx="512" cy="512" r="470" fill="url(#bloomGrad)"/>
+    <!-- Soft amber warmth at the central peer node -->
+    <circle cx="512" cy="512" r="185" fill="url(#amberGlow)"/>
+  </g>
+
+  <!-- N: three thick round-capped connection strokes -->
+  <g stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+    <path d="M316 200 V824"/>
+    <path d="M708 200 V824"/>
+    <path d="M316 200 L708 824"/>
+  </g>
+
+  <!-- Peer-node gap rings (punch a halo so each node reads as a distinct participant) -->
+  <g fill="url(#bgGrad)">
+    <circle cx="316" cy="200" r="104"/>
+    <circle cx="512" cy="512" r="104"/>
+    <circle cx="708" cy="824" r="104"/>
+  </g>
+
+  <!-- Peer nodes: upper-left, central junction (amber highlight), lower-right -->
+  <circle cx="316" cy="200" r="84" fill="#F8FAFC"/>
+  <circle cx="708" cy="824" r="84" fill="#F8FAFC"/>
+  <circle cx="512" cy="512" r="84" fill="#F59E0B"/>
+</svg>

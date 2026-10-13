@@ -1,195 +1,118 @@
 import React from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
-import { formatBytes, formatSpeed, formatEta } from '../../lib/formatters';
+import { formatBytes, formatSpeed } from '../../lib/formatters';
 import {
   Play,
-  FolderOpen,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  Clock,
-  Sparkles,
-  FilePlus,
-  CheckCircle2,
+  Pause,
+  Plus,
+  Film,
 } from 'lucide-react';
 
 export const SimpleMediaView: React.FC = () => {
-  const { torrents } = useTorrentStore();
+  const { torrents, pauseTorrent, resumeTorrent } = useTorrentStore();
   const { setShowAddTorrent } = useUiStore();
 
-  const activeDownloads = torrents.filter((t) => t.status === 'Downloading');
-  const completed = torrents.filter((t) => t.status === 'Completed' || t.status === 'Seeding');
-  const readyToWatch = torrents.filter((t) => t.is_media && t.progress > 0.1);
+  const mediaTorrents = torrents.filter((t) => t.is_media || t.category === 'Movies');
+  const displayItems = mediaTorrents.length > 0 ? mediaTorrents : torrents;
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 space-y-10">
-      {/* Hero Welcome / Quick Add Shelf */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-adc-crimson/30 via-black/80 to-black/90 border border-adc-crimson/30 p-6 flex items-center justify-between shadow-adc-glass backdrop-blur-md">
-        <div className="space-y-1 z-10 max-w-xl">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-adc-crimson/30 border border-adc-crimsonBright/40 text-adc-ivory text-[11px] font-semibold mb-2">
-            <Sparkles className="w-3.5 h-3.5 text-adc-gold" />
-            <span>Simple Media Mode</span>
+    <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#141414] text-white">
+      {/* Header Bar */}
+      <div className="flex items-center justify-between pb-4 border-b border-[#333333]">
+        <div className="flex items-center gap-3">
+          <Film className="w-5 h-5 text-[#e50914]" />
+          <div>
+            <h2 className="text-base font-bold text-white tracking-tight">Media Library</h2>
+            <p className="text-xs text-[#a3a3a3]">Instant streaming & sequential downloads</p>
           </div>
-          <h2 className="text-xl font-bold text-adc-ivory tracking-tight">
-            Media Deliveries & Playback
-          </h2>
-          <p className="text-xs text-white/70 leading-relaxed">
-            Drag and drop .torrent files anywhere onto this window, paste magnet links, or explore your downloads.
-          </p>
         </div>
         <button
           onClick={() => setShowAddTorrent(true)}
-          className="z-10 adc-btn-crimson flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold"
+          className="flex items-center gap-2 px-4 py-2 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow"
         >
-          <FilePlus className="w-4 h-4" />
-          <span>Add Media Torrent</span>
+          <Plus className="w-4 h-4" />
+          <span>Add Media</span>
         </button>
       </div>
 
-      {/* Shelf 1: Active Downloads */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <ArrowDownCircle className="w-4 h-4 text-pink-400" />
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Active Downloads</h3>
-            <span className="text-xs font-mono text-slate-500">({activeDownloads.length})</span>
+      {/* Empty State */}
+      {displayItems.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-28 text-center space-y-3">
+          <div className="p-4 rounded-full bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3]">
+            <Film className="w-10 h-10" />
           </div>
+          <h3 className="text-base font-bold text-white">Your Media Library is Empty</h3>
+          <p className="text-xs text-[#a3a3a3] max-w-sm">
+            Drop any .torrent or .adc file into this window to start streaming or seeding.
+          </p>
+          <button
+            onClick={() => setShowAddTorrent(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add First Video</span>
+          </button>
         </div>
-
-        {activeDownloads.length === 0 ? (
-          <div className="border border-dashed border-slate-800 rounded-xl p-8 text-center text-slate-500 text-xs">
-            No active downloads at this moment. Drag and drop a .torrent file to begin.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {activeDownloads.map((torrent) => (
+      ) : (
+        /* Netflix Style Card Grid */
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {displayItems.map((item) => {
+            const progressPct = Math.round(item.progress * 100);
+            const isDownloading = item.status === 'Downloading';
+            return (
               <div
-                key={torrent.id}
-                className="group relative overflow-hidden rounded-xl bg-black/60 border border-white/10 hover:border-adc-crimson/50 p-4 transition-all shadow-adc-glass backdrop-blur-md flex flex-col justify-between"
+                key={item.id}
+                className="group relative rounded-lg bg-[#1f1f1f] border border-[#333333] hover:border-[#e50914] overflow-hidden flex flex-col justify-between transition"
               >
-                <div>
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <h4 className="text-xs font-semibold text-adc-ivory truncate flex-1 group-hover:text-adc-crimsonGlow transition">
-                      {torrent.name}
-                    </h4>
-                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-adc-crimson/40 border border-adc-crimsonBright/50 text-adc-ivory font-semibold">
-                      {Math.round(torrent.progress * 100)}%
-                    </span>
+                {/* 16:9 Thumbnail Poster Area */}
+                <div className="aspect-video w-full bg-[#141414] relative flex items-center justify-center overflow-hidden">
+                  <Film className="w-12 h-12 text-[#333333] group-hover:text-[#525252] transition" />
+
+                  {/* Hover Overlay Play Action */}
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-3 transition">
+                    <button
+                      onClick={() => (isDownloading ? pauseTorrent(item.id) : resumeTorrent(item.id))}
+                      className="p-3 rounded-full bg-[#e50914] text-white hover:scale-105 transition shadow"
+                      title={isDownloading ? 'Pause' : 'Play'}
+                    >
+                      {isDownloading ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 fill-white" />}
+                    </button>
                   </div>
 
-                  <div className="flex items-center gap-3 text-[11px] text-white/70 font-mono mb-3">
-                    <span className="flex items-center gap-1 text-adc-ice">
-                      <ArrowDownCircle className="w-3.5 h-3.5" />
-                      {formatSpeed(torrent.download_rate)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-white/50" />
-                      ETA: {formatEta(torrent.eta_seconds)}
-                    </span>
-                  </div>
+                  {/* Status Badge */}
+                  <span className="absolute top-2 left-2 text-[10px] font-mono px-2 py-0.5 rounded bg-black/80 border border-[#333333] text-white font-semibold">
+                    {item.status}
+                  </span>
 
-                  {/* Progress Bar (ADC Crimson to Ice glow) */}
-                  <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mb-3">
+                  {/* Progress bar at bottom of poster */}
+                  <div className="absolute bottom-0 inset-x-0 h-1 bg-[#333333]">
                     <div
-                      className="h-full bg-gradient-to-r from-adc-crimsonBright via-adc-crimsonGlow to-adc-ice rounded-full transition-all"
-                      style={{ width: `${Math.round(torrent.progress * 100)}%` }}
-                    ></div>
+                      className="h-full bg-[#e50914] transition-all"
+                      style={{ width: `${progressPct}%` }}
+                    />
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-white/50 border-t border-white/10 pt-2 font-mono">
-                  <span>
-                    {formatBytes(torrent.downloaded_bytes)} of {formatBytes(torrent.total_bytes)}
-                  </span>
-                  <span>Peers: {torrent.peers}</span>
+                {/* Card Content & Metadata */}
+                <div className="p-3 space-y-2">
+                  <h4 className="text-xs font-semibold text-white truncate" title={item.name}>
+                    {item.name}
+                  </h4>
+                  <div className="flex items-center justify-between text-[11px] font-mono text-[#a3a3a3]">
+                    <span>{formatBytes(item.total_bytes)}</span>
+                    <span>
+                      {isDownloading ? formatSpeed(item.download_rate) : `${progressPct}%`}
+                    </span>
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Shelf 2: Ready to Watch */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Play className="w-4 h-4 text-adc-crimsonGlow" />
-            <h3 className="text-sm font-bold text-adc-ivory uppercase tracking-wider">Ready to Watch</h3>
-            <span className="text-xs font-mono text-white/50">({readyToWatch.length})</span>
-          </div>
+            );
+          })}
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {readyToWatch.map((torrent) => (
-            <div
-              key={`watch-${torrent.id}`}
-              className="group relative rounded-xl bg-black/60 border border-white/10 hover:border-adc-crimson/50 p-4 transition-all shadow-adc-glass backdrop-blur-md flex flex-col justify-between"
-            >
-              <div>
-                <div className="aspect-video w-full rounded-lg bg-black border border-white/10 flex items-center justify-center mb-3 relative overflow-hidden group-hover:border-adc-crimson/50 transition">
-                  <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80"></div>
-                  <Play className="w-10 h-10 text-adc-crimsonBright group-hover:scale-110 transition drop-shadow" />
-                  <span className="absolute bottom-2 left-2 text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-black/80 text-white/80 border border-white/10">
-                    {torrent.status}
-                  </span>
-                </div>
-                <h4 className="text-xs font-semibold text-adc-ivory truncate mb-1">
-                  {torrent.name}
-                </h4>
-                <p className="text-[11px] text-white/60 font-mono">
-                  Size: {formatBytes(torrent.total_bytes)} · Ratio: {torrent.ratio.toFixed(2)}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2 mt-4 pt-3 border-t border-white/10">
-                <button className="flex-1 adc-btn-crimson flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold">
-                  <Play className="w-3.5 h-3.5" />
-                  <span>Play Media</span>
-                </button>
-                <button className="adc-btn-glass p-2 rounded-lg text-white/80 hover:text-white" title="Open Destination Folder">
-                  <FolderOpen className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Shelf 3: Completed & Seeding */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-adc-emerald" />
-            <h3 className="text-sm font-bold text-adc-ivory uppercase tracking-wider">Completed & Seeding</h3>
-            <span className="text-xs font-mono text-white/50">({completed.length})</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {completed.map((torrent) => (
-            <div
-              key={`done-${torrent.id}`}
-              className="rounded-xl bg-black/60 border border-white/10 p-4 transition-all shadow-adc-glass backdrop-blur-md flex items-center justify-between gap-4"
-            >
-              <div className="flex-1 truncate">
-                <h4 className="text-xs font-semibold text-adc-ivory truncate mb-1">
-                  {torrent.name}
-                </h4>
-                <div className="flex items-center gap-3 text-[11px] text-white/60 font-mono">
-                  <span>{formatBytes(torrent.total_bytes)}</span>
-                  <span className="text-adc-emerald flex items-center gap-1">
-                    <ArrowUpCircle className="w-3 h-3" />
-                    Ratio: {torrent.ratio.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-              <button className="adc-btn-glass p-2 rounded-lg text-white/80 hover:text-white" title="Open in folder">
-                <FolderOpen className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+      )}
     </div>
   );
 };
+
+export default SimpleMediaView;

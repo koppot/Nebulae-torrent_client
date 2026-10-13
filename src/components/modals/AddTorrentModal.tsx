@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { X, Plus, Magnet, FileUp, Folder, FileCheck, CheckCircle2, FolderSearch } from 'lucide-react';
+import { X, Plus, FileUp, Folder, FileCheck } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 
 export const AddTorrentModal: React.FC = () => {
@@ -16,7 +16,6 @@ export const AddTorrentModal: React.FC = () => {
   const [selectedFileSize, setSelectedFileSize] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isManualPathEdit, setIsManualPathEdit] = useState(false);
   const [presets, setPresets] = useState<SystemPathPresets | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -85,7 +84,6 @@ export const AddTorrentModal: React.FC = () => {
 
   const handleChooseFile = async () => {
     try {
-      // 1. Attempt native OS file dialog via Tauri
       const nativePath = await selectTorrentFile();
       if (nativePath) {
         const name = nativePath.split('/').pop()?.split('\\').pop() || nativePath;
@@ -95,10 +93,8 @@ export const AddTorrentModal: React.FC = () => {
         return;
       }
     } catch {
-      // Fall through to HTML5 file input
+      // Fall through
     }
-
-    // 2. Fallback to HTML5 file input (macOS WebKit / WebView2 native sheet)
     fileInputRef.current?.click();
   };
 
@@ -134,8 +130,6 @@ export const AddTorrentModal: React.FC = () => {
     } catch {
       // Fall through
     }
-
-    // Fallback to webkitdirectory folder picker
     folderInputRef.current?.click();
   };
 
@@ -175,23 +169,23 @@ export const AddTorrentModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
-      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 font-sans select-none">
+      <div className="relative w-full max-w-lg bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col text-white">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/40">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#333333] bg-[#1f1f1f]">
           <div className="flex items-center gap-2">
-            <Plus className="w-5 h-5 text-adc-gold" />
-            <h2 className="text-base font-semibold text-white">Add New Torrent</h2>
+            <Plus className="w-4 h-4 text-[#e50914]" />
+            <h2 className="text-sm font-bold text-white">Add Torrent</h2>
           </div>
           <button
             onClick={() => setShowAddTorrent(false)}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="p-1 rounded text-[#a3a3a3] hover:text-white transition"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Hidden HTML5 File & Folder Inputs */}
+        {/* Hidden File & Folder Inputs */}
         <input
           ref={fileInputRef}
           type="file"
@@ -210,47 +204,37 @@ export const AddTorrentModal: React.FC = () => {
         />
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 text-xs text-slate-300">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs text-[#a3a3a3]">
           {/* File Selection Dropzone */}
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
-              <FileUp className="w-3.5 h-3.5 text-adc-gold" />
-              <span>Torrent / ADC Metainfo File</span>
+            <label className="block text-xs font-medium text-white mb-1.5">
+              Torrent File
             </label>
 
             {selectedFileName ? (
               <div
                 onClick={handleChooseFile}
-                className="relative border border-emerald-500/40 bg-emerald-950/20 hover:bg-emerald-950/30 rounded-xl p-4 transition cursor-pointer flex items-center justify-between group"
+                className="border border-[#333333] bg-[#1f1f1f] rounded-lg p-3 transition cursor-pointer flex items-center justify-between hover:border-[#e50914]"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="p-2.5 rounded-lg bg-emerald-500/20 text-emerald-400 flex-shrink-0">
-                    <FileCheck className="w-5 h-5" />
-                  </div>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <FileCheck className="w-4 h-4 text-[#e50914] flex-shrink-0" />
                   <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-semibold text-white truncate max-w-[280px]">
-                        {selectedFileName}
-                      </span>
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      {selectedFileSize ? formatFileSize(selectedFileSize) : 'Selected via File Dialog'}
+                    <span className="text-xs font-medium text-white truncate block max-w-[300px]">
+                      {selectedFileName}
+                    </span>
+                    <span className="text-[10px] text-[#a3a3a3] font-mono">
+                      {selectedFileSize ? formatFileSize(selectedFileSize) : 'Ready'}
                     </span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-400 group-hover:text-slate-200 underline">
-                    Change
-                  </span>
                   <button
                     type="button"
                     onClick={handleClearSelectedFile}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition"
-                    title="Remove selected file"
+                    className="p-1 rounded text-[#a3a3a3] hover:text-[#e50914] transition"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
@@ -263,119 +247,70 @@ export const AddTorrentModal: React.FC = () => {
                 }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
-                className={`border-2 border-dashed rounded-xl p-5 text-center transition cursor-pointer flex flex-col items-center justify-center gap-2 ${
+                className={`border-2 border-dashed rounded-lg p-4 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5 ${
                   isDragging
-                    ? 'border-adc-crimson bg-adc-crimson/10 scale-[1.01]'
-                    : 'border-slate-700 hover:border-adc-crimson/60 bg-slate-950/50 hover:bg-slate-950'
+                    ? 'border-[#e50914] bg-[#e50914]/10'
+                    : 'border-[#333333] hover:border-[#e50914] bg-[#1f1f1f]'
                 }`}
               >
-                <div className="p-2.5 rounded-full bg-slate-800 text-slate-300">
-                  <FileUp className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-xs text-white font-medium block">
-                    Click to browse and select <code className="text-adc-gold">.torrent</code> or <code className="text-adc-gold">.adc</code> file
-                  </span>
-                  <span className="text-[11px] text-slate-400 mt-0.5 block">
-                    or drag and drop metainfo file into this window
-                  </span>
-                </div>
+                <FileUp className="w-5 h-5 text-[#a3a3a3]" />
+                <span className="text-xs text-white">
+                  Click to select <span className="font-mono text-[#e50914]">.torrent</span> or <span className="font-mono text-[#e50914]">.adc</span> file
+                </span>
+                <span className="text-[10px] text-[#a3a3a3]">or drag and drop file here</span>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex-1 h-[1px] bg-slate-800"></div>
-            <span className="text-[10px] uppercase font-mono text-slate-500">Or enter magnet or ADC link</span>
-            <div className="flex-1 h-[1px] bg-slate-800"></div>
-          </div>
-
-          {/* Magnet / URL input */}
+          {/* Magnet / Protocol URL input */}
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
-              <Magnet className="w-3.5 h-3.5 text-adc-crimson" />
-              <span>Magnet Link or ADC Protocol URL</span>
+            <label className="block text-xs font-medium text-white mb-1.5">
+              Magnet Link or ADC URL
             </label>
-            <textarea
-              rows={2}
-              placeholder="magnet:?xt=urn:btih:... or adc://... or adc:?..."
+            <input
+              type="text"
+              placeholder="magnet:?xt=urn:btih:... or adc:?..."
               value={selectedFileName ? '' : torrentSource}
               disabled={!!selectedFileName}
               onChange={(e) => setTorrentSource(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-adc-crimson disabled:opacity-40"
+              className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#333333] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] disabled:opacity-40"
             />
           </div>
 
-          {/* Destination Directory (Interactive Folder Selection) */}
+          {/* Save Destination Directory */}
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                <Folder className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Save Destination Directory</span>
-              </label>
+            <label className="block text-xs font-medium text-white mb-1.5">
+              Save Destination
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={downloadDir}
+                onChange={(e) => setDownloadDir(e.target.value)}
+                className="flex-1 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#333333] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
+                placeholder="/path/to/download"
+              />
               <button
                 type="button"
-                onClick={() => setIsManualPathEdit(!isManualPathEdit)}
-                className="text-[11px] text-slate-400 hover:text-white transition underline"
+                onClick={handleBrowseFolder}
+                className="px-3 py-2 rounded-lg bg-[#1f1f1f] hover:bg-[#262626] text-white flex items-center gap-1.5 text-xs transition border border-[#333333]"
               >
-                {isManualPathEdit ? 'Pick via Directory Dialog' : 'Edit path manually'}
+                <Folder className="w-3.5 h-3.5 text-[#e50914]" />
+                <span>Browse...</span>
               </button>
             </div>
 
-            {!isManualPathEdit ? (
-              <div
-                onClick={handleBrowseFolder}
-                className="border border-slate-700 hover:border-cyan-500/60 bg-slate-950/60 hover:bg-slate-950 rounded-xl p-3 transition cursor-pointer flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-2 rounded-lg bg-cyan-950/60 text-cyan-400 border border-cyan-800/40 flex-shrink-0">
-                    <FolderSearch className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="text-[10px] text-slate-400 block font-mono uppercase tracking-wider">
-                      Target Folder:
-                    </span>
-                    <span className="text-xs font-mono text-white font-medium truncate block max-w-[310px]">
-                      {downloadDir || 'Click to select folder...'}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 text-[11px] text-cyan-400 group-hover:text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/40 border border-cyan-800/30 flex-shrink-0">
-                  <span>Browse Folder...</span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={downloadDir}
-                  onChange={(e) => setDownloadDir(e.target.value)}
-                  className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-adc-gold"
-                  placeholder="e.g. /Users/username/Downloads"
-                />
-                <button
-                  type="button"
-                  onClick={handleBrowseFolder}
-                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 text-xs transition border border-slate-700"
-                  title="Browse Directory"
-                >
-                  <FolderSearch className="w-3.5 h-3.5" />
-                  <span>Browse...</span>
-                </button>
-              </div>
-            )}
-
-            {/* Quick Preset Location Pills */}
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              <span className="text-[10px] text-slate-500 uppercase font-mono mr-0.5">Quick Pick:</span>
+            {/* Quick Preset Buttons */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px] font-mono">
+              <span className="text-[#a3a3a3]">Quick:</span>
               {presets?.downloads && (
                 <button
                   type="button"
                   onClick={() => setDownloadDir(presets.downloads!)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                  className={`px-2 py-0.5 rounded transition border ${
                     downloadDir === presets.downloads
-                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                      ? 'bg-[#e50914] text-white border-[#e50914]'
+                      : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                   }`}
                 >
                   Downloads
@@ -385,10 +320,10 @@ export const AddTorrentModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setDownloadDir(presets.movies!)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                  className={`px-2 py-0.5 rounded transition border ${
                     downloadDir === presets.movies
-                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                      ? 'bg-[#e50914] text-white border-[#e50914]'
+                      : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                   }`}
                 >
                   Movies
@@ -398,38 +333,31 @@ export const AddTorrentModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setDownloadDir(presets.desktop!)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                  className={`px-2 py-0.5 rounded transition border ${
                     downloadDir === presets.desktop
-                      ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                      : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                      ? 'bg-[#e50914] text-white border-[#e50914]'
+                      : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                   }`}
                 >
                   Desktop
                 </button>
               )}
-              <button
-                type="button"
-                onClick={handleBrowseFolder}
-                className="px-2 py-0.5 rounded text-[11px] font-mono text-adc-gold hover:text-amber-300 bg-amber-950/20 border border-amber-800/40 transition"
-              >
-                + Choose Other Folder...
-              </button>
             </div>
           </div>
 
-          {/* Footer Controls */}
-          <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
+          {/* Footer Actions */}
+          <div className="flex justify-end gap-2 pt-3 border-t border-[#333333]">
             <button
               type="button"
               onClick={() => setShowAddTorrent(false)}
-              className="px-4 py-2 rounded-lg text-slate-400 hover:text-white transition"
+              className="px-4 py-1.5 rounded-lg text-[#a3a3a3] hover:text-white transition"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting || (!torrentSource.trim() && !selectedFileName)}
-              className="px-5 py-2 rounded-lg bg-adc-crimson hover:bg-red-700 disabled:opacity-50 text-white font-semibold transition flex items-center gap-1.5 shadow-lg shadow-adc-crimson/20"
+              className="px-4 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#f40612] disabled:opacity-40 text-white font-semibold transition flex items-center gap-1.5 shadow"
             >
               {isSubmitting ? 'Adding...' : 'Start Download'}
             </button>
@@ -439,3 +367,5 @@ export const AddTorrentModal: React.FC = () => {
     </div>
   );
 };
+
+export default AddTorrentModal;

@@ -3,20 +3,17 @@ import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
-import { PeeringMode } from '../../types';
 import {
   Play,
   Pause,
   Trash2,
-  RotateCw,
+  Plus,
   Search,
   HardDrive,
   Users,
   Activity,
   Layers,
-  Zap,
-  Globe,
-  Radio,
+  FileText,
 } from 'lucide-react';
 
 export const TorrentManagerView: React.FC = () => {
@@ -26,6 +23,7 @@ export const TorrentManagerView: React.FC = () => {
     setSelectedId,
     pauseTorrent,
     resumeTorrent,
+    removeTorrent,
   } = useTorrentStore();
 
   const {
@@ -35,22 +33,16 @@ export const TorrentManagerView: React.FC = () => {
     setManagerCategoryFilter,
     searchQuery,
     setSearchQuery,
+    setShowAddTorrent,
   } = useUiStore();
 
-  const {
-    peers,
-    settings: peeringSettings,
-    fetchSettings: fetchPeeringSettings,
-    saveSettings: savePeeringSettings,
-    fetchPeers,
-  } = usePeeringStore();
+  const { peers, fetchPeers } = usePeeringStore();
 
   useEffect(() => {
-    fetchPeeringSettings();
     if (selectedId) {
       fetchPeers(selectedId);
     }
-  }, [selectedId, fetchPeeringSettings, fetchPeers]);
+  }, [selectedId, fetchPeers]);
 
   const filteredTorrents = torrents.filter((t) => {
     if (searchQuery && !t.name.toLowerCase().includes(searchQuery.toLowerCase())) {
@@ -66,23 +58,29 @@ export const TorrentManagerView: React.FC = () => {
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || torrents[0];
 
-  const handleModeChange = (mode: PeeringMode) => {
-    if (peeringSettings) {
-      savePeeringSettings({ ...peeringSettings, mode });
-    }
+  const handleResumeSelected = () => {
+    if (selectedTorrent) resumeTorrent(selectedTorrent.id);
+  };
+
+  const handlePauseSelected = () => {
+    if (selectedTorrent) pauseTorrent(selectedTorrent.id);
+  };
+
+  const handleRemoveSelected = () => {
+    if (selectedTorrent) removeTorrent(selectedTorrent.id);
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden font-sans select-none text-adc-ivory">
-      {/* Sidebar Filters */}
-      <aside className="w-56 bg-black/70 border-r border-white/10 backdrop-blur-md flex flex-col p-3 space-y-4 text-xs">
+    <div className="flex-1 flex overflow-hidden font-sans select-none bg-[#141414] text-white">
+      {/* 1. Left Sidebar: ruTorrent / qBittorrent Categories */}
+      <aside className="w-52 bg-[#141414] border-r border-[#333333] flex flex-col p-2 space-y-4 text-xs">
         <div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-adc-muted px-2 block mb-1">
-            Status Filters
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[#a3a3a3] px-2 block mb-1">
+            Transfers
           </span>
           <div className="space-y-0.5">
             {[
-              { id: 'all', label: 'All Transfers', count: torrents.length },
+              { id: 'all', label: 'All Torrents', count: torrents.length },
               { id: 'downloading', label: 'Downloading', count: torrents.filter((t) => t.status === 'Downloading').length },
               { id: 'seeding', label: 'Seeding', count: torrents.filter((t) => t.status === 'Seeding').length },
               { id: 'completed', label: 'Completed', count: torrents.filter((t) => t.status === 'Completed').length },
@@ -91,182 +89,192 @@ export const TorrentManagerView: React.FC = () => {
               <button
                 key={item.id}
                 onClick={() => setManagerCategoryFilter(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition ${
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left transition ${
                   managerCategoryFilter === item.id
-                    ? 'adc-btn-crimson font-semibold'
-                    : 'text-adc-ivory/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-[#e50914] text-white font-semibold'
+                    : 'text-[#a3a3a3] hover:text-white hover:bg-[#1f1f1f]'
                 }`}
               >
                 <span>{item.label}</span>
-                <span className="text-[10px] font-mono opacity-70">{item.count}</span>
+                <span className="text-[10px] font-mono opacity-80">{item.count}</span>
               </button>
             ))}
           </div>
         </div>
 
         <div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-adc-muted px-2 block mb-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[#a3a3a3] px-2 block mb-1">
             Categories
           </span>
           <div className="space-y-0.5">
             {[
-              { id: 'media', label: 'Cinema & Video', count: torrents.filter((t) => t.is_media).length },
+              { id: 'media', label: 'Video & Cinema', count: torrents.filter((t) => t.is_media).length },
             ].map((item) => (
               <button
                 key={item.id}
                 onClick={() => setManagerCategoryFilter(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition ${
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left transition ${
                   managerCategoryFilter === item.id
-                    ? 'adc-btn-crimson font-semibold'
-                    : 'text-adc-ivory/70 hover:text-white hover:bg-white/5'
+                    ? 'bg-[#e50914] text-white font-semibold'
+                    : 'text-[#a3a3a3] hover:text-white hover:bg-[#1f1f1f]'
                 }`}
               >
                 <span>{item.label}</span>
-                <span className="text-[10px] font-mono opacity-70">{item.count}</span>
+                <span className="text-[10px] font-mono opacity-80">{item.count}</span>
               </button>
             ))}
           </div>
         </div>
       </aside>
 
-      {/* Main Table + Tabbed Bottom Inspector */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-black/90">
-        {/* Action Toolbar */}
-        <div className="h-11 border-b border-white/10 bg-black/50 backdrop-blur-md flex items-center justify-between px-4">
-          <div className="flex items-center gap-2">
+      {/* 2. Main Right Area: Action Toolbar + Table + Tabbed Inspector */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-[#141414]">
+        {/* Top Action Toolbar */}
+        <div className="h-10 border-b border-[#333333] bg-[#1f1f1f] flex items-center justify-between px-3">
+          <div className="flex items-center gap-1">
             <button
-              onClick={() => selectedTorrent && resumeTorrent(selectedTorrent.id)}
-              className="adc-btn-glass p-1.5 rounded-md text-white/80 hover:text-emerald-400"
-              title="Resume"
+              onClick={() => setShowAddTorrent(true)}
+              className="p-1.5 rounded hover:bg-[#262626] text-white hover:text-[#e50914] transition"
+              title="Add Torrent"
             >
-              <Play className="w-3.5 h-3.5" />
+              <Plus className="w-4 h-4" />
             </button>
             <button
-              onClick={() => selectedTorrent && pauseTorrent(selectedTorrent.id)}
-              className="adc-btn-glass p-1.5 rounded-md text-white/80 hover:text-amber-400"
-              title="Pause"
+              onClick={handleResumeSelected}
+              disabled={!selectedTorrent}
+              className="p-1.5 rounded hover:bg-[#262626] text-white hover:text-[#e50914] disabled:opacity-30 transition"
+              title="Resume Selected"
             >
-              <Pause className="w-3.5 h-3.5" />
+              <Play className="w-4 h-4" />
             </button>
             <button
-              className="adc-btn-glass p-1.5 rounded-md text-white/80 hover:text-red-400"
-              title="Remove"
+              onClick={handlePauseSelected}
+              disabled={!selectedTorrent}
+              className="p-1.5 rounded hover:bg-[#262626] text-white hover:text-[#e50914] disabled:opacity-30 transition"
+              title="Pause Selected"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Pause className="w-4 h-4" />
             </button>
             <button
-              className="adc-btn-glass p-1.5 rounded-md text-white/80 hover:text-cyan-400"
-              title="Force Recheck"
+              onClick={handleRemoveSelected}
+              disabled={!selectedTorrent}
+              className="p-1.5 rounded hover:bg-[#262626] text-white hover:text-[#e50914] disabled:opacity-30 transition"
+              title="Delete Selected"
             >
-              <RotateCw className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Quick Search */}
-          <div className="relative w-64">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40" />
+          {/* Search Input */}
+          <div className="relative w-56">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
             <input
               type="text"
-              placeholder="Filter torrents..."
+              placeholder="Search transfers..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1 bg-white/5 border border-white/15 rounded-lg text-xs text-adc-ivory placeholder:text-white/40 focus:outline-none focus:border-adc-crimson"
+              className="w-full pl-8 pr-2.5 py-1 bg-[#141414] border border-[#333333] rounded text-xs text-white placeholder:text-[#a3a3a3] focus:outline-none focus:border-[#e50914]"
             />
           </div>
         </div>
 
-        {/* Data Grid Table */}
-        <div className="flex-1 overflow-auto border-b border-white/10">
+        {/* Data Table: Classic ruTorrent Grid */}
+        <div className="flex-1 overflow-auto">
           <table className="w-full text-left border-collapse text-xs">
-            <thead className="sticky top-0 bg-black/95 backdrop-blur border-b border-white/10 text-[11px] font-semibold text-adc-muted uppercase font-mono tracking-wider">
+            <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#333333] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider">
               <tr>
-                <th className="py-2.5 px-4">Name</th>
-                <th className="py-2.5 px-3">Size</th>
-                <th className="py-2.5 px-3 w-36">Progress</th>
-                <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3">Down Speed</th>
-                <th className="py-2.5 px-3">Up Speed</th>
-                <th className="py-2.5 px-3">ETA</th>
-                <th className="py-2.5 px-3">Ratio</th>
-                <th className="py-2.5 px-3">Seeds</th>
-                <th className="py-2.5 px-3">Peers</th>
+                <th className="py-2 px-3">Name</th>
+                <th className="py-2 px-2.5 w-20">Size</th>
+                <th className="py-2 px-2.5 w-36">Progress</th>
+                <th className="py-2 px-2.5 w-24">Status</th>
+                <th className="py-2 px-2.5 w-24">Down Speed</th>
+                <th className="py-2 px-2.5 w-24">Up Speed</th>
+                <th className="py-2 px-2.5 w-20">ETA</th>
+                <th className="py-2 px-2.5 w-16">Ratio</th>
+                <th className="py-2 px-2.5 w-14">Seeds</th>
+                <th className="py-2 px-2.5 w-14">Peers</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5 font-mono text-adc-ivory">
+            <tbody className="divide-y divide-[#262626] font-mono">
               {filteredTorrents.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-20 text-center text-adc-muted">
-                    <p className="text-sm font-sans font-medium text-white/70 mb-1">No torrents in list</p>
-                    <p className="text-xs font-sans text-white/40">
-                      Click <strong className="text-adc-gold font-semibold">+ Add Torrent</strong> in the top navigation or drop a <code className="text-white/60">.torrent</code> file to begin
-                    </p>
+                  <td colSpan={10} className="py-24 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <HardDrive className="w-8 h-8 text-[#333333]" />
+                      <p className="text-sm font-sans font-medium text-white">No torrents in list</p>
+                      <p className="text-xs font-sans text-[#a3a3a3]">
+                        Drop a <span className="text-white font-mono">.torrent</span> file or click <span className="text-[#e50914] font-semibold">+ Add</span> to begin
+                      </p>
+                    </div>
                   </td>
                 </tr>
               )}
-              {filteredTorrents.map((t) => (
-                <tr
-                  key={t.id}
-                  onClick={() => setSelectedId(t.id)}
-                  className={`hover:bg-white/5 cursor-pointer transition ${
-                    selectedId === t.id ? 'bg-adc-crimson/20 text-white font-medium' : ''
-                  }`}
-                >
-                  <td className="py-2.5 px-4 font-sans font-medium truncate max-w-xs">{t.name}</td>
-                  <td className="py-2.5 px-3 text-adc-muted">{formatBytes(t.total_bytes)}</td>
-                  <td className="py-2.5 px-3">
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 rounded-full bg-black/80 overflow-hidden border border-white/10">
-                        <div
-                          className="h-full bg-adc-crimson rounded-full"
-                          style={{ width: `${Math.round(t.progress * 100)}%` }}
-                        />
+              {filteredTorrents.map((t) => {
+                const isSelected = selectedId === t.id;
+                const progressPct = Math.round(t.progress * 100);
+                return (
+                  <tr
+                    key={t.id}
+                    onClick={() => setSelectedId(t.id)}
+                    className={`cursor-pointer transition select-none ${
+                      isSelected
+                        ? 'bg-[#1f1f1f] border-l-2 border-[#e50914] text-white'
+                        : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
+                    }`}
+                  >
+                    <td className="py-2 px-3 font-sans font-medium truncate max-w-xs text-white">
+                      {t.name}
+                    </td>
+                    <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
+                    <td className="py-2 px-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
+                          <div
+                            className="h-full bg-[#e50914] rounded-full transition-all"
+                            style={{ width: `${progressPct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] w-8 text-right font-mono text-white">{progressPct}%</span>
                       </div>
-                      <span className="text-[10px] w-8 text-right font-mono">{Math.round(t.progress * 100)}%</span>
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-3">
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                        t.status === 'Downloading'
-                          ? 'bg-blue-950/60 text-blue-300 border border-blue-800/50'
-                          : t.status === 'Seeding'
-                          ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/50'
-                          : 'bg-black/60 text-adc-muted border border-white/10'
-                      }`}
-                    >
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="py-2.5 px-3 text-cyan-400">{formatSpeed(t.download_rate)}</td>
-                  <td className="py-2.5 px-3 text-amber-400">{formatSpeed(t.upload_rate)}</td>
-                  <td className="py-2.5 px-3 text-adc-muted">{formatEta(t.eta_seconds)}</td>
-                  <td className="py-2.5 px-3">{formatRatio(t.ratio)}</td>
-                  <td className="py-2.5 px-3 text-adc-muted">{t.seeds}</td>
-                  <td className="py-2.5 px-3 text-adc-muted">{t.peers}</td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="py-2 px-2.5">
+                      <span className="text-[11px] font-sans text-white">
+                        {t.status}
+                      </span>
+                    </td>
+                    <td className="py-2 px-2.5 text-white">{formatSpeed(t.download_rate)}</td>
+                    <td className="py-2 px-2.5">{formatSpeed(t.upload_rate)}</td>
+                    <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
+                    <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
+                    <td className="py-2 px-2.5">{t.seeds}</td>
+                    <td className="py-2 px-2.5">{t.peers}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
 
-        {/* Bottom Tabbed Inspector */}
-        <div className="h-64 bg-black/95 border-t border-white/10 flex flex-col">
-          <div className="flex border-b border-white/10 px-4 pt-2 gap-2 text-xs">
+        {/* 3. Bottom Inspector: Classic ruTorrent Tabs */}
+        <div className="h-56 bg-[#1f1f1f] border-t border-[#333333] flex flex-col">
+          {/* Tab Headers */}
+          <div className="flex border-b border-[#333333] px-3 pt-1.5 gap-1 text-xs">
             {[
               { id: 'general', label: 'General', icon: Activity },
-              { id: 'files', label: 'Files & Media', icon: HardDrive },
+              { id: 'files', label: 'Files', icon: FileText },
               { id: 'trackers', label: 'Trackers', icon: Layers },
-              { id: 'peers', label: 'Smart Peering', icon: Users },
+              { id: 'peers', label: 'Peers', icon: Users },
             ].map((tab) => {
               const Icon = tab.icon;
+              const isActive = activeManagerTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveManagerTab(tab.id as any)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg transition border-b-2 font-medium ${
-                    activeManagerTab === tab.id
-                      ? 'border-adc-crimson text-white bg-white/5'
-                      : 'border-transparent text-adc-muted hover:text-white'
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t font-medium transition ${
+                    isActive
+                      ? 'border-b-2 border-[#e50914] text-white bg-[#141414]'
+                      : 'text-[#a3a3a3] hover:text-white'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -276,142 +284,81 @@ export const TorrentManagerView: React.FC = () => {
             })}
           </div>
 
-          <div className="flex-1 p-4 overflow-y-auto text-xs text-adc-ivory">
+          {/* Tab Panels */}
+          <div className="flex-1 p-3 overflow-y-auto text-xs bg-[#141414]">
             {selectedTorrent ? (
               activeManagerTab === 'general' ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
-                  <div>
-                    <span className="text-[10px] uppercase text-adc-muted block">Total Size</span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Size</span>
                     <span className="text-white">{formatBytes(selectedTorrent.total_bytes)}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] uppercase text-adc-muted block">Downloaded</span>
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Downloaded</span>
                     <span className="text-white">{formatBytes(selectedTorrent.downloaded_bytes)}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] uppercase text-adc-muted block">Uploaded</span>
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Uploaded</span>
                     <span className="text-white">{formatBytes(selectedTorrent.uploaded_bytes)}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] uppercase text-adc-muted block">Share Ratio</span>
-                    <span className="text-emerald-400">{formatRatio(selectedTorrent.ratio)}</span>
+                  <div className="space-y-1">
+                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Share Ratio</span>
+                    <span className="text-white font-bold">{formatRatio(selectedTorrent.ratio)}</span>
                   </div>
                 </div>
               ) : activeManagerTab === 'files' ? (
-                <div className="space-y-1.5 font-mono text-xs">
-                  <div className="p-2.5 rounded bg-black/60 border border-white/10 flex justify-between items-center">
-                    <div>
-                      <span className="text-white font-sans">{selectedTorrent.name}</span>
-                      <span className="block text-[10px] text-adc-muted font-mono mt-0.5">Priority: Sequential (Media Playable)</span>
-                    </div>
-                    <span className="text-adc-muted">{formatBytes(selectedTorrent.total_bytes)} · 100% Ready</span>
+                <div className="space-y-1 font-mono text-xs">
+                  <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex justify-between items-center">
+                    <span className="text-white truncate font-sans">{selectedTorrent.name}</span>
+                    <span className="text-[#a3a3a3]">{formatBytes(selectedTorrent.total_bytes)} · Complete</span>
                   </div>
                 </div>
               ) : activeManagerTab === 'trackers' ? (
-                <div className="font-mono text-xs space-y-2">
-                  <div className="p-2.5 rounded bg-black/60 border border-white/10 flex justify-between text-adc-muted">
-                    <span>https://tracker.asiandvdclub.org:2710/announce</span>
-                    <span className="text-emerald-400 font-semibold">Announce OK (HTTP 200 · Next in 23m)</span>
+                <div className="font-mono text-xs space-y-1.5">
+                  <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex justify-between text-xs">
+                    <span className="text-[#a3a3a3]">https://tracker.asiandvdclub.org:2710/announce</span>
+                    <span className="text-white font-semibold">Announce OK</span>
                   </div>
-                  <div className="p-2.5 rounded bg-black/60 border border-white/10 flex justify-between text-adc-muted">
-                    <span>udp://tracker.opentrackr.org:1337/announce</span>
-                    <span className="text-emerald-400 font-semibold">Active (Peers: {selectedTorrent.peers})</span>
+                  <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex justify-between text-xs">
+                    <span className="text-[#a3a3a3]">udp://tracker.opentrackr.org:1337/announce</span>
+                    <span className="text-white font-semibold">Peers: {selectedTorrent.peers}</span>
                   </div>
                 </div>
               ) : (
-                /* Enhanced Smart Peering Tab */
-                <div className="space-y-3">
-                  {/* Peering Mode Selector & Info */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-black/60 border border-white/10">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-adc-muted flex items-center gap-1">
-                        <Zap className="w-3.5 h-3.5 text-adc-crimson-light" />
-                        Peering Mode:
-                      </span>
-                      <select
-                        value={peeringSettings?.mode || 'Balanced'}
-                        onChange={(e) => handleModeChange(e.target.value as PeeringMode)}
-                        className="px-2 py-1 text-xs rounded bg-black border border-white/20 text-white focus:outline-none focus:border-adc-crimson"
-                      >
-                        <option value="Balanced">Balanced (Default)</option>
-                        <option value="SpeedFirst">Speed First</option>
-                        <option value="LatencyFirst">Latency First</option>
-                        <option value="LocalFirst">Local First (ISP/LAN)</option>
-                        <option value="PrivacyFirst">Privacy First (Randomized)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-3 text-[11px] text-adc-muted">
-                      <span className="flex items-center gap-1">
-                        <Globe className="w-3 h-3 text-cyan-400" /> Locality Preference: {peeringSettings?.enable_locality_preference ? 'Active' : 'Off'}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Radio className="w-3 h-3 text-emerald-400" /> Active Peers: {peers.length}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Peering Table */}
-                  <div className="overflow-x-auto border border-white/10 rounded-lg">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead className="bg-black/90 border-b border-white/10 text-[10px] uppercase font-mono text-adc-muted">
+                /* Peers Tab */
+                <div className="overflow-x-auto border border-[#333333] rounded">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-[#1f1f1f] border-b border-[#333333] text-[10px] uppercase font-mono text-[#a3a3a3]">
+                      <tr>
+                        <th className="py-1.5 px-2.5">Client</th>
+                        <th className="py-1.5 px-2.5">IP & Port</th>
+                        <th className="py-1.5 px-2.5">Down Speed</th>
+                        <th className="py-1.5 px-2.5">Up Speed</th>
+                        <th className="py-1.5 px-2.5">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#262626] font-mono text-[11px]">
+                      {peers.length === 0 ? (
                         <tr>
-                          <th className="py-2 px-3">Client</th>
-                          <th className="py-2 px-3">IP & Port</th>
-                          <th className="py-2 px-3">Locality</th>
-                          <th className="py-2 px-3">Score</th>
-                          <th className="py-2 px-3">RTT / Latency</th>
-                          <th className="py-2 px-3">Throughput (DL / UL)</th>
-                          <th className="py-2 px-3">Flags</th>
-                          <th className="py-2 px-3">Stability</th>
+                          <td colSpan={5} className="py-4 text-center text-[#a3a3a3]">No active peers connected</td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5 font-mono text-[11px]">
-                        {peers.map((p) => {
-                          const score = Math.round(p.stability_score * 100);
-                          return (
-                            <tr key={p.peer_id} className="hover:bg-white/5">
-                              <td className="py-2 px-3 font-sans text-white">{p.client_name}</td>
-                              <td className="py-2 px-3 text-adc-muted">{p.ip}:{p.port}</td>
-                              <td className="py-2 px-3">
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                                  p.locality_tier === 'Lan'
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                    : p.locality_tier === 'Country'
-                                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                                    : 'bg-white/10 text-adc-muted'
-                                }`}>
-                                  {p.locality_tier} {p.country_code ? `(${p.country_code})` : ''}
-                                </span>
-                              </td>
-                              <td className="py-2 px-3">
-                                <span className="font-bold text-emerald-400">{score}/100</span>
-                              </td>
-                              <td className="py-2 px-3 text-adc-muted">
-                                {p.rtt_ms}ms <span className="text-[10px] text-white/40">({p.req_resp_latency_ms}ms resp)</span>
-                              </td>
-                              <td className="py-2 px-3">
-                                <span className="text-cyan-400">{formatSpeed(p.sustained_dl_bps)}</span> /{' '}
-                                <span className="text-amber-400">{formatSpeed(p.sustained_ul_bps)}</span>
-                              </td>
-                              <td className="py-2 px-3 text-[10px] text-adc-muted">
-                                {p.utp && <span className="mr-1 text-cyan-300">uTP</span>}
-                                {p.encryption && <span className="mr-1 text-emerald-300">ENC</span>}
-                                {p.ipv6 && <span className="text-blue-300">IPv6</span>}
-                              </td>
-                              <td className="py-2 px-3 text-emerald-400">
-                                {(p.stability_score * 100).toFixed(0)}%
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                      ) : (
+                        peers.map((p) => (
+                          <tr key={p.peer_id} className="hover:bg-[#1f1f1f]">
+                            <td className="py-1.5 px-2.5 text-white font-sans">{p.client_name}</td>
+                            <td className="py-1.5 px-2.5 text-[#a3a3a3]">{p.ip}:{p.port}</td>
+                            <td className="py-1.5 px-2.5 text-white">{formatSpeed(p.sustained_dl_bps)}</td>
+                            <td className="py-1.5 px-2.5 text-[#a3a3a3]">{formatSpeed(p.sustained_ul_bps)}</td>
+                            <td className="py-1.5 px-2.5 text-white font-semibold">{(p.stability_score * 100).toFixed(0)}%</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               )
             ) : (
-              <div className="text-adc-muted">No torrent selected</div>
+              <div className="text-[#a3a3a3] text-xs">No torrent selected</div>
             )}
           </div>
         </div>
@@ -419,3 +366,5 @@ export const TorrentManagerView: React.FC = () => {
     </div>
   );
 };
+
+export default TorrentManagerView;

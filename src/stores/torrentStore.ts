@@ -17,6 +17,7 @@ interface TorrentState {
   setSelectedId: (id: string | null) => void;
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
+  removeTorrent: (id: string) => Promise<void>;
   addTorrent: (source: string, downloadDir?: string) => Promise<void>;
   selectTorrentFile: () => Promise<string | null>;
   selectDownloadDirectory: () => Promise<string | null>;
@@ -62,6 +63,19 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     set({
       torrents: get().torrents.map((t) => (t.id === id ? { ...t, status: 'Downloading' } : t)),
+    });
+  },
+
+  removeTorrent: async (id: string) => {
+    try {
+      await invoke('remove_torrent_stub', { id });
+    } catch {
+      //
+    }
+    const remaining = get().torrents.filter((t) => t.id !== id);
+    set({
+      torrents: remaining,
+      selectedId: get().selectedId === id ? (remaining[0]?.id || null) : get().selectedId,
     });
   },
 

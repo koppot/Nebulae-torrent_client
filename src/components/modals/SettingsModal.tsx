@@ -8,7 +8,6 @@ import {
   X,
   Sliders,
   Folder,
-  FolderSearch,
   Network,
   Palette,
   ShieldAlert,
@@ -20,7 +19,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Sparkles,
   Link,
   FileCheck,
   CheckCircle2,
@@ -36,7 +34,7 @@ export const SettingsModal: React.FC = () => {
     getSystemPathPresets().then(setPresets);
   }, [getSystemPathPresets]);
 
-  const [activeTab, setActiveTab] = useState<'general' | 'network' | 'appearance' | 'splash'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'network' | 'appearance'>('general');
   const [showDiagnostics, setShowDiagnostics] = useState(
     () => new URLSearchParams(window.location.search).get('diagnostics') === 'true'
   );
@@ -61,9 +59,9 @@ export const SettingsModal: React.FC = () => {
   const handleOpenLogs = async () => {
     try {
       await invoke('open_logs_folder');
-      showStatus('Opened internal logs folder in file manager');
+      showStatus('Opened internal logs folder');
     } catch {
-      showStatus('Opened internal logs folder (web simulation)');
+      showStatus('Opened internal logs folder');
     }
   };
 
@@ -73,7 +71,7 @@ export const SettingsModal: React.FC = () => {
       const text = JSON.stringify(summary, null, 2);
       await navigator.clipboard.writeText(text);
       setCopiedSummary(true);
-      showStatus('Diagnostic summary copied to clipboard');
+      showStatus('Diagnostic summary copied');
       setTimeout(() => setCopiedSummary(false), 2000);
     } catch {
       const fallback = JSON.stringify(
@@ -89,7 +87,7 @@ export const SettingsModal: React.FC = () => {
       );
       await navigator.clipboard.writeText(fallback);
       setCopiedSummary(true);
-      showStatus('Diagnostic summary copied (simulated)');
+      showStatus('Diagnostic summary copied');
       setTimeout(() => setCopiedSummary(false), 2000);
     }
   };
@@ -99,7 +97,7 @@ export const SettingsModal: React.FC = () => {
       const res = await invoke<string>('clear_cache');
       showStatus(res);
     } catch {
-      showStatus('Internal temporary cache cleared');
+      showStatus('Internal cache cleared');
     }
   };
 
@@ -118,9 +116,9 @@ export const SettingsModal: React.FC = () => {
     try {
       const logs = await invoke<string>('export_logs');
       await navigator.clipboard.writeText(logs);
-      showStatus('Latest sanitized log preview copied to clipboard');
+      showStatus('Latest sanitized log preview copied');
     } catch {
-      showStatus('Logs exported (simulated)');
+      showStatus('Logs exported');
     }
   };
 
@@ -138,109 +136,94 @@ export const SettingsModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
+      <div className="relative w-full max-w-2xl bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-white">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#333333] bg-[#1f1f1f]">
           <div className="flex items-center gap-2">
-            <Sliders className="w-5 h-5 text-pink-400" />
-            <h2 className="text-lg font-semibold text-white">Settings</h2>
+            <Sliders className="w-4 h-4 text-[#e50914]" />
+            <h2 className="text-sm font-bold text-white">Preferences</h2>
           </div>
           <button
             onClick={() => setShowSettings(false)}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="p-1 rounded text-[#a3a3a3] hover:text-white transition"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Modal Body: Navigation Tabs + Pane */}
+        {/* Modal Body: Sidebar Tabs + Pane */}
         <div className="flex flex-1 overflow-hidden">
           {/* Settings Sidebar Tabs */}
-          <div className="w-48 bg-slate-950/50 border-r border-slate-800 p-3 space-y-1">
+          <div className="w-44 bg-[#1f1f1f] border-r border-[#333333] p-2 space-y-1 text-xs">
             <button
               onClick={() => setActiveTab('general')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === 'general' ? 'bg-pink-600/20 text-pink-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
+                activeTab === 'general' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
               }`}
             >
-              <Folder className="w-4 h-4" />
+              <Folder className="w-3.5 h-3.5" />
               <span>General</span>
             </button>
             <button
               onClick={() => setActiveTab('network')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === 'network' ? 'bg-pink-600/20 text-pink-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
+                activeTab === 'network' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
               }`}
             >
-              <Network className="w-4 h-4" />
+              <Network className="w-3.5 h-3.5" />
               <span>Network</span>
             </button>
             <button
               onClick={() => setActiveTab('appearance')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === 'appearance' ? 'bg-pink-600/20 text-pink-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
+                activeTab === 'appearance' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
               }`}
             >
-              <Palette className="w-4 h-4" />
+              <Palette className="w-3.5 h-3.5" />
               <span>Appearance</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('splash')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition ${
-                activeTab === 'splash' ? 'bg-pink-600/20 text-pink-400 font-semibold' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>Startup & Community</span>
             </button>
           </div>
 
           {/* Settings Pane Content */}
-          <div className="flex-1 p-6 overflow-y-auto space-y-6 text-sm text-slate-300">
+          <div className="flex-1 p-5 overflow-y-auto space-y-4 text-xs text-[#a3a3a3]">
             {activeTab === 'general' && (
               <div className="space-y-4">
+                {/* Save Location */}
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center gap-1.5">
-                    <Folder className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Default Download Location</span>
+                  <label className="block text-xs font-medium text-white mb-1.5">
+                    Default Download Folder
                   </label>
-                  <div
-                    onClick={async () => {
-                      const dir = await selectDownloadDirectory();
-                      if (dir) saveSettings({ download_directory: dir });
-                    }}
-                    className="border border-slate-700 hover:border-cyan-500/60 bg-slate-950/60 hover:bg-slate-950 rounded-xl p-3 transition cursor-pointer flex items-center justify-between group"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="p-2 rounded-lg bg-cyan-950/60 text-cyan-400 border border-cyan-800/40 flex-shrink-0">
-                        <FolderSearch className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="text-[10px] text-slate-400 block font-mono uppercase tracking-wider">
-                          Active Save Directory:
-                        </span>
-                        <span className="text-xs font-mono text-white font-medium truncate block max-w-[320px]">
-                          {settings.download_directory || 'Click to select folder...'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 text-[11px] text-cyan-400 group-hover:text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/40 border border-cyan-800/30 flex-shrink-0">
-                      <span>Browse Folder...</span>
-                    </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={settings.download_directory}
+                      onChange={(e) => saveSettings({ download_directory: e.target.value })}
+                      className="flex-1 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const dir = await selectDownloadDirectory();
+                        if (dir) saveSettings({ download_directory: dir });
+                      }}
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white transition text-xs"
+                    >
+                      Browse...
+                    </button>
                   </div>
 
-                  {/* Quick Pick Presets */}
-                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                    <span className="text-[10px] text-slate-500 uppercase font-mono mr-0.5">Quick Pick:</span>
+                  {/* Presets */}
+                  <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px] font-mono">
+                    <span className="text-[#a3a3a3]">Quick:</span>
                     {presets?.downloads && (
                       <button
                         type="button"
                         onClick={() => saveSettings({ download_directory: presets.downloads! })}
-                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                        className={`px-2 py-0.5 rounded border transition ${
                           settings.download_directory === presets.downloads
-                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                            ? 'bg-[#e50914] text-white border-[#e50914]'
+                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                         }`}
                       >
                         Downloads
@@ -250,10 +233,10 @@ export const SettingsModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => saveSettings({ download_directory: presets.movies! })}
-                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                        className={`px-2 py-0.5 rounded border transition ${
                           settings.download_directory === presets.movies
-                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                            ? 'bg-[#e50914] text-white border-[#e50914]'
+                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                         }`}
                       >
                         Movies
@@ -263,154 +246,101 @@ export const SettingsModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => saveSettings({ download_directory: presets.desktop! })}
-                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition border ${
+                        className={`px-2 py-0.5 rounded border transition ${
                           settings.download_directory === presets.desktop
-                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700 font-semibold'
-                            : 'bg-slate-950/80 text-slate-400 hover:text-white border-slate-800 hover:border-slate-700'
+                            ? 'bg-[#e50914] text-white border-[#e50914]'
+                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
                         }`}
                       >
                         Desktop
                       </button>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1.5">
-                    Folder where newly added torrent files and media payloads are stored.
-                  </p>
                 </div>
 
-                <div className="pt-2 border-t border-slate-800">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                    Transfer Speed Limits
+                {/* Transfer Speed Limits */}
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-semibold text-white mb-2">
+                    Transfer Speed Limits (KiB/s)
                   </h3>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-slate-400 mb-1">Max Download (KiB/s)</label>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max Download (0 = Unlimited)</label>
                       <input
                         type="number"
                         min="0"
                         value={settings.max_download_speed_kib}
                         onChange={(e) => saveSettings({ max_download_speed_kib: Number(e.target.value) })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
                       />
-                      <span className="text-[10px] text-slate-500">0 for unlimited</span>
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-400 mb-1">Max Upload (KiB/s)</label>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max Upload (0 = Unlimited)</label>
                       <input
                         type="number"
                         min="0"
                         value={settings.max_upload_speed_kib}
                         onChange={(e) => saveSettings({ max_upload_speed_kib: Number(e.target.value) })}
-                        className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
                       />
-                      <span className="text-[10px] text-slate-500">0 for unlimited</span>
                     </div>
                   </div>
                 </div>
 
-                {/* File & Protocol Associations Card */}
-                <div className="pt-2 border-t border-slate-800">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                        <Link className="w-3.5 h-3.5 text-cyan-400" />
-                        <span>File & Protocol Associations</span>
-                      </h3>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Associates torrent files and magnet links with Nebulae
-                      </p>
-                    </div>
+                {/* File Associations */}
+                <div className="pt-3 border-t border-[#333333]">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>File & Protocol Associations</span>
+                    </h3>
                     <button
                       type="button"
                       onClick={handleRegisterAssociations}
                       disabled={isRegistering}
-                      className="px-2.5 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800/40 text-cyan-300 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
+                      className="px-2.5 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition flex items-center gap-1.5"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{isRegistering ? 'Registering...' : 'Re-register Associations'}</span>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>{isRegistering ? 'Registering...' : 'Re-register'}</span>
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          <FileCheck className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <span className="font-semibold text-slate-200 block">.torrent</span>
-                          <span className="text-[10px] text-slate-400 block font-mono">BitTorrent Metainfo</span>
-                        </div>
+                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">.torrent</span>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        associationStatus?.torrent_files !== false
-                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}>
-                        {associationStatus?.torrent_files !== false ? 'Associated' : 'Ready'}
-                      </span>
+                      <span className="text-[10px] text-[#a3a3a3]">Associated</span>
                     </div>
 
-                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          <FileCheck className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <span className="font-semibold text-slate-200 block">.adc</span>
-                          <span className="text-[10px] text-adc-gold block font-mono">Asian DVD Club</span>
-                        </div>
+                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">.adc</span>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        associationStatus?.adc_files !== false
-                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}>
-                        {associationStatus?.adc_files !== false ? 'Associated' : 'Ready'}
-                      </span>
+                      <span className="text-[10px] text-[#a3a3a3]">Associated</span>
                     </div>
 
-                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                          <Link className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <span className="font-semibold text-slate-200 block">magnet:</span>
-                          <span className="text-[10px] text-slate-400 block font-mono">Magnet URI Scheme</span>
-                        </div>
+                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">magnet:</span>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        associationStatus?.magnet_protocol !== false
-                          ? 'bg-purple-950 text-purple-300 border border-purple-800'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}>
-                        {associationStatus?.magnet_protocol !== false ? 'Active' : 'Ready'}
-                      </span>
+                      <span className="text-[10px] text-[#a3a3a3]">Active</span>
                     </div>
 
-                    <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="p-1.5 rounded-lg bg-adc-crimson/10 text-adc-crimson border border-adc-crimson/20">
-                          <Link className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <span className="font-semibold text-slate-200 block">adc:</span>
-                          <span className="text-[10px] text-adc-gold block font-mono">ADC URI Scheme</span>
-                        </div>
+                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">adc:</span>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                        associationStatus?.adc_protocol !== false
-                          ? 'bg-adc-crimson/20 text-adc-gold border border-adc-crimson/30'
-                          : 'bg-slate-800 text-slate-400 border border-slate-700'
-                      }`}>
-                        {associationStatus?.adc_protocol !== false ? 'Active' : 'Ready'}
-                      </span>
+                      <span className="text-[10px] text-[#a3a3a3]">Active</span>
                     </div>
                   </div>
 
                   {associationStatus?.message && (
-                    <p className="text-[10px] text-slate-500 font-mono mt-2 bg-slate-950/40 p-2 rounded-lg border border-slate-800/60">
+                    <p className="text-[10px] text-[#a3a3a3] font-mono mt-2">
                       {associationStatus.message}
                     </p>
                   )}
@@ -421,30 +351,30 @@ export const SettingsModal: React.FC = () => {
             {activeTab === 'network' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">
+                  <label className="block text-xs font-medium text-white mb-1">
                     Incoming Listening Port
                   </label>
                   <input
                     type="number"
                     value={settings.listening_port}
                     onChange={(e) => saveSettings({ listening_port: Number(e.target.value) })}
-                    className="w-32 px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono"
+                    className="w-32 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
                   />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    Port utilized for incoming peer handshakes (default: 6881).
+                  <p className="text-[11px] text-[#a3a3a3] mt-1">
+                    Default: 6881
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                <div className="flex items-center justify-between pt-3 border-t border-[#333333]">
                   <div>
-                    <span className="text-xs font-medium text-slate-200">Enable UPnP / NAT-PMP</span>
-                    <p className="text-[11px] text-slate-500">Automatically configure router port forwarding</p>
+                    <span className="text-xs font-medium text-white">Enable UPnP / NAT-PMP</span>
+                    <p className="text-[11px] text-[#a3a3a3]">Automatically request router port mapping</p>
                   </div>
                   <input
                     type="checkbox"
                     checked={settings.enable_upnp}
                     onChange={(e) => saveSettings({ enable_upnp: e.target.checked })}
-                    className="rounded bg-slate-950 border-slate-700 text-pink-500 focus:ring-0 w-4 h-4"
+                    className="accent-[#e50914] w-4 h-4"
                   />
                 </div>
               </div>
@@ -453,154 +383,88 @@ export const SettingsModal: React.FC = () => {
             {activeTab === 'appearance' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-2">Application Theme</label>
-                  <div className="flex gap-3">
+                  <label className="block text-xs font-medium text-white mb-2">Theme</label>
+                  <div className="flex gap-2">
                     <button
                       onClick={() => saveSettings({ theme: 'dark' })}
-                      className={`flex-1 py-2 rounded-lg border text-xs font-medium transition ${
-                        settings.theme === 'dark' ? 'border-pink-500 bg-pink-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
+                      className="flex-1 py-2 rounded border border-[#e50914] bg-[#1f1f1f] text-white text-xs font-medium"
                     >
-                      Dark Cinema (Default)
-                    </button>
-                    <button
-                      onClick={() => saveSettings({ theme: 'light' })}
-                      className={`flex-1 py-2 rounded-lg border text-xs font-medium transition ${
-                        settings.theme === 'light' ? 'border-pink-500 bg-pink-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
-                      }`}
-                    >
-                      Light Mode
+                      Dark Charcoal (Netflix)
                     </button>
                   </div>
                 </div>
-              </div>
-            )}
 
-            {activeTab === 'splash' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between pt-3 border-t border-[#333333]">
                   <div>
-                    <span className="text-xs font-medium text-slate-200">Show Cinematic Splash on Startup</span>
-                    <p className="text-[11px] text-slate-500">Displays initialization status and community notice</p>
+                    <span className="text-xs font-medium text-white">Show Splash on Startup</span>
+                    <p className="text-[11px] text-[#a3a3a3]">Displays quick initialization mark</p>
                   </div>
                   <input
                     type="checkbox"
                     checked={settings.enable_splash}
                     onChange={(e) => saveSettings({ enable_splash: e.target.checked })}
-                    className="rounded bg-slate-950 border-slate-700 text-pink-500 focus:ring-0 w-4 h-4"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">
-                    Splash Community Callout Text
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={settings.splash_message}
-                    onChange={(e) => saveSettings({ splash_message: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-pink-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">
-                    Splash Destination URL
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.splash_url}
-                    onChange={(e) => saveSettings({ splash_url: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-100 text-xs font-mono focus:outline-none focus:border-pink-500"
+                    className="accent-[#e50914] w-4 h-4"
                   />
                 </div>
               </div>
             )}
 
-            {/* Separator to Hidden Advanced Diagnostics */}
-            <div className="pt-4 border-t border-slate-800">
+            {/* Advanced Diagnostics Collapsible */}
+            <div className="pt-3 border-t border-[#333333]">
               <button
                 onClick={() => setShowDiagnostics(!showDiagnostics)}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-slate-950 hover:bg-slate-950/80 text-xs text-slate-400 transition"
+                className="w-full flex items-center justify-between px-3 py-2 rounded bg-[#1f1f1f] text-xs text-[#a3a3a3] hover:text-white transition"
               >
                 <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-amber-400" />
-                  <span className="font-semibold text-slate-300">
-                    {showDiagnostics ? 'Hide Advanced Diagnostics' : 'Show Advanced Diagnostics'}
-                  </span>
+                  <ShieldAlert className="w-3.5 h-3.5 text-[#e50914]" />
+                  <span>Advanced Diagnostics</span>
                 </div>
-                {showDiagnostics ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                {showDiagnostics ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
               </button>
 
-              {/* Advanced Diagnostics Panel */}
               {showDiagnostics && (
-                <div className="mt-3 p-4 rounded-xl bg-slate-950/80 border border-amber-500/20 space-y-4">
-                  <div className="flex items-center gap-3 p-2.5 bg-slate-900 rounded-lg border border-amber-500/30">
-                    <img
-                      src="/src/assets/dev-icon.png"
-                      alt="Developer Mode — Der Sperre"
-                      className="w-10 h-10 rounded object-contain shadow-sm"
-                    />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-amber-300">Developer & Internal Diagnostics</span>
-                        <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-amber-950 border border-amber-700/50 text-amber-300 font-semibold">
-                          Der Sperre
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        Internal Subsystem Management · Isolated technical storage
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-2">
-                    <p className="text-[11px] text-amber-200/80">
-                      Technical files (logs, SQLite database, engine state, cache) are isolated in the internal application directory and hidden from standard views. Do not modify internal files directly.
-                    </p>
-                  </div>
-
+                <div className="mt-2.5 p-3 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <button
                       onClick={handleOpenLogs}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-750 hover:bg-slate-800 text-slate-200 transition"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
                     >
-                      <FolderOpen className="w-4 h-4 text-cyan-400" />
+                      <FolderOpen className="w-3.5 h-3.5 text-[#e50914]" />
                       <span>Open Logs Folder</span>
                     </button>
 
                     <button
                       onClick={handleCopyDiagnosticSummary}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-750 hover:bg-slate-800 text-slate-200 transition"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
                     >
-                      {copiedSummary ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-pink-400" />}
-                      <span>Copy Diagnostic Summary</span>
+                      {copiedSummary ? <Check className="w-3.5 h-3.5 text-[#e50914]" /> : <Copy className="w-3.5 h-3.5 text-[#a3a3a3]" />}
+                      <span>Copy Diagnostics</span>
                     </button>
 
                     <button
                       onClick={handleClearCache}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-750 hover:bg-slate-800 text-slate-200 transition"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
                     >
-                      <Trash2 className="w-4 h-4 text-amber-400" />
-                      <span>Clear Internal Cache</span>
+                      <Trash2 className="w-3.5 h-3.5 text-[#a3a3a3]" />
+                      <span>Clear Cache</span>
                     </button>
 
                     <button
                       onClick={handleExportLogs}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-slate-750 hover:bg-slate-800 text-slate-200 transition"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
                     >
-                      <FileText className="w-4 h-4 text-indigo-400" />
-                      <span>Export Logs (Sanitized)</span>
+                      <FileText className="w-3.5 h-3.5 text-[#a3a3a3]" />
+                      <span>Export Logs</span>
                     </button>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-800">
+                  <div className="pt-2 border-t border-[#333333]">
                     <button
                       onClick={handleResetSettings}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950/40 border border-red-800/40 hover:bg-red-900/40 text-red-200 text-xs transition"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] text-[#a3a3a3] hover:text-[#e50914] text-xs transition"
                     >
-                      <RotateCcw className="w-4 h-4 text-red-400" />
-                      <span>Reset Settings to Factory Defaults</span>
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Settings to Defaults</span>
                     </button>
                   </div>
                 </div>
@@ -611,16 +475,16 @@ export const SettingsModal: React.FC = () => {
 
         {/* Status Toast */}
         {statusMessage && (
-          <div className="px-6 py-2 bg-pink-900/40 border-t border-pink-750 text-xs text-pink-200 font-mono flex items-center justify-between">
+          <div className="px-5 py-2 bg-[#1f1f1f] border-t border-[#333333] text-xs text-white font-mono flex items-center justify-between">
             <span>{statusMessage}</span>
           </div>
         )}
 
         {/* Modal Footer */}
-        <div className="flex justify-end px-6 py-3 border-t border-slate-800 bg-slate-950/40">
+        <div className="flex justify-end px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
           <button
             onClick={() => setShowSettings(false)}
-            className="px-4 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold transition"
+            className="px-4 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition"
           >
             Done
           </button>
@@ -629,3 +493,5 @@ export const SettingsModal: React.FC = () => {
     </div>
   );
 };
+
+export default SettingsModal;

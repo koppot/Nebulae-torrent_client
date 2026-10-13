@@ -127,6 +127,8 @@ export const App: React.FC = () => {
       useUiStore.getState().setShowSettings(true);
     } else if (modalParam === 'help') {
       useUiStore.getState().setShowHelp(true);
+    } else if (modalParam === 'add') {
+      useUiStore.getState().setShowAddTorrent(true);
     }
 
     return () => {
@@ -159,9 +161,9 @@ export const App: React.FC = () => {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="relative flex flex-col h-screen w-screen adc-watch-bg text-adc-ivory overflow-hidden font-sans select-none"
+      className="relative flex flex-col h-screen w-screen bg-[#141414] text-white overflow-hidden font-sans select-none"
     >
-      {/* 1. Cinematic Splash Screen */}
+      {/* 1. Splash Screen */}
       {!splashDismissed && <SplashScreen />}
 
       {/* 2. Top TitleBar & Navigation */}
@@ -174,12 +176,12 @@ export const App: React.FC = () => {
 
       {/* 4. Drag & Drop Full-Window Visual Overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-50 bg-black/90 border-4 border-dashed border-adc-crimson backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
-          <div className="p-4 rounded-full bg-adc-crimson/20 text-adc-crimson-light mb-4 animate-bounce">
+        <div className="absolute inset-0 z-50 bg-black/90 border-4 border-dashed border-[#e50914] flex flex-col items-center justify-center pointer-events-none">
+          <div className="p-4 rounded-full bg-[#e50914]/20 text-[#e50914] mb-3 animate-bounce">
             <FileUp className="w-12 h-12" />
           </div>
-          <h3 className="text-xl font-bold text-white mb-1">Drop .torrent or .adc to Start Transfer</h3>
-          <p className="text-xs text-adc-muted font-mono">Payload will be configured for download</p>
+          <h3 className="text-lg font-bold text-white mb-1">Drop Torrent to Add</h3>
+          <p className="text-xs text-[#a3a3a3] font-mono">.torrent or .adc file</p>
         </div>
       )}
 

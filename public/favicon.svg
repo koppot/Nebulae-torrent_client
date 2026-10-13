@@ -1,0 +1,14 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae simplified peer-constellation mark — single-color Ivory, transparent background.
+       Simplified independently for 16px/32px clarity: thicker strokes, solid merged nodes, no glow. -->
+  <g stroke="#F8FAFC" stroke-width="140" stroke-linecap="round" fill="none">
+    <path d="M316 200 V824"/>
+    <path d="M708 200 V824"/>
+    <path d="M316 200 L708 824"/>
+  </g>
+  <g fill="#F8FAFC">
+    <circle cx="316" cy="200" r="100"/>
+    <circle cx="512" cy="512" r="100"/>
+    <circle cx="708" cy="824" r="100"/>
+  </g>
+</svg>

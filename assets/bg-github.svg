@@ -1,0 +1,23 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae GitHub social preview background — original restrained cosmic atmosphere -->
+  <defs>
+    <radialGradient id="gIndigo" gradientUnits="userSpaceOnUse" cx="300" cy="330" r="640">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.30"/>
+      <stop offset="0.6" stop-color="#6366F1" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gMagenta" gradientUnits="userSpaceOnUse" cx="1120" cy="120" r="560">
+      <stop offset="0" stop-color="#D946EF" stop-opacity="0.22"/>
+      <stop offset="0.65" stop-color="#D946EF" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#D946EF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gTeal" gradientUnits="userSpaceOnUse" cx="1180" cy="620" r="480">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#10131D"/>
+  <rect width="1280" height="640" fill="url(#gIndigo)"/>
+  <rect width="1280" height="640" fill="url(#gMagenta)"/>
+  <rect width="1280" height="640" fill="url(#gTeal)"/>
+</svg>

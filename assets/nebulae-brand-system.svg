@@ -1,0 +1,285 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="shBg" cx="960" cy="540" r="1100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#141824"/>
+      <stop offset="0.6" stop-color="#10131D"/>
+      <stop offset="1" stop-color="#080A10"/>
+    </radialGradient>
+    <clipPath id="cardSq"><rect x="32" y="70" width="240" height="240" rx="52"/></clipPath>
+    <filter id="cShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#shBg)"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1920" height="110" fill="#131724" stroke="#1F263B" stroke-width="1.5"/>
+  <text x="80" y="65" font-family="-apple-system, 'SF Pro Display', 'Inter', sans-serif" font-size="34" font-weight="800" letter-spacing="4" fill="#F8FAFC">NEBULAE BRAND SYSTEM</text>
+  <text x="630" y="64" font-family="-apple-system, 'SF Pro Text', 'Inter', sans-serif" font-size="16" font-weight="500" letter-spacing="2" fill="#6366F1">VISUAL IDENTITY &amp; DESIGN GUIDELINES</text>
+  <text x="1840" y="64" text-anchor="end" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#64748B">Master: icon-master.svg • Asian DVD Club</text>
+
+  <!-- Color Palette -->
+  <g transform="translate(80, 140)">
+    <text x="0" y="0" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="#94A3B8">01. CORE COLOR SYSTEM</text>
+
+    <!-- Swatch 1 -->
+    <g transform="translate(0, 20)" filter="url(#cShadow)">
+      <rect width="270" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#10131D" stroke="#333E5A" stroke-width="1.5"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Void / Deep Space</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#10131D</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Primary Background</text>
+    </g>
+
+    <!-- Swatch 2 -->
+    <g transform="translate(295, 20)" filter="url(#cShadow)">
+      <rect width="270" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#6366F1"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Indigo</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#6366F1</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Cosmic Glow &amp; UI Accent</text>
+    </g>
+
+    <!-- Swatch 3 -->
+    <g transform="translate(590, 20)" filter="url(#cShadow)">
+      <rect width="270" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#D946EF"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Magenta</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#D946EF</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Celestial Bloom Layer</text>
+    </g>
+
+    <!-- Swatch 4 -->
+    <g transform="translate(885, 20)" filter="url(#cShadow)">
+      <rect width="270" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#F59E0B"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Amber</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#F59E0B</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Active Central Node</text>
+    </g>
+
+    <!-- Swatch 5 -->
+    <g transform="translate(1180, 20)" filter="url(#cShadow)">
+      <rect width="270" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#F8FAFC"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Ivory</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#F8FAFC</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Network Strokes &amp; Nodes</text>
+    </g>
+
+    <!-- Swatch 6 -->
+    <g transform="translate(1475, 20)" filter="url(#cShadow)">
+      <rect width="285" height="110" rx="12" fill="#141824" stroke="#252D42" stroke-width="1.5"/>
+      <rect x="12" y="12" width="70" height="86" rx="8" fill="#22D3EE"/>
+      <text x="96" y="38" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" fill="#F8FAFC">Teal</text>
+      <text x="96" y="62" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="14" fill="#94A3B8">#22D3EE</text>
+      <text x="96" y="84" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#64748B">Connectivity Accent</text>
+    </g>
+  </g>
+
+  <!-- Section 2: Exact Geometry & Anatomy Card -->
+  <g transform="translate(80, 310)" filter="url(#cShadow)">
+    <rect width="550" height="420" rx="16" fill="#131724" stroke="#222B40" stroke-width="1.5"/>
+    <text x="32" y="44" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="#94A3B8">02. ANATOMY: PEER CONSTELLATION</text>
+
+    <!-- Embedded master icon -->
+    <g clip-path="url(#cardSq)">
+      <rect x="32" y="70" width="240" height="240" fill="#10131D"/>
+      <circle cx="152" cy="190" r="140" fill="#6366F1" opacity="0.25"/>
+      <circle cx="152" cy="190" r="50" fill="#F59E0B" opacity="0.35"/>
+    </g>
+    <g transform="translate(32, 70) scale(0.234375)">
+      <g stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+        <path d="M316 200 V824"/>
+        <path d="M708 200 V824"/>
+        <path d="M316 200 L708 824"/>
+      </g>
+      <g fill="#10131D">
+        <circle cx="316" cy="200" r="104"/>
+        <circle cx="512" cy="512" r="104"/>
+        <circle cx="708" cy="824" r="104"/>
+      </g>
+      <circle cx="316" cy="200" r="84" fill="#F8FAFC"/>
+      <circle cx="708" cy="824" r="84" fill="#F8FAFC"/>
+      <circle cx="512" cy="512" r="84" fill="#F59E0B"/>
+    </g>
+
+    <!-- Annotations list -->
+    <g transform="translate(300, 85)">
+      <circle cx="0" cy="0" r="4" fill="#F8FAFC"/>
+      <text x="14" y="5" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#F8FAFC">Upper-Left Node (x=316, y=200)</text>
+      <text x="14" y="24" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#94A3B8">Radius: 84px • Halo Cutout: 104px</text>
+
+      <circle cx="0" cy="55" r="4" fill="#F59E0B"/>
+      <text x="14" y="60" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#F8FAFC">Central Junction (x=512, y=512)</text>
+      <text x="14" y="79" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#94A3B8">Amber Highlight #F59E0B • Active Swarm</text>
+
+      <circle cx="0" cy="110" r="4" fill="#F8FAFC"/>
+      <text x="14" y="115" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#F8FAFC">Lower-Right Node (x=708, y=824)</text>
+      <text x="14" y="134" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#94A3B8">Radius: 84px • Halo Cutout: 104px</text>
+
+      <circle cx="0" cy="165" r="4" fill="#6366F1"/>
+      <text x="14" y="170" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#F8FAFC">Strokes &amp; Frame</text>
+      <text x="14" y="189" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#94A3B8">Width: 120px Round-Capped • Squircle: R224</text>
+    </g>
+
+    <rect x="32" y="340" width="486" height="56" rx="8" fill="#1A2030"/>
+    <text x="48" y="365" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#E2E8F0">Geometric Symmetry: Exact mathematical centroid at (512, 512)</text>
+    <text x="48" y="383" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="11" fill="#94A3B8">Halo cutouts punch background void, creating floating peer nodes</text>
+  </g>
+
+  <!-- Section 3: Typography Hierarchy -->
+  <g transform="translate(660, 310)" filter="url(#cShadow)">
+    <rect width="560" height="420" rx="16" fill="#131724" stroke="#222B40" stroke-width="1.5"/>
+    <text x="32" y="44" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="#94A3B8">03. TYPOGRAPHY HIERARCHY</text>
+
+    <g transform="translate(32, 70)">
+      <text x="0" y="48" font-family="-apple-system, 'SF Pro Display', 'Inter', sans-serif" font-size="52" font-weight="800" letter-spacing="8" fill="#F8FAFC">NEBULAE</text>
+      <text x="4" y="80" font-family="-apple-system, 'SF Pro Text', 'Inter', sans-serif" font-size="14" font-weight="500" letter-spacing="2.5" fill="#94A3B8">TORRENT CLIENT BY ASIAN DVD CLUB</text>
+
+      <rect x="0" y="105" width="496" height="1" fill="#20283A"/>
+
+      <text x="0" y="135" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#6366F1">Primary Display Font:</text>
+      <text x="0" y="155" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" fill="#E2E8F0">SF Pro Display / Geometric Sans (Weight: 800 Bold, Letter-spacing: +8 to +14)</text>
+
+      <text x="0" y="195" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#6366F1">UI &amp; Body Font:</text>
+      <text x="0" y="215" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" fill="#E2E8F0">SF Pro Text / Inter / Segoe UI (Weights: 400 Regular, 500 Medium, 600 Semibold)</text>
+
+      <text x="0" y="255" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" font-weight="700" fill="#6366F1">Monospace / Technical Data:</text>
+      <text x="0" y="275" font-family="-apple-system, 'SF Pro Mono', monospace" font-size="13" fill="#38BDF8">SF Pro Mono / JetBrains Mono (Hashes, Passkeys, Swarm IP, Rates)</text>
+
+      <rect x="0" y="295" width="496" height="1" fill="#20283A"/>
+
+      <text x="0" y="325" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#F59E0B">Approved Community Notice Wording:</text>
+      <text x="0" y="343" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" fill="#94A3B8">“Consider joining our community” • “asiandvdclub.org”</text>
+    </g>
+  </g>
+
+  <!-- Section 4: Icon Matrix -->
+  <g transform="translate(1250, 310)" filter="url(#cShadow)">
+    <rect width="590" height="420" rx="16" fill="#131724" stroke="#222B40" stroke-width="1.5"/>
+    <text x="32" y="44" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="#94A3B8">04. ICON SCALING &amp; CONTEXT MATRIX</text>
+
+    <!-- Scaled Previews -->
+    <g transform="translate(32, 75)">
+      <!-- 128px -->
+      <rect x="0" y="0" width="128" height="128" rx="28" fill="#10131D" stroke="#2E3852" stroke-width="1.5"/>
+      <g transform="translate(0, 0) scale(0.125)">
+        <g stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+          <path d="M316 200 V824"/>
+          <path d="M708 200 V824"/>
+          <path d="M316 200 L708 824"/>
+        </g>
+        <g fill="#10131D">
+          <circle cx="316" cy="200" r="104"/>
+          <circle cx="512" cy="512" r="104"/>
+          <circle cx="708" cy="824" r="104"/>
+        </g>
+        <circle cx="316" cy="200" r="84" fill="#F8FAFC"/>
+        <circle cx="708" cy="824" r="84" fill="#F8FAFC"/>
+        <circle cx="512" cy="512" r="84" fill="#F59E0B"/>
+      </g>
+      <text x="64" y="150" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#E2E8F0">128x128</text>
+      <text x="64" y="166" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="11" fill="#64748B">Dock / Launcher</text>
+
+      <!-- 64px -->
+      <rect x="160" y="32" width="64" height="64" rx="14" fill="#10131D" stroke="#2E3852" stroke-width="1.5"/>
+      <g transform="translate(160, 32) scale(0.0625)">
+        <g stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+          <path d="M316 200 V824"/>
+          <path d="M708 200 V824"/>
+          <path d="M316 200 L708 824"/>
+        </g>
+        <g fill="#10131D">
+          <circle cx="316" cy="200" r="104"/>
+          <circle cx="512" cy="512" r="104"/>
+          <circle cx="708" cy="824" r="104"/>
+        </g>
+        <circle cx="316" cy="200" r="84" fill="#F8FAFC"/>
+        <circle cx="708" cy="824" r="84" fill="#F8FAFC"/>
+        <circle cx="512" cy="512" r="84" fill="#F59E0B"/>
+      </g>
+      <text x="192" y="150" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#E2E8F0">64x64</text>
+      <text x="192" y="166" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="11" fill="#64748B">Taskbar</text>
+
+      <!-- 32px -->
+      <rect x="260" y="48" width="32" height="32" rx="7" fill="#10131D" stroke="#2E3852" stroke-width="1"/>
+      <g transform="translate(260, 48) scale(0.03125)">
+        <g stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+          <path d="M316 200 V824"/>
+          <path d="M708 200 V824"/>
+          <path d="M316 200 L708 824"/>
+        </g>
+        <circle cx="512" cy="512" r="104" fill="#F59E0B"/>
+      </g>
+      <text x="276" y="150" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#E2E8F0">32x32</text>
+      <text x="276" y="166" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="11" fill="#64748B">System Tray</text>
+
+      <!-- 16px -->
+      <rect x="330" y="56" width="16" height="16" rx="4" fill="#10131D"/>
+      <g transform="translate(330, 56) scale(0.015625)">
+        <g stroke="#F8FAFC" stroke-width="130" stroke-linecap="round" fill="none">
+          <path d="M316 200 V824"/>
+          <path d="M708 200 V824"/>
+          <path d="M316 200 L708 824"/>
+        </g>
+        <circle cx="512" cy="512" r="120" fill="#F59E0B"/>
+      </g>
+      <text x="338" y="150" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#E2E8F0">16x16</text>
+      <text x="338" y="166" text-anchor="middle" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="11" fill="#64748B">Favicon</text>
+
+      <!-- Monochrome context previews -->
+      <rect x="400" y="32" width="125" height="40" rx="8" fill="#FFFFFF"/>
+      <g transform="translate(410, 40) scale(0.024)">
+        <path d="M316 200 V824 M708 200 V824 M316 200 L708 824" stroke="#10131D" stroke-width="120" stroke-linecap="round"/>
+        <circle cx="512" cy="512" r="100" fill="#10131D"/>
+      </g>
+      <text x="445" y="57" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#10131D">Light UI</text>
+
+      <rect x="400" y="80" width="125" height="40" rx="8" fill="#10131D" stroke="#252D42" stroke-width="1"/>
+      <g transform="translate(410, 88) scale(0.024)">
+        <path d="M316 200 V824 M708 200 V824 M316 200 L708 824" stroke="#F8FAFC" stroke-width="120" stroke-linecap="round"/>
+        <circle cx="512" cy="512" r="100" fill="#F8FAFC"/>
+      </g>
+      <text x="445" y="105" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="12" font-weight="600" fill="#F8FAFC">Dark UI</text>
+    </g>
+
+    <!-- Context specs table -->
+    <g transform="translate(32, 280)">
+      <line x1="0" y1="0" x2="526" y2="0" stroke="#20283A" stroke-width="1"/>
+      <text x="0" y="24" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="#38BDF8">Clear Space Rule:</text>
+      <text x="140" y="24" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" fill="#94A3B8">Minimum 1.0x node diameter (168px relative) margin</text>
+
+      <text x="0" y="50" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="#38BDF8">Minimum Legibility:</text>
+      <text x="140" y="50" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="13" fill="#94A3B8">16x16px raster / 12pt vector symbol</text>
+    </g>
+  </g>
+
+  <!-- Section 5: Brand Rules (Do's and Don'ts) -->
+  <g transform="translate(80, 760)" filter="url(#cShadow)">
+    <rect width="1760" height="260" rx="16" fill="#131724" stroke="#222B40" stroke-width="1.5"/>
+
+    <!-- Left: DO's -->
+    <g transform="translate(40, 35)">
+      <text x="0" y="0" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" letter-spacing="2" fill="#22C55E">✓ BRAND RULES — DO</text>
+      <text x="0" y="32" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Use the master Nebulae Peer Constellation mark (icon-master.svg) as the single source of truth.</text>
+      <text x="0" y="60" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Maintain the amber highlight (#F59E0B) strictly at the central peer node in full-color usage.</text>
+      <text x="0" y="88" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Ensure high contrast between the Ivory mark (#F8FAFC) and Deep Space void (#10131D).</text>
+      <text x="0" y="116" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Use the halo punch cutouts to keep peer nodes visually distinct from connecting strokes.</text>
+      <text x="0" y="144" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Pair with clean geometric sans-serif typography (SF Pro / Inter) with generous uppercase tracking.</text>
+    </g>
+
+    <line x1="900" y1="25" x2="900" y2="235" stroke="#222A3E" stroke-width="1.5"/>
+
+    <!-- Right: DON'Ts -->
+    <g transform="translate(940, 35)">
+      <text x="0" y="0" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="16" font-weight="700" letter-spacing="2" fill="#EF4444">✕ BRAND RULES — DO NOT</text>
+      <text x="0" y="32" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Do NOT use AsianDVDClub website crests, discs, reels, or copied graphic assets.</text>
+      <text x="0" y="60" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Do NOT use generic download arrows, globe maps, or green torrent-client brand styling.</text>
+      <text x="0" y="88" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Do NOT alter stroke widths, node coordinates (316, 512, 708), or halo cutout radiuses.</text>
+      <text x="0" y="116" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Do NOT add text inside the favicon or app-icon frame at any resolution.</text>
+      <text x="0" y="144" font-family="-apple-system, 'SF Pro Text', sans-serif" font-size="14" fill="#E2E8F0">• Do NOT add crowded peer meshes, literal detailed nebula clouds, or starfield clutter.</text>
+    </g>
+  </g>
+</svg>

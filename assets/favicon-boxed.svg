@@ -1,0 +1,22 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae boxed favicon chip — works on both light and dark browser tabs.
+       Deep-space rounded square + simplified peer-constellation mark. -->
+  <defs>
+    <radialGradient id="chipBg" gradientUnits="userSpaceOnUse" cx="512" cy="300" r="900">
+      <stop offset="0" stop-color="#1A1F31"/>
+      <stop offset="1" stop-color="#0B0D15"/>
+    </radialGradient>
+    <clipPath id="chip"><rect width="1024" height="1024" rx="224"/></clipPath>
+  </defs>
+  <g clip-path="url(#chip)">
+    <rect width="1024" height="1024" fill="url(#chipBg)"/>
+  </g>
+  <g stroke="#F8FAFC" stroke-width="140" stroke-linecap="round" fill="none">
+    <path d="M316 200 V824"/>
+    <path d="M708 200 V824"/>
+    <path d="M316 200 L708 824"/>
+  </g>
+  <circle cx="316" cy="200" r="100" fill="#F8FAFC"/>
+  <circle cx="512" cy="512" r="100" fill="#F59E0B"/>
+  <circle cx="708" cy="824" r="100" fill="#F8FAFC"/>
+</svg>

@@ -8,31 +8,44 @@ export default {
   theme: {
     extend: {
       colors: {
+        brand: {
+          bg: '#141414',
+          surface: '#1f1f1f',
+          panel: '#262626',
+          border: '#333333',
+          borderLight: '#404040',
+          red: '#e50914',
+          redHover: '#f40612',
+          redDark: '#b91c1c',
+          text: '#ffffff',
+          textMuted: '#a3a3a3',
+          textDim: '#737373',
+        },
         adc: {
-          // ADC watch.php and winter dark red theme tokens
-          bg: '#000000',
-          surface: '#0a0a0c',
-          panel: 'rgba(20, 20, 24, 0.95)',
-          glass: 'rgba(255, 255, 255, 0.08)',
-          glassHover: 'rgba(255, 255, 255, 0.16)',
-          border: 'rgba(255, 255, 255, 0.15)',
-          borderSubtle: 'rgba(255, 255, 255, 0.08)',
+          // Netflix Charcoal & Red Design System
+          bg: '#141414',
+          surface: '#1f1f1f',
+          panel: '#262626',
+          glass: 'rgba(255, 255, 255, 0.06)',
+          glassHover: 'rgba(255, 255, 255, 0.12)',
+          border: '#333333',
+          borderSubtle: '#262626',
 
-          // ADC Signature Crimson Red (from watch.php rgba(132, 0, 1, 0.85))
-          crimson: '#840001',
-          crimsonHover: '#980e10',
-          crimsonBright: '#b01214',
-          crimsonGlow: '#d22b2f',
+          // Netflix Signature Crimson
+          crimson: '#e50914',
+          crimsonHover: '#f40612',
+          crimsonBright: '#e50914',
+          crimsonGlow: '#e50914',
 
           // Typography
-          ivory: '#ECE9D8',
-          textMuted: 'rgba(255, 255, 255, 0.72)',
+          ivory: '#ffffff',
+          textMuted: '#a3a3a3',
 
-          // Secondary Telemetry & Status accents
-          ice: '#68e0ff',
-          gold: '#f59e0b',
-          emerald: '#10b981',
-          violet: '#8b5cf6',
+          // Remapped to 3-color constraint (No rainbow)
+          ice: '#ffffff',
+          gold: '#e50914',
+          emerald: '#ffffff',
+          violet: '#e50914',
         }
       },
       fontFamily: {
@@ -40,9 +53,9 @@ export default {
         mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
       },
       boxShadow: {
-        'adc-glass': '0 4px 12px rgba(0, 0, 0, 0.6)',
+        'adc-glass': '0 4px 12px rgba(0, 0, 0, 0.5)',
         'adc-dropdown': '0 10px 30px rgba(0, 0, 0, 0.8)',
-        'adc-glow': '0 0 14px rgba(210, 43, 47, 0.4)',
+        'adc-glow': '0 0 14px rgba(229, 9, 20, 0.3)',
       }
     },
   },

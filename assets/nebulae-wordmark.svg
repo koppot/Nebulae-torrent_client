@@ -1,0 +1,69 @@
+<svg width="1040" height="360" viewBox="0 0 1040 360" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae horizontal wordmark — original stroke-built geometric letterforms.
+       Letters are drawn as monoline round-capped strokes matching the peer-constellation mark.
+       Dark text variant for light surfaces; use the Canva ivory lockup for dark surfaces. -->
+  <defs>
+    <radialGradient id="wmChip" gradientUnits="userSpaceOnUse" cx="180" cy="120" r="240">
+      <stop offset="0" stop-color="#1A1F31"/>
+      <stop offset="1" stop-color="#0B0D15"/>
+    </radialGradient>
+    <clipPath id="wmSq"><rect x="60" y="60" width="240" height="240" rx="54"/></clipPath>
+  </defs>
+
+  <!-- App icon chip -->
+  <g clip-path="url(#wmSq)">
+    <rect x="60" y="60" width="240" height="240" fill="url(#wmChip)"/>
+  </g>
+  <!-- Peer-constellation N (scaled from the 1024 master geometry) -->
+  <g transform="translate(60 60) scale(0.234375)" stroke="#F8FAFC" stroke-width="120" stroke-linecap="round" fill="none">
+    <path d="M316 200 V824"/>
+    <path d="M708 200 V824"/>
+    <path d="M316 200 L708 824"/>
+  </g>
+  <circle cx="134.1" cy="106.9" r="19.7" fill="#F8FAFC"/>
+  <circle cx="180" cy="180" r="19.7" fill="#F59E0B"/>
+  <circle cx="225.9" cy="253.1" r="19.7" fill="#F8FAFC"/>
+
+  <!-- NEBULAE letterforms: monoline, round-capped, cap height 110, baseline y=235 -->
+  <g stroke="#10131D" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- N  (advance 94) -->
+    <g transform="translate(380 0)">
+      <path d="M12 112 V223"/>
+      <path d="M82 112 V223"/>
+      <path d="M12 112 L82 223"/>
+    </g>
+    <!-- E  (advance 76) -->
+    <g transform="translate(492 0)">
+      <path d="M12 112 V223"/>
+      <path d="M12 112 H64"/>
+      <path d="M12 167.5 H52"/>
+      <path d="M12 223 H64"/>
+    </g>
+    <!-- B  (advance 88) -->
+    <g transform="translate(586 0)">
+      <path d="M12 112 V223"/>
+      <path d="M12 112 H46 A27.5 27.5 0 0 1 46 167.5 H12"/>
+      <path d="M12 167.5 H52 A27.5 27.5 0 0 1 52 223 H12"/>
+    </g>
+    <!-- U  (advance 84) -->
+    <g transform="translate(692 0)">
+      <path d="M12 112 V184 A30 30 0 0 0 72 184 V112"/>
+    </g>
+    <!-- L  (advance 68) -->
+    <g transform="translate(794 0)">
+      <path d="M12 112 V223 H60"/>
+    </g>
+    <!-- A  (advance 92) -->
+    <g transform="translate(880 0)">
+      <path d="M12 223 L46 112 L80 223"/>
+      <path d="M25 178 H67"/>
+    </g>
+    <!-- E -->
+    <g transform="translate(990 0)">
+      <path d="M12 112 V223"/>
+      <path d="M12 112 H64"/>
+      <path d="M12 167.5 H52"/>
+      <path d="M12 223 H64"/>
+    </g>
+  </g>
+</svg>
