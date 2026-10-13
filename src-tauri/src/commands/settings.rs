@@ -28,6 +28,7 @@ pub struct UserSettings {
 
     // 2. Downloads
     pub download_directory: String,
+    pub recent_download_directories: Vec<String>,
     pub temp_incomplete_directory: String,
     pub use_temp_incomplete_dir: bool,
     pub copy_torrent_files_to: String,
@@ -153,7 +154,8 @@ impl Default for UserSettings {
             splash_url: "https://asiandvdclub.org".to_string(),
 
             // 2. Downloads
-            download_directory: default_download,
+            download_directory: default_download.clone(),
+            recent_download_directories: vec![default_download],
             temp_incomplete_directory: "".to_string(),
             use_temp_incomplete_dir: false,
             copy_torrent_files_to: "".to_string(),
@@ -291,7 +293,10 @@ mod tests {
 
         assert_eq!(defaults.language, deserialized.language);
         assert_eq!(defaults.listening_port, deserialized.listening_port);
-        assert_eq!(defaults.max_global_connections, deserialized.max_global_connections);
+        assert_eq!(
+            defaults.max_global_connections,
+            deserialized.max_global_connections
+        );
         assert_eq!(defaults.encryption_mode, deserialized.encryption_mode);
         assert_eq!(defaults.webui_port, deserialized.webui_port);
     }
@@ -300,8 +305,8 @@ mod tests {
     fn test_backward_compatible_partial_json_deserialization() {
         // Minimal json with only 2 fields
         let minimal_json = r#"{"download_directory": "/tmp/custom", "listening_port": 6889}"#;
-        let deserialized: UserSettings =
-            serde_json::from_str(minimal_json).expect("Should deserialize with defaults for missing fields");
+        let deserialized: UserSettings = serde_json::from_str(minimal_json)
+            .expect("Should deserialize with defaults for missing fields");
 
         assert_eq!(deserialized.download_directory, "/tmp/custom");
         assert_eq!(deserialized.listening_port, 6889);

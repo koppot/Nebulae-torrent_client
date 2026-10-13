@@ -1,7 +1,8 @@
 import React from 'react';
-import { useTorrentStore } from '../../stores/torrentStore';
-import { useUiStore } from '../../stores/uiStore';
-import { formatBytes, formatSpeed } from '../../lib/formatters';
+import { useTorrentStore } from '../../../stores/torrentStore';
+import { useUiStore } from '../../../stores/uiStore';
+import { formatBytes, formatSpeed } from '../../../lib/formatters';
+import { TorrentItem } from '../../../types';
 import {
   Play,
   Pause,
@@ -13,7 +14,7 @@ export const SimpleMediaView: React.FC = () => {
   const { torrents, pauseTorrent, resumeTorrent } = useTorrentStore();
   const { setShowAddTorrent } = useUiStore();
 
-  const mediaTorrents = torrents.filter((t) => t.is_media || t.category === 'Movies');
+  const mediaTorrents = torrents.filter((t: TorrentItem) => t.is_media || t.category === 'Movies');
   const displayItems = mediaTorrents.length > 0 ? mediaTorrents : torrents;
 
   return (
@@ -57,7 +58,7 @@ export const SimpleMediaView: React.FC = () => {
       ) : (
         /* Netflix Style Card Grid */
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {displayItems.map((item) => {
+          {displayItems.map((item: TorrentItem) => {
             const progressPct = Math.round(item.progress * 100);
             const isDownloading = item.status === 'Downloading';
             return (

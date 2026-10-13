@@ -52,4 +52,11 @@ pub trait TorrentEngine: Send + Sync {
     fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String>;
     fn toggle_super_seeding(&self, id: &str) -> Result<bool, String>;
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String>;
+    fn rename_torrent(&self, id: &str, new_name: &str) -> Result<(), String>;
+    fn rename_torrent_file(
+        &self,
+        id: &str,
+        file_index: u32,
+        new_file_name: &str,
+    ) -> Result<(), String>;
 }

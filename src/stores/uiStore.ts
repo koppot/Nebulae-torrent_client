@@ -7,6 +7,7 @@ interface UiState {
   showSettings: boolean;
   showHelp: boolean;
   showAddTorrent: boolean;
+  showCreateTorrent: boolean;
   showConnectivityDoctor: boolean;
   showVpnManager: boolean;
   showTrackerDashboard: boolean;
@@ -22,6 +23,7 @@ interface UiState {
   setShowSettings: (show: boolean) => void;
   setShowHelp: (show: boolean) => void;
   setShowAddTorrent: (show: boolean) => void;
+  setShowCreateTorrent: (show: boolean) => void;
   setShowConnectivityDoctor: (show: boolean) => void;
   setShowVpnManager: (show: boolean) => void;
   setShowTrackerDashboard: (show: boolean) => void;
@@ -34,11 +36,12 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  viewMode: 'media',
+  viewMode: 'manager',
   theme: 'dark',
   showSettings: false,
   showHelp: false,
   showAddTorrent: false,
+  showCreateTorrent: false,
   showConnectivityDoctor: false,
   showVpnManager: false,
   showTrackerDashboard: false,
@@ -53,14 +56,16 @@ export const useUiStore = create<UiState>((set) => ({
     document.documentElement.classList.toggle('dark', theme === 'dark');
     set({ theme });
   },
-  toggleTheme: () => set((state) => {
-    const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.classList.toggle('dark', nextTheme === 'dark');
-    return { theme: nextTheme };
-  }),
+  toggleTheme: () =>
+    set((state) => {
+      const nextTheme = state.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.classList.toggle('dark', nextTheme === 'dark');
+      return { theme: nextTheme };
+    }),
   setShowSettings: (showSettings) => set({ showSettings }),
   setShowHelp: (showHelp) => set({ showHelp }),
   setShowAddTorrent: (showAddTorrent) => set({ showAddTorrent }),
+  setShowCreateTorrent: (showCreateTorrent) => set({ showCreateTorrent }),
   setShowConnectivityDoctor: (showConnectivityDoctor) => set({ showConnectivityDoctor }),
   setShowVpnManager: (showVpnManager) => set({ showVpnManager }),
   setShowTrackerDashboard: (showTrackerDashboard) => set({ showTrackerDashboard }),
@@ -69,9 +74,10 @@ export const useUiStore = create<UiState>((set) => ({
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
-  openAddTorrentWithSource: (source: string) => set({
-    initialAddTorrentSource: source,
-    showAddTorrent: true,
-    splashDismissed: true,
-  }),
+  openAddTorrentWithSource: (source: string) =>
+    set({
+      initialAddTorrentSource: source,
+      showAddTorrent: true,
+      splashDismissed: true,
+    }),
 }));

@@ -89,7 +89,10 @@ pub fn add_torrent_stub(
 }
 
 #[tauri::command]
-pub fn remove_torrent_stub(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn remove_torrent_stub(
+    id: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
     engine.remove_torrent(&id)
 }
 
@@ -99,12 +102,18 @@ pub fn pause_torrent_stub(id: String, engine: State<Arc<MockTorrentEngine>>) -> 
 }
 
 #[tauri::command]
-pub fn resume_torrent_stub(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn resume_torrent_stub(
+    id: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
     engine.resume_torrent(&id)
 }
 
 #[tauri::command]
-pub fn force_recheck_torrent(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn force_recheck_torrent(
+    id: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
     engine.force_recheck(&id)
 }
 
@@ -177,6 +186,25 @@ pub fn set_file_priority(
 }
 
 #[tauri::command]
+pub fn rename_torrent(
+    id: String,
+    new_name: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
+    engine.rename_torrent(&id, &new_name)
+}
+
+#[tauri::command]
+pub fn rename_torrent_file(
+    id: String,
+    file_index: u32,
+    new_file_name: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
+    engine.rename_torrent_file(&id, file_index, &new_file_name)
+}
+
+#[tauri::command]
 pub fn create_torrent_file(
     params: CreateTorrentParams,
     engine: State<Arc<MockTorrentEngine>>,
@@ -209,7 +237,10 @@ pub fn create_torrent_file(
 }
 
 #[tauri::command]
-pub fn export_torrent_file(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<String, String> {
+pub fn export_torrent_file(
+    id: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<String, String> {
     let torrents = engine.list_torrents()?;
     let item = torrents
         .iter()

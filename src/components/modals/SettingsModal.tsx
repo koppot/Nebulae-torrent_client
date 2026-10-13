@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { useTorrentStore, SystemPathPresets } from '../../stores/torrentStore';
+import { useTorrentStore } from '../../stores/torrentStore';
 import { DiagnosticSummary, AssociationStatus } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -9,35 +9,31 @@ import {
   Sliders,
   Folder,
   Network,
-  Palette,
-  ShieldAlert,
+  Gauge,
+  Radio,
+  Rss,
+  Globe,
+  Cpu,
   FolderOpen,
   Copy,
   Trash2,
   RotateCcw,
   FileText,
-  Check,
-  ChevronDown,
-  ChevronRight,
   Link,
   FileCheck,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
   const { settings, saveSettings } = useSettingsStore();
-  const { selectDownloadDirectory, getSystemPathPresets } = useTorrentStore();
-  const [presets, setPresets] = useState<SystemPathPresets | null>(null);
+  const { selectDownloadDirectory } = useTorrentStore();
 
-  useEffect(() => {
-    getSystemPathPresets().then(setPresets);
-  }, [getSystemPathPresets]);
+  const [activeTab, setActiveTab] = useState<
+    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'advanced'
+  >('behavior');
 
-  const [activeTab, setActiveTab] = useState<'general' | 'network' | 'appearance'>('general');
-  const [showDiagnostics, setShowDiagnostics] = useState(
-    () => new URLSearchParams(window.location.search).get('diagnostics') === 'true'
-  );
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [associationStatus, setAssociationStatus] = useState<AssociationStatus | null>(null);
@@ -135,14 +131,20 @@ export const SettingsModal: React.FC = () => {
     }
   };
 
+  const handleRandomizePort = () => {
+    const randomPort = Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024;
+    saveSettings({ listening_port: randomPort });
+    showStatus(`Generated random port: ${randomPort}`);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
-      <div className="relative w-full max-w-2xl bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-white">
+      <div className="relative w-full max-w-4xl bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] text-white">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#333333] bg-[#1f1f1f]">
           <div className="flex items-center gap-2">
             <Sliders className="w-4 h-4 text-[#e50914]" />
-            <h2 className="text-sm font-bold text-white">Preferences</h2>
+            <h2 className="text-sm font-bold text-white">Options — Preferences</h2>
           </div>
           <button
             onClick={() => setShowSettings(false)}
@@ -152,47 +154,237 @@ export const SettingsModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Modal Body: Sidebar Tabs + Pane */}
+        {/* Modal Body: Sidebar Tabs + Content Pane */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Settings Sidebar Tabs */}
-          <div className="w-44 bg-[#1f1f1f] border-r border-[#333333] p-2 space-y-1 text-xs">
-            <button
-              onClick={() => setActiveTab('general')}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
-                activeTab === 'general' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-              }`}
-            >
-              <Folder className="w-3.5 h-3.5" />
-              <span>General</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('network')}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
-                activeTab === 'network' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-              }`}
-            >
-              <Network className="w-3.5 h-3.5" />
-              <span>Network</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('appearance')}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
-                activeTab === 'appearance' ? 'bg-[#e50914] text-white font-semibold' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-              }`}
-            >
-              <Palette className="w-3.5 h-3.5" />
-              <span>Appearance</span>
-            </button>
+          {/* Settings Sidebar Tabs (Canonical 8 qBittorrent Sections) */}
+          <div className="w-48 bg-[#1f1f1f] border-r border-[#333333] p-2 space-y-1 text-xs">
+            {[
+              { id: 'behavior', label: 'Behavior', icon: Sliders },
+              { id: 'downloads', label: 'Downloads', icon: Folder },
+              { id: 'connection', label: 'Connection', icon: Network },
+              { id: 'speed', label: 'Speed', icon: Gauge },
+              { id: 'bittorrent', label: 'BitTorrent', icon: Radio },
+              { id: 'rss', label: 'RSS', icon: Rss },
+              { id: 'webui', label: 'Web UI', icon: Globe },
+              { id: 'advanced', label: 'Advanced', icon: Cpu },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
+                    isActive
+                      ? 'bg-[#e50914] text-white font-semibold shadow'
+                      : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Settings Pane Content */}
-          <div className="flex-1 p-5 overflow-y-auto space-y-4 text-xs text-[#a3a3a3]">
-            {activeTab === 'general' && (
+          <div className="flex-1 p-5 overflow-y-auto space-y-5 text-xs text-[#a3a3a3]">
+            {/* 1. BEHAVIOR */}
+            {activeTab === 'behavior' && (
               <div className="space-y-4">
-                {/* Save Location */}
                 <div>
-                  <label className="block text-xs font-medium text-white mb-1.5">
-                    Default Download Folder
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    User Interface & Desktop Integration
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Language</label>
+                      <select
+                        value={settings.language}
+                        onChange={(e) => saveSettings({ language: e.target.value })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="en-US">English (United States)</option>
+                        <option value="ja-JP">日本語 (Japanese)</option>
+                        <option value="zh-CN">简体中文 (Simplified Chinese)</option>
+                        <option value="ko-KR">한국어 (Korean)</option>
+                        <option value="fr-FR">Français (French)</option>
+                        <option value="de-DE">Deutsch (German)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Color Theme</label>
+                      <select
+                        value={settings.theme}
+                        onChange={(e) => saveSettings({ theme: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="dark">Dark Space / Charcoal</option>
+                        <option value="light">Light Theme</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.start_on_boot}
+                        onChange={(e) => saveSettings({ start_on_boot: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Start Nebulae on Windows/macOS startup</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.start_minimized}
+                        onChange={(e) => saveSettings({ start_minimized: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Start minimized</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.minimize_to_tray}
+                        onChange={(e) => saveSettings({ minimize_to_tray: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Minimize to notification area / system tray</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.close_to_tray}
+                        onChange={(e) => saveSettings({ close_to_tray: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Close button minimizes to system tray</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.inhibit_sleep_when_active}
+                        onChange={(e) => saveSettings({ inhibit_sleep_when_active: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Inhibit system sleep when transfers are active</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Notifications & Confirmations
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.notify_on_download_finished}
+                        onChange={(e) => saveSettings({ notify_on_download_finished: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show OS desktop notification when download completes</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.notify_on_torrent_added}
+                        onChange={(e) => saveSettings({ notify_on_torrent_added: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show desktop notification when new torrent is added</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.confirm_torrent_deletion}
+                        onChange={(e) => saveSettings({ confirm_torrent_deletion: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Confirm when deleting torrents</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.confirm_exit_when_active}
+                        onChange={(e) => saveSettings({ confirm_exit_when_active: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Confirm exit when active transfers exist</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>File & URL Scheme Ownership</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={handleRegisterAssociations}
+                      disabled={isRegistering}
+                      className="px-2.5 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>{isRegistering ? 'Registering...' : 'Claim OS Defaults'}</span>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">.torrent</span>
+                      </div>
+                      <span className="text-[10px] text-[#a3a3a3]">
+                        {associationStatus?.torrent_files ? 'Registered' : 'Available'}
+                      </span>
+                    </div>
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">.adc</span>
+                      </div>
+                      <span className="text-[10px] text-[#a3a3a3]">
+                        {associationStatus?.adc_files ? 'Registered' : 'Available'}
+                      </span>
+                    </div>
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">magnet:</span>
+                      </div>
+                      <span className="text-[10px] text-[#a3a3a3]">
+                        {associationStatus?.magnet_protocol ? 'Active' : 'Available'}
+                      </span>
+                    </div>
+                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span className="text-white">adc:</span>
+                      </div>
+                      <span className="text-[10px] text-[#a3a3a3]">
+                        {associationStatus?.adc_protocol ? 'Active' : 'Available'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 2. DOWNLOADS */}
+            {activeTab === 'downloads' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Save Management
+                  </h3>
+                  <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                    Default Save Path
                   </label>
                   <div className="flex gap-2">
                     <input
@@ -213,278 +405,918 @@ export const SettingsModal: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Presets */}
-                  <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px] font-mono">
-                    <span className="text-[#a3a3a3]">Quick:</span>
-                    {presets?.downloads && (
-                      <button
-                        type="button"
-                        onClick={() => saveSettings({ download_directory: presets.downloads! })}
-                        className={`px-2 py-0.5 rounded border transition ${
-                          settings.download_directory === presets.downloads
-                            ? 'bg-[#e50914] text-white border-[#e50914]'
-                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
-                        }`}
-                      >
-                        Downloads
-                      </button>
-                    )}
-                    {presets?.movies && (
-                      <button
-                        type="button"
-                        onClick={() => saveSettings({ download_directory: presets.movies! })}
-                        className={`px-2 py-0.5 rounded border transition ${
-                          settings.download_directory === presets.movies
-                            ? 'bg-[#e50914] text-white border-[#e50914]'
-                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
-                        }`}
-                      >
-                        Movies
-                      </button>
-                    )}
-                    {presets?.desktop && (
-                      <button
-                        type="button"
-                        onClick={() => saveSettings({ download_directory: presets.desktop! })}
-                        className={`px-2 py-0.5 rounded border transition ${
-                          settings.download_directory === presets.desktop
-                            ? 'bg-[#e50914] text-white border-[#e50914]'
-                            : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
-                        }`}
-                      >
-                        Desktop
-                      </button>
-                    )}
+                  {/* Recent Destination Buttons */}
+                  {settings.recent_download_directories && settings.recent_download_directories.length > 0 && (
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px] font-mono">
+                      <span className="text-[#a3a3a3]">Recent:</span>
+                      {settings.recent_download_directories.map((dirPath) => {
+                        const label = dirPath.split('/').pop()?.split('\\').pop() || dirPath;
+                        const isCurrent = settings.download_directory === dirPath;
+                        return (
+                          <button
+                            key={dirPath}
+                            type="button"
+                            onClick={() => saveSettings({ download_directory: dirPath })}
+                            title={dirPath}
+                            className={`px-2 py-0.5 rounded transition border truncate max-w-[160px] ${
+                              isCurrent
+                                ? 'bg-[#e50914] text-white border-[#e50914]'
+                                : 'bg-[#1f1f1f] text-[#a3a3a3] hover:text-white border-[#333333]'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="mt-3">
+                    <label className="flex items-center gap-2 cursor-pointer mb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={settings.use_temp_incomplete_dir}
+                        onChange={(e) => saveSettings({ use_temp_incomplete_dir: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Keep incomplete torrents in separate folder:</span>
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!settings.use_temp_incomplete_dir}
+                      value={settings.temp_incomplete_directory}
+                      onChange={(e) => saveSettings({ temp_incomplete_directory: e.target.value })}
+                      placeholder="/path/to/incomplete_downloads"
+                      className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] disabled:opacity-40"
+                    />
                   </div>
                 </div>
 
-                {/* Transfer Speed Limits */}
                 <div className="pt-3 border-t border-[#333333]">
-                  <h3 className="text-xs font-semibold text-white mb-2">
-                    Transfer Speed Limits (KiB/s)
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Torrent Ingestion & File Allocation
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.auto_management_mode}
+                        onChange={(e) => saveSettings({ auto_management_mode: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Automatic Torrent Management mode (relocate when category changes)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.show_torrent_content_dialog}
+                        onChange={(e) => saveSettings({ show_torrent_content_dialog: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Display torrent content and file selection dialog when adding</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.do_not_start_automatically}
+                        onChange={(e) => saveSettings({ do_not_start_automatically: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Do not start the download automatically (Add in Paused state)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.append_neb_extension}
+                        onChange={(e) => saveSettings({ append_neb_extension: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Append .!neb extension to incomplete files</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.preallocate_disk_space}
+                        onChange={(e) => saveSettings({ preallocate_disk_space: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Pre-allocate disk space for all files</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Post-Processing & External Commands
+                  </h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-2">
+                    <input
+                      type="checkbox"
+                      checked={settings.run_external_program_on_finished}
+                      onChange={(e) => saveSettings({ run_external_program_on_finished: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                    />
+                    <span className="text-white">Run external program on torrent completion</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled={!settings.run_external_program_on_finished}
+                    value={settings.external_program_command}
+                    onChange={(e) => saveSettings({ external_program_command: e.target.value })}
+                    placeholder="/usr/local/bin/script.sh &quot;%N&quot; &quot;%D&quot; &quot;%F&quot;"
+                    className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] disabled:opacity-40"
+                  />
+                  <p className="text-[10px] text-[#a3a3a3] font-mono mt-1">
+                    Parameters: %N (Name), %D (Save path), %F (Content path), %I (Info-hash), %L (Category)
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* 3. CONNECTION */}
+            {activeTab === 'connection' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Listening Port & Protocols
                   </h3>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max Download (0 = Unlimited)</label>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Peer Connection Protocol
+                      </label>
+                      <select
+                        value={settings.peer_connection_protocol}
+                        onChange={(e) => saveSettings({ peer_connection_protocol: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="Both">Both TCP and μTP</option>
+                        <option value="TCP">TCP Only</option>
+                        <option value="uTP">μTP Only</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Port used for incoming connections
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={settings.listening_port}
+                          onChange={(e) => saveSettings({ listening_port: Number(e.target.value) })}
+                          className="flex-1 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleRandomizePort}
+                          className="px-2.5 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs transition flex items-center gap-1"
+                        >
+                          <RefreshCw className="w-3 h-3 text-[#e50914]" />
+                          <span>Random</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_upnp}
+                        onChange={(e) => saveSettings({ enable_upnp: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Use UPnP / NAT-PMP port forwarding from router</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.randomize_port_on_startup}
+                        onChange={(e) => saveSettings({ randomize_port_on_startup: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Use different port on each startup</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Connection Limits
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Global maximum number of connections:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_global_connections}
+                        onChange={(e) => saveSettings({ max_global_connections: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum number of connections per torrent:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_connections_per_torrent}
+                        onChange={(e) => saveSettings({ max_connections_per_torrent: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Global maximum number of upload slots:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_global_upload_slots}
+                        onChange={(e) => saveSettings({ max_global_upload_slots: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum number of upload slots per torrent:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_upload_slots_per_torrent}
+                        onChange={(e) => saveSettings({ max_upload_slots_per_torrent: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Proxy Server & IP Filtering
+                  </h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Type</label>
+                      <select
+                        value={settings.proxy_type}
+                        onChange={(e) => saveSettings({ proxy_type: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="None">(None)</option>
+                        <option value="HTTP">HTTP</option>
+                        <option value="SOCKS4">SOCKS4</option>
+                        <option value="SOCKS5">SOCKS5</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Host</label>
+                      <input
+                        type="text"
+                        disabled={settings.proxy_type === 'None'}
+                        value={settings.proxy_host}
+                        onChange={(e) => saveSettings({ proxy_host: e.target.value })}
+                        placeholder="127.0.0.1"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Port</label>
+                      <input
+                        type="number"
+                        disabled={settings.proxy_type === 'None'}
+                        value={settings.proxy_port}
+                        onChange={(e) => saveSettings({ proxy_port: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-1.5">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.proxy_peer_connections}
+                        onChange={(e) => saveSettings({ proxy_peer_connections: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Use proxy for peer connections</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.proxy_disable_unsupported}
+                        onChange={(e) => saveSettings({ proxy_disable_unsupported: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Disable connections not supported by proxies</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 4. SPEED */}
+            {activeTab === 'speed' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Global Rate Limits (KiB/s, 0 = Unlimited)
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum Download Rate
+                      </label>
                       <input
                         type="number"
                         min="0"
                         value={settings.max_download_speed_kib}
                         onChange={(e) => saveSettings({ max_download_speed_kib: Number(e.target.value) })}
-                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max Upload (0 = Unlimited)</label>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum Upload Rate
+                      </label>
                       <input
                         type="number"
                         min="0"
                         value={settings.max_upload_speed_kib}
                         onChange={(e) => saveSettings({ max_upload_speed_kib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                      Alternative Rate Limits (Turtle Mode & Scheduling)
+                    </h3>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.alt_rate_limits_enabled}
+                        onChange={(e) => saveSettings({ alt_rate_limits_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white text-xs font-semibold">Active</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Alternative Download Limit
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.alt_download_speed_kib}
+                        onChange={(e) => saveSettings({ alt_download_speed_kib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Alternative Upload Limit
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.alt_upload_speed_kib}
+                        onChange={(e) => saveSettings({ alt_upload_speed_kib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 p-3 rounded bg-[#1f1f1f] border border-[#333333] space-y-2.5">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.alt_schedule_enabled}
+                        onChange={(e) => saveSettings({ alt_schedule_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white font-medium">Schedule Alternative Rate Limits</span>
+                    </label>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-[#a3a3a3] mb-1">From</label>
+                        <input
+                          type="time"
+                          value={settings.alt_schedule_from_time}
+                          onChange={(e) => saveSettings({ alt_schedule_from_time: e.target.value })}
+                          className="w-full px-2 py-1 rounded border border-[#333333] bg-[#141414] text-white text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#a3a3a3] mb-1">To</label>
+                        <input
+                          type="time"
+                          value={settings.alt_schedule_to_time}
+                          onChange={(e) => saveSettings({ alt_schedule_to_time: e.target.value })}
+                          className="w-full px-2 py-1 rounded border border-[#333333] bg-[#141414] text-white text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[#a3a3a3] mb-1">Days</label>
+                        <select
+                          value={settings.alt_schedule_days}
+                          onChange={(e) => saveSettings({ alt_schedule_days: e.target.value })}
+                          className="w-full px-2 py-1 rounded border border-[#333333] bg-[#141414] text-white text-xs"
+                        >
+                          <option value="Every day">Every day</option>
+                          <option value="Weekdays">Weekdays</option>
+                          <option value="Weekends">Weekends</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Rate Limit Settings
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.rate_limit_utp}
+                        onChange={(e) => saveSettings({ rate_limit_utp: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Apply rate limit to μTP protocol</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.rate_limit_overhead}
+                        onChange={(e) => saveSettings({ rate_limit_overhead: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Apply rate limit to transport overhead</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.rate_limit_lan_peers}
+                        onChange={(e) => saveSettings({ rate_limit_lan_peers: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Apply rate limit to peers on LAN</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 5. BITTORRENT */}
+            {activeTab === 'bittorrent' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Privacy, Swarm & Encryption
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_dht}
+                        onChange={(e) => saveSettings({ enable_dht: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable DHT (Distributed Hash Table) to find more peers</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_pex}
+                        onChange={(e) => saveSettings({ enable_pex: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable PeX (Peer Exchange) to find more peers</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_lsd}
+                        onChange={(e) => saveSettings({ enable_lsd: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable Local Peer Discovery (LSD) to find more peers</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.anonymous_mode}
+                        onChange={(e) => saveSettings({ anonymous_mode: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable Anonymous Mode</span>
+                    </label>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                      Encryption Mode
+                    </label>
+                    <select
+                      value={settings.encryption_mode}
+                      onChange={(e) => saveSettings({ encryption_mode: e.target.value as any })}
+                      className="w-56 px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                    >
+                      <option value="Prefer">Prefer Encryption</option>
+                      <option value="Require">Require Encryption</option>
+                      <option value="Disable">Disable Encryption</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Torrent Queueing
+                  </h3>
+                  <div className="grid grid-cols-3 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum active downloads:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_active_downloads}
+                        onChange={(e) => saveSettings({ max_active_downloads: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum active uploads:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_active_uploads}
+                        onChange={(e) => saveSettings({ max_active_uploads: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Maximum active torrents:
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.max_active_torrents}
+                        onChange={(e) => saveSettings({ max_active_torrents: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Seeding Limits & Share Ratio
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        When ratio reaches (-1 = Unlimited):
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={settings.max_ratio_limit}
+                        onChange={(e) => saveSettings({ max_ratio_limit: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Action when limit reached:
+                      </label>
+                      <select
+                        value={settings.seeding_limit_action}
+                        onChange={(e) => saveSettings({ seeding_limit_action: e.target.value as any })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="Pause">Pause torrent</option>
+                        <option value="Remove">Remove torrent</option>
+                        <option value="RemoveAndFiles">Remove torrent and files</option>
+                        <option value="SuperSeeding">Switch to Super-Seeding</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 6. RSS */}
+            {activeTab === 'rss' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    RSS Reader
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.rss_auto_refresh_enabled}
+                        onChange={(e) => saveSettings({ rss_auto_refresh_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Fetch feeds automatically</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Feeds refresh interval (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.rss_refresh_interval_minutes}
+                        onChange={(e) => saveSettings({ rss_refresh_interval_minutes: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Maximum articles per feed
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.rss_max_articles_per_feed}
+                        onChange={(e) => saveSettings({ rss_max_articles_per_feed: Number(e.target.value) })}
                         className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* File Associations */}
                 <div className="pt-3 border-t border-[#333333]">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-xs font-semibold text-white flex items-center gap-1.5">
-                      <Link className="w-3.5 h-3.5 text-[#e50914]" />
-                      <span>File & Protocol Associations</span>
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={handleRegisterAssociations}
-                      disabled={isRegistering}
-                      className="px-2.5 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition flex items-center gap-1.5"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-[#e50914]" />
-                      <span>{isRegistering ? 'Registering...' : 'Re-register'}</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
-                        <span className="text-white">.torrent</span>
-                      </div>
-                      <span className="text-[10px] text-[#a3a3a3]">Associated</span>
-                    </div>
-
-                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <FileCheck className="w-3.5 h-3.5 text-[#e50914]" />
-                        <span className="text-white">.adc</span>
-                      </div>
-                      <span className="text-[10px] text-[#a3a3a3]">Associated</span>
-                    </div>
-
-                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
-                        <span className="text-white">magnet:</span>
-                      </div>
-                      <span className="text-[10px] text-[#a3a3a3]">Active</span>
-                    </div>
-
-                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Link className="w-3.5 h-3.5 text-[#e50914]" />
-                        <span className="text-white">adc:</span>
-                      </div>
-                      <span className="text-[10px] text-[#a3a3a3]">Active</span>
-                    </div>
-                  </div>
-
-                  {associationStatus?.message && (
-                    <p className="text-[10px] text-[#a3a3a3] font-mono mt-2">
-                      {associationStatus.message}
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'network' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-white mb-1">
-                    Incoming Listening Port
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    RSS Torrent Auto-Downloader
+                  </h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-2">
+                    <input
+                      type="checkbox"
+                      checked={settings.rss_auto_downloader_enabled}
+                      onChange={(e) => saveSettings({ rss_auto_downloader_enabled: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                    />
+                    <span className="text-white">Enable automatic torrent downloading from RSS feeds</span>
                   </label>
-                  <input
-                    type="number"
-                    value={settings.listening_port}
-                    onChange={(e) => saveSettings({ listening_port: Number(e.target.value) })}
-                    className="w-32 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
-                  />
-                  <p className="text-[11px] text-[#a3a3a3] mt-1">
-                    Default: 6881
+                  <p className="text-[11px] text-[#a3a3a3]">
+                    Matches smart episode filters, must-contain keywords, and auto-assigns categories.
                   </p>
                 </div>
-
-                <div className="flex items-center justify-between pt-3 border-t border-[#333333]">
-                  <div>
-                    <span className="text-xs font-medium text-white">Enable UPnP / NAT-PMP</span>
-                    <p className="text-[11px] text-[#a3a3a3]">Automatically request router port mapping</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.enable_upnp}
-                    onChange={(e) => saveSettings({ enable_upnp: e.target.checked })}
-                    className="accent-[#e50914] w-4 h-4"
-                  />
-                </div>
               </div>
             )}
 
-            {activeTab === 'appearance' && (
+            {/* 7. WEB UI */}
+            {activeTab === 'webui' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-white mb-2">Theme</label>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => saveSettings({ theme: 'dark' })}
-                      className="flex-1 py-2 rounded border border-[#e50914] bg-[#1f1f1f] text-white text-xs font-medium"
-                    >
-                      Dark Charcoal (Netflix)
-                    </button>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Web User Interface (Remote Management)
+                  </h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-3">
+                    <input
+                      type="checkbox"
+                      checked={settings.webui_enabled}
+                      onChange={(e) => saveSettings({ webui_enabled: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                    />
+                    <span className="text-white font-medium">Enable Web User Interface (Remote Control)</span>
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        IP Address / Bind Address
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!settings.webui_enabled}
+                        value={settings.webui_address}
+                        onChange={(e) => saveSettings({ webui_address: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Port
+                      </label>
+                      <input
+                        type="number"
+                        disabled={!settings.webui_enabled}
+                        value={settings.webui_port}
+                        onChange={(e) => saveSettings({ webui_port: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-3 border-t border-[#333333]">
-                  <div>
-                    <span className="text-xs font-medium text-white">Show Splash on Startup</span>
-                    <p className="text-[11px] text-[#a3a3a3]">Displays quick initialization mark</p>
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Authentication
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Username
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!settings.webui_enabled}
+                        value={settings.webui_username}
+                        onChange={(e) => saveSettings({ webui_username: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        disabled={!settings.webui_enabled}
+                        value={settings.webui_password}
+                        onChange={(e) => saveSettings({ webui_password: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.enable_splash}
-                    onChange={(e) => saveSettings({ enable_splash: e.target.checked })}
-                    className="accent-[#e50914] w-4 h-4"
-                  />
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.webui_bypass_localhost}
+                        onChange={(e) => saveSettings({ webui_bypass_localhost: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Bypass authentication for clients on localhost</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Advanced Diagnostics Collapsible */}
-            <div className="pt-3 border-t border-[#333333]">
-              <button
-                onClick={() => setShowDiagnostics(!showDiagnostics)}
-                className="w-full flex items-center justify-between px-3 py-2 rounded bg-[#1f1f1f] text-xs text-[#a3a3a3] hover:text-white transition"
-              >
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-3.5 h-3.5 text-[#e50914]" />
-                  <span>Advanced Diagnostics</span>
+            {/* 8. ADVANCED */}
+            {activeTab === 'advanced' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Network Interface & Adapter Binding
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Network Interface
+                      </label>
+                      <select
+                        value={settings.network_interface_binding}
+                        onChange={(e) => saveSettings({ network_interface_binding: e.target.value })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="Any interface">Any interface (Default)</option>
+                        <option value="utun3">utun3 (WireGuard VPN Tunnel)</option>
+                        <option value="en0">en0 (Primary Wi-Fi / Ethernet)</option>
+                        <option value="lo0">lo0 (Loopback)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                        Optional IP Address Binding
+                      </label>
+                      <select
+                        value={settings.optional_ip_address_binding}
+                        onChange={(e) => saveSettings({ optional_ip_address_binding: e.target.value })}
+                        className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      >
+                        <option value="All IPv4 and IPv6 addresses">All IPv4 and IPv6 addresses</option>
+                        <option value="All IPv4 addresses">All IPv4 addresses</option>
+                        <option value="All IPv6 addresses">All IPv6 addresses</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
-                {showDiagnostics ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-              </button>
 
-              {showDiagnostics && (
-                <div className="mt-2.5 p-3 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Engine Tuning & Disk Cache
+                  </h3>
+                  <div className="grid grid-cols-3 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Disk Cache Size (MiB, -1 = Auto)
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.disk_cache_size_mib}
+                        onChange={(e) => saveSettings({ disk_cache_size_mib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Disk Cache TTL (seconds)
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.disk_cache_ttl_seconds}
+                        onChange={(e) => saveSettings({ disk_cache_ttl_seconds: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Async I/O Threads
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.async_io_threads}
+                        onChange={(e) => saveSettings({ async_io_threads: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Diagnostics & Storage Maintenance
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
                     <button
+                      type="button"
                       onClick={handleOpenLogs}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
                     >
                       <FolderOpen className="w-3.5 h-3.5 text-[#e50914]" />
-                      <span>Open Logs Folder</span>
+                      <span>Open Internal Logs</span>
                     </button>
-
                     <button
+                      type="button"
                       onClick={handleCopyDiagnosticSummary}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
                     >
-                      {copiedSummary ? <Check className="w-3.5 h-3.5 text-[#e50914]" /> : <Copy className="w-3.5 h-3.5 text-[#a3a3a3]" />}
-                      <span>Copy Diagnostics</span>
+                      <Copy className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>{copiedSummary ? 'Copied!' : 'Copy Diagnostics JSON'}</span>
                     </button>
-
                     <button
-                      onClick={handleClearCache}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
+                      type="button"
+                      onClick={handleExportLogs}
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
                     >
-                      <Trash2 className="w-3.5 h-3.5 text-[#a3a3a3]" />
+                      <FileText className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>Copy Recent Logs</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearCache}
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-[#e50914]" />
                       <span>Clear Cache</span>
                     </button>
-
                     <button
-                      onClick={handleExportLogs}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] hover:border-[#525252] text-white transition"
-                    >
-                      <FileText className="w-3.5 h-3.5 text-[#a3a3a3]" />
-                      <span>Export Logs</span>
-                    </button>
-                  </div>
-
-                  <div className="pt-2 border-t border-[#333333]">
-                    <button
+                      type="button"
                       onClick={handleResetSettings}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#141414] border border-[#333333] text-[#a3a3a3] hover:text-[#e50914] text-xs transition"
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-red-950/60 border border-red-900/60 text-red-300 flex items-center gap-1.5 transition"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reset Settings to Defaults</span>
+                      <RotateCcw className="w-3.5 h-3.5 text-red-400" />
+                      <span>Reset All Settings</span>
                     </button>
                   </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Status Toast */}
-        {statusMessage && (
-          <div className="px-5 py-2 bg-[#1f1f1f] border-t border-[#333333] text-xs text-white font-mono flex items-center justify-between">
-            <span>{statusMessage}</span>
-          </div>
-        )}
-
         {/* Modal Footer */}
-        <div className="flex justify-end px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
+        <div className="flex items-center justify-between px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
+          <div className="text-[11px] font-mono text-[#a3a3a3]">
+            {statusMessage ? (
+              <span className="text-[#e50914] font-semibold">{statusMessage}</span>
+            ) : (
+              <span>Nebulae Preferences · Changes applied automatically</span>
+            )}
+          </div>
           <button
+            type="button"
             onClick={() => setShowSettings(false)}
-            className="px-4 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition"
+            className="px-5 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white font-medium text-xs transition shadow"
           >
             Done
           </button>

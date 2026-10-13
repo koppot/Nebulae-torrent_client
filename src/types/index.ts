@@ -75,6 +75,7 @@ export interface UserSettings {
 
   // 2. Downloads
   download_directory: string;
+  recent_download_directories: string[];
   temp_incomplete_directory: string;
   use_temp_incomplete_dir: boolean;
   copy_torrent_files_to: string;

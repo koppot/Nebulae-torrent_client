@@ -54,7 +54,11 @@ impl MockTorrentEngine {
                 sequential_download: false,
                 first_last_piece_prio: true,
                 super_seeding: false,
-                tags: vec!["Japanese".to_string(), "Classic".to_string(), "Cinema".to_string()],
+                tags: vec![
+                    "Japanese".to_string(),
+                    "Classic".to_string(),
+                    "Cinema".to_string(),
+                ],
                 files: vec![
                     TorrentFileItem {
                         index: 0,
@@ -139,17 +143,15 @@ impl MockTorrentEngine {
                         priority: 1,
                     },
                 ],
-                trackers: vec![
-                    TorrentTrackerItem {
-                        tier: 0,
-                        url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
-                        status: "Working".to_string(),
-                        seeds: 88,
-                        peers: 24,
-                        downloaded: 412,
-                        message: "Announce OK".to_string(),
-                    },
-                ],
+                trackers: vec![TorrentTrackerItem {
+                    tier: 0,
+                    url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
+                    status: "Working".to_string(),
+                    seeds: 88,
+                    peers: 24,
+                    downloaded: 412,
+                    message: "Announce OK".to_string(),
+                }],
                 download_limit_kib: 0,
                 upload_limit_kib: 0,
             },
@@ -181,14 +183,12 @@ impl TorrentEngine for MockTorrentEngine {
 
         let mut list = self.torrents.lock().unwrap();
         let new_id = format!("swarm-test-{}", list.len() + 1);
-        let save = download_dir
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                dirs::download_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .to_string_lossy()
-                    .to_string()
-            });
+        let save = download_dir.map(|s| s.to_string()).unwrap_or_else(|| {
+            dirs::download_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .to_string_lossy()
+                .to_string()
+        });
 
         let name = if source.starts_with("magnet:") {
             let parsed_name = source
@@ -465,7 +465,79 @@ impl TorrentEngine for MockTorrentEngine {
                 file.priority = priority;
                 Ok(())
             } else {
-                Err(format!("File index '{file_index}' not found in torrent '{id}'"))
+                Err(format!(
+                    "File index '{file_index}' not found in torrent '{id}'"
+                ))
+            }
+        } else {
+            Err(format!("Torrent with id '{id}' not found"))
+        }
+    }
+
+    fn rename_torrent(&self, id: &str, new_name: &str) -> Result<(), String> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return Err("Torrent name cannot be empty".to_string());
+        }
+
+        let mut list = self.torrents.lock().unwrap();
+        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+            let save_lower = item.save_path.to_lowercase();
+            if save_lower.contains("qbittorrent") || save_lower.contains("bt_backup") {
+                return Err("Safety Guard: Torrents and directories managed by external qBittorrent must not be amended by Nebulae.".to_string());
+            }
+
+            let old_dir = std::path::Path::new(&item.save_path);
+            if old_dir.exists() {
+                if let Some(parent) = old_dir.parent() {
+                    let new_dir = parent.join(trimmed);
+                    if old_dir != new_dir && old_dir.is_dir() {
+                        let _ = std::fs::rename(old_dir, &new_dir);
+                        item.save_path = new_dir.to_string_lossy().to_string();
+                    }
+                }
+            }
+
+            item.name = trimmed.to_string();
+            Ok(())
+        } else {
+            Err(format!("Torrent with id '{id}' not found"))
+        }
+    }
+
+    fn rename_torrent_file(
+        &self,
+        id: &str,
+        file_index: u32,
+        new_file_name: &str,
+    ) -> Result<(), String> {
+        let trimmed = new_file_name.trim();
+        if trimmed.is_empty() {
+            return Err("File name cannot be empty".to_string());
+        }
+
+        let mut list = self.torrents.lock().unwrap();
+        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+            let save_lower = item.save_path.to_lowercase();
+            if save_lower.contains("qbittorrent") || save_lower.contains("bt_backup") {
+                return Err("Safety Guard: Torrents and directories managed by external qBittorrent must not be amended by Nebulae.".to_string());
+            }
+
+            if let Some(file) = item.files.iter_mut().find(|f| f.index == file_index) {
+                let base_dir = std::path::Path::new(&item.save_path);
+                let old_file_path = base_dir.join(&file.name);
+                let new_file_path = base_dir.join(trimmed);
+
+                if old_file_path.exists() && old_file_path != new_file_path {
+                    let _ = std::fs::rename(old_file_path, new_file_path);
+                }
+
+                file.name = trimmed.to_string();
+                Ok(())
+            } else {
+                Err(format!(
+                    "File index '{file_index}' not found in torrent '{id}'"
+                ))
             }
         } else {
             Err(format!("Torrent with id '{id}' not found"))

@@ -7,11 +7,12 @@ import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
-import { SimpleMediaView } from './components/media/SimpleMediaView';
+import { StatusBar } from './components/layout/StatusBar';
 import { TorrentManagerView } from './components/manager/TorrentManagerView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
+import { CreateTorrentModal } from './components/modals/CreateTorrentModal';
 import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
@@ -20,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
-  const { viewMode, splashDismissed, openAddTorrentWithSource } = useUiStore();
+  const { splashDismissed, openAddTorrentWithSource } = useUiStore();
   const { loadSettings } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
@@ -109,8 +110,6 @@ export const App: React.FC = () => {
 
     if (viewParam === 'manager') {
       useUiStore.getState().setViewMode('manager');
-    } else if (viewParam === 'media') {
-      useUiStore.getState().setViewMode('media');
     }
 
     if (tabParam === 'peers' || tabParam === 'files' || tabParam === 'trackers' || tabParam === 'general') {
@@ -171,8 +170,11 @@ export const App: React.FC = () => {
 
       {/* 3. Main View Mode Area */}
       <main className="flex-1 flex overflow-hidden">
-        {viewMode === 'media' ? <SimpleMediaView /> : <TorrentManagerView />}
+        <TorrentManagerView />
       </main>
+
+      {/* 4. Bottom Desktop Application Status Bar */}
+      <StatusBar />
 
       {/* 4. Drag & Drop Full-Window Visual Overlay */}
       {isDragging && (
@@ -189,6 +191,7 @@ export const App: React.FC = () => {
       <SettingsModal />
       <HelpModal />
       <AddTorrentModal />
+      <CreateTorrentModal />
       <ConnectivityDoctorModal />
       <VpnManagerModal />
       <TrackerModal />

@@ -48,7 +48,7 @@ export const SplashScreen: React.FC = () => {
         <div className="relative">
           <div className="w-24 h-24 rounded-2xl bg-[#1f1f1f] border border-[#333333] shadow-xl overflow-hidden p-3 flex items-center justify-center">
             <img
-              src="/app-icon.png"
+              src="/icon-master.svg"
               alt="Nebulae"
               className="w-full h-full object-contain"
             />

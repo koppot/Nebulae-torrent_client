@@ -96,6 +96,8 @@ pub fn run() {
             commands::torrent::toggle_torrent_first_last,
             commands::torrent::toggle_torrent_super_seeding,
             commands::torrent::set_file_priority,
+            commands::torrent::rename_torrent,
+            commands::torrent::rename_torrent_file,
             commands::torrent::create_torrent_file,
             commands::torrent::export_torrent_file,
             commands::torrent::get_engine_status,

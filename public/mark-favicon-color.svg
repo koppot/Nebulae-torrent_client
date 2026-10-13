@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nebulae simplified peer-constellation mark — color variant with single amber peer node.
+       Transparent background, no glow, optimized for small sizes (48px+ tabs). -->
+  <g stroke="#F8FAFC" stroke-width="140" stroke-linecap="round" fill="none">
+    <path d="M316 200 V824"/>
+    <path d="M708 200 V824"/>
+    <path d="M316 200 L708 824"/>
+  </g>
+  <circle cx="316" cy="200" r="100" fill="#F8FAFC"/>
+  <circle cx="512" cy="512" r="100" fill="#F59E0B"/>
+  <circle cx="708" cy="824" r="100" fill="#F8FAFC"/>
+</svg>
