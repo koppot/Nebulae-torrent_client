@@ -22,7 +22,9 @@ export const StatusBar: React.FC = () => {
         <div className="flex items-center gap-1.5" title="Swarm Network Status">
           <span
             className={`w-2 h-2 rounded-full ${
-              isPortOpen ? 'bg-[#e50914]' : 'bg-[#e50914]/50 animate-pulse'
+              isPortOpen
+                ? 'bg-emerald-500 shadow-[0_0_6px_#10b981]'
+                : 'bg-amber-500/80 animate-pulse'
             }`}
           />
           <span className="text-white font-sans text-[11px]">
@@ -44,7 +46,13 @@ export const StatusBar: React.FC = () => {
       {/* Center: Global Transfer Throughput */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-1.5 text-white" title="Global Download Rate & Total Downloaded">
-          <span className="text-[#e50914] font-bold">▼</span>
+          <span
+            className={`font-bold transition-colors ${
+              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#737373]'
+            }`}
+          >
+            ▼
+          </span>
           <span>{formatSpeed(totalDlSpeed)}</span>
           <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
         </div>
@@ -52,7 +60,13 @@ export const StatusBar: React.FC = () => {
         <span className="text-[#333333]">|</span>
 
         <div className="flex items-center gap-1.5 text-white" title="Global Upload Rate & Total Uploaded">
-          <span className="text-[#e50914] font-bold">▲</span>
+          <span
+            className={`font-bold transition-colors ${
+              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#737373]'
+            }`}
+          >
+            ▲
+          </span>
           <span>{formatSpeed(totalUlSpeed)}</span>
           <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
         </div>

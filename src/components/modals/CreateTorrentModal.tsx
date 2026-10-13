@@ -3,6 +3,8 @@ import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { X, Sparkles, Folder, CheckCircle2, AlertCircle } from 'lucide-react';
 
+const LAST_SAVED_TRACKERS_KEY = 'nebulae_last_created_trackers';
+
 export const CreateTorrentModal: React.FC = () => {
   const { showCreateTorrent, setShowCreateTorrent } = useUiStore();
   const { createTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
@@ -10,11 +12,14 @@ export const CreateTorrentModal: React.FC = () => {
   const [sourcePath, setSourcePath] = useState('');
   const [outputPath, setOutputPath] = useState('');
   const [pieceSizeKib, setPieceSizeKib] = useState(1024); // 1 MiB default
-  const [trackers, setTrackers] = useState(
-    'https://tracker.asiandvdclub.org:2710/announce\nudp://tracker.opentrackr.org:1337/announce'
-  );
-  const [webSeeds, setWebSeeds] = useState('');
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [trackers, setTrackers] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_SAVED_TRACKERS_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [isPrivate, setIsPrivate] = useState(true); // Private by default
   const [comment, setComment] = useState('Created with Nebulae');
   const [createdBy, setCreatedBy] = useState('Nebulae Torrent Client 1.0');
   const [startSeeding, setStartSeeding] = useState(true);
@@ -58,10 +63,14 @@ export const CreateTorrentModal: React.FC = () => {
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
-    const webSeedList = webSeeds
-      .split('\n')
-      .map((w) => w.trim())
-      .filter((w) => w.length > 0);
+    // Save tracker URLs so subsequent creations offer the same tracker URLs
+    if (trackers.trim()) {
+      try {
+        localStorage.setItem(LAST_SAVED_TRACKERS_KEY, trackers.trim());
+      } catch {
+        // Ignore storage errors
+      }
+    }
 
     try {
       const createdFile = await createTorrent({
@@ -69,7 +78,7 @@ export const CreateTorrentModal: React.FC = () => {
         output_path: outputPath.trim(),
         piece_size_kib: pieceSizeKib,
         trackers: trackerList,
-        web_seeds: webSeedList,
+        web_seeds: [],
         is_private: isPrivate,
         comment: comment.trim(),
         created_by: createdBy.trim(),
@@ -186,20 +195,6 @@ export const CreateTorrentModal: React.FC = () => {
               value={trackers}
               onChange={(e) => setTrackers(e.target.value)}
               className="w-full px-3 py-2 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
-            />
-          </div>
-
-          {/* Web Seeds */}
-          <div>
-            <label className="block text-xs font-medium text-white mb-1">
-              Web Seed URLs (Optional HTTP/HTTPS sources)
-            </label>
-            <textarea
-              rows={2}
-              value={webSeeds}
-              onChange={(e) => setWebSeeds(e.target.value)}
-              placeholder="https://example.com/mirror/content.mkv"
-              className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
             />
           </div>
 
