@@ -5,7 +5,11 @@ use nebulae_torrent_client_lib::models::swarm::AdaptiveSwarmConfig;
 fn test_engine_initialization_and_listing() {
     let engine = MockTorrentEngine::new();
     let torrents = engine.list_torrents().expect("list torrents failed");
-    assert_eq!(torrents.len(), 0, "Default torrent engine must initialize with zero torrents");
+    assert_eq!(
+        torrents.len(),
+        0,
+        "Default torrent engine must initialize with zero torrents"
+    );
 }
 
 #[test]

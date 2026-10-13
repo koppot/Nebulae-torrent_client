@@ -118,12 +118,12 @@ pub fn register_protocol_associations() -> Result<AssociationStatus, String> {
     {
         // On macOS, file and URL associations are registered through the app bundle's Info.plist.
         // We also notify LaunchServices via lsregister if available.
-        let bundle_path = std::env::current_exe()
-            .ok()
-            .and_then(|p| {
-                // .../Nebulae.app/Contents/MacOS/nebulae -> .../Nebulae.app
-                p.ancestors().find(|a| a.extension().map_or(false, |ext| ext == "app")).map(|a| a.to_path_buf())
-            });
+        let bundle_path = std::env::current_exe().ok().and_then(|p| {
+            // .../Nebulae.app/Contents/MacOS/nebulae -> .../Nebulae.app
+            p.ancestors()
+                .find(|a| a.extension().map_or(false, |ext| ext == "app"))
+                .map(|a| a.to_path_buf())
+        });
 
         if let Some(app_path) = bundle_path {
             let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
