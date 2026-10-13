@@ -42,3 +42,8 @@ export interface DiagnosticSummary {
   internal_storage_status: string;
   total_logs_size_bytes: number;
 }
+
+export * from './peering';
+export * from './connectivity';
+export * from './vpn';
+export * from './tracker';

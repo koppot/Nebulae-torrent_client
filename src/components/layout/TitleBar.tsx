@@ -1,5 +1,8 @@
 import React from 'react';
 import { useUiStore } from '../../stores/uiStore';
+import { useVpnStore } from '../../stores/vpnStore';
+import { useConnectivityStore } from '../../stores/connectivityStore';
+import { useTrackerStore } from '../../stores/trackerStore';
 import {
   Film,
   Table,
@@ -8,6 +11,9 @@ import {
   HelpCircle,
   Sun,
   Moon,
+  Activity,
+  Shield,
+  Award,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -19,10 +25,17 @@ export const TitleBar: React.FC = () => {
     setShowSettings,
     setShowHelp,
     setShowAddTorrent,
+    setShowConnectivityDoctor,
+    setShowVpnManager,
+    setShowTrackerDashboard,
   } = useUiStore();
 
+  const { status: vpnStatus } = useVpnStore();
+  const { report: connReport } = useConnectivityStore();
+  const { profile: trackerProfile } = useTrackerStore();
+
   return (
-    <header className="h-14 border-b border-white/10 bg-black/60 backdrop-blur-xl flex items-center justify-between px-5 select-none z-30">
+    <header className="h-14 border-b border-white/10 bg-black/70 backdrop-blur-xl flex items-center justify-between px-5 select-none z-30">
       {/* Brand Monogram & App Title */}
       <div className="flex items-center gap-3">
         <img
@@ -69,17 +82,61 @@ export const TitleBar: React.FC = () => {
         </button>
       </div>
 
-      {/* Right Controls: Add, Settings, Help, Theme */}
+      {/* Right Controls: Connectivity Doctor, VPN, Tracker, Add, Settings, Help, Theme */}
       <div className="flex items-center gap-2">
+        {/* Connectivity Doctor Quick-Button */}
+        <button
+          onClick={() => setShowConnectivityDoctor(true)}
+          className="adc-btn-glass flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-white/90 hover:text-white hover:border-emerald-500/40 transition"
+          title="Connectivity Doctor & Port Status"
+        >
+          <Activity className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden sm:inline font-mono text-[11px]">
+            {connReport?.port_status === 'Open' ? '6881 Open' : 'Doctor'}
+          </span>
+        </button>
+
+        {/* VPN Quick-Button */}
+        <button
+          onClick={() => setShowVpnManager(true)}
+          className={`adc-btn-glass flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition ${
+            vpnStatus?.connected
+              ? 'border-emerald-500/40 text-emerald-300'
+              : 'text-white/80 hover:text-white'
+          }`}
+          title="ADC-Only VPN Management"
+        >
+          <Shield className="w-3.5 h-3.5 text-adc-crimson-light" />
+          <span className="hidden sm:inline font-mono text-[11px]">
+            {vpnStatus?.mode === 'AdcOnlyVpn'
+              ? 'ADC-VPN'
+              : vpnStatus?.mode === 'SystemVpn'
+              ? 'Sys-VPN'
+              : 'No VPN'}
+          </span>
+        </button>
+
+        {/* AsianDVDClub Tracker Quick-Button */}
+        <button
+          onClick={() => setShowTrackerDashboard(true)}
+          className="adc-btn-glass flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-white/90 hover:text-white hover:border-amber-500/40 transition"
+          title="AsianDVDClub Tracker & Ratio Coach"
+        >
+          <Award className="w-3.5 h-3.5 text-amber-400" />
+          <span className="hidden sm:inline font-mono text-[11px]">
+            {trackerProfile?.is_linked ? `Ratio: ${trackerProfile.ratio.toFixed(2)}` : 'ADC Link'}
+          </span>
+        </button>
+
+        <div className="h-4 w-[1px] bg-white/10 mx-0.5"></div>
+
         <button
           onClick={() => setShowAddTorrent(true)}
           className="adc-btn-crimson flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold"
         >
           <Plus className="w-3.5 h-3.5" />
-          <span>Add Torrent</span>
+          <span className="hidden md:inline">Add Torrent</span>
         </button>
-
-        <div className="h-4 w-[1px] bg-white/10 mx-1"></div>
 
         <button
           onClick={() => setShowHelp(true)}

@@ -7,6 +7,9 @@ interface UiState {
   showSettings: boolean;
   showHelp: boolean;
   showAddTorrent: boolean;
+  showConnectivityDoctor: boolean;
+  showVpnManager: boolean;
+  showTrackerDashboard: boolean;
   splashDismissed: boolean;
   activeManagerTab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
   managerCategoryFilter: string;
@@ -18,6 +21,9 @@ interface UiState {
   setShowSettings: (show: boolean) => void;
   setShowHelp: (show: boolean) => void;
   setShowAddTorrent: (show: boolean) => void;
+  setShowConnectivityDoctor: (show: boolean) => void;
+  setShowVpnManager: (show: boolean) => void;
+  setShowTrackerDashboard: (show: boolean) => void;
   setSplashDismissed: (dismissed: boolean) => void;
   setActiveManagerTab: (tab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log') => void;
   setManagerCategoryFilter: (filter: string) => void;
@@ -30,6 +36,9 @@ export const useUiStore = create<UiState>((set) => ({
   showSettings: false,
   showHelp: false,
   showAddTorrent: false,
+  showConnectivityDoctor: false,
+  showVpnManager: false,
+  showTrackerDashboard: false,
   splashDismissed: false,
   activeManagerTab: 'general',
   managerCategoryFilter: 'all',
@@ -48,6 +57,9 @@ export const useUiStore = create<UiState>((set) => ({
   setShowSettings: (showSettings) => set({ showSettings }),
   setShowHelp: (showHelp) => set({ showHelp }),
   setShowAddTorrent: (showAddTorrent) => set({ showAddTorrent }),
+  setShowConnectivityDoctor: (showConnectivityDoctor) => set({ showConnectivityDoctor }),
+  setShowVpnManager: (showVpnManager) => set({ showVpnManager }),
+  setShowTrackerDashboard: (showTrackerDashboard) => set({ showTrackerDashboard }),
   setSplashDismissed: (splashDismissed) => set({ splashDismissed }),
   setActiveManagerTab: (activeManagerTab) => set({ activeManagerTab }),
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),

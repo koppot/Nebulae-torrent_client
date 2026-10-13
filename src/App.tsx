@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useUiStore } from './stores/uiStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore } from './stores/torrentStore';
+import { useConnectivityStore } from './stores/connectivityStore';
+import { useVpnStore } from './stores/vpnStore';
+import { useTrackerStore } from './stores/trackerStore';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
 import { SimpleMediaView } from './components/media/SimpleMediaView';
@@ -9,18 +12,27 @@ import { TorrentManagerView } from './components/manager/TorrentManagerView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
+import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
+import { VpnManagerModal } from './components/modals/VpnManagerModal';
+import { TrackerModal } from './components/modals/TrackerModal';
 import { FileUp } from 'lucide-react';
 
 export const App: React.FC = () => {
   const { viewMode, splashDismissed } = useUiStore();
   const { loadSettings } = useSettingsStore();
   const { fetchTorrents, addTorrent } = useTorrentStore();
+  const { runDoctorTest } = useConnectivityStore();
+  const { fetchStatus: fetchVpnStatus } = useVpnStore();
+  const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     loadSettings();
     fetchTorrents();
-  }, [loadSettings, fetchTorrents]);
+    runDoctorTest();
+    fetchVpnStatus();
+    fetchTrackerProfile();
+  }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -61,12 +73,12 @@ export const App: React.FC = () => {
 
       {/* 4. Drag & Drop Full-Window Visual Overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-50 bg-slate-950/90 border-4 border-dashed border-pink-500 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
-          <div className="p-4 rounded-full bg-pink-500/20 text-pink-400 mb-4 animate-bounce">
+        <div className="absolute inset-0 z-50 bg-black/90 border-4 border-dashed border-adc-crimson backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
+          <div className="p-4 rounded-full bg-adc-crimson/20 text-adc-crimson-light mb-4 animate-bounce">
             <FileUp className="w-12 h-12" />
           </div>
           <h3 className="text-xl font-bold text-white mb-1">Drop .torrent to Start Transfer</h3>
-          <p className="text-xs text-slate-400 font-mono">Payload will be placed into default downloads</p>
+          <p className="text-xs text-adc-muted font-mono">Payload will be placed into default downloads</p>
         </div>
       )}
 
@@ -74,6 +86,9 @@ export const App: React.FC = () => {
       <SettingsModal />
       <HelpModal />
       <AddTorrentModal />
+      <ConnectivityDoctorModal />
+      <VpnManagerModal />
+      <TrackerModal />
     </div>
   );
 };
