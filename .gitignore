@@ -1,0 +1,36 @@
+# Node dependencies
+node_modules/
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Rust / Cargo build artifacts
+src-tauri/target/
+target/
+**/*.rs.bk
+
+# Tauri temporary files
+src-tauri/gen/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+
+# Environment and sensitive keys
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# Internal application data (if run locally)
+internal/
+ADC/

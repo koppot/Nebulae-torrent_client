@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #000000;
+  color: #ECE9D8;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Background atmospheric gradients matching ADC watch.php & winter theme */
+.adc-watch-bg {
+  background:
+    radial-gradient(1200px 700px at 15% -10%, rgba(104, 224, 255, 0.08), transparent 60%),
+    radial-gradient(1000px 700px at 95% 0%, rgba(132, 0, 1, 0.20), transparent 55%),
+    radial-gradient(900px 600px at 50% 120%, rgba(132, 0, 1, 0.15), transparent 60%),
+    linear-gradient(180deg, #02070d 0%, #000000 100%);
+}
+
+/* ADC Signature Watch.php Button */
+.adc-btn-crimson {
+  background-color: rgba(132, 0, 1, 0.85);
+  color: #ECE9D8;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+.adc-btn-crimson:hover {
+  background-color: rgba(176, 18, 20, 1);
+  color: #ffffff;
+  box-shadow: 0 6px 16px rgba(210, 43, 47, 0.4);
+  transform: translateY(-1px);
+}
+
+/* ADC Glass Control Button */
+.adc-btn-glass {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: all 0.25s ease;
+}
+
+.adc-btn-glass:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.5);
+}
+
+/* Custom scrollbar styling matching watch.php */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(132, 0, 1, 0.6);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(210, 43, 47, 0.9);
+}

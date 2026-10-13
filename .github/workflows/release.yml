@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            artifact_name: 'ADC-macOS-arm64.dmg'
+          - platform: 'macos-13'
+            target: 'x86_64-apple-darwin'
+            artifact_name: 'ADC-macOS-x64.dmg'
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            artifact_name: 'ADC-Setup-x64.exe'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js & pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 12
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri Application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'ADC — Nebula ${{ github.ref_name }}'
+          releaseBody: |
+            ## Nebula — Torrent Client by Asian DVD Club (${{ github.ref_name }})
+            
+            ### Official Native Packages:
+            - **Windows x64**: `ADC-Setup-x64.exe`
+            - **macOS Apple Silicon (M1/M2/M3/M4)**: `ADC-macOS-arm64.dmg`
+            - **macOS Intel (x86_64)**: `ADC-macOS-x64.dmg`
+            
+            Refer to [Installation Guide](docs/installation.md) for step-by-step instructions.
+          releaseDraft: true
+          prerelease: false
