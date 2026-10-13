@@ -15,13 +15,13 @@ jobs:
         include:
           - platform: 'macos-latest'
             target: 'aarch64-apple-darwin'
-            artifact_name: 'ADC-macOS-arm64.dmg'
+            artifact_name: 'nebular_torrent-macOS-arm64.dmg'
           - platform: 'macos-13'
             target: 'x86_64-apple-darwin'
-            artifact_name: 'ADC-macOS-x64.dmg'
+            artifact_name: 'nebular_torrent-macOS-x64.dmg'
           - platform: 'windows-latest'
             target: 'x86_64-pc-windows-msvc'
-            artifact_name: 'ADC-Setup-x64.exe'
+            artifact_name: 'nebular_torrent-Setup-x64.exe'
 
     runs-on: ${{ matrix.platform }}
 
@@ -58,9 +58,9 @@ jobs:
             ## Nebula — Torrent Client by Asian DVD Club (${{ github.ref_name }})
             
             ### Official Native Packages:
-            - **Windows x64**: `ADC-Setup-x64.exe`
-            - **macOS Apple Silicon (M1/M2/M3/M4)**: `ADC-macOS-arm64.dmg`
-            - **macOS Intel (x86_64)**: `ADC-macOS-x64.dmg`
+            - **Windows x64**: `nebular_torrent-Setup-x64.exe`
+            - **macOS Apple Silicon (M1/M2/M3/M4)**: `nebular_torrent-macOS-arm64.dmg`
+            - **macOS Intel (x86_64)**: `nebular_torrent-macOS-x64.dmg`
             
             Refer to [Installation Guide](docs/installation.md) for step-by-step instructions.
           releaseDraft: true

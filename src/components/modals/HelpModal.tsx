@@ -87,7 +87,7 @@ export const HelpModal: React.FC = () => {
                 <ul className="list-disc list-inside space-y-1 text-slate-400">
                   <li><strong>Operating System:</strong> Windows 10 or Windows 11 (64-bit only).</li>
                   <li><strong>Hardware:</strong> 2 GB RAM minimum (4 GB recommended), 100 MB disk space for app.</li>
-                  <li><strong>Installer Artifact:</strong> <code className="text-pink-300">ADC-Setup-x64.exe</code> (produces installed binary <code className="text-pink-300">ADC.exe</code>).</li>
+                  <li><strong>Installer Artifact:</strong> <code className="text-pink-300">nebular_torrent-Setup-x64.exe</code> (produces installed binary <code className="text-pink-300">nebular_torrent.exe</code>).</li>
                 </ul>
               </section>
 
@@ -97,7 +97,7 @@ export const HelpModal: React.FC = () => {
                   2. Download & SmartScreen Notice
                 </h3>
                 <p>
-                  Download <code className="text-cyan-300">ADC-Setup-x64.exe</code> exclusively from our official GitHub Releases page.
+                  Download <code className="text-cyan-300">nebular_torrent-Setup-x64.exe</code> exclusively from our official GitHub Releases page.
                 </p>
                 <div className="p-3 bg-amber-950/30 border border-amber-600/30 rounded-lg text-amber-200">
                   <div className="flex items-center gap-2 font-semibold mb-1">
@@ -119,7 +119,7 @@ export const HelpModal: React.FC = () => {
                   3. Installer Walkthrough & Firewall Configuration
                 </h3>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-                  <li>Run <code className="text-pink-300">ADC-Setup-x64.exe</code> and follow the standard NSIS setup wizard.</li>
+                  <li>Run <code className="text-pink-300">nebular_torrent-Setup-x64.exe</code> and follow the standard NSIS setup wizard.</li>
                   <li>Select your destination folder and desktop shortcut preference.</li>
                   <li>Check "Launch ADC" and click Finish.</li>
                   <li>
@@ -167,7 +167,7 @@ export const HelpModal: React.FC = () => {
                   Click the <strong>Apple menu ()</strong> → <strong>About This Mac</strong>. Confirm the <strong>Chip</strong> line reads <strong>Apple M1, M2, M3, M4</strong> (or Pro/Max/Ultra).
                 </p>
                 <p className="text-slate-400 mt-1">
-                  Download package: <code className="text-pink-300">ADC-macOS-arm64.dmg</code> (native ARM64 binary).
+                  Download package: <code className="text-pink-300">nebular_torrent-macOS-arm64.dmg</code> (native ARM64 binary).
                 </p>
               </section>
 
@@ -177,10 +177,10 @@ export const HelpModal: React.FC = () => {
                   2. Installation Steps
                 </h3>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-                  <li>Double-click <code className="text-pink-300">ADC-macOS-arm64.dmg</code> to mount the disk image.</li>
-                  <li>Drag the <strong>ADC.app</strong> icon into your <strong>Applications</strong> shortcut.</li>
+                  <li>Double-click <code className="text-pink-300">nebular_torrent-macOS-arm64.dmg</code> to mount the disk image.</li>
+                  <li>Drag the <strong>nebular_torrent.app</strong> icon into your <strong>Applications</strong> shortcut.</li>
                   <li>Eject the mounted DMG in Finder.</li>
-                  <li>Launch <strong>ADC</strong> from Applications or Launchpad.</li>
+                  <li>Launch <strong>nebular_torrent</strong> from Applications or Launchpad.</li>
                 </ol>
               </section>
 
@@ -190,10 +190,10 @@ export const HelpModal: React.FC = () => {
                   <span>macOS Gatekeeper Verification</span>
                 </div>
                 <p>
-                  If launching an unsigned community release, macOS may display: <em>"ADC cannot be opened because Apple cannot check it for malicious software"</em>.
+                  If launching an unsigned community release, macOS may display: <em>"nebular_torrent cannot be opened because Apple cannot check it for malicious software"</em>.
                 </p>
                 <p>
-                  To open: Right-click (or Control-click) <strong>ADC.app</strong> in Applications and choose <strong>Open</strong>, then click <strong>Open</strong> in the dialog. Alternatively, open <strong>System Settings → Privacy & Security</strong> and click <strong>Open Anyway</strong>.
+                  To open: Right-click (or Control-click) <strong>nebular_torrent.app</strong> in Applications and choose <strong>Open</strong>, then click <strong>Open</strong> in the dialog. Alternatively, open <strong>System Settings → Privacy & Security</strong> and click <strong>Open Anyway</strong>.
                 </p>
               </section>
 
@@ -203,9 +203,9 @@ export const HelpModal: React.FC = () => {
                   3. Troubleshooting & Internal Files
                 </h3>
                 <ul className="space-y-1.5 text-slate-400">
-                  <li><strong>"ADC is damaged" quarantine prompt:</strong> Open Terminal and execute: <code className="text-pink-300 select-all">xattr -cr /Applications/ADC.app</code></li>
+                  <li><strong>"nebular_torrent is damaged" quarantine prompt:</strong> Open Terminal and execute: <code className="text-pink-300 select-all">xattr -cr /Applications/nebular_torrent.app</code></li>
                   <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/ADC/internal/</code>.</li>
-                  <li><strong>Uninstall:</strong> Drag <code className="text-slate-200">ADC.app</code> to Trash and optionally delete <code className="text-slate-200">~/Library/Application Support/ADC/</code>.</li>
+                  <li><strong>Uninstall:</strong> Drag <code className="text-slate-200">nebular_torrent.app</code> to Trash and optionally delete <code className="text-slate-200">~/Library/Application Support/ADC/</code>.</li>
                 </ul>
               </section>
             </div>
@@ -223,7 +223,7 @@ export const HelpModal: React.FC = () => {
                   Click the <strong>Apple menu ()</strong> → <strong>About This Mac</strong>. Confirm the <strong>Processor</strong> line reads <strong>Intel Core i5, i7, i9, or Xeon</strong>.
                 </p>
                 <p className="text-slate-400 mt-1">
-                  Download package: <code className="text-pink-300">ADC-macOS-x64.dmg</code> (native x86_64 binary).
+                  Download package: <code className="text-pink-300">nebular_torrent-macOS-x64.dmg</code> (native x86_64 binary).
                 </p>
               </section>
 
@@ -233,9 +233,9 @@ export const HelpModal: React.FC = () => {
                   2. Installation Steps
                 </h3>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-300">
-                  <li>Double-click <code className="text-pink-300">ADC-macOS-x64.dmg</code> to mount.</li>
-                  <li>Drag <strong>ADC.app</strong> to Applications.</li>
-                  <li>Eject the disk image and launch ADC.</li>
+                  <li>Double-click <code className="text-pink-300">nebular_torrent-macOS-x64.dmg</code> to mount.</li>
+                  <li>Drag <strong>nebular_torrent.app</strong> to Applications.</li>
+                  <li>Eject the disk image and launch nebular_torrent.</li>
                 </ol>
               </section>
 
@@ -245,7 +245,7 @@ export const HelpModal: React.FC = () => {
                   <span>macOS Gatekeeper Verification</span>
                 </div>
                 <p>
-                  Right-click <strong>ADC.app</strong> → select <strong>Open</strong> → confirm <strong>Open</strong>.
+                  Right-click <strong>nebular_torrent.app</strong> → select <strong>Open</strong> → confirm <strong>Open</strong>.
                 </p>
               </section>
 
@@ -255,7 +255,7 @@ export const HelpModal: React.FC = () => {
                   3. Troubleshooting & Internal Files
                 </h3>
                 <ul className="space-y-1.5 text-slate-400">
-                  <li><strong>Quarantine removal:</strong> <code className="text-pink-300 select-all">xattr -cr /Applications/ADC.app</code></li>
+                  <li><strong>Quarantine removal:</strong> <code className="text-pink-300 select-all">xattr -cr /Applications/nebular_torrent.app</code></li>
                   <li><strong>Internal Files:</strong> Stored in <code className="text-pink-300">~/Library/Application Support/ADC/internal/</code>.</li>
                 </ul>
               </section>

@@ -9,7 +9,7 @@ name = "nebula_torrent_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "ADC"
+name = "nebular_torrent"
 path = "src/main.rs"
 
 [build-dependencies]
