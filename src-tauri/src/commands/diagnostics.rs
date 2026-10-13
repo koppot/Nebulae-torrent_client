@@ -72,7 +72,10 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
 #[tauri::command]
 pub fn clear_cache(paths: State<Arc<AppPaths>>) -> Result<String, String> {
     if paths.cache_dir.exists() {
-        for entry in fs::read_dir(&paths.cache_dir).map_err(|e| e.to_string())?.flatten() {
+        for entry in fs::read_dir(&paths.cache_dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
             let path = entry.path();
             if path.is_file() {
                 let _ = fs::remove_file(path);
