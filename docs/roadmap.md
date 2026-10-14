@@ -30,8 +30,8 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 - [x] Honest ADC Tracker profile statistics & Seed Time Shield background loop (`spawn_seeding_rules_loop`).
 - [x] Real VPN subsystem: OS Keychain credential storage via `keyring`, OpenVPN `.ovpn` parser, system interface discovery, and 500ms fail-closed kill-switch watcher loop (`spawn_kill_switch_watcher`).
 - [x] Implement throttled 500ms telemetry IPC stream from Rust to React frontend (`spawn_telemetry_loop`).
-- [ ] Implement magnet link resolver (`ut_metadata` BEP 9).
-- [ ] Implement file priority tree (allow selective file downloading and skipping).
+- [x] Implement magnet link resolver (`ut_metadata` BEP 9).
+- [x] Implement file priority tree (allow selective file downloading and skipping).
 
 ---
 

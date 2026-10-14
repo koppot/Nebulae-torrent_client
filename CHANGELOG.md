@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **BEP 9 Magnet Link Resolver (`ut_metadata`)**:
+  - Non-blocking asynchronous magnet link ingestion in `RqbitTorrentEngine` with honest `Downloading Metadata` status and live tracker resolution.
+  - Added Magnet Link / URL tab in `AddTorrentModal` with instant `dn=` title preview and validation.
+  - Added `pnpm.onlyBuiltDependencies: ["esbuild"]` in `package.json` matching Factory AI coordination guidance.
+
+### Fixed
+- **Windows Cross-Platform Compilation**:
+  - Guarded Unix domain socket stream in `src-tauri/src/engine/rtorrent/scgi.rs` with `#[cfg(unix)]` to eliminate compilation failures on Windows.
+  - Scoped `tauri::Manager` trait import in `src-tauri/src/updater.rs` under `#[cfg(windows)]` for `try_state`.
+
 ## [0.1.0-beta.8] - 2026-10-14
 
 ### Added

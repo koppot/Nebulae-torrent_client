@@ -14,6 +14,15 @@ use crate::db::{Database, TorrentDbMetadata};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::utils::paths::AppPaths;
 
+#[derive(Debug, Clone)]
+pub struct PendingMagnet {
+    pub raw_url: String,
+    pub display_name: String,
+    pub added_on: u64,
+    pub download_dir: Option<String>,
+    pub trackers: Vec<String>,
+}
+
 pub struct RqbitTorrentEngine {
     session: Arc<Session>,
     db: Arc<Database>,
@@ -21,6 +30,7 @@ pub struct RqbitTorrentEngine {
     kill_switch_active: Arc<AtomicBool>,
     bound_interface: Arc<Mutex<Option<String>>>,
     metadata_cache: Arc<Mutex<HashMap<String, TorrentDbMetadata>>>,
+    pending_magnets: Arc<Mutex<HashMap<String, PendingMagnet>>>,
 }
 
 impl RqbitTorrentEngine {
@@ -67,6 +77,7 @@ impl RqbitTorrentEngine {
             kill_switch_active: Arc::new(AtomicBool::new(false)),
             bound_interface: Arc::new(Mutex::new(None)),
             metadata_cache: Arc::new(Mutex::new(cached_meta)),
+            pending_magnets: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -108,7 +119,7 @@ impl TorrentEngine for RqbitTorrentEngine {
         let cached = self.metadata_cache.lock().unwrap().clone();
         let is_ks = self.kill_switch_active.load(Ordering::SeqCst);
 
-        let items = self.session.with_torrents(|torrents| {
+        let mut items = self.session.with_torrents(|torrents| {
             let mut result = Vec::new();
 
             for (tid, handle) in torrents {
@@ -207,6 +218,8 @@ impl TorrentEngine for RqbitTorrentEngine {
                     "Paused".to_string()
                 } else if stats.finished {
                     "Seeding".to_string()
+                } else if handle.with_metadata(|_| ()).is_err() && stats.total_bytes == 0 {
+                    "Downloading Metadata".to_string()
                 } else {
                     match stats.state {
                         TorrentStatsState::Initializing { .. } => "Checking".to_string(),
@@ -311,6 +324,65 @@ impl TorrentEngine for RqbitTorrentEngine {
             result
         });
 
+        // Include any pending magnet links that are currently resolving metadata over peer wire
+        if let Ok(pending_lock) = self.pending_magnets.lock() {
+            let seen: std::collections::HashSet<String> =
+                items.iter().map(|t| t.info_hash.clone()).collect();
+            for (p_hash, p_info) in pending_lock.iter() {
+                if !seen.contains(p_hash) {
+                    let mut trackers = Vec::new();
+                    for (tier, tr_url) in p_info.trackers.iter().enumerate() {
+                        trackers.push(TorrentTrackerItem {
+                            tier: tier as u32,
+                            url: tr_url.clone(),
+                            status: "Connecting".to_string(),
+                            seeds: 0,
+                            peers: 0,
+                            downloaded: 0,
+                            message: "Resolving metadata via peer exchange (BEP 9)...".to_string(),
+                        });
+                    }
+
+                    items.push(TorrentItem {
+                        id: p_hash.clone(),
+                        name: p_info.display_name.clone(),
+                        total_bytes: 0,
+                        downloaded_bytes: 0,
+                        uploaded_bytes: 0,
+                        download_rate: 0,
+                        upload_rate: 0,
+                        progress: 0.0,
+                        status: "Downloading Metadata".to_string(),
+                        eta_seconds: None,
+                        seeds: 0,
+                        peers: 0,
+                        ratio: 0.0,
+                        category: "General".to_string(),
+                        is_media: false,
+                        poster_url: None,
+                        info_hash: p_hash.clone(),
+                        save_path: p_info.download_dir.clone().unwrap_or_default(),
+                        added_on: p_info.added_on,
+                        completed_on: None,
+                        comment: "Magnet Link".to_string(),
+                        created_by: "Nebulae Metainfo Tool".to_string(),
+                        piece_size: 1_048_576,
+                        total_pieces: 0,
+                        sequential_download: false,
+                        first_last_piece_prio: false,
+                        super_seeding: false,
+                        tags: vec!["Magnet".to_string(), "Active".to_string()],
+                        files: vec![],
+                        trackers,
+                        download_limit_kib: 0,
+                        upload_limit_kib: 0,
+                        ratio_limit: -1.0,
+                        media_meta: None,
+                    });
+                }
+            }
+        }
+
         Ok(items)
     }
 
@@ -348,10 +420,114 @@ impl TorrentEngine for RqbitTorrentEngine {
             ..Default::default()
         };
 
-        let add = if trimmed.starts_with("magnet:")
-            || trimmed.starts_with("http://")
-            || trimmed.starts_with("https://")
-        {
+        if trimmed.starts_with("magnet:") {
+            let xt_hash = if let Some(xt_idx) = trimmed.find("xt=urn:btih:") {
+                let rest = &trimmed[xt_idx + 12..];
+                let hash = rest.split('&').next().unwrap_or("");
+                hash.to_lowercase()
+            } else {
+                return Err("Invalid magnet link: missing xt=urn:btih parameter".to_string());
+            };
+
+            if xt_hash.len() != 40 && xt_hash.len() != 32 {
+                return Err("Invalid magnet link: invalid info hash length".to_string());
+            }
+
+            let dn_title = trimmed
+                .split("&dn=")
+                .nth(1)
+                .and_then(|dn| dn.split('&').next())
+                .map(|raw| {
+                    raw.replace('+', " ")
+                        .replace("%20", " ")
+                        .replace("%2F", "/")
+                        .replace("%3A", ":")
+                })
+                .unwrap_or_else(|| format!("Magnet {}", &xt_hash[..8.min(xt_hash.len())]));
+
+            let mut trackers = Vec::new();
+            for part in trimmed.split("&tr=") {
+                if part.starts_with("magnet:") {
+                    continue;
+                }
+                if let Some(tr) = part.split('&').next() {
+                    let decoded = tr
+                        .replace("%3A", ":")
+                        .replace("%2F", "/")
+                        .replace("%3F", "?")
+                        .replace("%3D", "=")
+                        .replace("%26", "&");
+                    if decoded.starts_with("http") || decoded.starts_with("udp") {
+                        trackers.push(decoded);
+                    }
+                }
+            }
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            let meta = TorrentDbMetadata {
+                info_hash: xt_hash.clone(),
+                display_title: Some(dn_title.clone()),
+                category: Some("General".to_string()),
+                labels: Some("Active".to_string()),
+                is_watched: false,
+                notes: None,
+                added_at: now,
+                completed_on: None,
+                save_path: download_dir.map(|s| s.to_string()),
+                download_limit_kib: 0,
+                upload_limit_kib: 0,
+                ratio_limit: -1.0,
+                sequential_download: false,
+                first_last_piece_prio: false,
+                super_seeding: false,
+            };
+
+            let _ = self.db.upsert_torrent_metadata(&meta);
+            self.metadata_cache
+                .lock()
+                .unwrap()
+                .insert(xt_hash.clone(), meta);
+
+            let pending = PendingMagnet {
+                raw_url: trimmed.to_string(),
+                display_name: dn_title,
+                added_on: now,
+                download_dir: download_dir.map(|d| d.to_string()),
+                trackers,
+            };
+
+            self.pending_magnets
+                .lock()
+                .unwrap()
+                .insert(xt_hash.clone(), pending);
+
+            let session = self.session.clone();
+            let pending_map = self.pending_magnets.clone();
+            let hash_key = xt_hash.clone();
+            let url_str = trimmed.to_string();
+
+            tauri::async_runtime::spawn(async move {
+                let add_req = AddTorrent::from_url(&url_str);
+                match session.add_torrent(add_req, Some(opts)).await {
+                    Ok(_) => {
+                        if let Ok(mut lock) = pending_map.lock() {
+                            lock.remove(&hash_key);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Magnet resolution ended for {hash_key}: {e:#}");
+                    }
+                }
+            });
+
+            return Ok(xt_hash);
+        }
+
+        let add = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             AddTorrent::from_url(trimmed)
         } else {
             let path = crate::engine::mock::normalize_source_path(trimmed);
@@ -379,9 +555,11 @@ impl TorrentEngine for RqbitTorrentEngine {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        let display_title = handle.name();
+
         let meta = TorrentDbMetadata {
             info_hash: info_hash.clone(),
-            display_title: handle.name(),
+            display_title,
             category: Some("General".to_string()),
             labels: Some("Active".to_string()),
             is_watched: false,
@@ -466,6 +644,12 @@ impl TorrentEngine for RqbitTorrentEngine {
     }
 
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
+        let is_pending = if let Ok(mut pending_lock) = self.pending_magnets.lock() {
+            pending_lock.remove(id).is_some()
+        } else {
+            false
+        };
+
         let tid_or_hash = TorrentIdOrHash::parse(id)
             .map_err(|e| format!("Invalid torrent identifier '{id}': {e}"))?;
 
@@ -479,10 +663,15 @@ impl TorrentEngine for RqbitTorrentEngine {
             }
         }
 
-        tauri::async_runtime::block_on(async {
+        let delete_res = tauri::async_runtime::block_on(async {
             self.session.delete(tid_or_hash, delete_files).await
-        })
-        .map_err(|e| format!("Failed to remove torrent from librqbit: {e:#}"))?;
+        });
+
+        if let Err(e) = delete_res {
+            if !is_pending {
+                return Err(format!("Failed to remove torrent from librqbit: {e:#}"));
+            }
+        }
 
         let _ = self.db.delete_torrent_metadata(id);
         self.metadata_cache.lock().unwrap().remove(id);

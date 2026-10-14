@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 
@@ -24,6 +25,7 @@ export const AddTorrentModal: React.FC = () => {
   const { addTorrent, inspectTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
 
+  const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
   const [torrentSource, setTorrentSource] = useState('');
   const [downloadDir, setDownloadDir] = useState(settings.download_directory);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
@@ -92,6 +94,15 @@ export const AddTorrentModal: React.FC = () => {
   useEffect(() => {
     if (initialAddTorrentSource) {
       setTorrentSource(initialAddTorrentSource);
+      if (
+        initialAddTorrentSource.startsWith('magnet:') ||
+        initialAddTorrentSource.startsWith('http://') ||
+        initialAddTorrentSource.startsWith('https://')
+      ) {
+        setInputMode('magnet');
+      } else {
+        setInputMode('file');
+      }
       const name =
         initialAddTorrentSource.split('/').pop()?.split('\\').pop() || initialAddTorrentSource;
       setSelectedFileName(name);
@@ -335,62 +346,123 @@ export const AddTorrentModal: React.FC = () => {
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs text-[#a3a3a3]">
-          {/* File Selection Dropzone */}
-          <div>
-            <label className="block text-xs font-medium text-white mb-1.5">
-              Torrent Metainfo File (.torrent / .adc)
-            </label>
+          {/* Source Mode Switcher */}
+          <div className="flex border-b border-[#262626] mb-3 gap-2">
+            <button
+              type="button"
+              onClick={() => setInputMode('file')}
+              className={`pb-2 px-3 text-xs font-medium border-b-2 flex items-center gap-1.5 transition ${
+                inputMode === 'file'
+                  ? 'border-[#e50914] text-white'
+                  : 'border-transparent text-[#737373] hover:text-white'
+              }`}
+            >
+              <FileUp className="w-3.5 h-3.5" />
+              <span>Torrent Metainfo File</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('magnet')}
+              className={`pb-2 px-3 text-xs font-medium border-b-2 flex items-center gap-1.5 transition ${
+                inputMode === 'magnet'
+                  ? 'border-[#e50914] text-white'
+                  : 'border-transparent text-[#737373] hover:text-white'
+              }`}
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+              <span>Magnet Link / URL</span>
+            </button>
+          </div>
 
-            {selectedFileName ? (
-              <div
-                onClick={handleChooseFile}
-                className="border border-[#333333] bg-[#1f1f1f] rounded-lg p-3 transition cursor-pointer flex items-center justify-between hover:border-[#e50914]"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <FileCheck className="w-4 h-4 text-[#e50914] flex-shrink-0" />
-                  <div className="min-w-0">
-                    <span className="text-xs font-medium text-white truncate block max-w-[300px]">
-                      {selectedFileName}
+          {/* File Selection Dropzone or Magnet Input */}
+          <div>
+            {inputMode === 'file' ? (
+              <>
+                <label className="block text-xs font-medium text-white mb-1.5">
+                  Torrent Metainfo File (.torrent / .adc)
+                </label>
+
+                {selectedFileName ? (
+                  <div
+                    onClick={handleChooseFile}
+                    className="border border-[#333333] bg-[#1f1f1f] rounded-lg p-3 transition cursor-pointer flex items-center justify-between hover:border-[#e50914]"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <FileCheck className="w-4 h-4 text-[#e50914] flex-shrink-0" />
+                      <div className="min-w-0">
+                        <span className="text-xs font-medium text-white truncate block max-w-[300px]">
+                          {selectedFileName}
+                        </span>
+                        <span className="text-[10px] text-[#a3a3a3] font-mono">
+                          {selectedFileSize ? formatFileSize(selectedFileSize) : 'Ready for swarm connection'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleClearSelectedFile}
+                        className="p-1 rounded text-[#a3a3a3] hover:text-[#e50914] transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={handleChooseFile}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-lg p-5 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5 ${
+                      isDragging
+                        ? 'border-[#e50914] bg-[#e50914]/10'
+                        : 'border-[#333333] hover:border-[#e50914] bg-[#1f1f1f]'
+                    }`}
+                  >
+                    <FileUp className="w-6 h-6 text-[#a3a3a3]" />
+                    <span className="text-xs text-white">
+                      Click to select <span className="font-mono text-[#e50914]">.torrent</span> or{' '}
+                      <span className="font-mono text-[#e50914]">.adc</span> file
                     </span>
-                    <span className="text-[10px] text-[#a3a3a3] font-mono">
-                      {selectedFileSize ? formatFileSize(selectedFileSize) : 'Ready for swarm connection'}
+                    <span className="text-[10px] text-[#a3a3a3]">
+                      or drag and drop metainfo file here
                     </span>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleClearSelectedFile}
-                    className="p-1 rounded text-[#a3a3a3] hover:text-[#e50914] transition"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
+                )}
+              </>
             ) : (
-              <div
-                onClick={handleChooseFile}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                className={`border-2 border-dashed rounded-lg p-5 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5 ${
-                  isDragging
-                    ? 'border-[#e50914] bg-[#e50914]/10'
-                    : 'border-[#333333] hover:border-[#e50914] bg-[#1f1f1f]'
-                }`}
-              >
-                <FileUp className="w-6 h-6 text-[#a3a3a3]" />
-                <span className="text-xs text-white">
-                  Click to select <span className="font-mono text-[#e50914]">.torrent</span> or{' '}
-                  <span className="font-mono text-[#e50914]">.adc</span> file
-                </span>
-                <span className="text-[10px] text-[#a3a3a3]">
-                  or drag and drop metainfo file here
-                </span>
+              <div>
+                <label className="block text-xs font-medium text-white mb-1.5 flex items-center justify-between">
+                  <span>Magnet URI or Direct Web Torrent URL</span>
+                  <span className="text-[10px] text-[#737373] font-mono">BEP 9 Metadata Exchange</span>
+                </label>
+                <textarea
+                  value={torrentSource}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setTorrentSource(val);
+                    setSelectedFileName(null);
+                    setSelectedFileSize(null);
+                    setSelectedFileBytes(null);
+                    if (val.trim().startsWith('magnet:') || val.trim().startsWith('http')) {
+                      setInspectLoading(true);
+                      inspectTorrent(val.trim())
+                        .then((preview) => setInspectPreview(preview))
+                        .catch(() => setInspectPreview(null))
+                        .finally(() => setInspectLoading(false));
+                    } else {
+                      setInspectPreview(null);
+                    }
+                  }}
+                  rows={3}
+                  placeholder="magnet:?xt=urn:btih:...&dn=... or https://tracker.asiandvdclub.org/..."
+                  className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#333333] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] resize-none"
+                />
               </div>
             )}
 

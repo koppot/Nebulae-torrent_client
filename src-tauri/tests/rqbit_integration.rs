@@ -255,3 +255,24 @@ fn test_rqbit_engine_bep27_private_torrent_isolation() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_rqbit_engine_magnet_link_resolution() {
+    let (engine, tmp) = setup_test_engine("magnet_resolution");
+
+    // Add magnet link with dn display name and ADC tracker
+    let magnet = "magnet:?xt=urn:btih:3b245504d5f12bbdbe12f73313a3711941d66669&dn=Classic+Asian+Cinema+Collection&tr=https%3A%2F%2Ftracker.asiandvdclub.org%3A2710%2Fannounce";
+    let hash = engine.add_torrent(magnet, None).expect("add magnet failed");
+    assert_eq!(hash, "3b245504d5f12bbdbe12f73313a3711941d66669");
+
+    let torrents = engine.list_torrents().expect("list failed");
+    assert_eq!(torrents.len(), 1);
+    let item = &torrents[0];
+    assert_eq!(item.info_hash, "3b245504d5f12bbdbe12f73313a3711941d66669");
+    assert_eq!(item.name, "Classic Asian Cinema Collection");
+    // Before peers connect to provide ut_metadata, state is honestly reported as Downloading Metadata
+    assert_eq!(item.status, "Downloading Metadata");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp);
+}
