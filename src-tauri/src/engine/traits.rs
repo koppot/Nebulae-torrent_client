@@ -59,4 +59,11 @@ pub trait TorrentEngine: Send + Sync {
         file_index: u32,
         new_file_name: &str,
     ) -> Result<(), String>;
+    fn rename_torrent_folder(
+        &self,
+        id: &str,
+        old_folder_path: &str,
+        new_folder_name: &str,
+    ) -> Result<(), String>;
 }
+

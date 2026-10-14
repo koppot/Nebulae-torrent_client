@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
+import { TorrentFileItem } from '../../types';
 import {
   Play,
   Pause,
@@ -19,6 +20,17 @@ import {
   ShieldCheck,
   AlertCircle,
   X,
+  Folder,
+  FolderOpen,
+  ChevronRight,
+  ChevronDown,
+  Film,
+  Disc,
+  Music,
+  File,
+  Search,
+  List,
+  FolderTree,
 } from 'lucide-react';
 
 interface ContextMenuState {
@@ -26,6 +38,97 @@ interface ContextMenuState {
   x: number;
   y: number;
   torrentId: string;
+}
+
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  isFolder: boolean;
+  size_bytes: number;
+  file?: TorrentFileItem;
+  children: FileTreeNode[];
+}
+
+function buildFileTree(files: TorrentFileItem[]): FileTreeNode {
+  const root: FileTreeNode = {
+    name: 'root',
+    path: '',
+    isFolder: true,
+    size_bytes: 0,
+    children: [],
+  };
+
+  for (const file of files) {
+    const parts = file.name.replace(/\\/g, '/').split('/').filter(Boolean);
+    let current = root;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const currentPath = parts.slice(0, i + 1).join('/');
+
+      if (isLast) {
+        current.children.push({
+          name: part,
+          path: currentPath,
+          isFolder: false,
+          size_bytes: file.size_bytes,
+          file,
+          children: [],
+        });
+      } else {
+        let folderNode = current.children.find((c) => c.isFolder && c.name === part);
+        if (!folderNode) {
+          folderNode = {
+            name: part,
+            path: currentPath,
+            isFolder: true,
+            size_bytes: 0,
+            children: [],
+          };
+          current.children.push(folderNode);
+        }
+        current = folderNode;
+      }
+    }
+  }
+
+  function computeFolderSize(node: FileTreeNode): number {
+    if (!node.isFolder) {
+      return node.size_bytes;
+    }
+    node.size_bytes = node.children.reduce((acc, c) => acc + computeFolderSize(c), 0);
+    node.children.sort((a, b) => {
+      if (a.isFolder === b.isFolder) {
+        return a.name.localeCompare(b.name);
+      }
+      return a.isFolder ? -1 : 1;
+    });
+    return node.size_bytes;
+  }
+
+  computeFolderSize(root);
+  return root;
+}
+
+function countFilesInNode(node: FileTreeNode): number {
+  if (!node.isFolder) return 1;
+  return node.children.reduce((acc, c) => acc + countFilesInNode(c), 0);
+}
+
+function countFoldersInNode(node: FileTreeNode): number {
+  if (!node.isFolder) return 0;
+  return 1 + node.children.reduce((acc, c) => acc + countFoldersInNode(c), 0);
+}
+
+function nodeMatchesFilter(node: FileTreeNode, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  if (node.name.toLowerCase().includes(q)) return true;
+  if (node.isFolder) {
+    return node.children.some((c) => nodeMatchesFilter(c, query));
+  }
+  return false;
 }
 
 export const TorrentManagerView: React.FC = () => {
@@ -40,6 +143,7 @@ export const TorrentManagerView: React.FC = () => {
     reannounce,
     renameTorrent,
     renameTorrentFile,
+    renameTorrentFolder,
     setFilePriority,
   } = useTorrentStore();
 
@@ -60,11 +164,16 @@ export const TorrentManagerView: React.FC = () => {
     torrentId: '',
   });
 
+  const [filesViewMode, setFilesViewMode] = useState<'tree' | 'flat'>('tree');
+  const [fileFilter, setFileFilter] = useState('');
+  const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
+
   const [renameModal, setRenameModal] = useState<{
     isOpen: boolean;
-    type: 'torrent' | 'file';
+    type: 'torrent' | 'folder' | 'file';
     id: string;
     fileIndex?: number;
+    folderPath?: string;
     currentName: string;
     newName: string;
     savePath?: string;
@@ -190,16 +299,32 @@ export const TorrentManagerView: React.FC = () => {
     });
   };
 
-  const openRenameFileModal = (fileIndex: number, currentFileName: string) => {
+  const openRenameFolderModal = (folderPath: string, folderName: string) => {
     if (!selectedTorrent) return;
     setRenameError(null);
+    setRenameModal({
+      isOpen: true,
+      type: 'folder',
+      id: selectedTorrent.id,
+      folderPath,
+      currentName: folderName,
+      newName: folderName,
+      savePath: selectedTorrent.save_path,
+    });
+  };
+
+  const openRenameFileModal = (fileIndex: number, currentFilePath: string) => {
+    if (!selectedTorrent) return;
+    setRenameError(null);
+    const parts = currentFilePath.replace(/\\/g, '/').split('/');
+    const baseName = parts[parts.length - 1] || currentFilePath;
     setRenameModal({
       isOpen: true,
       type: 'file',
       id: selectedTorrent.id,
       fileIndex,
-      currentName: currentFileName,
-      newName: currentFileName,
+      currentName: baseName,
+      newName: baseName,
       savePath: selectedTorrent.save_path,
     });
   };
@@ -215,6 +340,8 @@ export const TorrentManagerView: React.FC = () => {
     try {
       if (renameModal.type === 'torrent') {
         await renameTorrent(renameModal.id, trimmed);
+      } else if (renameModal.type === 'folder' && renameModal.folderPath) {
+        await renameTorrentFolder(renameModal.id, renameModal.folderPath, trimmed);
       } else if (renameModal.fileIndex !== undefined) {
         await renameTorrentFile(renameModal.id, renameModal.fileIndex, trimmed);
       }
@@ -222,6 +349,184 @@ export const TorrentManagerView: React.FC = () => {
     } catch (err: any) {
       setRenameError(String(err));
     }
+  };
+
+  const fileTree = useMemo(() => {
+    if (!selectedTorrent?.files || selectedTorrent.files.length === 0) {
+      return null;
+    }
+    return buildFileTree(selectedTorrent.files);
+  }, [selectedTorrent?.files]);
+
+  const totalFoldersCount = useMemo(() => {
+    if (!fileTree) return 0;
+    return Math.max(0, countFoldersInNode(fileTree) - 1);
+  }, [fileTree]);
+
+  const filteredFlatFiles = useMemo(() => {
+    if (!selectedTorrent?.files) return [];
+    if (!fileFilter) return selectedTorrent.files;
+    const q = fileFilter.toLowerCase();
+    return selectedTorrent.files.filter((f) => f.name.toLowerCase().includes(q));
+  }, [selectedTorrent?.files, fileFilter]);
+
+  const toggleFolder = (folderPath: string) => {
+    setCollapsedFolders((prev) => ({
+      ...prev,
+      [folderPath]: !prev[folderPath],
+    }));
+  };
+
+  const getFileIcon = (fileName: string) => {
+    const lower = fileName.toLowerCase();
+    if (
+      lower.endsWith('.mkv') ||
+      lower.endsWith('.mp4') ||
+      lower.endsWith('.avi') ||
+      lower.endsWith('.m2ts') ||
+      lower.endsWith('.ts')
+    ) {
+      return <Film className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />;
+    }
+    if (
+      lower.endsWith('.iso') ||
+      lower.endsWith('.img') ||
+      lower.endsWith('.bdmv') ||
+      lower.endsWith('.clpi') ||
+      lower.endsWith('.mpls')
+    ) {
+      return <Disc className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />;
+    }
+    if (
+      lower.endsWith('.srt') ||
+      lower.endsWith('.sub') ||
+      lower.endsWith('.idx') ||
+      lower.endsWith('.vtt')
+    ) {
+      return <FileText className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />;
+    }
+    if (
+      lower.endsWith('.flac') ||
+      lower.endsWith('.mp3') ||
+      lower.endsWith('.wav') ||
+      lower.endsWith('.ac3') ||
+      lower.endsWith('.dts')
+    ) {
+      return <Music className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />;
+    }
+    if (lower.endsWith('.nfo') || lower.endsWith('.txt') || lower.endsWith('.md')) {
+      return <FileText className="w-3.5 h-3.5 text-[#a3a3a3] flex-shrink-0" />;
+    }
+    return <File className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />;
+  };
+
+  const renderTreeNode = (node: FileTreeNode, depth = 0): React.ReactNode => {
+    if (node.isFolder) {
+      const isCollapsed = !!collapsedFolders[node.path];
+      const fileCount = countFilesInNode(node);
+
+      if (fileFilter && !nodeMatchesFilter(node, fileFilter)) {
+        return null;
+      }
+
+      return (
+        <React.Fragment key={node.path || node.name}>
+          <div
+            className="group flex items-center justify-between p-1.5 rounded hover:bg-[#222222] border border-transparent hover:border-[#333333] transition text-xs"
+            style={{ paddingLeft: `${depth * 18 + 8}px` }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                onClick={() => toggleFolder(node.path)}
+                className="p-0.5 rounded hover:bg-[#333333] text-[#a3a3a3] hover:text-white"
+                title={isCollapsed ? 'Expand folder' : 'Collapse folder'}
+              >
+                {isCollapsed ? (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+              {isCollapsed ? (
+                <Folder className="w-4 h-4 text-[#e50914] flex-shrink-0" />
+              ) : (
+                <FolderOpen className="w-4 h-4 text-[#e50914] flex-shrink-0" />
+              )}
+              <span className="font-semibold text-white truncate max-w-sm font-sans">
+                {node.name}
+              </span>
+              <span className="text-[10px] text-[#a3a3a3] font-mono">
+                ({formatBytes(node.size_bytes)} · {fileCount} {fileCount === 1 ? 'file' : 'files'})
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
+              <button
+                type="button"
+                onClick={() => openRenameFolderModal(node.path, node.name)}
+                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                title={`Rename Folder "${node.name}" on disk`}
+              >
+                <Edit2 className="w-3 h-3 text-[#e50914]" />
+                <span>Rename Folder</span>
+              </button>
+            </div>
+          </div>
+
+          {!isCollapsed && (
+            <div className="space-y-0.5">
+              {node.children.map((child) => renderTreeNode(child, depth + 1))}
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
+    if (fileFilter && !node.name.toLowerCase().includes(fileFilter.toLowerCase())) {
+      return null;
+    }
+
+    const file = node.file!;
+    return (
+      <div
+        key={file.index}
+        className="group flex items-center justify-between p-1.5 rounded hover:bg-[#1f1f1f] border border-transparent hover:border-[#2a2a2a] transition text-xs font-mono"
+        style={{ paddingLeft: `${depth * 18 + 14}px` }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {getFileIcon(node.name)}
+          <span className="text-white truncate max-w-md font-sans font-medium" title={file.name}>
+            {node.name}
+          </span>
+          <span className="text-[10px] text-[#a3a3a3]">
+            ({formatBytes(file.size_bytes)})
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 flex-shrink-0 opacity-90 group-hover:opacity-100 transition">
+          <select
+            value={file.priority}
+            onChange={(e) => setFilePriority(selectedTorrent!.id, file.index, Number(e.target.value))}
+            className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+          >
+            <option value={0}>Do Not Download</option>
+            <option value={1}>Normal Priority</option>
+            <option value={2}>High Priority</option>
+            <option value={3}>Maximum Priority</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => openRenameFileModal(file.index, file.name)}
+            className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+            title={`Rename File "${node.name}" on disk`}
+          >
+            <Edit2 className="w-3 h-3 text-[#e50914]" />
+            <span>Rename File</span>
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -478,56 +783,153 @@ export const TorrentManagerView: React.FC = () => {
                   </div>
                 </div>
               ) : activeManagerTab === 'files' ? (
-                /* Files Tab with Rename File support */
-                <div className="space-y-1.5 font-mono text-xs">
-                  {selectedTorrent.files && selectedTorrent.files.length > 0 ? (
-                    selectedTorrent.files.map((file) => (
-                      <div
-                        key={file.index}
-                        className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between items-center hover:border-[#333333]"
-                      >
-                        <div className="min-w-0 flex items-center gap-2">
-                          <FileText className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
-                          <span className="text-white truncate max-w-md font-sans">
-                            {file.name}
-                          </span>
-                          <span className="text-[10px] text-[#a3a3a3]">
-                            ({formatBytes(file.size_bytes)})
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3 flex-shrink-0">
-                          <select
-                            value={file.priority}
-                            onChange={(e) =>
-                              setFilePriority(selectedTorrent.id, file.index, Number(e.target.value))
-                            }
-                            className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
-                          >
-                            <option value={0}>Do Not Download</option>
-                            <option value={1}>Normal Priority</option>
-                            <option value={2}>High Priority</option>
-                            <option value={3}>Maximum Priority</option>
-                          </select>
+                /* Files & Folder Content Tab with Tree/Flat View & Folder/File Renaming */
+                <div className="flex flex-col h-full space-y-2">
+                  {/* Controls Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded bg-[#1f1f1f] border border-[#262626]">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center bg-[#141414] rounded-lg p-0.5 border border-[#333333]">
+                        <button
+                          type="button"
+                          onClick={() => setFilesViewMode('tree')}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                            filesViewMode === 'tree'
+                              ? 'bg-[#e50914] text-white'
+                              : 'text-[#a3a3a3] hover:text-white'
+                          }`}
+                        >
+                          <FolderTree className="w-3.5 h-3.5" />
+                          <span>Tree View</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFilesViewMode('flat')}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                            filesViewMode === 'flat'
+                              ? 'bg-[#e50914] text-white'
+                              : 'text-[#a3a3a3] hover:text-white'
+                          }`}
+                        >
+                          <List className="w-3.5 h-3.5" />
+                          <span>Flat View</span>
+                        </button>
+                      </div>
+
+                      {filesViewMode === 'tree' && fileTree && (
+                        <div className="flex items-center gap-1">
                           <button
                             type="button"
-                            onClick={() => openRenameFileModal(file.index, file.name)}
-                            className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                            title="Rename File on Disk"
+                            onClick={() => setCollapsedFolders({})}
+                            className="px-2 py-1 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3] hover:text-white transition"
                           >
-                            <Edit2 className="w-3 h-3 text-[#e50914]" />
-                            <span>Rename</span>
+                            Expand All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const map: Record<string, boolean> = {};
+                              const collect = (node: FileTreeNode) => {
+                                if (node.isFolder && node.path) map[node.path] = true;
+                                node.children.forEach(collect);
+                              };
+                              if (fileTree) collect(fileTree);
+                              setCollapsedFolders(map);
+                            }}
+                            className="px-2 py-1 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3] hover:text-white transition"
+                          >
+                            Collapse All
                           </button>
                         </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between items-center">
-                      <span className="text-white truncate font-sans">{selectedTorrent.name}</span>
-                      <span className="text-[#a3a3a3]">
-                        {formatBytes(selectedTorrent.total_bytes)} · Complete
-                      </span>
+                      )}
                     </div>
-                  )}
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-[#a3a3a3]" />
+                        <input
+                          type="text"
+                          value={fileFilter}
+                          onChange={(e) => setFileFilter(e.target.value)}
+                          placeholder="Filter files or folders..."
+                          className="pl-7 pr-6 py-1 rounded bg-[#141414] border border-[#333333] text-white placeholder-[#666666] text-xs font-sans focus:outline-none focus:border-[#e50914] w-48"
+                        />
+                        {fileFilter && (
+                          <button
+                            type="button"
+                            onClick={() => setFileFilter('')}
+                            className="absolute right-2 top-2 text-[#a3a3a3] hover:text-white"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="text-[11px] text-[#a3a3a3] font-mono whitespace-nowrap">
+                        {selectedTorrent.files?.length || 0} files
+                        {totalFoldersCount > 0 ? ` · ${totalFoldersCount} folders` : ''} ·{' '}
+                        {formatBytes(selectedTorrent.total_bytes)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Content List / Tree */}
+                  <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs pr-1">
+                    {filesViewMode === 'tree' && fileTree ? (
+                      fileTree.children.length > 0 ? (
+                        fileTree.children.map((child) => renderTreeNode(child, 0))
+                      ) : (
+                        <div className="p-3 text-center text-[#a3a3a3]">
+                          No files found in torrent.
+                        </div>
+                      )
+                    ) : (
+                      filteredFlatFiles.length > 0 ? (
+                        filteredFlatFiles.map((file) => (
+                          <div
+                            key={file.index}
+                            className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between items-center hover:border-[#333333]"
+                          >
+                            <div className="min-w-0 flex items-center gap-2">
+                              {getFileIcon(file.name)}
+                              <span className="text-white truncate max-w-md font-sans">
+                                {file.name}
+                              </span>
+                              <span className="text-[10px] text-[#a3a3a3]">
+                                ({formatBytes(file.size_bytes)})
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 flex-shrink-0">
+                              <select
+                                value={file.priority}
+                                onChange={(e) =>
+                                  setFilePriority(selectedTorrent.id, file.index, Number(e.target.value))
+                                }
+                                className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+                              >
+                                <option value={0}>Do Not Download</option>
+                                <option value={1}>Normal Priority</option>
+                                <option value={2}>High Priority</option>
+                                <option value={3}>Maximum Priority</option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => openRenameFileModal(file.index, file.name)}
+                                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                                title="Rename File on Disk"
+                              >
+                                <Edit2 className="w-3 h-3 text-[#e50914]" />
+                                <span>Rename</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-3 text-center text-[#a3a3a3]">
+                          {fileFilter ? 'No matching files found.' : 'No files found.'}
+                        </div>
+                      )
+                    )}
+                  </div>
                 </div>
               ) : activeManagerTab === 'trackers' ? (
                 <div className="font-mono text-xs space-y-1">
@@ -692,7 +1094,11 @@ export const TorrentManagerView: React.FC = () => {
               <div className="flex items-center gap-2">
                 <Edit2 className="w-4 h-4 text-[#e50914]" />
                 <h2 className="text-sm font-bold text-white">
-                  {renameModal.type === 'torrent' ? 'Rename Torrent' : 'Rename File'}
+                  {renameModal.type === 'torrent'
+                    ? 'Rename Torrent / Root Directory'
+                    : renameModal.type === 'folder'
+                    ? 'Rename Folder'
+                    : 'Rename File'}
                 </h2>
               </div>
               <button
@@ -705,8 +1111,17 @@ export const TorrentManagerView: React.FC = () => {
 
             <form onSubmit={handleConfirmRename} className="p-5 space-y-4 text-xs">
               <div>
+                <span className="text-[10px] uppercase text-[#a3a3a3] block font-mono mb-1">
+                  Current {renameModal.type === 'torrent' ? 'Torrent' : renameModal.type === 'folder' ? 'Folder' : 'File'} Name:
+                </span>
+                <span className="text-xs text-white font-mono bg-[#1f1f1f] p-2 rounded block border border-[#262626] truncate">
+                  {renameModal.currentName}
+                </span>
+              </div>
+
+              <div>
                 <label className="block text-xs font-medium text-white mb-1.5">
-                  New {renameModal.type === 'torrent' ? 'Torrent / Folder' : 'File'} Name:
+                  New {renameModal.type === 'torrent' ? 'Torrent' : renameModal.type === 'folder' ? 'Folder' : 'File'} Name:
                 </label>
                 <input
                   type="text"
@@ -717,12 +1132,23 @@ export const TorrentManagerView: React.FC = () => {
                 />
               </div>
 
+              {renameModal.folderPath && renameModal.type === 'folder' && (
+                <div>
+                  <span className="text-[10px] uppercase text-[#a3a3a3] block font-mono">
+                    Relative Folder Path:
+                  </span>
+                  <span className="text-xs text-[#a3a3a3] font-mono truncate block max-w-sm">
+                    {renameModal.folderPath}
+                  </span>
+                </div>
+              )}
+
               {renameModal.savePath && (
                 <div>
                   <span className="text-[10px] uppercase text-[#a3a3a3] block font-mono">
                     Storage Location:
                   </span>
-                  <span className="text-xs text-white font-mono truncate block max-w-sm">
+                  <span className="text-xs text-[#a3a3a3] font-mono truncate block max-w-sm">
                     {renameModal.savePath}
                   </span>
                 </div>

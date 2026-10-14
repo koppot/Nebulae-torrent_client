@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { TorrentItem, CreateTorrentParams } from '../types';
+import { TorrentItem, CreateTorrentParams, InspectTorrentResult } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
 export interface SystemPathPresets {
@@ -18,7 +18,8 @@ interface TorrentState {
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
   removeTorrent: (id: string) => Promise<void>;
-  addTorrent: (source: string, downloadDir?: string) => Promise<void>;
+  addTorrent: (source: string, downloadDir?: string, bytes?: number[]) => Promise<void>;
+  inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
   forceRecheck: (id: string) => Promise<void>;
   reannounce: (id: string) => Promise<void>;
   setLocation: (id: string, newPath: string) => Promise<void>;
@@ -30,6 +31,7 @@ interface TorrentState {
   setFilePriority: (id: string, fileIndex: number, priority: number) => Promise<void>;
   renameTorrent: (id: string, newName: string) => Promise<void>;
   renameTorrentFile: (id: string, fileIndex: number, newFileName: string) => Promise<void>;
+  renameTorrentFolder: (id: string, oldFolderPath: string, newFolderName: string) => Promise<void>;
   createTorrent: (params: CreateTorrentParams) => Promise<string>;
   exportTorrent: (id: string) => Promise<string>;
   selectTorrentFile: () => Promise<string | null>;
@@ -97,9 +99,9 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     });
   },
 
-  addTorrent: async (source: string, downloadDir?: string) => {
+  addTorrent: async (source: string, downloadDir?: string, bytes?: number[]) => {
     try {
-      await invoke('add_torrent_stub', { source, downloadDir });
+      await invoke('add_torrent_stub', { source, downloadDir, bytes });
       await get().fetchTorrents();
     } catch {
       // Offline/fallback state update
@@ -164,6 +166,10 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         selectedId: newId,
       });
     }
+  },
+
+  inspectTorrent: async (source?: string, bytes?: number[]) => {
+    return await invoke<InspectTorrentResult>('inspect_torrent_file', { source, bytes });
   },
 
   forceRecheck: async (id: string) => {
@@ -318,19 +324,46 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   renameTorrentFile: async (id: string, fileIndex: number, newFileName: string) => {
     try {
       await invoke('rename_torrent_file', { id, fileIndex, newFileName });
+      await get().fetchTorrents();
     } catch {
       //
+      set({
+        torrents: get().torrents.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                files: t.files.map((f) => (f.index === fileIndex ? { ...f, name: newFileName } : f)),
+              }
+            : t
+        ),
+      });
     }
-    set({
-      torrents: get().torrents.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              files: t.files.map((f) => (f.index === fileIndex ? { ...f, name: newFileName } : f)),
-            }
-          : t
-      ),
-    });
+  },
+
+  renameTorrentFolder: async (id: string, oldFolderPath: string, newFolderName: string) => {
+    try {
+      await invoke('rename_torrent_folder', { id, oldFolderPath, newFolderName });
+      await get().fetchTorrents();
+    } catch {
+      // Offline fallback
+      const oldNorm = oldFolderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      const oldPrefix = `${oldNorm}/`;
+      set({
+        torrents: get().torrents.map((t) => {
+          if (t.id !== id) return t;
+          return {
+            ...t,
+            files: t.files.map((f) => {
+              const norm = f.name.replace(/\\/g, '/');
+              if (norm.startsWith(oldPrefix)) {
+                return { ...f, name: `${newFolderName}/${norm.slice(oldPrefix.length)}` };
+              }
+              return f;
+            }),
+          };
+        }),
+      });
+    }
   },
 
   createTorrent: async (params: CreateTorrentParams) => {

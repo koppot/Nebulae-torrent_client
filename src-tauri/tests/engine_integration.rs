@@ -201,3 +201,67 @@ fn test_torrent_creation_from_directory_and_file() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+#[test]
+fn test_torrent_folder_and_file_renaming() {
+    let tmp_dir = std::env::temp_dir().join(format!("nebulae_rename_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros()));
+    let release_dir = tmp_dir.join("Tokyo.Story.Series");
+    let season_dir = release_dir.join("Season 1");
+    let subs_dir = release_dir.join("Subs");
+    std::fs::create_dir_all(&season_dir).unwrap();
+    std::fs::create_dir_all(&subs_dir).unwrap();
+
+    let ep1 = season_dir.join("Episode 1.mkv");
+    let ep2 = season_dir.join("Episode 2.mkv");
+    let sub = subs_dir.join("en.srt");
+    std::fs::write(&ep1, b"mock video 1").unwrap();
+    std::fs::write(&ep2, b"mock video 2").unwrap();
+    std::fs::write(&sub, b"1\n00:00:00 --> 00:00:05\nHello\n").unwrap();
+
+    let engine = MockTorrentEngine::new();
+    let id = engine
+        .add_torrent(&release_dir.to_string_lossy(), Some(&tmp_dir.to_string_lossy()))
+        .expect("add torrent from dir failed");
+
+    let torrents = engine.list_torrents().unwrap();
+    let item = torrents.iter().find(|t| t.id == id).expect("torrent not found");
+    assert_eq!(item.files.len(), 3);
+    assert!(item.files.iter().any(|f| f.name == "Season 1/Episode 1.mkv"));
+    assert!(item.files.iter().any(|f| f.name == "Season 1/Episode 2.mkv"));
+    assert!(item.files.iter().any(|f| f.name == "Subs/en.srt"));
+
+    // 1. Test folder renaming: "Season 1" -> "Season 01"
+    engine
+        .rename_torrent_folder(&id, "Season 1", "Season 01")
+        .expect("rename folder failed");
+
+    let torrents_after = engine.list_torrents().unwrap();
+    let item_after = torrents_after.iter().find(|t| t.id == id).unwrap();
+    assert!(item_after.files.iter().any(|f| f.name == "Season 01/Episode 1.mkv"));
+    assert!(item_after.files.iter().any(|f| f.name == "Season 01/Episode 2.mkv"));
+    assert!(item_after.files.iter().any(|f| f.name == "Subs/en.srt"));
+    assert!(release_dir.join("Season 01/Episode 1.mkv").exists());
+    assert!(!release_dir.join("Season 1").exists());
+
+    // 2. Test file renaming preserving parent directory: "Subs/en.srt" -> "english.srt"
+    let sub_file = item_after.files.iter().find(|f| f.name == "Subs/en.srt").unwrap();
+    engine
+        .rename_torrent_file(&id, sub_file.index, "english.srt")
+        .expect("rename file failed");
+
+    let torrents_after_file = engine.list_torrents().unwrap();
+    let item_after_file = torrents_after_file.iter().find(|t| t.id == id).unwrap();
+    assert!(item_after_file.files.iter().any(|f| f.name == "Subs/english.srt"));
+    assert!(release_dir.join("Subs/english.srt").exists());
+    assert!(!release_dir.join("Subs/en.srt").exists());
+
+    // 3. Test safety guard protecting qBittorrent paths
+    let qbit_id = engine.add_torrent("magnet:?xt=urn:btih:abc&dn=qbit_test", Some("/home/user/qbittorrent/downloads")).unwrap();
+    let rename_guard_err = engine.rename_torrent_folder(&qbit_id, "folder", "new_folder");
+    assert!(rename_guard_err.is_err());
+    assert!(rename_guard_err.unwrap_err().contains("Safety Guard"));
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+

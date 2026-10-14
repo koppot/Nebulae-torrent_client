@@ -18,6 +18,19 @@ export interface TorrentTrackerItem {
   message: string;
 }
 
+export interface InspectTorrentResult {
+  name: string;
+  total_bytes: number;
+  piece_size: number;
+  total_pieces: number;
+  info_hash: string;
+  is_private: boolean;
+  comment: string;
+  created_by: string;
+  files: TorrentFileItem[];
+  trackers: TorrentTrackerItem[];
+}
+
 export interface TorrentItem {
   id: string;
   name: string;

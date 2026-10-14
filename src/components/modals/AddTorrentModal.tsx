@@ -2,19 +2,35 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { X, Plus, FileUp, Folder, FileCheck, Layers, Play } from 'lucide-react';
+import { InspectTorrentResult } from '../../types';
+import {
+  X,
+  Plus,
+  FileUp,
+  Folder,
+  FileCheck,
+  Layers,
+  Play,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 
 export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource } =
     useUiStore();
-  const { addTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
+  const { addTorrent, inspectTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory } = useSettingsStore();
 
   const [torrentSource, setTorrentSource] = useState('');
   const [downloadDir, setDownloadDir] = useState(settings.download_directory);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [selectedFileSize, setSelectedFileSize] = useState<number | null>(null);
+  const [selectedFileBytes, setSelectedFileBytes] = useState<number[] | null>(null);
+  const [inspectPreview, setInspectPreview] = useState<InspectTorrentResult | null>(null);
+  const [inspectLoading, setInspectLoading] = useState(false);
+  const [showFilePreviewList, setShowFilePreviewList] = useState(false);
   const [category, setCategory] = useState('General');
   const [startImmediately, setStartImmediately] = useState(!settings.do_not_start_automatically);
   const [sequentialDownload, setSequentialDownload] = useState(false);
@@ -37,7 +53,13 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         setSelectedFileName(name);
         setSelectedFileSize(null);
+        setSelectedFileBytes(null);
         setTorrentSource(filePath);
+        setInspectLoading(true);
+        inspectTorrent(filePath)
+          .then((preview) => setInspectPreview(preview))
+          .catch(() => setInspectPreview(null))
+          .finally(() => setInspectLoading(false));
       }
     })
       .then((un) => unlistenList.push(un))
@@ -49,7 +71,13 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         setSelectedFileName(name);
         setSelectedFileSize(null);
+        setSelectedFileBytes(null);
         setTorrentSource(filePath);
+        setInspectLoading(true);
+        inspectTorrent(filePath)
+          .then((preview) => setInspectPreview(preview))
+          .catch(() => setInspectPreview(null))
+          .finally(() => setInspectLoading(false));
       }
     })
       .then((un) => unlistenList.push(un))
@@ -58,7 +86,7 @@ export const AddTorrentModal: React.FC = () => {
     return () => {
       for (const un of unlistenList) un();
     };
-  }, [showAddTorrent]);
+  }, [showAddTorrent, inspectTorrent]);
 
   useEffect(() => {
     if (initialAddTorrentSource) {
@@ -67,8 +95,13 @@ export const AddTorrentModal: React.FC = () => {
         initialAddTorrentSource.split('/').pop()?.split('\\').pop() || initialAddTorrentSource;
       setSelectedFileName(name);
       setInitialAddTorrentSource(null);
+      setInspectLoading(true);
+      inspectTorrent(initialAddTorrentSource)
+        .then((preview) => setInspectPreview(preview))
+        .catch(() => setInspectPreview(null))
+        .finally(() => setInspectLoading(false));
     }
-  }, [initialAddTorrentSource, setInitialAddTorrentSource]);
+  }, [initialAddTorrentSource, setInitialAddTorrentSource, inspectTorrent]);
 
   useEffect(() => {
     if (!showAddTorrent) return;
@@ -79,12 +112,14 @@ export const AddTorrentModal: React.FC = () => {
           e.preventDefault();
           const targetDir = downloadDir || settings.download_directory || '~/Downloads';
           setIsSubmitting(true);
-          addTorrent(source, targetDir).then(() => {
+          addTorrent(source, targetDir, selectedFileBytes || undefined).then(() => {
             if (targetDir) addRecentDirectory(targetDir);
             setIsSubmitting(false);
             setTorrentSource('');
             setSelectedFileName(null);
             setSelectedFileSize(null);
+            setSelectedFileBytes(null);
+            setInspectPreview(null);
             setShowAddTorrent(false);
           });
         }
@@ -95,7 +130,18 @@ export const AddTorrentModal: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showAddTorrent, torrentSource, selectedFileName, isSubmitting, downloadDir, settings.download_directory, addTorrent, addRecentDirectory, setShowAddTorrent]);
+  }, [
+    showAddTorrent,
+    torrentSource,
+    selectedFileName,
+    selectedFileBytes,
+    isSubmitting,
+    downloadDir,
+    settings.download_directory,
+    addTorrent,
+    addRecentDirectory,
+    setShowAddTorrent,
+  ]);
 
   if (!showAddTorrent) return null;
 
@@ -112,7 +158,17 @@ export const AddTorrentModal: React.FC = () => {
         const name = nativePath.split('/').pop()?.split('\\').pop() || nativePath;
         setSelectedFileName(name);
         setSelectedFileSize(null);
+        setSelectedFileBytes(null);
         setTorrentSource(nativePath);
+        setInspectLoading(true);
+        try {
+          const preview = await inspectTorrent(nativePath);
+          setInspectPreview(preview);
+        } catch {
+          setInspectPreview(null);
+        } finally {
+          setInspectLoading(false);
+        }
         return;
       }
     } catch {
@@ -128,6 +184,24 @@ export const AddTorrentModal: React.FC = () => {
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
       setTorrentSource(file.name);
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        if (reader.result instanceof ArrayBuffer) {
+          const bytes = Array.from(new Uint8Array(reader.result));
+          setSelectedFileBytes(bytes);
+          setInspectLoading(true);
+          try {
+            const preview = await inspectTorrent(undefined, bytes);
+            setInspectPreview(preview);
+          } catch {
+            setInspectPreview(null);
+          } finally {
+            setInspectLoading(false);
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
     }
   };
 
@@ -140,6 +214,24 @@ export const AddTorrentModal: React.FC = () => {
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
       setTorrentSource(source);
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        if (reader.result instanceof ArrayBuffer) {
+          const bytes = Array.from(new Uint8Array(reader.result));
+          setSelectedFileBytes(bytes);
+          setInspectLoading(true);
+          try {
+            const preview = await inspectTorrent(undefined, bytes);
+            setInspectPreview(preview);
+          } catch {
+            setInspectPreview(null);
+          } finally {
+            setInspectLoading(false);
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
     }
   };
 
@@ -171,6 +263,8 @@ export const AddTorrentModal: React.FC = () => {
     e.stopPropagation();
     setSelectedFileName(null);
     setSelectedFileSize(null);
+    setSelectedFileBytes(null);
+    setInspectPreview(null);
     setTorrentSource('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -183,7 +277,7 @@ export const AddTorrentModal: React.FC = () => {
     if (!source) return;
 
     setIsSubmitting(true);
-    await addTorrent(source, downloadDir);
+    await addTorrent(source, downloadDir, selectedFileBytes || undefined);
     if (downloadDir) {
       await addRecentDirectory(downloadDir);
     }
@@ -191,6 +285,8 @@ export const AddTorrentModal: React.FC = () => {
     setTorrentSource('');
     setSelectedFileName(null);
     setSelectedFileSize(null);
+    setSelectedFileBytes(null);
+    setInspectPreview(null);
     setShowAddTorrent(false);
   };
 
@@ -287,6 +383,73 @@ export const AddTorrentModal: React.FC = () => {
                 <span className="text-[10px] text-[#a3a3a3]">
                   or drag and drop metainfo file here
                 </span>
+              </div>
+            )}
+
+            {inspectLoading && (
+              <div className="mt-2.5 p-3 rounded-lg bg-[#1f1f1f] border border-[#262626] flex items-center justify-center gap-2 text-xs text-[#a3a3a3]">
+                <div className="w-3.5 h-3.5 border-2 border-[#e50914] border-t-transparent rounded-full animate-spin" />
+                <span>Parsing Bencoded Torrent Metainfo...</span>
+              </div>
+            )}
+
+            {inspectPreview && !inspectLoading && (
+              <div className="mt-2.5 p-3 rounded-lg bg-[#1f1f1f] border border-[#262626] space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                    <span className="font-semibold text-white truncate max-w-[280px]">
+                      {inspectPreview.name}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-[#a3a3a3] font-mono flex-shrink-0">
+                    {formatFileSize(inspectPreview.total_bytes)} · {inspectPreview.files.length}{' '}
+                    {inspectPreview.files.length === 1 ? 'file' : 'files'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] text-[#a3a3a3] font-mono border-t border-[#2a2a2a] pt-1.5">
+                  <span className="truncate max-w-[200px]" title={inspectPreview.info_hash}>
+                    Hash: {inspectPreview.info_hash.substring(0, 16)}...
+                  </span>
+                  {inspectPreview.files.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowFilePreviewList(!showFilePreviewList)}
+                      className="flex items-center gap-1 text-[#e50914] hover:underline"
+                    >
+                      <span>{showFilePreviewList ? 'Hide Files' : 'Inspect Content'}</span>
+                      {showFilePreviewList ? (
+                        <ChevronUp className="w-3 h-3" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3" />
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {showFilePreviewList && inspectPreview.files.length > 0 && (
+                  <div className="max-h-36 overflow-y-auto space-y-1 font-mono text-[11px] border-t border-[#2a2a2a] pt-1.5 pr-1">
+                    {inspectPreview.files.slice(0, 25).map((f) => (
+                      <div
+                        key={f.index}
+                        className="flex justify-between items-center py-0.5 text-[#cccccc] hover:text-white"
+                      >
+                        <span className="truncate max-w-[280px]" title={f.name}>
+                          {f.name}
+                        </span>
+                        <span className="text-[#a3a3a3] text-[10px] flex-shrink-0 ml-2">
+                          {formatFileSize(f.size_bytes)}
+                        </span>
+                      </div>
+                    ))}
+                    {inspectPreview.files.length > 25 && (
+                      <div className="text-[10px] text-[#a3a3a3] text-center pt-1">
+                        + {inspectPreview.files.length - 25} more files
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

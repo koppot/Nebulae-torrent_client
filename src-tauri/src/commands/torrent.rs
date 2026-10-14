@@ -74,6 +74,149 @@ pub struct CreateTorrentParams {
     pub start_seeding: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InspectTorrentResult {
+    pub name: String,
+    pub total_bytes: u64,
+    pub piece_size: u32,
+    pub total_pieces: u32,
+    pub info_hash: String,
+    pub is_private: bool,
+    pub comment: String,
+    pub created_by: String,
+    pub files: Vec<TorrentFileItem>,
+    pub trackers: Vec<TorrentTrackerItem>,
+}
+
+#[tauri::command]
+pub fn inspect_torrent_file(
+    source: Option<String>,
+    bytes: Option<Vec<u8>>,
+) -> Result<InspectTorrentResult, String> {
+    // 1. If raw bytes are passed
+    if let Some(raw) = bytes {
+        if !raw.is_empty() {
+            let parsed = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw)?;
+            return Ok(InspectTorrentResult {
+                name: parsed.name,
+                total_bytes: parsed.total_bytes,
+                piece_size: parsed.piece_size,
+                total_pieces: parsed.total_pieces,
+                info_hash: parsed.info_hash,
+                is_private: parsed.is_private,
+                comment: parsed.comment,
+                created_by: parsed.created_by,
+                files: parsed.files,
+                trackers: parsed.trackers,
+            });
+        }
+    }
+
+    // 2. If source string is passed
+    if let Some(src) = source {
+        let trimmed = src.trim();
+
+        // Base64 encoded torrent?
+        let b64_candidate = if trimmed.starts_with("data:") {
+            trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
+        } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
+            Some(stripped)
+        } else if !trimmed.starts_with("magnet:") && !trimmed.contains('/') && !trimmed.contains('\\') && trimmed.len() > 100 {
+            Some(trimmed)
+        } else {
+            None
+        };
+
+        if let Some(b64) = b64_candidate {
+            if let Ok(decoded) = crate::engine::mock::decode_base64_data(b64) {
+                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&decoded) {
+                    return Ok(InspectTorrentResult {
+                        name: parsed.name,
+                        total_bytes: parsed.total_bytes,
+                        piece_size: parsed.piece_size,
+                        total_pieces: parsed.total_pieces,
+                        info_hash: parsed.info_hash,
+                        is_private: parsed.is_private,
+                        comment: parsed.comment,
+                        created_by: parsed.created_by,
+                        files: parsed.files,
+                        trackers: parsed.trackers,
+                    });
+                }
+            }
+        }
+
+        // Magnet link?
+        if trimmed.starts_with("magnet:") {
+            let parsed_name = trimmed
+                .split("&dn=")
+                .nth(1)
+                .and_then(|dn| dn.split('&').next())
+                .unwrap_or("Magnet Download");
+            let name = parsed_name.replace('+', " ").replace("%20", " ");
+            let xt_hash = trimmed
+                .split("xt=urn:btih:")
+                .nth(1)
+                .and_then(|h| h.split('&').next())
+                .unwrap_or("unknown_hash");
+            return Ok(InspectTorrentResult {
+                name,
+                total_bytes: 0,
+                piece_size: 1_048_576,
+                total_pieces: 0,
+                info_hash: xt_hash.to_lowercase(),
+                is_private: false,
+                comment: "Magnet Link".to_string(),
+                created_by: "Nebulae Metainfo Tool".to_string(),
+                files: vec![],
+                trackers: vec![],
+            });
+        }
+
+        // Disk path?
+        let norm_path = crate::engine::mock::normalize_source_path(trimmed);
+        if norm_path.exists() {
+            if norm_path.is_file() {
+                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_file(&norm_path) {
+                    return Ok(InspectTorrentResult {
+                        name: parsed.name,
+                        total_bytes: parsed.total_bytes,
+                        piece_size: parsed.piece_size,
+                        total_pieces: parsed.total_pieces,
+                        info_hash: parsed.info_hash,
+                        is_private: parsed.is_private,
+                        comment: parsed.comment,
+                        created_by: parsed.created_by,
+                        files: parsed.files,
+                        trackers: parsed.trackers,
+                    });
+                }
+            } else if norm_path.is_dir() {
+                let files = crate::engine::mock::scan_directory_files(&norm_path)?;
+                let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
+                let dir_name = norm_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Local Directory".to_string());
+                return Ok(InspectTorrentResult {
+                    name: dir_name,
+                    total_bytes,
+                    piece_size: 1_048_576,
+                    total_pieces: ((total_bytes + 1_048_575) / 1_048_576) as u32,
+                    info_hash: format!("local_{:x}", total_bytes),
+                    is_private: false,
+                    comment: "Local Storage Directory".to_string(),
+                    created_by: "Nebulae Metainfo Tool".to_string(),
+                    files,
+                    trackers: vec![],
+                });
+            }
+        }
+    }
+
+    Err("Could not inspect torrent: invalid source or unsupported format".to_string())
+}
+
 #[tauri::command]
 pub fn list_torrents(engine: State<Arc<MockTorrentEngine>>) -> Result<Vec<TorrentItem>, String> {
     engine.list_torrents()
@@ -83,9 +226,24 @@ pub fn list_torrents(engine: State<Arc<MockTorrentEngine>>) -> Result<Vec<Torren
 pub fn add_torrent_stub(
     source: String,
     download_dir: Option<String>,
+    bytes: Option<Vec<u8>>,
     engine: State<Arc<MockTorrentEngine>>,
 ) -> Result<String, String> {
+    if let Some(raw) = bytes {
+        if !raw.is_empty() {
+            return engine.add_torrent_from_bytes(&raw, download_dir.as_deref());
+        }
+    }
     engine.add_torrent(&source, download_dir.as_deref())
+}
+
+#[tauri::command]
+pub fn add_torrent_bytes(
+    bytes: Vec<u8>,
+    download_dir: Option<String>,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<String, String> {
+    engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
 }
 
 #[tauri::command]
@@ -202,6 +360,16 @@ pub fn rename_torrent_file(
     engine: State<Arc<MockTorrentEngine>>,
 ) -> Result<(), String> {
     engine.rename_torrent_file(&id, file_index, &new_file_name)
+}
+
+#[tauri::command]
+pub fn rename_torrent_folder(
+    id: String,
+    old_folder_path: String,
+    new_folder_name: String,
+    engine: State<Arc<MockTorrentEngine>>,
+) -> Result<(), String> {
+    engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
 }
 
 #[tauri::command]

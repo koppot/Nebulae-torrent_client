@@ -4,6 +4,112 @@ use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+pub fn decode_base64_data(input: &str) -> Result<Vec<u8>, String> {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0;
+    for &b in input.as_bytes() {
+        if b == b'=' || b.is_ascii_whitespace() {
+            continue;
+        }
+        let val = TABLE
+            .iter()
+            .position(|&c| c == b)
+            .ok_or_else(|| "Invalid base64 character".to_string())? as u32;
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
+pub fn normalize_source_path(source: &str) -> std::path::PathBuf {
+    let mut s = source.trim();
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        s = &s[1..s.len() - 1];
+    }
+    if let Some(stripped) = s.strip_prefix("file://") {
+        let decoded = percent_decode_path(stripped);
+        return std::path::PathBuf::from(decoded);
+    }
+    if let Some(stripped) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(stripped);
+        }
+    }
+    if s == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    std::path::PathBuf::from(s)
+}
+
+fn percent_decode_path(input: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = input.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            if let (Some(h1), Some(h2)) = (chars.next(), chars.next()) {
+                if let Ok(val) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                    bytes.push(val);
+                    continue;
+                }
+                bytes.push(b'%');
+                bytes.push(h1);
+                bytes.push(h2);
+                continue;
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+pub fn scan_directory_files(dir: &std::path::Path) -> Result<Vec<TorrentFileItem>, String> {
+    fn walk(root: &std::path::Path, current: &std::path::Path, list: &mut Vec<TorrentFileItem>) -> Result<(), String> {
+        let entries = std::fs::read_dir(current)
+            .map_err(|e| format!("Failed to read directory '{}': {e}", current.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Directory read error: {e}"))?;
+            let path = entry.path();
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, list)?;
+            } else if path.is_file() {
+                let rel = path
+                    .strip_prefix(root)
+                    .map_err(|e| format!("Path prefix error: {e}"))?;
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let size = entry.metadata().map_err(|e| format!("Metadata error: {e}"))?.len();
+                list.push(TorrentFileItem {
+                    index: list.len() as u32,
+                    name: rel_str,
+                    size_bytes: size,
+                    progress: 1.0,
+                    priority: 1,
+                });
+            }
+        }
+        Ok(())
+    }
+    let mut list = Vec::new();
+    walk(dir, dir, &mut list)?;
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    for (idx, item) in list.iter_mut().enumerate() {
+        item.index = idx as u32;
+    }
+    Ok(list)
+}
+
 pub struct MockTorrentEngine {
     torrents: Arc<Mutex<Vec<TorrentItem>>>,
     kill_switch_active: Arc<AtomicBool>,
@@ -15,6 +121,7 @@ impl Default for MockTorrentEngine {
         Self::new()
     }
 }
+
 
 impl MockTorrentEngine {
     pub fn new() -> Self {
@@ -177,15 +284,12 @@ impl MockTorrentEngine {
         let mut guard = self.bound_interface.lock().unwrap();
         *guard = interface;
     }
-}
 
-impl TorrentEngine for MockTorrentEngine {
-    fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
-        let list = self.torrents.lock().unwrap();
-        Ok(list.clone())
-    }
-
-    fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
+    pub fn add_parsed_torrent(
+        &self,
+        parsed: ParsedTorrent,
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
         if self.kill_switch_active.load(Ordering::SeqCst) {
             return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
         }
@@ -210,129 +314,19 @@ impl TorrentEngine for MockTorrentEngine {
                 dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
             });
 
-        let source_path = std::path::Path::new(source);
-        let parsed_opt =
-            if source_path.exists() && (source.ends_with(".torrent") || source_path.is_file()) {
-                ParsedTorrent::parse_file(source_path).ok()
-            } else {
-                None
-            };
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let (
-            name,
-            total_bytes,
-            files,
-            piece_size,
-            total_pieces,
-            info_hash,
-            comment,
-            created_by,
-            trackers,
-            save_path,
-            initial_seeds,
-            initial_peers,
-        ) = if let Some(parsed) = parsed_opt {
-            let content_dir = ensure_torrent_storage(&save_base, &parsed)
-                .unwrap_or_else(|_| save_base.join(&parsed.name));
-            let save_str = content_dir.to_string_lossy().to_string();
+        let content_dir = ensure_torrent_storage(&save_base, &parsed)
+            .unwrap_or_else(|_| save_base.join(&parsed.name));
+        let save_path = content_dir.to_string_lossy().to_string();
 
-            // Background tracker scrape for actual swarm counts
-            let torrents_ref = Arc::clone(&self.torrents);
-            let target_id = new_id.clone();
-            let raw_hash = parsed.raw_info_hash;
-            let left = parsed.total_bytes;
-            if let Some(first_tracker) = parsed.trackers.first() {
-                let tr_url = first_tracker.url.clone();
-                tauri::async_runtime::spawn(async move {
-                    let peer_id = b"-NE0100-849204820194";
-                    if let Ok((seeds, peers)) =
-                        announce_http_tracker(&tr_url, &raw_hash, peer_id, 51413, left).await
-                    {
-                        if let Ok(mut items) = torrents_ref.lock() {
-                            if let Some(item) = items.iter_mut().find(|t| t.id == target_id) {
-                                item.seeds = seeds;
-                                item.peers = peers;
-                                if let Some(tr) = item.trackers.first_mut() {
-                                    tr.seeds = seeds;
-                                    tr.peers = peers;
-                                    tr.status = "Working".to_string();
-                                    tr.message = "Announce OK".to_string();
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-
-            (
-                parsed.name,
-                parsed.total_bytes,
-                parsed.files,
-                parsed.piece_size,
-                parsed.total_pieces,
-                parsed.info_hash,
-                parsed.comment,
-                parsed.created_by,
-                parsed.trackers,
-                save_str,
-                2, // Default to 2 seeds (matching actual ADC swarm) while async announce resolves
-                0,
-            )
-        } else {
-            let name = if source.starts_with("magnet:") {
-                let parsed_name = source
-                    .split("&dn=")
-                    .nth(1)
-                    .and_then(|dn| dn.split('&').next())
-                    .unwrap_or("Magnet Download");
-                parsed_name.replace('+', " ").replace("%20", " ")
-            } else {
-                source_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Queued Torrent".to_string())
-            };
-
-            let save_str = save_base.to_string_lossy().to_string();
-            (
-                name.clone(),
-                1_250_000_000,
-                vec![TorrentFileItem {
-                    index: 0,
-                    name: name.clone(),
-                    size_bytes: 1_250_000_000,
-                    progress: 0.0,
-                    priority: 1,
-                }],
-                1_048_576,
-                1192,
-                format!("hash_{:x}", now),
-                "Added via Nebulae".to_string(),
-                "Nebulae Client".to_string(),
-                vec![TorrentTrackerItem {
-                    tier: 0,
-                    url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
-                    status: "Working".to_string(),
-                    seeds: 12,
-                    peers: 4,
-                    downloaded: 0,
-                    message: "Announce OK".to_string(),
-                }],
-                save_str,
-                12,
-                4,
-            )
-        };
-
-        let is_media = name.ends_with(".mkv")
-            || name.ends_with(".mp4")
-            || name.ends_with(".iso")
-            || files.iter().any(|f| {
+        let is_media = parsed.name.ends_with(".mkv")
+            || parsed.name.ends_with(".mp4")
+            || parsed.name.ends_with(".iso")
+            || parsed.files.iter().any(|f| {
                 let lower = f.name.to_lowercase();
                 lower.ends_with(".iso")
                     || lower.ends_with(".mkv")
@@ -343,17 +337,18 @@ impl TorrentEngine for MockTorrentEngine {
         let content_path = std::path::Path::new(&save_path);
         let already_complete = if content_path.is_file() {
             std::fs::metadata(content_path)
-                .map(|m| m.len() >= total_bytes && total_bytes > 0)
+                .map(|m| m.len() >= parsed.total_bytes && parsed.total_bytes > 0)
                 .unwrap_or(false)
         } else if content_path.is_dir() {
-            let existing_size: u64 = files
+            let existing_size: u64 = parsed
+                .files
                 .iter()
                 .filter_map(|f| {
                     let p = content_path.join(&f.name);
                     std::fs::metadata(p).ok().map(|m| m.len())
                 })
                 .sum();
-            existing_size >= total_bytes && total_bytes > 0
+            existing_size >= parsed.total_bytes && parsed.total_bytes > 0
         } else {
             false
         };
@@ -364,20 +359,48 @@ impl TorrentEngine for MockTorrentEngine {
             "Downloading".to_string()
         };
         let initial_progress = if already_complete { 1.0f32 } else { 0.0f32 };
-        let initial_downloaded = if already_complete { total_bytes } else { 0 };
+        let initial_downloaded = if already_complete { parsed.total_bytes } else { 0 };
         let completed_time = if already_complete { Some(now) } else { None };
 
-        let mut final_files = files;
+        let mut final_files = parsed.files.clone();
         if already_complete {
             for f in &mut final_files {
                 f.progress = 1.0;
             }
         }
 
+        // Background tracker scrape for actual swarm counts
+        let torrents_ref = Arc::clone(&self.torrents);
+        let target_id = new_id.clone();
+        let raw_hash = parsed.raw_info_hash;
+        let left = parsed.total_bytes;
+        if let Some(first_tracker) = parsed.trackers.first() {
+            let tr_url = first_tracker.url.clone();
+            tauri::async_runtime::spawn(async move {
+                let peer_id = b"-NE0100-849204820194";
+                if let Ok((seeds, peers)) =
+                    announce_http_tracker(&tr_url, &raw_hash, peer_id, 51413, left).await
+                {
+                    if let Ok(mut items) = torrents_ref.lock() {
+                        if let Some(item) = items.iter_mut().find(|t| t.id == target_id) {
+                            item.seeds = seeds;
+                            item.peers = peers;
+                            if let Some(tr) = item.trackers.first_mut() {
+                                tr.seeds = seeds;
+                                tr.peers = peers;
+                                tr.status = "Working".to_string();
+                                tr.message = "Announce OK".to_string();
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         list.push(TorrentItem {
             id: new_id.clone(),
-            name,
-            total_bytes,
+            name: parsed.name,
+            total_bytes: parsed.total_bytes,
             downloaded_bytes: initial_downloaded,
             uploaded_bytes: 0,
             download_rate: 0,
@@ -385,26 +408,221 @@ impl TorrentEngine for MockTorrentEngine {
             progress: initial_progress,
             status: initial_status,
             eta_seconds: None,
-            seeds: initial_seeds,
-            peers: initial_peers,
+            seeds: 2,
+            peers: 0,
             ratio: 0.0,
             category: "General".to_string(),
             is_media,
             poster_url: None,
-            info_hash,
+            info_hash: parsed.info_hash,
             save_path,
             added_on: now,
             completed_on: completed_time,
-            comment,
-            created_by,
-            piece_size,
-            total_pieces,
+            comment: parsed.comment,
+            created_by: parsed.created_by,
+            piece_size: parsed.piece_size,
+            total_pieces: parsed.total_pieces,
             sequential_download: false,
             first_last_piece_prio: true,
             super_seeding: false,
             tags: vec!["Active".to_string()],
             files: final_files,
-            trackers,
+            trackers: parsed.trackers,
+            download_limit_kib: 0,
+            upload_limit_kib: 0,
+        });
+
+        Ok(new_id)
+    }
+
+    pub fn add_torrent_from_bytes(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let parsed = ParsedTorrent::parse_bytes(bytes)?;
+        self.add_parsed_torrent(parsed, download_dir)
+    }
+}
+
+impl TorrentEngine for MockTorrentEngine {
+    fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
+        let mut list = self.torrents.lock().unwrap();
+        for item in list.iter_mut() {
+            let p = std::path::Path::new(&item.save_path);
+            if p.exists() && p.is_dir() && item.files.len() <= 1 {
+                if let Ok(scanned) = scan_directory_files(p) {
+                    if scanned.len() > item.files.len() {
+                        let total: u64 = scanned.iter().map(|f| f.size_bytes).sum();
+                        item.files = scanned;
+                        if item.total_bytes == 1_250_000_000 || item.total_bytes == 0 {
+                            item.total_bytes = total;
+                            if item.progress >= 1.0 {
+                                item.downloaded_bytes = total;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(list.clone())
+    }
+
+    fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
+        if self.kill_switch_active.load(Ordering::SeqCst) {
+            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
+        }
+
+        let trimmed = source.trim();
+
+        // 1. Check if source is base64 encoded
+        let b64_candidate = if trimmed.starts_with("data:") {
+            trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
+        } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
+            Some(stripped)
+        } else if !trimmed.starts_with("magnet:") && !trimmed.contains('/') && !trimmed.contains('\\') && trimmed.len() > 100 {
+            Some(trimmed)
+        } else {
+            None
+        };
+
+        if let Some(b64) = b64_candidate {
+            if let Ok(decoded) = decode_base64_data(b64) {
+                if let Ok(parsed) = ParsedTorrent::parse_bytes(&decoded) {
+                    return self.add_parsed_torrent(parsed, download_dir);
+                }
+            }
+        }
+
+        // 2. Check if source is a path on disk
+        let norm_path = normalize_source_path(trimmed);
+        if norm_path.exists() {
+            if norm_path.is_file() {
+                if let Ok(parsed) = ParsedTorrent::parse_file(&norm_path) {
+                    return self.add_parsed_torrent(parsed, download_dir);
+                }
+            } else if norm_path.is_dir() {
+                if let Ok(scanned_files) = scan_directory_files(&norm_path) {
+                    let total: u64 = scanned_files.iter().map(|f| f.size_bytes).sum();
+                    let dir_name = norm_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Local Directory".to_string());
+                    let parsed = ParsedTorrent {
+                        name: dir_name,
+                        total_bytes: total,
+                        piece_size: 1_048_576,
+                        total_pieces: ((total + 1_048_575) / 1_048_576) as u32,
+                        info_hash: format!("local_{:x}", total),
+                        raw_info_hash: [0u8; 20],
+                        is_private: false,
+                        is_multi_file: true,
+                        files: scanned_files,
+                        trackers: vec![TorrentTrackerItem {
+                            tier: 0,
+                            url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
+                            status: "Working".to_string(),
+                            seeds: 25,
+                            peers: 5,
+                            downloaded: 0,
+                            message: "Announce OK".to_string(),
+                        }],
+                        comment: "Local directory content".to_string(),
+                        created_by: "Nebulae Metainfo Tool".to_string(),
+                    };
+                    return self.add_parsed_torrent(parsed, download_dir);
+                }
+            }
+        }
+
+        // 3. Fallback to magnet or placeholder
+        let save_base = download_dir
+            .map(|d| {
+                if let Some(stripped) = d.strip_prefix("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        home.join(stripped)
+                    } else {
+                        std::path::PathBuf::from(d)
+                    }
+                } else if d == "~" {
+                    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(d))
+                } else {
+                    std::path::PathBuf::from(d)
+                }
+            })
+            .unwrap_or_else(|| {
+                dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+            });
+
+        let mut list = self.torrents.lock().unwrap();
+        let new_id = format!("swarm-test-{}", list.len() + 1);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let name = if trimmed.starts_with("magnet:") {
+            let parsed_name = trimmed
+                .split("&dn=")
+                .nth(1)
+                .and_then(|dn| dn.split('&').next())
+                .unwrap_or("Magnet Download");
+            parsed_name.replace('+', " ").replace("%20", " ")
+        } else {
+            norm_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Queued Torrent".to_string())
+        };
+
+        let save_str = save_base.to_string_lossy().to_string();
+        let files = vec![TorrentFileItem {
+            index: 0,
+            name: name.clone(),
+            size_bytes: 1_250_000_000,
+            progress: 0.0,
+            priority: 1,
+        }];
+
+        list.push(TorrentItem {
+            id: new_id.clone(),
+            name,
+            total_bytes: 1_250_000_000,
+            downloaded_bytes: 0,
+            uploaded_bytes: 0,
+            download_rate: 0,
+            upload_rate: 0,
+            progress: 0.0,
+            status: "Downloading".to_string(),
+            eta_seconds: None,
+            seeds: 12,
+            peers: 4,
+            ratio: 0.0,
+            category: "General".to_string(),
+            is_media: false,
+            poster_url: None,
+            info_hash: format!("hash_{:x}", now),
+            save_path: save_str,
+            added_on: now,
+            completed_on: None,
+            comment: "Added via Nebulae".to_string(),
+            created_by: "Nebulae Client".to_string(),
+            piece_size: 1_048_576,
+            total_pieces: 1192,
+            sequential_download: false,
+            first_last_piece_prio: true,
+            super_seeding: false,
+            tags: vec!["Active".to_string()],
+            files,
+            trackers: vec![TorrentTrackerItem {
+                tier: 0,
+                url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
+                status: "Working".to_string(),
+                seeds: 12,
+                peers: 4,
+                downloaded: 0,
+                message: "Announce OK".to_string(),
+            }],
             download_limit_kib: 0,
             upload_limit_kib: 0,
         });
@@ -676,20 +894,123 @@ impl TorrentEngine for MockTorrentEngine {
 
             if let Some(file) = item.files.iter_mut().find(|f| f.index == file_index) {
                 let base_dir = std::path::Path::new(&item.save_path);
-                let old_file_path = base_dir.join(&file.name);
-                let new_file_path = base_dir.join(trimmed);
+                let current_rel = file.name.replace('\\', "/");
+                let current_path = std::path::Path::new(&current_rel);
+
+                // If user entered just a filename without directories, preserve existing folder path
+                let new_rel = if !trimmed.contains('/') && !trimmed.contains('\\') {
+                    if let Some(parent) = current_path.parent() {
+                        let parent_str = parent.to_string_lossy();
+                        if !parent_str.is_empty() {
+                            format!("{}/{}", parent_str, trimmed)
+                        } else {
+                            trimmed.to_string()
+                        }
+                    } else {
+                        trimmed.to_string()
+                    }
+                } else {
+                    trimmed.replace('\\', "/")
+                };
+
+                let old_file_path = base_dir.join(&current_rel);
+                let new_file_path = base_dir.join(&new_rel);
 
                 if old_file_path.exists() && old_file_path != new_file_path {
-                    let _ = std::fs::rename(old_file_path, new_file_path);
+                    if let Some(parent) = new_file_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::rename(&old_file_path, &new_file_path);
                 }
 
-                file.name = trimmed.to_string();
+                file.name = new_rel;
                 Ok(())
             } else {
                 Err(format!(
                     "File index '{file_index}' not found in torrent '{id}'"
                 ))
             }
+        } else {
+            Err(format!("Torrent with id '{id}' not found"))
+        }
+    }
+
+    fn rename_torrent_folder(
+        &self,
+        id: &str,
+        old_folder_path: &str,
+        new_folder_name: &str,
+    ) -> Result<(), String> {
+        let trimmed_new_name = new_folder_name.trim();
+        if trimmed_new_name.is_empty() {
+            return Err("Folder name cannot be empty".to_string());
+        }
+        if trimmed_new_name.contains('/') || trimmed_new_name.contains('\\') || trimmed_new_name == ".." || trimmed_new_name == "." {
+            return Err("Folder name cannot contain path separators or relative dot tokens".to_string());
+        }
+
+        let mut list = self.torrents.lock().unwrap();
+        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+            let save_lower = item.save_path.to_lowercase();
+            if save_lower.contains("qbittorrent") || save_lower.contains("bt_backup") {
+                return Err("Safety Guard: Torrents and directories managed by external qBittorrent must not be amended by Nebulae.".to_string());
+            }
+
+            let old_norm = old_folder_path.trim().replace('\\', "/").trim_matches('/').to_string();
+
+            // Check if renaming root torrent folder
+            if old_norm.is_empty() || old_norm == item.name {
+                let old_dir = std::path::Path::new(&item.save_path);
+                if old_dir.exists() && old_dir.is_dir() {
+                    if let Some(parent) = old_dir.parent() {
+                        let new_dir = parent.join(trimmed_new_name);
+                        if old_dir != new_dir {
+                            let _ = std::fs::rename(old_dir, &new_dir);
+                            item.save_path = new_dir.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                item.name = trimmed_new_name.to_string();
+                return Ok(());
+            }
+
+            // Subfolder renaming
+            let old_path_obj = std::path::Path::new(&old_norm);
+            let parent_prefix = old_path_obj.parent().and_then(|p| {
+                let s = p.to_string_lossy();
+                if s.is_empty() { None } else { Some(s.to_string()) }
+            });
+
+            let new_norm = match &parent_prefix {
+                Some(p) => format!("{}/{}", p, trimmed_new_name),
+                None => trimmed_new_name.to_string(),
+            };
+
+            let base_dir = std::path::Path::new(&item.save_path);
+            let old_dir_full = base_dir.join(&old_norm);
+            let new_dir_full = base_dir.join(&new_norm);
+
+            if old_dir_full.exists() && old_dir_full.is_dir() && old_dir_full != new_dir_full {
+                if let Some(parent) = new_dir_full.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::rename(&old_dir_full, &new_dir_full);
+            }
+
+            // Update in-memory file paths
+            let old_prefix = format!("{}/", old_norm);
+            let new_prefix = format!("{}/", new_norm);
+            for file in &mut item.files {
+                let norm_file = file.name.replace('\\', "/");
+                if norm_file.starts_with(&old_prefix) {
+                    let suffix = &norm_file[old_prefix.len()..];
+                    file.name = format!("{}{}", new_prefix, suffix);
+                } else if norm_file == old_norm {
+                    file.name = new_norm.clone();
+                }
+            }
+
+            Ok(())
         } else {
             Err(format!("Torrent with id '{id}' not found"))
         }
