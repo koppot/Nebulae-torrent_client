@@ -244,23 +244,33 @@ export const SettingsModal: React.FC = () => {
                       />
                       <span className="text-white">Start minimized</span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.minimize_to_tray}
-                        onChange={(e) => saveSettings({ minimize_to_tray: e.target.checked })}
-                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-                      />
-                      <span className="text-white">Minimize to notification area / system tray</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
+                    <label className="flex items-start gap-2 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={settings.close_to_tray}
                         onChange={(e) => saveSettings({ close_to_tray: e.target.checked })}
-                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
-                      <span className="text-white">Close button minimizes to system tray</span>
+                      <div>
+                        <span className="text-white font-medium">Close button minimizes to system tray</span>
+                        <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
+                          When enabled, clicking the window close button automatically hides Nebulae to the system tray (right-click tray icon to quit). When disabled, closing the window exits Nebulae.
+                        </span>
+                      </div>
+                    </label>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.minimize_to_tray}
+                        onChange={(e) => saveSettings({ minimize_to_tray: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium">Minimize button minimizes to system tray</span>
+                        <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
+                          When disabled, minimizing keeps the application icon visible on the taskbar.
+                        </span>
+                      </div>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input

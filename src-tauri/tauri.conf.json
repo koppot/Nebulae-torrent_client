@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Nebulae — Torrent Client by Asian DVD Club",
         "width": 1280,
         "height": 840,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import {
   Plus,
   Play,
@@ -82,10 +83,17 @@ export const TitleBar: React.FC = () => {
     }
   };
 
+  const { settings } = useSettingsStore();
+
   const handleMinimize = async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().minimize();
+      const win = getCurrentWindow();
+      if (settings.minimize_to_tray) {
+        await win.hide();
+      } else {
+        await win.minimize();
+      }
     } catch (e) {
       console.warn('Minimize not supported in web context', e);
     }
@@ -105,7 +113,12 @@ export const TitleBar: React.FC = () => {
   const handleClose = async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().close();
+      const win = getCurrentWindow();
+      if (settings.close_to_tray) {
+        await win.hide();
+      } else {
+        await win.close();
+      }
     } catch (e) {
       console.warn('Close not supported in web context', e);
     }

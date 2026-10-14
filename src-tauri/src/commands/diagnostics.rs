@@ -145,6 +145,11 @@ pub fn export_logs(paths: State<Arc<AppPaths>>) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+pub fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
