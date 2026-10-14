@@ -641,9 +641,81 @@ impl TorrentEngine for MockTorrentEngine {
         }
     }
 
-    fn remove_torrent(&self, id: &str) -> Result<(), String> {
+    fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        list.retain(|t| t.id != id);
+        let pos = list.iter().position(|t| t.id == id);
+        let Some(idx) = pos else {
+            return Ok(());
+        };
+
+        if delete_files {
+            let item = &list[idx];
+            let save_lower = item.save_path.to_lowercase();
+            if save_lower.contains("qbittorrent") || save_lower.contains("bt_backup") {
+                return Err("Safety Guard: Torrents and directories managed by external qBittorrent must not be deleted by Nebulae.".to_string());
+            }
+
+            let content_path = std::path::Path::new(&item.save_path);
+            if content_path.exists() {
+                // Determine system paths that must never be removed as directories
+                let protected_roots: Vec<std::path::PathBuf> = vec![
+                    dirs::download_dir(),
+                    dirs::home_dir(),
+                    dirs::desktop_dir(),
+                    dirs::document_dir(),
+                    Some(std::path::PathBuf::from("/")),
+                    Some(std::path::PathBuf::from("C:\\")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+
+                let is_protected_root = protected_roots.iter().any(|r| r == content_path);
+
+                if content_path.is_file() {
+                    let _ = std::fs::remove_file(content_path);
+                } else if content_path.is_dir() {
+                    // Delete all individual files tracked in this torrent
+                    for f in &item.files {
+                        let file_p = content_path.join(&f.name);
+                        if file_p.exists() && file_p.is_file() {
+                            let _ = std::fs::remove_file(&file_p);
+                        }
+                        // Clean up empty intermediate directories
+                        let mut parent = file_p.parent();
+                        while let Some(par) = parent {
+                            if par == content_path {
+                                break;
+                            }
+                            if let Ok(mut entries) = std::fs::read_dir(par) {
+                                if entries.next().is_none() {
+                                    let _ = std::fs::remove_dir(par);
+                                }
+                            }
+                            parent = par.parent();
+                        }
+                    }
+
+                    // If content_path is NOT a protected root directory, check if it's the torrent's dedicated folder
+                    if !is_protected_root {
+                        let is_dedicated_folder = content_path
+                            .file_name()
+                            .map(|name| name.to_string_lossy() == item.name)
+                            .unwrap_or(false);
+
+                        if is_dedicated_folder {
+                            let _ = std::fs::remove_dir_all(content_path);
+                        } else if let Ok(mut entries) = std::fs::read_dir(content_path) {
+                            if entries.next().is_none() {
+                                let _ = std::fs::remove_dir(content_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        list.remove(idx);
         Ok(())
     }
 

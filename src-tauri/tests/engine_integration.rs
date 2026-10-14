@@ -265,3 +265,116 @@ fn test_torrent_folder_and_file_renaming() {
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
+#[test]
+fn test_remove_torrent_with_and_without_files() {
+    let tmp_base = std::env::temp_dir().join(format!(
+        "nebulae_remove_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    ));
+    std::fs::create_dir_all(&tmp_base).unwrap();
+
+    let engine = MockTorrentEngine::new();
+
+    // 1. Test Retention Path: remove_torrent(id, false)
+    let retention_dir = tmp_base.join("KeepTorrent");
+    let retention_sub = retention_dir.join("SubDir");
+    std::fs::create_dir_all(&retention_sub).unwrap();
+    let retention_file = retention_sub.join("keep_me.txt");
+    std::fs::write(&retention_file, b"important payload").unwrap();
+
+    let id_retention = engine
+        .add_torrent(
+            &retention_dir.to_string_lossy(),
+            Some(&tmp_base.to_string_lossy()),
+        )
+        .expect("add retention torrent failed");
+
+    assert!(engine.list_torrents().unwrap().iter().any(|t| t.id == id_retention));
+
+    // Remove without deleting files
+    engine
+        .remove_torrent(&id_retention, false)
+        .expect("remove_torrent without files failed");
+
+    // Must be removed from in-memory engine list
+    assert!(
+        engine.list_torrents().unwrap().iter().all(|t| t.id != id_retention),
+        "Torrent must be removed from memory list"
+    );
+    // Files on disk must still exist
+    assert!(
+        retention_file.exists(),
+        "Payload file on disk must be preserved when delete_files is false"
+    );
+    assert!(
+        retention_dir.exists(),
+        "Torrent directory must be preserved when delete_files is false"
+    );
+
+    // 2. Test Deletion Path: remove_torrent(id, true)
+    let delete_dir = tmp_base.join("DeleteTorrent");
+    let delete_sub = delete_dir.join("SubDir");
+    std::fs::create_dir_all(&delete_sub).unwrap();
+    let delete_file = delete_sub.join("delete_me.txt");
+    std::fs::write(&delete_file, b"disposable payload").unwrap();
+
+    let id_delete = engine
+        .add_torrent(
+            &delete_dir.to_string_lossy(),
+            Some(&tmp_base.to_string_lossy()),
+        )
+        .expect("add delete torrent failed");
+
+    assert!(engine.list_torrents().unwrap().iter().any(|t| t.id == id_delete));
+
+    // Remove with deleting files
+    engine
+        .remove_torrent(&id_delete, true)
+        .expect("remove_torrent with delete_files failed");
+
+    // Must be removed from in-memory engine list
+    assert!(
+        engine.list_torrents().unwrap().iter().all(|t| t.id != id_delete),
+        "Torrent must be removed from memory list"
+    );
+    // Files on disk must be deleted
+    assert!(
+        !delete_file.exists(),
+        "Payload file on disk must be deleted when delete_files is true"
+    );
+    assert!(
+        !delete_dir.exists(),
+        "Torrent directory must be deleted when delete_files is true"
+    );
+
+    // 3. Test External qBittorrent Safety Guard
+    let qbit_dir = tmp_base.join("qbittorrent_downloads");
+    std::fs::create_dir_all(&qbit_dir).unwrap();
+    let qbit_file = qbit_dir.join("protected_qbit.mkv");
+    std::fs::write(&qbit_file, b"qbit data").unwrap();
+
+    let id_qbit = engine
+        .add_torrent("magnet:?xt=urn:btih:fedcba9876543210&dn=qbit_test", Some(&qbit_dir.to_string_lossy()))
+        .expect("add qbit torrent failed");
+
+    // Attempting to delete with delete_files = true must be blocked by the safety guard
+    let guard_err = engine.remove_torrent(&id_qbit, true);
+    assert!(guard_err.is_err(), "Safety guard must reject deletion of qbittorrent managed path");
+    assert!(guard_err.unwrap_err().contains("Safety Guard"));
+
+    // Torrent must still be in the engine list
+    assert!(
+        engine.list_torrents().unwrap().iter().any(|t| t.id == id_qbit),
+        "Torrent must remain in engine list if safety guard is triggered"
+    );
+    // Files on disk must be untouched
+    assert!(qbit_file.exists(), "Protected qbittorrent file must remain untouched");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp_base);
+}
+
+

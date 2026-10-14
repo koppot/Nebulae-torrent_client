@@ -16,6 +16,7 @@ interface UiState {
   managerCategoryFilter: string;
   searchQuery: string;
   initialAddTorrentSource: string | null;
+  deleteModalTarget: { id: string; name: string } | null;
 
   setViewMode: (mode: ViewMode) => void;
   setTheme: (theme: 'dark' | 'light') => void;
@@ -32,6 +33,7 @@ interface UiState {
   setManagerCategoryFilter: (filter: string) => void;
   setSearchQuery: (query: string) => void;
   setInitialAddTorrentSource: (source: string | null) => void;
+  setDeleteModalTarget: (target: { id: string; name: string } | null) => void;
   openAddTorrentWithSource: (source: string) => void;
 }
 
@@ -50,6 +52,7 @@ export const useUiStore = create<UiState>((set) => ({
   managerCategoryFilter: 'all',
   searchQuery: '',
   initialAddTorrentSource: null,
+  deleteModalTarget: null,
 
   setViewMode: (viewMode) => set({ viewMode }),
   setTheme: (theme) => {
@@ -74,6 +77,7 @@ export const useUiStore = create<UiState>((set) => ({
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
+  setDeleteModalTarget: (deleteModalTarget) => set({ deleteModalTarget }),
   openAddTorrentWithSource: (source: string) =>
     set({
       initialAddTorrentSource: source,

@@ -25,7 +25,7 @@ pub struct EngineStatus {
 pub trait TorrentEngine: Send + Sync {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String>;
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String>;
-    fn remove_torrent(&self, id: &str) -> Result<(), String>;
+    fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String>;
     fn pause_torrent(&self, id: &str) -> Result<(), String>;
     fn resume_torrent(&self, id: &str) -> Result<(), String>;
     fn pause_all(&self) -> Result<(), String>;

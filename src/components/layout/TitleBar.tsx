@@ -27,9 +27,10 @@ export const TitleBar: React.FC = () => {
     setShowTrackerDashboard,
     searchQuery,
     setSearchQuery,
+    setDeleteModalTarget,
   } = useUiStore();
 
-  const { selectedId, torrents, resumeTorrent, pauseTorrent, removeTorrent } = useTorrentStore();
+  const { selectedId, torrents, resumeTorrent, pauseTorrent } = useTorrentStore();
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
 
@@ -42,7 +43,9 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleRemove = () => {
-    if (selectedId) removeTorrent(selectedId);
+    if (selectedTorrent) {
+      setDeleteModalTarget({ id: selectedTorrent.id, name: selectedTorrent.name });
+    }
   };
 
   return (

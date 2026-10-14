@@ -249,9 +249,10 @@ pub fn add_torrent_bytes(
 #[tauri::command]
 pub fn remove_torrent_stub(
     id: String,
+    delete_files: Option<bool>,
     engine: State<Arc<MockTorrentEngine>>,
 ) -> Result<(), String> {
-    engine.remove_torrent(&id)
+    engine.remove_torrent(&id, delete_files.unwrap_or(false))
 }
 
 #[tauri::command]

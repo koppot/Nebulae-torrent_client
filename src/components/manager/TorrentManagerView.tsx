@@ -138,7 +138,6 @@ export const TorrentManagerView: React.FC = () => {
     setSelectedId,
     pauseTorrent,
     resumeTorrent,
-    removeTorrent,
     forceRecheck,
     reannounce,
     renameTorrent,
@@ -153,6 +152,7 @@ export const TorrentManagerView: React.FC = () => {
     managerCategoryFilter,
     setManagerCategoryFilter,
     searchQuery,
+    setDeleteModalTarget,
   } = useUiStore();
 
   const { peers, fetchPeers } = usePeeringStore();
@@ -207,7 +207,7 @@ export const TorrentManagerView: React.FC = () => {
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        removeTorrent(selectedId);
+        setDeleteModalTarget({ id: currentTorrent.id, name: currentTorrent.name });
       } else if (e.key === 'F2') {
         e.preventDefault();
         setRenameModal({
@@ -242,7 +242,7 @@ export const TorrentManagerView: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, torrents, pauseTorrent, resumeTorrent, removeTorrent, setSelectedId]);
+  }, [selectedId, torrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -1075,13 +1075,16 @@ export const TorrentManagerView: React.FC = () => {
           <div className="h-[1px] bg-[#333333] my-1" />
           <button
             onClick={() => {
-              removeTorrent(contextMenu.torrentId);
+              const t = torrents.find((item) => item.id === contextMenu.torrentId);
+              if (t) {
+                setDeleteModalTarget({ id: t.id, name: t.name });
+              }
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete Torrent</span>
+            <span>Delete Torrent...</span>
           </button>
         </div>
       )}

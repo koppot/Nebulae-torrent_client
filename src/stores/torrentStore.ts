@@ -17,7 +17,7 @@ interface TorrentState {
   setSelectedId: (id: string | null) => void;
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
-  removeTorrent: (id: string) => Promise<void>;
+  removeTorrent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addTorrent: (source: string, downloadDir?: string, bytes?: number[]) => Promise<void>;
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
   forceRecheck: (id: string) => Promise<void>;
@@ -86,11 +86,12 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     });
   },
 
-  removeTorrent: async (id: string) => {
+  removeTorrent: async (id: string, deleteFiles?: boolean) => {
     try {
-      await invoke('remove_torrent_stub', { id });
-    } catch {
-      //
+      await invoke('remove_torrent_stub', { id, deleteFiles: !!deleteFiles });
+    } catch (err) {
+      console.error('remove_torrent_stub error:', err);
+      throw err;
     }
     const remaining = get().torrents.filter((t) => t.id !== id);
     set({

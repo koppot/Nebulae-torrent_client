@@ -16,6 +16,7 @@ import { CreateTorrentModal } from './components/modals/CreateTorrentModal';
 import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
+import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
 import { FileUp } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -218,6 +219,7 @@ export const App: React.FC = () => {
       <ConnectivityDoctorModal />
       <VpnManagerModal />
       <TrackerModal />
+      <DeleteTorrentModal />
     </div>
   );
 };
