@@ -121,7 +121,7 @@ pub fn register_protocol_associations() -> Result<AssociationStatus, String> {
         let bundle_path = std::env::current_exe().ok().and_then(|p| {
             // .../Nebulae.app/Contents/MacOS/nebulae -> .../Nebulae.app
             p.ancestors()
-                .find(|a| a.extension().map_or(false, |ext| ext == "app"))
+                .find(|a| a.extension().is_some_and(|ext| ext == "app"))
                 .map(|a| a.to_path_buf())
         });
 

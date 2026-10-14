@@ -61,13 +61,11 @@ pub fn run() {
         .manage(engine)
         .manage(pending_payloads)
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(drag_event) = event {
-                if let tauri::DragDropEvent::Drop { paths, .. } = drag_event {
-                    use tauri::Emitter;
-                    for path in paths {
-                        let path_str = path.to_string_lossy().to_string();
-                        let _ = window.emit("nebulae://file-dropped", path_str);
-                    }
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                use tauri::Emitter;
+                for path in paths {
+                    let path_str = path.to_string_lossy().to_string();
+                    let _ = window.emit("nebulae://file-dropped", path_str);
                 }
             }
         })
