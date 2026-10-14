@@ -119,3 +119,52 @@ commit `087e99e` (this repository). Context and history: this file.
     - Updated `docs/installation.md` removing manual player requirements and documenting UHD AACS boundaries.
     - Preserved provider-neutral `WINDOWS_SIGN_PROVIDER` and Tauri signing secrets in `.github/workflows/release.yml`.
     - **CI Verification**: GitHub Actions CI run [38653344827](https://github.com/koppot/Nebulae-torrent_client/actions/runs/38653344827) verified 100% green (lint-and-check, TypeScript build, format check, clippy, and all 74 Rust tests passed).
+
+## Droid review of the disc-player bundling (commit 355af5d, CI 38653344827)
+
+Verified independently by Droid at the owner's direction. The tasking
+checklist is NOT fully met yet; the implementation claim overstates it.
+
+**Confirmed correct:**
+- Pinned Windows artifact (URL + SHA-256) with dvdnav/bluray smoke test;
+  NSIS resource layout matches the probe candidates.
+- deb/rpm ship mpv as a package dependency; Linux runner installs
+  mpv/libdvdnav4 for staging and the deb smoke test.
+- Probe order (bundled -> system mpv -> VLC -> IINA -> OS default), ISO
+  menu routing, `get_disc_player_status` + Settings -> Media pane,
+  THIRD-PARTY-NOTICES.md, installation.md update, provider-neutral
+  `WINDOWS_SIGN_PROVIDER` gate and updater secrets untouched.
+- macOS script correctly uses `APPLE_SIGNING_IDENTITY` with
+  `--options runtime --timestamp` when provided (ad-hoc fallback).
+
+**Required follow-ups (in priority order):**
+
+1. **AppImage: the bundled mpv has no library tree.**
+   `bundle-linux-mpv.sh` copies only the binary. On the CI runner the apt
+   libs exist, so the smoke test passes there, but on a clean desktop the
+   AppImage's mpv will fail on missing libs (libass, ffmpeg, libbluray...).
+   Fix: walk `ldd` like the macOS script does — copy non-system libs to
+   `resources/player/lib/`, add RPATH `$ORIGIN/lib` to the staged mpv —
+   or route the staged binary through linuxdeploy. Then re-verify from the
+   AppImage itself on a bare container (not the build runner).
+
+2. **macOS Gatekeeper: document the first-launch allow step.**
+   The app bundle is currently unsigned (no APPLE_* env in release.yml),
+   so the bundled ad-hoc mpv helper will trigger its own Gatekeeper prompt
+   on first spawn on macOS 14/15 (Sequoia removed the right-click bypass).
+   Add a short "allow the bundled player" note to docs/installation.md.
+   When the project later signs/notarizes the app, the script is already
+   identity-ready — no change needed there.
+
+3. **Compliance leftovers:** record the per-platform package size delta in
+   CHANGELOG.md (tasking item), and generalize THIRD-PARTY-NOTICES.md to
+   cover the bundled dylib set (macOS ships ~40 homebrew dylibs, not just
+   mpv/libbluray).
+
+**Still open from the tasking (cannot be closed by CI):** the fresh-VM
+acceptance matrix — DVD menu navigation, BD simple menu, ISO menus, and
+`prefer_menu=false` behavior on clean Windows/macOS/Linux machines with
+real disc structures. These need an actual release build and real media.
+
+Do not retag or cut a release until items 1 and 2 are done. Report
+completion here as before.
