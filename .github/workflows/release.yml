@@ -23,6 +23,11 @@ jobs:
       # set the repository variable WINDOWS_SIGN_PROVIDER plus that provider's
       # credentials; SignPath's are listed in docs/signpath-ci-integration.md.
       WINDOWS_SIGN_PROVIDER: ${{ vars.WINDOWS_SIGN_PROVIDER }}
+      # Tauri updater signing: tauri.conf.json enables createUpdaterArtifacts,
+      # so tauri build refuses to bundle unless the minisign private key is
+      # present in the environment. Both values are repository secrets.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
       SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
       SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
