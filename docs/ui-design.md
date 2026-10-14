@@ -47,7 +47,7 @@
 - Full-window drag-and-drop overlay for dropping `.torrent` files.
 
 ### Mode 2: Advanced Torrent Manager Mode
-- Inspired by rTorrent / ruTorrent with modern polish:
+- Comprehensive transfer management with modern polish:
   - Sidebar with Status Filters and Categories.
   - Action Toolbar for batch operations.
   - Virtualized data grid displaying all transfer metrics.

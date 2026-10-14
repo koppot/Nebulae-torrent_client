@@ -587,7 +587,7 @@ export const TorrentManagerView: React.FC = () => {
 
   return (
     <div className="flex-1 flex overflow-hidden font-sans select-none bg-[#141414] text-white">
-      {/* 1. Left Sidebar: ruTorrent / qBittorrent Categories & Filters */}
+      {/* 1. Left Sidebar: Categories & Filters */}
       <aside className="w-48 bg-[#141414] border-r border-[#262626] flex flex-col p-2 space-y-4 text-xs">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-[#a3a3a3] px-2 block mb-1">

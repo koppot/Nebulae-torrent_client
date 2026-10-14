@@ -10,7 +10,7 @@
 - **Primary Goals**:
   - Native desktop BitTorrent client for Windows and macOS.
   - Zero cloud dependencies or telemetry; 100% local-first data architecture.
-  - Dual presentation modes: **Simple Media Mode** (casual media shelf view) and **Torrent Manager Mode** (power-user rTorrent/ruTorrent inspired table).
+  - Dual presentation modes: **Simple Media Mode** (casual media shelf view) and **Torrent Manager Mode** (power-user table view).
   - High performance, low memory footprint, safe concurrency via Rust and Tauri 2.
 
 ---

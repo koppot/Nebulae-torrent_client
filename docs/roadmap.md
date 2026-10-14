@@ -35,7 +35,7 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 
 ---
 
-## Phase 3: Advanced Torrent Management (ruTorrent Parity)
+## Phase 3: Advanced Torrent Management (Power-User Parity)
 - [x] Per-torrent upload and download speed limit overrides.
 - [x] Sequential downloading toggle for active media torrents.
 - [x] Detailed Inspector tabs:
