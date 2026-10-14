@@ -298,7 +298,7 @@ mod tests {
 
         <key>
         -----BEGIN PRIVATE KEY-----
-        MIIFakeClientPrivateKeyData==
+        TESTONLY-NOT-A-REAL-KEY-BODY-NEVER-SHIPS-NEVER-DECRYPTS-ANYTHING
         -----END PRIVATE KEY-----
         </key>
         "#;
@@ -315,7 +315,7 @@ mod tests {
         assert!(parsed.client_key.is_some());
         assert_eq!(
             parsed.client_key.as_deref(),
-            Some("-----BEGIN PRIVATE KEY-----\n        MIIFakeClientPrivateKeyData==\n        -----END PRIVATE KEY-----")
+            Some("-----BEGIN PRIVATE KEY-----\n        TESTONLY-NOT-A-REAL-KEY-BODY-NEVER-SHIPS-NEVER-DECRYPTS-ANYTHING\n        -----END PRIVATE KEY-----")
         );
     }
 }
