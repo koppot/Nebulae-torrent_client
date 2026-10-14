@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import {
@@ -14,6 +14,9 @@ import {
   Search,
   X,
   Sparkles,
+  Minus,
+  Square,
+  Copy,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -31,8 +34,39 @@ export const TitleBar: React.FC = () => {
   } = useUiStore();
 
   const { selectedId, torrents, resumeTorrent, pauseTorrent } = useTorrentStore();
-
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
+
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [platform, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
+
+  useEffect(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    if (ua.includes('mac')) {
+      setPlatform('mac');
+    } else if (ua.includes('linux')) {
+      setPlatform('linux');
+    } else {
+      setPlatform('windows');
+    }
+
+    let unlistenResize: (() => void) | undefined;
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        setIsMaximized(await appWindow.isMaximized());
+        unlistenResize = await appWindow.onResized(async () => {
+          setIsMaximized(await appWindow.isMaximized());
+        });
+      } catch {
+        // Fallback for non-tauri contexts
+      }
+    })();
+
+    return () => {
+      if (unlistenResize) unlistenResize();
+    };
+  }, []);
 
   const handleResume = () => {
     if (selectedId) resumeTorrent(selectedId);
@@ -48,116 +82,206 @@ export const TitleBar: React.FC = () => {
     }
   };
 
+  const handleMinimize = async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().minimize();
+    } catch (e) {
+      console.warn('Minimize not supported in web context', e);
+    }
+  };
+
+  const handleToggleMaximize = async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      await appWindow.toggleMaximize();
+      setIsMaximized(await appWindow.isMaximized());
+    } catch (e) {
+      console.warn('Toggle maximize not supported in web context', e);
+    }
+  };
+
+  const handleClose = async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } catch (e) {
+      console.warn('Close not supported in web context', e);
+    }
+  };
+
   return (
-    <header className="h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30">
-      {/* Left: Brand Monogram & Standard Desktop Transfer Controls */}
-      <div className="flex items-center gap-1.5">
-        {/* Brand Monogram */}
-        <div className="flex items-center gap-2 pr-2 border-r border-[#262626]">
+    <header
+      data-tauri-drag-region
+      onDoubleClick={handleToggleMaximize}
+      className="h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
+    >
+      {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
+      <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
+        {/* macOS Native-Style Window Traffic Lights */}
+        {platform === 'mac' && (
+          <div className="flex items-center gap-2 pr-2.5 pl-0.5 flex-shrink-0">
+            <button
+              type="button"
+              onClick={handleClose}
+              className="w-3 h-3 rounded-full bg-[#ff5f56] hover:brightness-90 flex items-center justify-center group transition"
+              title="Close"
+            >
+              <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+            </button>
+            <button
+              type="button"
+              onClick={handleMinimize}
+              className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:brightness-90 flex items-center justify-center group transition"
+              title="Minimize"
+            >
+              <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+            </button>
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              className="w-3 h-3 rounded-full bg-[#27c93f] hover:brightness-90 flex items-center justify-center group transition"
+              title="Zoom / Maximize"
+            >
+              <Square className="w-1.5 h-1.5 text-black/60 opacity-0 group-hover:opacity-100" />
+            </button>
+          </div>
+        )}
+
+        {/* Integrated Brand Monogram & Full Title Identity */}
+        <div
+          data-tauri-drag-region
+          className="flex items-center gap-2 pr-2.5 border-r border-[#262626] flex-shrink-0"
+        >
           <img
             src="/favicon-boxed.svg"
             alt="Nebulae"
-            className="w-5 h-5 rounded object-cover border border-[#333333]"
+            className="w-5 h-5 rounded object-cover border border-[#333333] flex-shrink-0 pointer-events-none"
           />
-          <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+          <div className="flex items-baseline gap-1.5 min-w-0" data-tauri-drag-region>
+            <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+            <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden md:inline truncate">
+              — Torrent Client by Asian DVD Club
+            </span>
+          </div>
         </div>
 
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete */}
-        <button
-          onClick={() => setShowAddTorrent(true)}
-          className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
-          title="Add Torrent or Magnet link (Cmd/Ctrl+O)"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add</span>
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowAddTorrent(true); }}
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+            title="Add Torrent or Magnet link (Cmd/Ctrl+O)"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add</span>
+          </button>
 
-        <button
-          onClick={() => setShowCreateTorrent(true)}
-          className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition"
-          title="Create .torrent File (Torrent Creator)"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-[#e50914]" />
-          <span>Create</span>
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowCreateTorrent(true); }}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition"
+            title="Create .torrent File (Torrent Creator)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#e50914]" />
+            <span>Create</span>
+          </button>
 
-        <button
-          onClick={handleResume}
-          disabled={!selectedTorrent}
-          className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
-          title="Resume Selected Transfer"
-        >
-          <Play className="w-3 h-3 fill-current" />
-          <span>Resume</span>
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleResume(); }}
+            disabled={!selectedTorrent}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
+            title="Resume Selected Transfer"
+          >
+            <Play className="w-3 h-3 fill-current" />
+            <span>Resume</span>
+          </button>
 
-        <button
-          onClick={handlePause}
-          disabled={!selectedTorrent}
-          className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
-          title="Pause Selected Transfer"
-        >
-          <Pause className="w-3 h-3 fill-current" />
-          <span>Pause</span>
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handlePause(); }}
+            disabled={!selectedTorrent}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
+            title="Pause Selected Transfer"
+          >
+            <Pause className="w-3 h-3 fill-current" />
+            <span>Pause</span>
+          </button>
 
-        <button
-          onClick={handleRemove}
-          disabled={!selectedTorrent}
-          className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white hover:text-[#e50914] text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
-          title="Delete Selected Transfer"
-        >
-          <Trash2 className="w-3 h-3" />
-          <span>Delete</span>
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleRemove(); }}
+            disabled={!selectedTorrent}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white hover:text-[#e50914] text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
+            title="Delete Selected Transfer"
+          >
+            <Trash2 className="w-3 h-3" />
+            <span>Delete</span>
+          </button>
 
-        {/* Divider */}
-        <div className="h-4 w-[1px] bg-[#262626] mx-1" />
+          {/* Divider */}
+          <div className="h-4 w-[1px] bg-[#262626] mx-1" />
 
-        {/* Utility Workbench Dialogs: Doctor, VPN, Tracker, Settings */}
-        <button
-          onClick={() => setShowConnectivityDoctor(true)}
-          className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-          title="Connectivity Doctor & Port Status"
-        >
-          <Activity className="w-3.5 h-3.5" />
-        </button>
+          {/* Utility Workbench Dialogs: Doctor, VPN, Tracker, Settings, Help */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowConnectivityDoctor(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="Connectivity Doctor & Port Status"
+          >
+            <Activity className="w-3.5 h-3.5" />
+          </button>
 
-        <button
-          onClick={() => setShowVpnManager(true)}
-          className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-          title="VPN & Fail-Closed Kill Switch"
-        >
-          <Shield className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowVpnManager(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="VPN & Fail-Closed Kill Switch"
+          >
+            <Shield className="w-3.5 h-3.5" />
+          </button>
 
-        <button
-          onClick={() => setShowTrackerDashboard(true)}
-          className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-          title="Asian DVD Club Tracker & Ratio Profile"
-        >
-          <Radio className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowTrackerDashboard(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="Asian DVD Club Tracker & Ratio Profile"
+          >
+            <Radio className="w-3.5 h-3.5" />
+          </button>
 
-        <button
-          onClick={() => setShowSettings(true)}
-          className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-          title="Preferences & Torrent Engine Settings"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowSettings(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="Preferences & Torrent Engine Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
 
-        <button
-          onClick={() => setShowHelp(true)}
-          className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-          title="Documentation & Keyboard Shortcuts"
-        >
-          <HelpCircle className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="Documentation & Keyboard Shortcuts"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
-      {/* Right: Quick Search Filter & Compact View Switcher */}
-      <div className="flex items-center gap-2">
+      {/* Middle: Expansive Draggable Region */}
+      <div
+        data-tauri-drag-region
+        onDoubleClick={handleToggleMaximize}
+        className="flex-1 h-full min-w-4 cursor-default"
+      />
+
+      {/* Right: Quick Search Filter & Desktop Window Controls */}
+      <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
         {/* Compact Quick Filter */}
         <div className="relative w-44">
           <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
@@ -170,6 +294,7 @@ export const TitleBar: React.FC = () => {
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => setSearchQuery('')}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#a3a3a3] hover:text-white"
             >
@@ -177,6 +302,45 @@ export const TitleBar: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* Windows / Linux Desktop Window Control Buttons */}
+        {platform !== 'mac' && (
+          <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
+            {/* Minimize */}
+            <button
+              type="button"
+              onClick={handleMinimize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Maximize / Restore */}
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title={isMaximized ? 'Restore' : 'Maximize'}
+            >
+              {isMaximized ? (
+                <Copy className="w-3 h-3 rotate-180" />
+              ) : (
+                <Square className="w-3 h-3" />
+              )}
+            </button>
+
+            {/* Close */}
+            <button
+              type="button"
+              onClick={handleClose}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#e81123] transition"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );
