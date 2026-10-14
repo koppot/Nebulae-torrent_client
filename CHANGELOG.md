@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Media Station & Local Title Parser (WS9)**:
+  - Implemented local release title parser (`MediaTitleParser`) extracting clean titles, release years, resolutions, source formats, video codecs, audio standards, and editions without cloud mandates.
+  - Enriched `TorrentItem` model with optional `media_meta` containing parsed release attributes.
+  - Enhanced Simple Media Mode shelf cards with clean cinema titles, technical badges (Year, Resolution, Source, Edition), and instant default player streaming.
+- **Tracker Keychain Safeguards & Private Swarm Tests (WS8)**:
+  - Integrated OS Keychain storage (`keyring` crate) for personal tracker passkeys on account link (`link_adc_account`) and secure cleanup on unlink (`unlink_adc_account`).
+  - Added BEP 27 private swarm integration tests confirming strict DHT/PEX isolation for Asian DVD Club private releases.
+  - Added comprehensive unit tests for `SafeLogger` sanitization verifying full redaction of passkeys, query parameters, and auth tokens in application session logs.
+- **Torrent Inspector, Speed Graph & Per-Torrent Controls (WS4)**:
+  - Added Speed Graph tab with live SVG throughput curves powered by 500ms push telemetry.
+  - Replaced hardcoded tracker status displays with honest tracker lists and per-tracker reannounce triggers.
+  - Added interactive swarm toggles for sequential downloading, first/last piece header priority, and super-seeding with honest Observational banner (`docs/upstream-issues/rqbit-super-seeding.md`).
+  - Added per-torrent speed limits dialog (Download/Upload KiB/s and ratio cutoffs) in General tab and context menu.
+- **ADC Connect In-App Supervisor Documentation (WS7)**:
+  - Updated `docs/connectivity.md` to document ADC Connect as an internal supervisor coordinating the 500ms kill-switch watcher and seeding rules loops, maintaining single signed binary compliance.
 - **UI Modes, Color System & Subsystem Splash Initialization (WS2)**:
   - Applied `docs/ui-design.md` color tokens (`adc-dark`, `adc-cardDark`, `adc-cardBorderDark`, `adc-accent`, `adc-gold`, `adc-cyan`, `adc-emerald`, `adc-violet`) as single source of truth in `tailwind.config.js`.
   - Restored and wired `SimpleMediaView` with 3 horizontal shelves: Active Downloads (speeds, progress, ETA), Ready to Watch (posters, direct streaming player launch, folder jump), and Completed & Seeding (ratio, file size).

@@ -36,13 +36,13 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 ---
 
 ## Phase 3: Advanced Torrent Management (ruTorrent Parity)
-- [ ] Per-torrent upload and download speed limit overrides.
-- [ ] Sequential downloading toggle for active media torrents.
-- [ ] Detailed Inspector tabs:
+- [x] Per-torrent upload and download speed limit overrides.
+- [x] Sequential downloading toggle for active media torrents.
+- [x] Detailed Inspector tabs:
   - **Trackers**: Announce URLs, tier hierarchy, seed/peer feedback, re-announce trigger.
   - **Peers**: Peer IPs, client ID, encryption flags, transfer rates.
   - **Files**: Interactive file checklist with priority adjustment (Do Not Download / Normal / High).
-  - **Speed Graph**: Live SVG/Canvas transfer throughput charts.
+  - **Speed Graph**: Live SVG transfer throughput charts.
 - [x] Watched Folders subsystem (auto-load dropped `.torrent` files via `spawn_watched_folder_loop`).
 - [x] RSS feed automation engine (regex title matching, auto-queueing via `spawn_rss_loop`).
 - [x] Seeding rules: auto-pause upon reaching target share ratio or seed time (`spawn_seeding_rules_loop`).
@@ -50,7 +50,7 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 ---
 
 ## Phase 4: Local Media Library & Playback Station
-- [ ] Local media metadata extraction (parse video release titles without cloud mandates).
+- [x] Local media metadata extraction (parse video release titles without cloud mandates).
 - [ ] Embedded video frame thumbnail generator.
 - [x] Local streaming launcher: stream/play media in default system players (VLC, IINA, mpv) with hidden command execution (`launch_media_player`).
 - [ ] Automatic series and episode aggregator.

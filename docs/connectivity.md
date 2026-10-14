@@ -51,15 +51,17 @@ If UPnP is disabled on your router, follow these steps to manually forward port 
 
 ---
 
-## 5. ADC Connect Local Helper Service
+## 5. ADC Connect In-App Supervisor
 
-**ADC Connect** is an optional standalone local background daemon that provides continuous connectivity management:
+**ADC Connect** is an integrated in-app supervisor task (running asynchronously within Nebulae, rather than as an external daemon or background sidecar) that provides continuous connectivity and swarm health management:
 
 - **What ADC Connect Does**:
-  - Automatically renews UPnP and PCP leases before they expire.
-  - Monitors the active VPN interface and instantly signals ADC to pause downloads if the VPN drops.
-  - Generates privacy-safe diagnostic reports for community support.
+  - Automatically monitors UPnP and NAT-PMP port mapping statuses.
+  - Monitors the active VPN interface via a 500ms fail-closed supervisor loop (`spawn_kill_switch_watcher`) and instantly pauses transfers if the VPN drops.
+  - Enforces community seeding rules and Seed Time Shield protections (`spawn_seeding_rules_loop`).
+  - Generates privacy-safe diagnostic reports for community support with passkey/magnet redaction.
 - **What ADC Connect Never Does**:
+  - Never spawns separate external background daemons or sidecars (maintaining single signed binary SignPath compliance).
   - Never proxies torrent data through external cloud servers.
   - Never logs or stores IP addresses, torrent names, or passkeys.
   - Never modifies router or system settings without explicit user consent.
