@@ -1,5 +1,8 @@
 # Installing Nebulae Server on Unraid
 
+> Posting to Discord? Use the paste-ready 7-message edition:
+> **[docs/unraid-install-discord.md](unraid-install-discord.md)**.
+
 This guide walks you through installing Nebulae Server on an Unraid box and
 connecting the Nebulae desktop app to it. When you are done, your torrents run
 on the server (rtorrent, started and managed by the container) while the
