@@ -71,4 +71,8 @@ pub trait TorrentEngine: Send + Sync {
         new_folder_name: &str,
     ) -> Result<(), String>;
     fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String>;
+    fn get_peer_telemetry(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String>;
 }

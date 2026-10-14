@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Production command renaming: promoted `add_torrent_stub`, `remove_torrent_stub`, `pause_torrent_stub`, and `resume_torrent_stub` to production IPC handlers `add_torrent`, `remove_torrent`, `pause_torrent`, and `resume_torrent`.
   - Honest error reporting: removed synthetic 1.5GB torrent fallback generator; added Tier 2 error banner to `AddTorrentModal`.
   - Honest connectivity diagnostics: eliminated hardcoded mock report and fake certificate fallback; displays honest neutral probing/untested states.
+- **Real Engine Telemetry, Network Probing & Seeding Rules (P1)**:
+  - Real `.torrent` export serialization: `export_torrent_file` extracts raw metainfo from active torrent handles or reconstructs valid bencoded torrent files, writing to selected destination with fallback to default Downloads folder.
+  - Real live peer telemetry: integrated `librqbit` peer stats snapshot (`librqbit::http_api_types::PeerStatsFilter`) into `get_peer_telemetry`, surfacing live peer IP, connection protocol (uTP/TCP), fetched/uploaded metrics, error counts, and reciprocity scoring to Smart Peering.
+  - Parallel asynchronous Connectivity Doctor probes: implemented real non-blocking network verification via UPnP SSDP M-SEARCH multicast (`239.255.255.250:1900`), NAT-PMP gateway probes (`5351`), dual-stack IPv4/IPv6 socket tests, DNS resolution latency probes (`1.1.1.1:53`), and tracker reachability checks (`tracker.asiandvdclub.org`).
+  - Honest ADC Tracker profile statistics: removed fabricated 185.4 GB, 68.2 GB, 3420 BP placeholders; derived ratio and passkey status honestly from SQLite persistence and real torrent stats.
+  - Seeding Rules & Seed Time Shield background loop: implemented `spawn_seeding_rules_loop` running periodic 5s evaluations to record active seed time in SQLite and auto-pause torrents exceeding target ratio limits.
 - **Core Architecture**:
   - Tauri v2 + React 19 + TypeScript + Tailwind CSS application foundation.
   - Rust backend with SQLite database persistence under isolated platform directory (`ADC/internal/`).

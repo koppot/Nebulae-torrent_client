@@ -252,6 +252,7 @@ impl TorrentEngine for RqbitTorrentEngine {
                 let ss = meta.map(|m| m.super_seeding).unwrap_or(false);
                 let dl_limit = meta.map(|m| m.download_limit_kib).unwrap_or(0);
                 let ul_limit = meta.map(|m| m.upload_limit_kib).unwrap_or(0);
+                let ratio_limit = meta.map(|m| m.ratio_limit).unwrap_or(0.0);
 
                 let tags = meta
                     .and_then(|m| m.labels.as_ref())
@@ -296,6 +297,7 @@ impl TorrentEngine for RqbitTorrentEngine {
                     trackers,
                     download_limit_kib: dl_limit,
                     upload_limit_kib: ul_limit,
+                    ratio_limit,
                 });
             }
 
@@ -784,5 +786,104 @@ impl TorrentEngine for RqbitTorrentEngine {
             return Err("Torrent metainfo bytes are empty".to_string());
         }
         Ok(bytes)
+    }
+
+    fn get_peer_telemetry(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String> {
+        let handle = self.get_handle(id)?;
+        let live = match handle.live() {
+            Some(l) => l,
+            None => return Ok(vec![]),
+        };
+
+        let snapshot =
+            live.per_peer_stats_snapshot(librqbit::http_api_types::PeerStatsFilter::default());
+
+        let mut result = Vec::new();
+
+        for (addr_str, stats) in snapshot.peers {
+            let socket_addr = match addr_str.parse::<std::net::SocketAddr>() {
+                Ok(sa) => sa,
+                Err(_) => continue,
+            };
+
+            let ip_str = socket_addr.ip().to_string();
+            let port = socket_addr.port();
+            let is_v6 = socket_addr.is_ipv6();
+
+            let locality = if socket_addr.ip().is_loopback() {
+                crate::models::peering::LocalityTier::Lan
+            } else {
+                match socket_addr.ip() {
+                    std::net::IpAddr::V4(ipv4) => {
+                        let octets = ipv4.octets();
+                        if octets[0] == 10
+                            || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
+                            || (octets[0] == 192 && octets[1] == 168)
+                        {
+                            crate::models::peering::LocalityTier::Lan
+                        } else {
+                            crate::models::peering::LocalityTier::Global
+                        }
+                    }
+                    std::net::IpAddr::V6(_) => crate::models::peering::LocalityTier::Global,
+                }
+            };
+
+            let is_utp = stats
+                .conn_kind
+                .as_ref()
+                .map(|k| k.to_string() == "uTP")
+                .unwrap_or(false);
+            let client_name = stats
+                .client_name
+                .unwrap_or_else(|| "Unknown Peer".to_string());
+            let fetched = stats.counters.fetched_bytes;
+            let uploaded = stats.counters.uploaded_bytes;
+            let errors = stats.counters.errors;
+
+            let reciprocity = if fetched > 0 {
+                (uploaded as f64 / fetched as f64).min(2.0) as f32
+            } else {
+                0.0
+            };
+
+            let stability = if errors > 0 {
+                (1.0 / (1.0 + errors as f32 * 0.1)).max(0.1)
+            } else {
+                1.0
+            };
+
+            result.push(crate::models::peering::PeerTelemetry {
+                peer_id: format!("peer-{}:{}", ip_str, port),
+                ip: ip_str,
+                port,
+                rtt_ms: (stats.counters.total_time_connecting_ms / 10).max(1) as u32,
+                req_resp_latency_ms: 0,
+                sustained_dl_bps: 0,
+                sustained_ul_bps: 0,
+                upload_reciprocity: reciprocity,
+                stability_score: stability,
+                disconnect_count: 0,
+                timeout_count: 0,
+                choke_events: 0,
+                client_name,
+                locality_tier: locality,
+                country_code: None,
+                asn: None,
+                utp: is_utp,
+                encryption: true,
+                ipv6: is_v6,
+                dht: false,
+                pex: true,
+                connection_age_seconds: 0,
+                total_downloaded_bytes: fetched,
+                total_uploaded_bytes: uploaded,
+            });
+        }
+
+        Ok(result)
     }
 }

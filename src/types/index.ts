@@ -64,6 +64,7 @@ export interface TorrentItem {
   trackers: TorrentTrackerItem[];
   download_limit_kib: number;
   upload_limit_kib: number;
+  ratio_limit: number;
 }
 
 export interface UserSettings {

@@ -2,6 +2,7 @@ pub mod failed;
 pub mod metainfo;
 pub mod mock;
 pub mod rqbit;
+pub mod seeding;
 pub mod traits;
 
 pub use failed::FailedTorrentEngine;

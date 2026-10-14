@@ -160,6 +160,9 @@ pub fn run() {
     }
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
 
+    let engine_for_seeding = Arc::clone(&engine);
+    let db_for_seeding = Arc::clone(&db);
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -172,6 +175,8 @@ pub fn run() {
         .manage(updater::StagedUpdateState::default())
         .setup(move |app| {
             use tauri::Manager;
+
+            engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
 
             #[cfg(desktop)]
             {

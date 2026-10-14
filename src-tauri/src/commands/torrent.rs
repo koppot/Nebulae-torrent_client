@@ -58,6 +58,7 @@ pub struct TorrentItem {
     pub trackers: Vec<TorrentTrackerItem>,
     pub download_limit_kib: u32,
     pub upload_limit_kib: u32,
+    pub ratio_limit: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

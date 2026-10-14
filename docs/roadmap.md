@@ -24,6 +24,10 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 - [x] Implement `.torrent` file parsing, hashing, and storage allocation (metainfo).
 - [x] Wire up real-time download and upload speeds in Simple Media and Manager views.
 - [x] Implement torrent lifecycle controls: Pause, Resume, Remove, Delete Files, Force Recheck.
+- [x] Implement real `.torrent` file export serialization (`export_torrent_file`).
+- [x] Wire live peer telemetry from engine into Smart Peering algorithm (`get_peer_telemetry`).
+- [x] Real parallel Connectivity Doctor probes (UPnP SSDP, NAT-PMP, IPv4/IPv6, DNS latency, ADC tracker).
+- [x] Honest ADC Tracker profile statistics & Seed Time Shield background loop (`spawn_seeding_rules_loop`).
 - [ ] Implement magnet link resolver (`ut_metadata` BEP 9).
 - [ ] Implement file priority tree (allow selective file downloading and skipping).
 - [ ] Implement throttled 500ms telemetry IPC stream from Rust to React frontend.

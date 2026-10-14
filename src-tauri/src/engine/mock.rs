@@ -217,6 +217,7 @@ impl MockTorrentEngine {
                 ],
                 download_limit_kib: 0,
                 upload_limit_kib: 0,
+                ratio_limit: 0.0,
             },
             TorrentItem {
                 id: "swarm-test-2".to_string(),
@@ -274,6 +275,7 @@ impl MockTorrentEngine {
                 }],
                 download_limit_kib: 0,
                 upload_limit_kib: 0,
+                ratio_limit: 0.0,
             },
         ];
 
@@ -442,6 +444,7 @@ impl MockTorrentEngine {
             trackers: parsed.trackers,
             download_limit_kib: 0,
             upload_limit_kib: 0,
+            ratio_limit: 0.0,
         });
 
         Ok(new_id)
@@ -641,6 +644,7 @@ impl TorrentEngine for MockTorrentEngine {
             }],
             download_limit_kib: 0,
             upload_limit_kib: 0,
+            ratio_limit: 0.0,
         });
         Ok(new_id)
     }
@@ -1131,6 +1135,18 @@ impl TorrentEngine for MockTorrentEngine {
         let list = self.torrents.lock().unwrap();
         if list.iter().any(|t| t.id == id) {
             Ok(b"d8:announce41:https://tracker.asiandvdclub.org/announcee".to_vec())
+        } else {
+            Err(format!("Torrent with id '{id}' not found"))
+        }
+    }
+
+    fn get_peer_telemetry(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String> {
+        let list = self.torrents.lock().unwrap();
+        if list.iter().any(|t| t.id == id) {
+            Ok(vec![])
         } else {
             Err(format!("Torrent with id '{id}' not found"))
         }

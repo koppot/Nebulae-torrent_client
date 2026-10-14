@@ -181,6 +181,31 @@ impl Database {
         Ok(list)
     }
 
+    pub fn get_seed_time_record(&self, info_hash: &str) -> Result<Option<SeedTimeRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT info_hash, torrent_name, seeding_time_seconds, required_seeding_seconds, is_shield_satisfied FROM seed_time_records WHERE info_hash = ?1")?;
+
+        let mut iter = stmt.query_map(params![info_hash], |row| {
+            let seeding_sec: i64 = row.get(2)?;
+            let req_sec: i64 = row.get(3)?;
+            let satisfied_int: i32 = row.get(4)?;
+
+            Ok(SeedTimeRecord {
+                info_hash: row.get(0)?,
+                torrent_name: row.get(1)?,
+                seeding_time_seconds: seeding_sec.max(0) as u64,
+                required_seeding_seconds: req_sec.max(0) as u64,
+                is_shield_satisfied: satisfied_int == 1,
+            })
+        })?;
+
+        if let Some(res) = iter.next() {
+            Ok(Some(res?))
+        } else {
+            Ok(None)
+        }
+    }
+
     // Torrent Metadata CRUD (Phase 1 UI-facing persistence mirroring)
     pub fn upsert_torrent_metadata(&self, meta: &TorrentDbMetadata) -> Result<()> {
         let conn = self.conn.lock().unwrap();

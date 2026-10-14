@@ -19,7 +19,7 @@ pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerPro
             is_linked: false,
             last_announce_time: None,
             next_announce_countdown_sec: None,
-            announce_status: "Unlinked".to_string(),
+            announce_status: "Link your account to see stats".to_string(),
             ratio: 1.0,
             uploaded_bytes: 0,
             downloaded_bytes: 0,
@@ -41,27 +41,46 @@ pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerPro
         .get_setting("adc_uploaded")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
-        .unwrap_or(185_400_000_000); // 185.4 GB
+        .unwrap_or(0);
     let downloaded: u64 = db
         .get_setting("adc_downloaded")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
-        .unwrap_or(68_200_000_000); // 68.2 GB
+        .unwrap_or(0);
     let bonus: f32 = db
         .get_setting("adc_bonus_points")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
-        .unwrap_or(3_420.50);
+        .unwrap_or(0.0);
     let freeleech = db
         .get_setting("adc_freeleech")
         .unwrap_or(None)
         .map(|v| v == "true")
-        .unwrap_or(true);
+        .unwrap_or(false);
     let seed_hours: u32 = db
         .get_setting("adc_required_seed_hours")
         .unwrap_or(None)
         .and_then(|v| v.parse().ok())
         .unwrap_or(72);
+
+    let last_announce: Option<i64> = db
+        .get_setting("adc_last_announce_time")
+        .unwrap_or(None)
+        .and_then(|v| v.parse().ok());
+    let announce_interval_sec: u32 = db
+        .get_setting("adc_announce_interval_sec")
+        .unwrap_or(None)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1800);
+
+    let now = Utc::now().timestamp();
+    let (countdown, announce_status) = if let Some(last) = last_announce {
+        let elapsed = (now - last).max(0) as u32;
+        let remaining = announce_interval_sec.saturating_sub(elapsed);
+        (Some(remaining), "Announce OK".to_string())
+    } else {
+        (None, "Unknown until first announce".to_string())
+    };
 
     let ratio = AdcTrackerProfile::calculate_ratio(uploaded, downloaded);
 
@@ -69,9 +88,9 @@ pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerPro
         username,
         masked_passkey,
         is_linked: true,
-        last_announce_time: Some(Utc::now().timestamp() - 420),
-        next_announce_countdown_sec: Some(1380), // 23 mins remaining
-        announce_status: "Announce OK (HTTP 200)".to_string(),
+        last_announce_time: last_announce,
+        next_announce_countdown_sec: countdown,
+        announce_status,
         ratio,
         uploaded_bytes: uploaded,
         downloaded_bytes: downloaded,
@@ -102,13 +121,13 @@ pub fn link_adc_account(
         .map_err(|e| e.to_string())?;
     db.set_setting("adc_masked_passkey", &masked)
         .map_err(|e| e.to_string())?;
-    db.set_setting("adc_uploaded", "185400000000")
+    db.set_setting("adc_uploaded", "0")
         .map_err(|e| e.to_string())?;
-    db.set_setting("adc_downloaded", "68200000000")
+    db.set_setting("adc_downloaded", "0")
         .map_err(|e| e.to_string())?;
-    db.set_setting("adc_bonus_points", "3420.50")
+    db.set_setting("adc_bonus_points", "0.0")
         .map_err(|e| e.to_string())?;
-    db.set_setting("adc_freeleech", "true")
+    db.set_setting("adc_freeleech", "false")
         .map_err(|e| e.to_string())?;
     db.set_setting("adc_required_seed_hours", "72")
         .map_err(|e| e.to_string())?;

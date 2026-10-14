@@ -200,4 +200,14 @@ impl TorrentEngine for FailedTorrentEngine {
             self.error_message
         ))
     }
+
+    fn get_peer_telemetry(
+        &self,
+        _id: &str,
+    ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String> {
+        Err(format!(
+            "Torrent engine unavailable: {}",
+            self.error_message
+        ))
+    }
 }
