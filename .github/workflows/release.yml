@@ -72,8 +72,14 @@ jobs:
             ### Shipped Packages & Executables
             - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
             - **Windows x64 Executable**: `nebulae.exe`
-            - **macOS Apple Silicon**: `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`)
-            - **macOS Intel (x86_64)**: `Nebulae-macOS-x64.dmg` (mounts `Nebulae.app`)
+            - **macOS Apple Silicon**:
+              - `Nebulae-macOS-arm64.dmg` (standard disk image)
+              - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
+              - `Nebulae-macOS-arm64-app.zip` (direct application bundle)
+            - **macOS Intel (x86_64)**:
+              - `Nebulae-macOS-x64.dmg` (standard disk image)
+              - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
+              - `Nebulae-macOS-x64-app.zip` (direct application bundle)
             
             ### Verification
             All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
@@ -89,15 +95,15 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
           if [ -n "$DMG_FILE" ]; then
             cp "$DMG_FILE" "${{ matrix.artifact_name }}"
-          else
-            APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
-            if [ -n "$APP_DIR" ]; then
-              hdiutil create -volname "Nebulae" -srcfolder "$APP_DIR" -ov -format UDZO "${{ matrix.artifact_name }}"
-            fi
+          elif [ -n "$APP_DIR" ]; then
+            hdiutil create -volname "Nebulae" -srcfolder "$APP_DIR" -ov -format UDZO "${{ matrix.artifact_name }}"
           fi
+
           if [ -f "${{ matrix.artifact_name }}" ]; then
+            # Apply custom icon to the local DMG file
             osascript -l JavaScript -e "
               ObjC.import('AppKit');
               var img = $.NSImage.alloc.initWithContentsOfFile('src-tauri/icons/icon.icns');
@@ -106,7 +112,23 @@ jobs:
               }
             " || true
             shasum -a 256 "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256"
-            gh release upload "$TAG" "${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" --clobber || true
+
+            # Create AppleDouble-sequestered ZIP of the DMG to preserve custom Finder icon across HTTP downloads
+            DMG_ZIP="${{ matrix.artifact_name }}.zip"
+            ditto -c -k --sequesterRsrc "${{ matrix.artifact_name }}" "$DMG_ZIP"
+            shasum -a 256 "$DMG_ZIP" > "$DMG_ZIP.sha256"
+
+            UPLOAD_FILES=("${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" "$DMG_ZIP" "$DMG_ZIP.sha256")
+
+            # Create standalone zip of Nebulae.app with full icon and bundle metadata
+            if [ -n "$APP_DIR" ]; then
+              APP_ZIP="${{ matrix.artifact_name }}-app.zip"
+              ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ZIP"
+              shasum -a 256 "$APP_ZIP" > "$APP_ZIP.sha256"
+              UPLOAD_FILES+=("$APP_ZIP" "$APP_ZIP.sha256")
+            fi
+
+            gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber || true
           fi
 
       - name: Prepare and upload named artifact (Windows)
@@ -138,6 +160,10 @@ jobs:
           path: |
             ${{ matrix.artifact_name }}
             ${{ matrix.artifact_name }}.sha256
+            ${{ matrix.artifact_name }}.zip
+            ${{ matrix.artifact_name }}.zip.sha256
+            ${{ matrix.artifact_name }}-app.zip
+            ${{ matrix.artifact_name }}-app.zip.sha256
             nebulae.exe
             nebulae.exe.sha256
           if-no-files-found: warn
@@ -162,7 +188,7 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           mkdir -p dist-assets
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" \) -exec cp {} dist-assets/ \;
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.zip" \) ! -name "*.sha256" -exec cp {} dist-assets/ \;
           cd dist-assets
           sha256sum * > ../SHA256SUMS.txt
           cd ..

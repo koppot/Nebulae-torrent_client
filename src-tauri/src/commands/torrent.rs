@@ -216,7 +216,10 @@ pub async fn create_torrent_file(
 
     let source = std::path::PathBuf::from(&source_path_str);
     if !source.exists() {
-        return Err(format!("Source path '{}' does not exist on disk", source.display()));
+        return Err(format!(
+            "Source path '{}' does not exist on disk",
+            source.display()
+        ));
     }
 
     let out_dir = if params.output_path.trim().is_empty() {

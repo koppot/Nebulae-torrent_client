@@ -360,8 +360,10 @@ pub fn build_torrent_file(
                     let rel = path
                         .strip_prefix(root)
                         .map_err(|e| format!("Strip prefix error: {e}"))?;
-                    let comps: Vec<String> =
-                        rel.iter().map(|c| c.to_string_lossy().to_string()).collect();
+                    let comps: Vec<String> = rel
+                        .iter()
+                        .map(|c| c.to_string_lossy().to_string())
+                        .collect();
                     let len = entry
                         .metadata()
                         .map_err(|e| format!("File metadata error: {e}"))?
@@ -487,4 +489,3 @@ pub fn build_torrent_file(
 
     Ok(target_file_path)
 }
-

@@ -128,7 +128,10 @@ fn test_adaptive_swarm_auto_tune() {
 fn test_zero_leechers_zero_upload_rate() {
     let engine = MockTorrentEngine::new();
     let torrent_id = engine
-        .add_torrent("magnet:?xt=urn:btih:abcdef1234567890&dn=TestZeroLeechers", None)
+        .add_torrent(
+            "magnet:?xt=urn:btih:abcdef1234567890&dn=TestZeroLeechers",
+            None,
+        )
         .expect("add torrent failed");
 
     // Sleep 1.5s to let the transfer loop tick
@@ -140,14 +143,26 @@ fn test_zero_leechers_zero_upload_rate() {
     // Since this torrent has no active leechers requesting blocks (peers == 0),
     // upload_rate must strictly be 0.
     if t.peers == 0 {
-        assert_eq!(t.upload_rate, 0, "Upload rate must be 0 when no peers are downloading from client");
-        assert_eq!(t.uploaded_bytes, 0, "Uploaded bytes must not increment without leechers");
+        assert_eq!(
+            t.upload_rate, 0,
+            "Upload rate must be 0 when no peers are downloading from client"
+        );
+        assert_eq!(
+            t.uploaded_bytes, 0,
+            "Uploaded bytes must not increment without leechers"
+        );
     }
 }
 
 #[test]
 fn test_torrent_creation_from_directory_and_file() {
-    let tmp_dir = std::env::temp_dir().join(format!("nebulae_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "nebulae_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     let source_dir = tmp_dir.join("TestReleaseFolder");
     std::fs::create_dir_all(&source_dir).unwrap();
     std::fs::write(source_dir.join("disc1.iso"), vec![0x42; 65536]).unwrap();
@@ -168,10 +183,15 @@ fn test_torrent_creation_from_directory_and_file() {
     .expect("Torrent creation failed");
 
     assert!(torrent_file.exists());
-    assert_eq!(torrent_file.file_name().unwrap(), "TestReleaseFolder.torrent");
+    assert_eq!(
+        torrent_file.file_name().unwrap(),
+        "TestReleaseFolder.torrent"
+    );
 
     // Parse the generated torrent file
-    let parsed = nebulae_torrent_client_lib::engine::metainfo::ParsedTorrent::parse_file(&torrent_file).unwrap();
+    let parsed =
+        nebulae_torrent_client_lib::engine::metainfo::ParsedTorrent::parse_file(&torrent_file)
+            .unwrap();
     assert_eq!(parsed.name, "TestReleaseFolder");
     assert_eq!(parsed.total_bytes, 65536 + 32768);
     assert_eq!(parsed.files.len(), 2);
@@ -181,5 +201,3 @@ fn test_torrent_creation_from_directory_and_file() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
-
-
