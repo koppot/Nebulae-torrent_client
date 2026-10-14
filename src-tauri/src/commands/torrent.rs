@@ -330,7 +330,9 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
             if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        { Ok(None) }
+        {
+            Ok(linux_pick_dir("Select Folder for Torrent Creation"))
+        }
     })
     .await
     .map_err(|e| format!("Picker task error: {e}"))?
@@ -380,7 +382,9 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
             if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        { Ok(None) }
+        {
+            Ok(linux_pick_file("Select File for Torrent Creation", None))
+        }
     })
     .await
     .map_err(|e| format!("Picker task error: {e}"))?
@@ -439,11 +443,78 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(None)
+            Ok(linux_pick_file(
+                "Select .torrent or .adc file",
+                Some(("Torrent & ADC Files (*.torrent, *.adc)", "*.torrent *.adc")),
+            ))
         }
     })
     .await
     .map_err(|e| format!("Picker task error: {e}"))?
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn linux_pick_dir(title: &str) -> Option<String> {
+    if let Ok(output) = std::process::Command::new("zenity")
+        .args([
+            "--file-selection",
+            "--directory",
+            &format!("--title={title}"),
+        ])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    if let Ok(output) = std::process::Command::new("kdialog")
+        .args(["--title", title, "--getexistingdirectory", "."])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn linux_pick_file(title: &str, filter: Option<(&str, &str)>) -> Option<String> {
+    let mut zenity_cmd = std::process::Command::new("zenity");
+    zenity_cmd.args(["--file-selection", &format!("--title={title}")]);
+    if let Some((name, patterns)) = filter {
+        zenity_cmd.arg(format!("--file-filter={name} | {patterns}"));
+        zenity_cmd.arg("--file-filter=All Files | *");
+    }
+    if let Ok(output) = zenity_cmd.output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+
+    let mut kdialog_cmd = std::process::Command::new("kdialog");
+    kdialog_cmd.args(["--title", title, "--getopenfilename", "."]);
+    if let Some((name, patterns)) = filter {
+        kdialog_cmd.arg(format!("{patterns}|{name}"));
+    }
+    if let Ok(output) = kdialog_cmd.output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -498,7 +569,7 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(None)
+            Ok(linux_pick_dir("Select Download Directory"))
         }
     })
     .await

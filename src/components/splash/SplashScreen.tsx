@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { X } from 'lucide-react';
@@ -27,7 +28,10 @@ export const SplashScreen: React.FC = () => {
 
   const handleOpenCommunity = (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.open(settings.splash_url || 'https://asiandvdclub.org', '_blank');
+    const url = settings.splash_url || 'https://asiandvdclub.org';
+    invoke('open_external_link', { url }).catch(() => {
+      window.open(url, '_blank');
+    });
   };
 
   // Keyboard dismiss (Escape, Space, Enter)

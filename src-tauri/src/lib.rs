@@ -76,6 +76,7 @@ pub fn run() {
             commands::diagnostics::clear_cache,
             commands::diagnostics::reset_settings,
             commands::diagnostics::export_logs,
+            commands::diagnostics::open_external_link,
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,

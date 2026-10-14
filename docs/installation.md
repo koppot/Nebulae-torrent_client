@@ -1,6 +1,6 @@
 # Nebulae Installation and User Guide
 
-This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **Nebulae** (Subtitle: **Torrent Client by Asian DVD Club**) on Windows and macOS.
+This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **Nebulae** (Subtitle: **Torrent Client by Asian DVD Club**) on Windows, macOS, and Linux.
 
 ---
 
@@ -31,7 +31,15 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
    - [Confirming an Intel Mac](#confirming-an-intel-mac)
    - [Downloading Nebulae-macOS-x64.dmg](#downloading-nebulae-macos-x64dmg)
    - [Installation & Gatekeeper Walkthrough](#installation--gatekeeper-intel)
-5. [Isolated Internal Storage & Diagnostics](#isolated-internal-storage--diagnostics)
+5. [Linux x86_64 Installation (.deb, .rpm, .AppImage)](#4-linux-x86_64-installation-deb-rpm-appimage)
+   - [Supported Distributions & Baseline](#linux-supported-distributions)
+   - [Debian, Ubuntu & Linux Mint (.deb)](#debian-ubuntu-and-linux-mint-deb)
+   - [Fedora & Red Hat (.rpm)](#fedora-and-red-hat-rpm)
+   - [openSUSE (.rpm)](#opensuse-rpm)
+   - [Portable AppImage](#portable-appimage)
+   - [Linux Desktop Integration & File Pickers](#linux-desktop-integration)
+   - [Uninstalling on Linux](#uninstalling-on-linux)
+6. [Isolated Internal Storage & Diagnostics](#5-isolated-internal-storage--diagnostics)
 
 ---
 
@@ -45,6 +53,10 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
   - Windows: **`Nebulae-Setup-x64.exe`**
   - macOS Apple Silicon: **`Nebulae-macOS-arm64.dmg`**
   - macOS Intel: **`Nebulae-macOS-x64.dmg`**
+  - Linux Debian/Ubuntu: **`Nebulae-Linux-x86_64.deb`**
+  - Linux Red Hat/Fedora/openSUSE: **`Nebulae-Linux-x86_64.rpm`**
+  - Linux Portable: **`Nebulae-Linux-x86_64.AppImage`**
+  - Linux Raw Executable: **`nebulae-linux-x86_64`**
 - **Startup Splash Screen**: On launch, Nebulae presents a startup splash screen displaying internal initialization progress and a community invitation to visit `asiandvdclub.org`. The splash screen can be skipped immediately or disabled in Settings.
 - **Isolated Technical Files**: Database files, session logs, engine state, and caches are isolated in an internal directory (`Nebulae/internal/`) and never exposed in the standard interface.
 
@@ -249,7 +261,107 @@ Press Enter. Nebulae will open immediately.
 
 ---
 
-## Isolated Internal Storage & Diagnostics
+## 4. Linux x86_64 Installation (.deb, .rpm, .AppImage)
+
+Nebulae provides native Linux packages compiled against a pinned **Ubuntu 22.04 LTS (GLIBC 2.35)** baseline. This preserves broad binary compatibility across modern and enterprise distributions without requiring Docker or containerization.
+
+For in-depth architectural notes, dependency trees, and display server troubleshooting, see the dedicated [Linux Packaging and Verification Guide](linux.md).
+
+### Linux System Requirements
+
+| Specification | Requirement |
+| :--- | :--- |
+| **Operating System** | Ubuntu 22.04+, Debian 12+, Linux Mint 21+, Fedora 38+, openSUSE Leap 15.6+ |
+| **Architecture** | 64-bit x86 (`x86_64` / `amd64`) |
+| **Desktop Environment** | GNOME, KDE Plasma, XFCE, Cinnamon, MATE, or Sway/wlroots (X11 or Wayland) |
+| **Core Libraries** | WebKitGTK 4.1 or 4.0, GTK 3, Ayatana AppIndicator, OpenSSL |
+
+---
+
+### Debian, Ubuntu, and Linux Mint (`.deb`)
+
+1. Download **`Nebulae-Linux-x86_64.deb`** from the latest GitHub Release.
+2. Install via APT to automatically resolve dependencies:
+   ```bash
+   sudo apt update
+   sudo apt install ./Nebulae-Linux-x86_64.deb
+   ```
+3. Alternatively, install via `dpkg`:
+   ```bash
+   sudo dpkg -i Nebulae-Linux-x86_64.deb
+   sudo apt-get install -f -y
+   ```
+4. Launch Nebulae from your application menu or run `nebulae` in your terminal.
+
+---
+
+### Fedora and Red Hat (`.rpm`)
+
+1. Download **`Nebulae-Linux-x86_64.rpm`** from GitHub Releases.
+2. Install using DNF:
+   ```bash
+   sudo dnf install ./Nebulae-Linux-x86_64.rpm
+   ```
+
+---
+
+### openSUSE (`.rpm`)
+
+1. Download **`Nebulae-Linux-x86_64.rpm`** from GitHub Releases.
+2. Install using Zypper:
+   ```bash
+   sudo zypper --non-interactive install --allow-unsigned-rpm ./Nebulae-Linux-x86_64.rpm
+   ```
+
+---
+
+### Portable AppImage
+
+1. Download **`Nebulae-Linux-x86_64.AppImage`**.
+2. Mark it as executable:
+   ```bash
+   chmod +x Nebulae-Linux-x86_64.AppImage
+   ```
+3. Run the AppImage:
+   ```bash
+   ./Nebulae-Linux-x86_64.AppImage
+   ```
+*Note on FUSE*: If your distribution (e.g. minimal Ubuntu 24.04) does not have FUSE installed, run `./Nebulae-Linux-x86_64.AppImage --appimage-extract-and-run` or install `libfuse2t64` / `libfuse2`.
+
+---
+
+### Linux Desktop Integration
+
+- **Application Launcher**: Registered automatically at `/usr/share/applications/nebulae.desktop`.
+- **System Tray**: Displays status in the system notification tray via Ayatana AppIndicator.
+- **Native File Choosers**: Seamlessly opens GTK file choosers (`zenity`) on GNOME/Cinnamon or Qt file choosers (`kdialog`) on KDE.
+- **MIME Associations**: Automatically handles `.torrent` files, `.adc` files, and `magnet:` links.
+
+---
+
+### Uninstalling on Linux
+
+- **Debian / Ubuntu**:
+  ```bash
+  sudo dpkg -r nebulae
+  sudo dpkg --purge nebulae
+  ```
+- **Fedora / RHEL**:
+  ```bash
+  sudo dnf remove nebulae
+  ```
+- **openSUSE**:
+  ```bash
+  sudo zypper remove nebulae
+  ```
+- **Purge User Data & Logs**:
+  ```bash
+  rm -rf ~/.local/share/Nebulae ~/.config/ADC
+  ```
+
+---
+
+## 5. Isolated Internal Storage & Diagnostics
 
 To maintain a clean and reliable interface, Nebulae strictly isolates technical files:
 
