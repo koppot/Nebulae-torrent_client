@@ -306,3 +306,35 @@ POSSIBILITY OF SUCH DAMAGES.
 
                      END OF TERMS AND CONDITIONS
 ```
+
+---
+
+## 2. Bundled Java Runtime (BD-J / UHD menu support)
+
+- **Component:** minimal Java runtime image produced with `jlink` from **Eclipse Temurin** (OpenJDK 21), shipped inside the package as `resources/player/jre` on Windows, macOS, and Linux
+- **License:** GNU General Public License version 2 with the Classpath Exception (GPLv2+CE)
+- **Upstream Project & Source Code:** [https://openjdk.org/](https://openjdk.org/) / [https://github.com/adoptium/temurin21-binaries](https://github.com/adoptium/temurin21-binaries)
+- **Purpose:** libbluray requires a JVM to run BD-J interactive menus, including Java-based menus on 4K UHD discs. The bundled runtime is used by the bundled mpv player only; Nebulae itself does not use Java.
+
+The OpenJDK source code corresponding to the bundled runtime is available at the Adoptium repository linked above.
+
+---
+
+## 3. Bundled shared-library tree (macOS and Linux player bundle)
+
+The bundled player is self-contained: on macOS and Linux the package carries the complete set of non-system shared libraries that the bundled mpv links against (discovered at build time from the pinned build host and copied into the package with their load paths rewritten). These libraries originate from their respective upstream projects and are redistributed under their own licenses. The principal components and licenses include:
+
+| Library | Typical license | Upstream |
+| --- | --- | --- |
+| FFmpeg (libav*) | LGPLv2.1+ / GPLv2+ depending on build configuration | https://ffmpeg.org/ |
+| libass | ISC | https://github.com/libass/libass |
+| libplacebo | LGPLv2.1+ | https://code.videolan.org/videolan/libplacebo |
+| fontconfig, freetype | MIT / FTL | https://www.freedesktop.org/wiki/Software/fontconfig/ , https://www.freetype.org/ |
+| HarfBuzz, fribidi | MIT / LGPLv2.1+ | https://harfbuzz.github.io/ , https://github.com/fribidi/fribidi |
+| zlib, zstd, brotli, xz, lz4 | zlib / BSD / MIT / public domain | upstream project sites |
+| expat, libxml2, libxslt | MIT / MIT | https://github.com/libexpat/ |
+| OpenSSL / GnuTLS / mbedtls (as linked) | Apache-2.0 / LGPLv2.1+ / Apache-2.0 | upstream project sites |
+
+The exact set varies with the pinned build; the corresponding source for every bundled library is obtainable from the upstream project of each library as linked by the build recipes above (shinchiro/mpv-winbuild-cmake for Windows; the distribution source packages of the build host for macOS/Linux trees). No library bundled this way is modified by Nebulae beyond binary load-path rewriting (`install_name_tool` / `patchelf`), which does not constitute a modification of the work under the applicable licenses. As above, the player is executed as an independent subprocess; nothing in this tree is linked into the Nebulae binary.
+
+Nebulae does not bundle VLC, IINA, or any DRM/circumvention component (no libaacs, no key databases).

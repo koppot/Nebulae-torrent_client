@@ -119,22 +119,29 @@ folder with menus after passing Gatekeeper.
 ## Verification checklist
 
 - [ ] Fresh-VM matrix: Windows 10/11 x64, macOS 14 (arm64, plus Intel if you
-      ship a universal build), Ubuntu 22.04 AppImage + deb
+      ship a universal build), Ubuntu 22.04 AppImage + deb — requires a
+      release build and real disc structures; not closable by CI
 - [ ] DVD folder (`VIDEO_TS`): interactive main menu navigable by mouse and
       keyboard
-- [ ] Blu-ray folder (`BDMV`): simple menu minimum; BD-J interactive when a
-      JVM is present; graceful, logged fallback when not
+- [ ] Blu-ray folder (`BDMV`): simple menu minimum; BD-J interactive via the
+      bundled JRE (no user JVM needed since the owner directive); graceful,
+      logged fallback if the JRE is absent
 - [ ] DVD ISO and BD ISO: menus via the ISO-routed path
 - [ ] `prefer_menu = false`: plays directly, no menu, unchanged behavior
 - [ ] UHD (`BDMV` 66/100-layer or `uhd`-named): plays; UI copy states the
       AACS limitation for pressed discs
-- [ ] CI: all three release legs green; release assets include the bundle;
-      package size delta recorded in `CHANGELOG.md`
-- [ ] Docs: the installation guide no longer lists "install mpv/VLC" as a
+- [ ] CI: all three release legs green; release assets include the bundle
+      (player + library tree + JRE); package size delta recorded in
+      `CHANGELOG.md`
+- [x] Docs: the installation guide no longer lists "install mpv/VLC" as a
       requirement for disc playback; the UHD AACS limitation is documented
-- [ ] `THIRD-PARTY-NOTICES` includes mpv (GPLv2+) with source links
-- [ ] `CHANGELOG.md` and `AGENT-COORDINATION.md` updated by you with
-      decisions, pinned SHA-256s, and CI run links
+      (e7074a3 — zero-dependency guarantee now covers all platforms, plus
+      the macOS Gatekeeper first-spawn note and glibc floor)
+- [x] `THIRD-PARTY-NOTICES` includes mpv (GPLv2+) with source links, the
+      bundled JRE (OpenJDK/Temurin, GPLv2+CE), and the bundled
+      shared-library tree (e7074a3)
+- [x] `CHANGELOG.md` and `AGENT-COORDINATION.md` updated with decisions,
+      pinned SHA-256s, and CI run links (355af5d, e7074a3)
 
 ## Reporting
 
