@@ -45,8 +45,19 @@ pub fn open_logs_folder(paths: State<Arc<AppPaths>>) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_external_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(format!(
+            "Disallowed URL scheme: only http/https URLs are permitted: {url}"
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_external_link(url: String) -> Result<(), String> {
+    validate_external_url(&url)?;
+
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -66,7 +77,7 @@ pub fn open_external_link(url: String) -> Result<(), String> {
         std::process::Command::new("xdg-open")
             .arg(&url)
             .spawn()
-            .map_err(|e| format!("Failed to open link on Linux: {e}"))?;
+            .map_err(|e| format!("Failed to open link on Linux via xdg-open: {e}. Please ensure xdg-utils is installed."))?;
     }
     Ok(())
 }
@@ -131,5 +142,24 @@ pub fn export_logs(paths: State<Arc<AppPaths>>) -> Result<String, String> {
         Ok(preview)
     } else {
         Ok("No logs recorded yet.".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_external_url_valid() {
+        assert!(validate_external_url("https://asiandvdclub.org").is_ok());
+        assert!(validate_external_url("https://github.com/asiandvdclub/Nebulae").is_ok());
+        assert!(validate_external_url("http://localhost:8080/test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_external_url_invalid() {
+        assert!(validate_external_url("file:///etc/passwd").is_err());
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+        assert!(validate_external_url("sh -c rm -rf /").is_err());
     }
 }

@@ -28,7 +28,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "category": "Network",
     "shortDescription": "Nebulae — Torrent Client by Asian DVD Club",
     "longDescription": "Native cross-platform BitTorrent client for reliable, high-scale seeding with qBittorrent parity, private tracker intelligence, and ultra-low RAM footprint.",
     "icon": [
@@ -44,7 +43,9 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["torrent"],
+        "ext": [
+          "torrent"
+        ],
         "name": "BitTorrent Metainfo",
         "description": "BitTorrent Metainfo File",
         "mimeType": "application/x-bittorrent",
@@ -52,7 +53,9 @@
         "rank": "Default"
       },
       {
-        "ext": ["adc"],
+        "ext": [
+          "adc"
+        ],
         "name": "Asian DVD Club Metainfo",
         "description": "Asian DVD Club Metainfo File",
         "mimeType": "application/x-asiandvdclub-torrent",
@@ -124,7 +127,9 @@
         "headerImage": null,
         "sidebarImage": null,
         "installMode": "currentUser",
-        "languages": ["English"],
+        "languages": [
+          "English"
+        ],
         "installerHooks": "nsis/hooks.nsh"
       }
     }

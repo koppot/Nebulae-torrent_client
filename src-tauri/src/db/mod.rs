@@ -14,6 +14,15 @@ impl Database {
     pub fn new(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
 
+        // Configure WAL mode and crash safety
+        conn.execute_batch(
+            "
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA busy_timeout = 5000;
+        ",
+        )?;
+
         // Execute table initialization
         conn.execute(schema::CREATE_SETTINGS_TABLE, [])?;
         conn.execute(schema::CREATE_TORRENT_METADATA_TABLE, [])?;

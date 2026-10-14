@@ -331,7 +331,7 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(linux_pick_dir("Select Folder for Torrent Creation"))
+            linux_pick_dir("Select Folder for Torrent Creation")
         }
     })
     .await
@@ -383,7 +383,7 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(linux_pick_file("Select File for Torrent Creation", None))
+            linux_pick_file("Select File for Torrent Creation", None)
         }
     })
     .await
@@ -443,19 +443,54 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(linux_pick_file(
+            linux_pick_file(
                 "Select .torrent or .adc file",
                 Some(("Torrent & ADC Files (*.torrent, *.adc)", "*.torrent *.adc")),
-            ))
+            )
         }
     })
     .await
     .map_err(|e| format!("Picker task error: {e}"))?
 }
 
+pub fn parse_dialog_output(
+    status_success: bool,
+    exit_code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<String>, String> {
+    if status_success {
+        let path = String::from_utf8_lossy(stdout).trim().to_string();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let p = std::path::Path::new(&path);
+        if !p.exists() {
+            return Err(format!(
+                "Selected path does not exist or is unreadable: {path}"
+            ));
+        }
+        Ok(Some(path))
+    } else if exit_code == Some(1) {
+        // User cancelled the file dialog
+        Ok(None)
+    } else {
+        let err_msg = String::from_utf8_lossy(stderr).trim().to_string();
+        Err(format!(
+            "Dialog failed with exit code {:?}: {}",
+            exit_code,
+            if err_msg.is_empty() {
+                "Operation cancelled or dialog closed"
+            } else {
+                &err_msg
+            }
+        ))
+    }
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn linux_pick_dir(title: &str) -> Option<String> {
-    if let Ok(output) = std::process::Command::new("zenity")
+fn linux_pick_dir(title: &str) -> Result<Option<String>, String> {
+    match std::process::Command::new("zenity")
         .args([
             "--file-selection",
             "--directory",
@@ -463,42 +498,62 @@ fn linux_pick_dir(title: &str) -> Option<String> {
         ])
         .output()
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+        Ok(output) => {
+            return parse_dialog_output(
+                output.status.success(),
+                output.status.code(),
+                &output.stdout,
+                &output.stderr,
+            );
         }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("Failed to execute zenity: {e}"));
+        }
+        Err(_) => {}
     }
-    if let Ok(output) = std::process::Command::new("kdialog")
+
+    match std::process::Command::new("kdialog")
         .args(["--title", title, "--getexistingdirectory", "."])
         .output()
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+        Ok(output) => {
+            return parse_dialog_output(
+                output.status.success(),
+                output.status.code(),
+                &output.stdout,
+                &output.stderr,
+            );
         }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("Failed to execute kdialog: {e}"));
+        }
+        Err(_) => {}
     }
-    None
+
+    Err("No supported graphical file dialog found. Please install 'zenity' (GNOME/GTK) or 'kdialog' (KDE/Qt) to use directory selection.".to_string())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn linux_pick_file(title: &str, filter: Option<(&str, &str)>) -> Option<String> {
+fn linux_pick_file(title: &str, filter: Option<(&str, &str)>) -> Result<Option<String>, String> {
     let mut zenity_cmd = std::process::Command::new("zenity");
     zenity_cmd.args(["--file-selection", &format!("--title={title}")]);
     if let Some((name, patterns)) = filter {
         zenity_cmd.arg(format!("--file-filter={name} | {patterns}"));
         zenity_cmd.arg("--file-filter=All Files | *");
     }
-    if let Ok(output) = zenity_cmd.output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+    match zenity_cmd.output() {
+        Ok(output) => {
+            return parse_dialog_output(
+                output.status.success(),
+                output.status.code(),
+                &output.stdout,
+                &output.stderr,
+            );
         }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("Failed to execute zenity: {e}"));
+        }
+        Err(_) => {}
     }
 
     let mut kdialog_cmd = std::process::Command::new("kdialog");
@@ -506,15 +561,22 @@ fn linux_pick_file(title: &str, filter: Option<(&str, &str)>) -> Option<String> 
     if let Some((name, patterns)) = filter {
         kdialog_cmd.arg(format!("{patterns}|{name}"));
     }
-    if let Ok(output) = kdialog_cmd.output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+    match kdialog_cmd.output() {
+        Ok(output) => {
+            return parse_dialog_output(
+                output.status.success(),
+                output.status.code(),
+                &output.stdout,
+                &output.stderr,
+            );
         }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("Failed to execute kdialog: {e}"));
+        }
+        Err(_) => {}
     }
-    None
+
+    Err("No supported graphical file dialog found. Please install 'zenity' (GNOME/GTK) or 'kdialog' (KDE/Qt) to use file selection.".to_string())
 }
 
 #[tauri::command]
@@ -569,7 +631,7 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            Ok(linux_pick_dir("Select Download Directory"))
+            linux_pick_dir("Select Download Directory")
         }
     })
     .await
@@ -592,4 +654,74 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
         desktop: dirs::desktop_dir().map(|p| p.to_string_lossy().to_string()),
         documents: dirs::document_dir().map(|p| p.to_string_lossy().to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_parse_dialog_output_user_cancel() {
+        let res = parse_dialog_output(false, Some(1), b"", b"");
+        assert_eq!(res, Ok(None));
+    }
+
+    #[test]
+    fn test_parse_dialog_output_empty_selection() {
+        let res = parse_dialog_output(true, Some(0), b"\n", b"");
+        assert_eq!(res, Ok(None));
+    }
+
+    #[test]
+    fn test_parse_dialog_output_nonexistent_path() {
+        let res = parse_dialog_output(
+            true,
+            Some(0),
+            b"/tmp/non_existent_nebulae_path_12345\n",
+            b"",
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("does not exist or is unreadable"));
+    }
+
+    #[test]
+    fn test_parse_dialog_output_path_with_spaces() {
+        let temp_dir = std::env::temp_dir().join("nebulae test with spaces");
+        fs::create_dir_all(&temp_dir).unwrap();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        let res = parse_dialog_output(true, Some(0), format!("{path_str}\n").as_bytes(), b"");
+        assert_eq!(res, Ok(Some(path_str)));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_parse_dialog_output_path_with_unicode() {
+        let temp_dir = std::env::temp_dir().join("nebulae_テスト_日本語_файл");
+        fs::create_dir_all(&temp_dir).unwrap();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        let res = parse_dialog_output(true, Some(0), format!("{path_str}\n").as_bytes(), b"");
+        assert_eq!(res, Ok(Some(path_str)));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_parse_dialog_output_path_with_quotes_and_metachars() {
+        let temp_dir = std::env::temp_dir().join("nebulae_test's & $VAR");
+        fs::create_dir_all(&temp_dir).unwrap();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        let res = parse_dialog_output(true, Some(0), format!("{path_str}\n").as_bytes(), b"");
+        assert_eq!(res, Ok(Some(path_str)));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_parse_dialog_output_dialog_error() {
+        let res = parse_dialog_output(false, Some(127), b"", b"zenity: command not found\n");
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("zenity: command not found"));
+    }
 }
