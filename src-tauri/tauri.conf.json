@@ -81,8 +81,7 @@
           "libgtk-3-0",
           "libayatana-appindicator3-1",
           "librsvg2-2",
-          "libssl3 | libssl1.1",
-          "mpv"
+          "libssl3 | libssl1.1"
         ],
         "section": "net",
         "priority": "optional"
@@ -93,8 +92,7 @@
           "gtk3",
           "libayatana-appindicator3",
           "librsvg2",
-          "openssl",
-          "mpv"
+          "openssl"
         ]
       },
       "appimage": {

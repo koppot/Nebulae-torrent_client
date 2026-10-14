@@ -117,7 +117,48 @@ subprocess.run(codesign_cmd + [mpv_path], check=True)
 print("Code signing completed for bundled dylib tree and mpv helper binary.")
 EOF
 
+# --- Bundled JRE (BD-J / 4K UHD interactive menus) --------------------------
+# The owner requires ALL menus to play, including BD-J interactive menus on
+# Blu-ray and 4K UHD discs. libbluray needs a JVM for those, so a minimal
+# JRE produced by jlink ships inside the package and is signed like the
+# rest of the bundled player tree.
+if [ "${NEB_SKIP_JRE:-0}" != "1" ]; then
+    if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/jlink" ]; then
+        echo "ERROR: jlink is not available (JAVA_HOME='${JAVA_HOME:-unset}')."
+        echo "The owner requires full BD-J/UHD interactive menu support, which"
+        echo "needs a bundled JRE. Set up a JDK (e.g. actions/setup-java,"
+        echo "distribution: temurin, java-version: 21) or set NEB_SKIP_JRE=1"
+        echo "to build WITHOUT BD-J menus (not acceptable for releases)."
+        exit 1
+    fi
+    echo "==> Bundling minimal JRE via jlink (BD-J / UHD menus)..."
+    "$JAVA_HOME/bin/jlink" \
+        --add-modules java.se,jdk.unsupported,jdk.crypto.ec \
+        --strip-debug --no-man-pages --no-header-files \
+        --output "$TARGET_DIR/jre"
+    "$TARGET_DIR/jre/bin/java" -version
+    echo "==> Code-signing bundled JRE Mach-O images..."
+    while IFS= read -r -d '' f; do
+        if file "$f" | grep -q "Mach-O"; then
+            if [ -n "$SIGNING_IDENTITY" ]; then
+                codesign --force --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$f"
+            else
+                codesign --force --sign - "$f"
+            fi
+        fi
+    done < <(find "$TARGET_DIR/jre" -type f -print0)
+    echo "JRE signing complete. Bundled JRE ready: $TARGET_DIR/jre"
+fi
+
 echo "==> Running smoke test on bundled macOS mpv binary..."
 SMOKE_OUT=$("$TARGET_DIR/mpv" --version)
-echo "$SMOKE_OUT" | head -n 5
-echo "SUCCESS: macOS disc player and dylib tree bundled and verified."
+echo "$SMOKE_OUT" | head -n 6
+case "$SMOKE_OUT" in
+    *dvdnav*)   : ;;
+    *) echo "ERROR: dvdnav feature missing from bundled mpv!"; exit 1 ;;
+esac
+case "$SMOKE_OUT" in
+    *libbluray*) : ;;
+    *) echo "ERROR: libbluray feature missing from bundled mpv!"; exit 1 ;;
+esac
+echo "SUCCESS: macOS disc player, dylib tree, and JRE bundled and verified."

@@ -2,6 +2,7 @@ use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo, DiscType};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::Manager;
 
 #[tauri::command]
 pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
@@ -50,9 +51,14 @@ pub struct DiscPlayerStatus {
 }
 
 #[tauri::command]
-pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
-    let player_info = find_optical_disc_player();
-    let java_home = detect_java_home().map(|p| p.to_string_lossy().to_string());
+pub fn get_disc_player_status(app: tauri::AppHandle) -> Result<DiscPlayerStatus, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    get_disc_player_status_impl(resource_dir.as_deref())
+}
+
+fn get_disc_player_status_impl(resource_dir: Option<&Path>) -> Result<DiscPlayerStatus, String> {
+    let player_info = find_optical_disc_player(resource_dir);
+    let java_home = detect_java_home(resource_dir).map(|p| p.to_string_lossy().to_string());
     let has_jvm = java_home.is_some();
 
     match player_info {
@@ -121,8 +127,23 @@ pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
 }
 
 #[tauri::command]
-pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Result<(), String> {
-    let path = Path::new(&file_path);
+pub fn launch_disc_player(
+    app: tauri::AppHandle,
+    file_path: String,
+    prefer_menu: Option<bool>,
+) -> Result<(), String> {
+    let resource_dir = app.path().resource_dir().ok();
+    launch_disc_player_impl(resource_dir.as_deref(), &file_path, prefer_menu)
+}
+
+/// Core launcher, separated from the Tauri command so it stays testable
+/// without an AppHandle.
+pub fn launch_disc_player_impl(
+    resource_dir: Option<&Path>,
+    file_path: &str,
+    prefer_menu: Option<bool>,
+) -> Result<(), String> {
+    let path = Path::new(file_path);
     if !path.exists() {
         return Err(format!("Media path does not exist: {file_path}"));
     }
@@ -131,13 +152,25 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
     let use_menu = prefer_menu.unwrap_or(true);
 
     // Locate preferred disc player (bundled mpv -> system mpv -> VLC -> IINA -> system default)
-    if let Some((player_bin, engine)) = find_optical_disc_player() {
+    if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
         let mut cmd = Command::new(&player_bin);
 
-        // Ensure Java runtime is accessible to libbluray for BD-J and 4K UHD menus
-        let java_home = detect_java_home();
+        // Ensure a Java runtime is accessible to libbluray for BD-J and 4K UHD
+        // menus. The bundled JRE ships inside the package and is preferred over
+        // any system JVM; its bin directory is also prepended to PATH so the
+        // JVM can locate its own companion executables.
+        let java_home = detect_java_home(resource_dir);
         if let Some(ref jh) = java_home {
             cmd.env("JAVA_HOME", jh);
+            if let Some(java_bin) = jh.join("bin").to_str() {
+                if let Ok(path_value) =
+                    std::env::join_paths(std::iter::once(PathBuf::from(java_bin)).chain(
+                        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+                    ))
+                {
+                    cmd.env("PATH", path_value);
+                }
+            }
         }
 
         if let Some(disc) = &disc_info {
@@ -286,7 +319,7 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
                 }
             }
         } else {
-            cmd.arg(&file_path);
+            cmd.arg(file_path);
         }
 
         #[cfg(target_os = "windows")]
@@ -306,9 +339,9 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
                     engine,
                     e
                 );
-                if let Err(fallback_err) = launch_system_default(&file_path) {
+                if launch_system_default(file_path).is_err() {
                     return Err(format!(
-                        "Failed to launch optical disc player '{:?}' ({engine:?}): {e}. System fallback launcher also failed: {fallback_err}. Please ensure a media player (mpv or VLC) is accessible.",
+                        "Failed to launch optical disc player '{:?}' ({engine:?}): {e}. System fallback launcher also failed. The bundled player should never require external software; if it is missing the installation may be incomplete - reinstall Nebulae or check Settings > Media.",
                         player_bin
                     ));
                 }
@@ -318,63 +351,98 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
     }
 
     // Fallback: system default file / directory launcher
-    if let Err(fallback_err) = launch_system_default(&file_path) {
+    if let Err(fallback_err) = launch_system_default(file_path) {
         return Err(format!(
-            "No optical disc player (bundled mpv, system mpv, VLC, or IINA) was found, and system default launcher failed: {fallback_err}. For DVD and Blu-ray menu navigation, Nebulae requires mpv or VLC."
+            "No optical disc player (bundled mpv, system mpv, VLC, or IINA) was found, and system default launcher failed: {fallback_err}. Nebulae normally ships a self-contained player; if it is missing the installation may be incomplete - reinstall, or check Settings > Media."
         ));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn launch_media_player(file_path: String) -> Result<(), String> {
-    launch_disc_player(file_path, Some(true))
+pub fn launch_media_player(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
+    launch_disc_player(app, file_path, Some(true))
 }
 
-/// Discovers an installed player capable of DVD/Blu-ray/UHD menu navigation.
-/// Probes bundled copy first, followed by system mpv, VLC, and IINA.
-pub fn find_optical_disc_player() -> Option<(PathBuf, PlayerEngine)> {
-    // 0. Probe bundled mpv FIRST (isolated package delivery)
+/// Candidate directories for the bundled player across every package layout.
+/// `resource_dir` is Tauri's canonical resource directory and is probed
+/// first; the remaining entries cover installer layouts (NSIS, .app bundle,
+/// deb/rpm filesystem paths), the AppImage runtime environment, and
+/// development checkouts. The bundled tree is fully self-contained: it
+/// carries its own shared libraries and JRE, so no OS-installed player or
+/// third-party library is ever required.
+fn bundled_player_dir_candidates(resource_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Some(rd) = resource_dir {
+        // Tauri v2 preserves the path relative to src-tauri/ inside the
+        // resource directory (e.g. Contents/Resources/resources/player on
+        // macOS, $INSTDIR/resources/player on Windows).
+        cands.push(rd.join("resources").join("player"));
+        cands.push(rd.join("player"));
+        cands.push(rd.to_path_buf());
+    }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(exe_dir) = current_exe.parent() {
-            let bundled_candidates = [
-                // Windows NSIS layout ($INSTDIR/resources/player/mpv.exe)
-                exe_dir.join("resources").join("player").join("mpv.exe"),
-                exe_dir.join("resources").join("mpv.exe"),
-                exe_dir.join("player").join("mpv.exe"),
-                exe_dir.join("mpv.exe"),
-                // macOS App Bundle layout (Contents/MacOS/nebulae -> Contents/Resources/player/mpv)
-                exe_dir.join("../Resources/player/mpv"),
-                exe_dir.join("../Resources/mpv"),
-                exe_dir.join("../Frameworks/player/mpv"),
-                // Linux directory layout (resources/player/mpv)
-                exe_dir.join("resources").join("player").join("mpv"),
-                exe_dir.join("player").join("mpv"),
-                exe_dir.join("mpv"),
-            ];
-            for cand in &bundled_candidates {
-                if cand.is_file() {
-                    return Some((cand.clone(), PlayerEngine::BundledMpv));
-                }
+            cands.push(exe_dir.join("resources").join("player"));
+            cands.push(exe_dir.join("resources"));
+            cands.push(exe_dir.join("player"));
+            cands.push(exe_dir.to_path_buf());
+            // deb/rpm layout: /usr/bin/nebulae -> /usr/lib/nebulae/resources/player
+            if let Some(prefix) = exe_dir.parent().and_then(|p| p.parent()) {
+                cands.push(
+                    prefix
+                        .join("lib")
+                        .join("nebulae")
+                        .join("resources")
+                        .join("player"),
+                );
+                cands.push(
+                    prefix
+                        .join("share")
+                        .join("nebulae")
+                        .join("resources")
+                        .join("player"),
+                );
             }
         }
     }
-
-    // Check AppImage runtime environment ($APPDIR)
     if let Ok(appdir) = std::env::var("APPDIR") {
-        let appdir_candidates = [
-            Path::new(&appdir).join("usr/bin/mpv"),
-            Path::new(&appdir).join("resources/player/mpv"),
-            Path::new(&appdir).join("usr/lib/nebulae/resources/player/mpv"),
-        ];
-        for cand in &appdir_candidates {
-            if cand.is_file() {
-                return Some((cand.clone(), PlayerEngine::BundledMpv));
-            }
+        let appdir = PathBuf::from(appdir);
+        cands.push(appdir.join("resources").join("player"));
+        cands.push(
+            appdir
+                .join("usr")
+                .join("lib")
+                .join("nebulae")
+                .join("resources")
+                .join("player"),
+        );
+        cands.push(appdir.join("usr").join("bin"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        cands.push(PathBuf::from("/usr/lib/nebulae/resources/player"));
+        cands.push(PathBuf::from("/usr/share/nebulae/resources/player"));
+    }
+    cands
+}
+
+/// Discovers the player used for DVD/Blu-ray/UHD menu navigation.
+/// Probes the bundled self-contained player first, followed by system mpv,
+/// VLC, and IINA. The bundled player ships with the package together with
+/// its complete shared-library tree and JRE, so a clean machine needs
+/// nothing installed.
+pub fn find_optical_disc_player(resource_dir: Option<&Path>) -> Option<(PathBuf, PlayerEngine)> {
+    // 0. Probe bundled mpv FIRST (self-contained package delivery)
+    let mpv_binary = if cfg!(windows) { "mpv.exe" } else { "mpv" };
+    for dir in bundled_player_dir_candidates(resource_dir) {
+        let cand = dir.join(mpv_binary);
+        if cand.is_file() {
+            return Some((cand, PlayerEngine::BundledMpv));
         }
     }
 
-    // Relative project / dev paths
+    // Development checkout fallbacks (cargo tauri dev runs from src-tauri/)
     let dev_candidates = [
         PathBuf::from("resources/player/mpv.exe"),
         PathBuf::from("src-tauri/resources/player/mpv.exe"),
@@ -442,8 +510,18 @@ pub fn find_optical_disc_player() -> Option<(PathBuf, PlayerEngine)> {
     None
 }
 
-/// Locate Java runtime directory for BD-J and UHD menu execution in libbluray.
-fn detect_java_home() -> Option<PathBuf> {
+/// Locate the Java runtime used by libbluray for BD-J and UHD menus.
+/// The JRE bundled inside the package is preferred; a system JVM
+/// (JAVA_HOME or OS locations) is only a fallback.
+fn detect_java_home(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    let java_binary = if cfg!(windows) { "java.exe" } else { "java" };
+    for player_dir in bundled_player_dir_candidates(resource_dir) {
+        let jre_home = player_dir.join("jre");
+        if jre_home.join("bin").join(java_binary).is_file() {
+            return Some(jre_home);
+        }
+    }
+
     if let Ok(env_java) = std::env::var("JAVA_HOME") {
         let p = PathBuf::from(env_java);
         if p.exists() {
@@ -615,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_launch_nonexistent_media() {
-        let res = launch_media_player("/nonexistent/movie/file.mkv".to_string());
+        let res = launch_disc_player_impl(None, "/nonexistent/movie/file.mkv", Some(true));
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("does not exist"));
     }
@@ -675,7 +753,7 @@ mod tests {
 
     #[test]
     fn test_get_disc_player_status_command() {
-        let status = get_disc_player_status().expect("get_disc_player_status failed");
+        let status = get_disc_player_status_impl(None).expect("get_disc_player_status failed");
         assert!(!status.player_name.is_empty());
         assert!(!status.player_type.is_empty());
     }
@@ -683,6 +761,6 @@ mod tests {
     #[test]
     fn test_disc_player_discovery() {
         // Just verify discovery returns without panic
-        let _ = find_optical_disc_player();
+        let _ = find_optical_disc_player(None);
     }
 }

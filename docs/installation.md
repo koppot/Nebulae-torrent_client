@@ -417,10 +417,15 @@ Nebulae includes a dedicated media station mode designed specifically for Asian 
 
 ### Zero-Dependency Bundled Player
 
-Beginning with the optical disc player bundle update:
-- **No manual player installation required:** Nebulae packages an embedded, isolated `mpv` player engine compiled with `libdvdnav` and `libbluray`. Users do not need to install VLC, system mpv, or any third-party software on a clean machine to play disc structures with interactive menus.
+Beginning with the optical disc player bundle update, every platform ships a fully self-contained player:
+- **No manual player installation required:** Nebulae packages an embedded, isolated `mpv` player engine compiled with `libdvdnav` and `libbluray`. This applies to **all** platforms — Windows (NSIS), macOS (DMG), Linux (`.deb`, `.rpm`, AppImage). Users do not need to install VLC, system mpv, or any third-party software on a clean machine to play disc structures with interactive menus. The `.deb`/`.rpm` packages no longer depend on the distribution's `mpv` package either.
+- **Self-contained library tree:** on macOS and Linux the bundled player carries its complete non-system shared-library tree inside the package, with load paths rewritten so it uses only its own libraries. On Linux the only remaining host requirement is the platform's C runtime (glibc 2.35 or newer, i.e. Ubuntu 22.04+/Debian 12+ era systems).
 - **Probe Order:** When launching disc playback, Nebulae probes the bundled isolated player first, followed by system `mpv`, VLC, and IINA (on macOS), before falling back to the operating system's default media player.
 - **Player Status:** Current player detection and capability details can be inspected at any time in **Settings → Media**.
+
+### First Launch on macOS (Gatekeeper)
+
+The macOS beta is currently unsigned, so the first launch of the app itself requires the usual right-click → **Open** confirmation. The same applies once to the bundled player helper the first time it plays a disc: macOS 14/15 will show a "developer cannot be verified" prompt on first use — allow it via **System Settings → Privacy & Security** (or right-click → Open on the dialog flow). This happens once per install; when the project ships signed/notarized builds, this step disappears.
 
 ### UHD Blu-ray & Commercial Discs (AACS Limitation)
 
@@ -429,5 +434,6 @@ Beginning with the optical disc player bundle update:
 
 ### Java Runtime & BD-J Navigation
 
-- **BD-J Interactive Menus:** Dynamic Java-based interactive menus (common on modern Blu-ray and 4K UHD discs) utilize a standard Java Runtime Environment (JRE) if installed on your system (`JAVA_HOME`).
-- **Graceful Fallback:** If no JVM is installed on your computer, Nebulae automatically falls back to clean stream playback and standard title/playlist navigation with an informative log line, without crashing or presenting error dialogs.
+- **Bundled JRE:** Nebulae ships its own minimal Java runtime (produced with `jlink`) inside the package, so BD-J interactive menus — including Java-based menus on 4K UHD discs — work with no Java installation on the user's machine. No `JAVA_HOME` setup is required.
+- **System JRE fallback:** if the bundled JRE is absent (for example a development build), Nebulae uses a system JVM when one is detected (`JAVA_HOME` or OS Java locations).
+- **Graceful Fallback:** if neither a bundled nor a system JVM is available, Nebulae automatically falls back to clean stream playback and standard title/playlist navigation with an informative log line, without crashing or presenting error dialogs.

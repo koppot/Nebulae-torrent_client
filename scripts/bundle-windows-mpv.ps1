@@ -72,6 +72,24 @@ if (Test-Path $D3dSource) {
     Write-Host "Staged: $D3dDest"
 }
 
+Write-Host "==> Bundling minimal JRE via jlink (BD-J / 4K UHD menus)..."
+# --- Bundled JRE (BD-J / 4K UHD interactive menus) -----------------------
+# The owner requires ALL menus to play, including BD-J interactive menus on
+# Blu-ray and 4K UHD discs. libbluray needs a JVM for those, so a minimal
+# JRE produced by jlink ships inside the package.
+if ($env:NEB_SKIP_JRE -ne "1") {
+    $Jlink = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME "bin\jlink.exe" } else { $null }
+    if (-not $Jlink -or -not (Test-Path $Jlink)) {
+        throw "jlink.exe not found under JAVA_HOME='$($env:JAVA_HOME ?? 'unset')'. The owner requires full BD-J/UHD interactive menu support, which needs a bundled JRE. Set up a JDK (actions/setup-java, distribution: temurin, java-version: 21) or set NEB_SKIP_JRE=1 to build WITHOUT BD-J menus (not acceptable for releases)."
+    }
+    & $Jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec --strip-debug --no-man-pages --no-header-files --output (Join-Path $TargetDir "jre")
+    if ($LASTEXITCODE -ne 0) { throw "jlink failed with exit code $LASTEXITCODE" }
+    $JreJava = Join-Path (Join-Path (Join-Path $TargetDir "jre") "bin") "java.exe"
+    & $JreJava -version
+    if ($LASTEXITCODE -ne 0) { throw "Bundled JRE smoke test failed" }
+    Write-Host "Bundled JRE ready: $(Join-Path $TargetDir 'jre')"
+}
+
 Write-Host "==> Running smoke test on bundled mpv.exe..."
 $VersionInfo = & $MpvDest --version
 Write-Host $VersionInfo

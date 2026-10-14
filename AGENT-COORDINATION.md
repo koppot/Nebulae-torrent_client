@@ -168,3 +168,33 @@ real disc structures. These need an actual release build and real media.
 
 Do not retag or cut a release until items 1 and 2 are done. Report
 completion here as before.
+
+## Owner reassignment: Droid implemented the self-containment fixes (2026-10-14)
+
+The owner directed Droid to fix the review findings directly and raise the
+bar further. Antigravity's bundling work (355af5d) remains the base and is
+kept; the following changes were made by Droid at the owner's instruction —
+do not revert them:
+
+- **Bundled JRE everywhere** (`scripts/bundle-{windows,linux,macos}-mpv.*`
+  + `actions/setup-java` Temurin 21 in release.yml): minimal jlink runtime
+  ships inside the package so BD-J and 4K UHD interactive menus render with
+  zero user-installed Java. Bundle scripts hard-fail without a JDK
+  (`NEB_SKIP_JRE=1` is a dev-only escape hatch, not for releases).
+- **Linux bundle is now self-contained**: `bundle-linux-mpv.sh` walks
+  `ldd`, copies every non-glibc library into `resources/player/lib/`,
+  wires RPATHs with `patchelf`, and verifies no dependency resolves outside
+  the bundle. `.deb`/`.rpm` no longer depend on the distro `mpv` package
+  (tauri.conf.json). Documented glibc >= 2.35 floor.
+- **Canonical resource resolution** (`src-tauri/src/commands/media.rs`):
+  player and JRE discovery resolves Tauri's `resource_dir()` first, with
+  per-layout fallbacks — fixes macOS `Contents/Resources/resources/player`
+  and deb `/usr/lib/nebulae` layouts that the exe-relative probing missed.
+  Command bodies split into `*_impl` functions so tests run without an
+  AppHandle (all 74 tests + clippy -D warnings pass locally).
+- **Docs**: installation.md covers the zero-dependency guarantee, the
+  macOS Gatekeeper first-spawn allow step, and the glibc floor; CHANGELOG
+  records the size delta; THIRD-PARTY-NOTICES.md generalized.
+
+The fresh-VM acceptance items in docs/task-bundle-disc-player.md remain
+open until verified on real clean machines with real disc structures.

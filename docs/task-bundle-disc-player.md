@@ -143,3 +143,31 @@ owner (and Droid) can follow along without asking. If you hit a blocking
 constraint — e.g. macOS helper signing inside the Tauri bundler — document
 the blocker and the proposed workaround there before changing approach;
 do not silently drop an acceptance item.
+
+## Addendum (2026-10-14, owner directive): full self-containment, all menus
+
+After the first implementation (355af5d), the owner raised the bar:
+
+1. **ALL menus must play** — DVD, Blu-ray, and UHD, *including* BD-J
+   interactive menus. A minimal JRE (produced with `jlink`, Temurin 21 base,
+   modules `java.se` + `jdk.unsupported` + `jdk.crypto.ec`) is therefore
+   bundled inside the package on every platform and preferred over any
+   system JVM. CI installs the JDK via `actions/setup-java`; the bundle
+   scripts hard-fail without it (`NEB_SKIP_JRE=1` exists for dev builds
+   only and is not acceptable for releases).
+2. **No reliance on OS-installed libraries or players**: `.deb`/`.rpm` no
+   longer depend on the distribution `mpv` package; the Linux bundle
+   carries its complete non-system shared-library tree (`ldd` walk +
+   `patchelf` RPATH wiring + self-containment verification in
+   `bundle-linux-mpv.sh`). The only host requirement left is the glibc
+   core, which cannot be bundled safely (documented floor: glibc >= 2.35).
+3. **Canonical resource resolution**: player and JRE discovery now resolve
+   through Tauri's resource directory first (`AppHandle::path()`
+   `.resource_dir()`), with per-layout fallbacks (NSIS `$INSTDIR`, `.app`
+   bundle, deb/rpm `/usr/lib/nebulae`, AppImage `$APPDIR`). This fixes
+   packaged-layout detection, including the macOS
+   `Contents/Resources/resources/player` path.
+
+Droid implemented these changes directly at the owner's instruction. Treat
+this addendum as part of the definition of done alongside the original
+checklist; the fresh-VM acceptance items remain mandatory.
