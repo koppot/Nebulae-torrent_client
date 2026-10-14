@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta.8] - 2026-10-14
+
 ### Added
+- **Remote Server Mode & Unraid Integration**:
+  - Headless `nebulae-server` daemon and Docker container bridging rTorrent RPC/SCGI to the Nebulae desktop client.
+  - End-user Unraid installation guides and template (`server/nebulae-server-unraid.xml`).
+  - Remote engine adapter (`RemoteServerEngine` and `RtorrentRemoteEngine`) supporting full torrent monitoring, control, and pause/resume kill-switch flags over authenticated bearer token API.
 - **Media Station & Local Title Parser (WS9)**:
   - Implemented local release title parser (`MediaTitleParser`) extracting clean titles, release years, resolutions, source formats, video codecs, audio standards, and editions without cloud mandates.
   - Enriched `TorrentItem` model with optional `media_meta` containing parsed release attributes.
