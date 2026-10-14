@@ -491,9 +491,7 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
                 $f.SelectedPath
             }
             "#;
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", script])
-                .output()
+            let output = crate::utils::process::run_hidden_powershell(script)
                 .map_err(|e| format!("Failed to open folder picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
@@ -543,9 +541,7 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
                 $f.FileName
             }
             "#;
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", script])
-                .output()
+            let output = crate::utils::process::run_hidden_powershell(script)
                 .map_err(|e| format!("Failed to open file picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
@@ -599,9 +595,7 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
                 $f.FileName
             }
             "#;
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", script])
-                .output()
+            let output = crate::utils::process::run_hidden_powershell(script)
                 .map_err(|e| format!("Failed to open file picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() {
@@ -787,9 +781,7 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
                 $f.SelectedPath
             }
             "#;
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", script])
-                .output()
+            let output = crate::utils::process::run_hidden_powershell(script)
                 .map_err(|e| format!("Failed to open directory picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() {

@@ -30,7 +30,7 @@ pub fn open_logs_folder(paths: State<Arc<AppPaths>>) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
+        crate::utils::process::create_hidden_command("explorer")
             .arg(logs_dir)
             .spawn()
             .map_err(|e| format!("Failed to open logs folder on Windows: {e}"))?;
@@ -67,7 +67,7 @@ pub fn open_external_link(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
+        crate::utils::process::create_hidden_command("explorer")
             .arg(&url)
             .spawn()
             .map_err(|e| format!("Failed to open link on Windows: {e}"))?;

@@ -50,9 +50,7 @@ $adc_proto = (Test-Path "HKCU:\Software\Classes\adc") -or (Test-Path "HKCR:\adc"
     adc_protocol = [bool]$adc_proto
 } | ConvertTo-Json -Compress
 "#;
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", script])
-            .output();
+        let output = crate::utils::process::run_hidden_powershell(script);
 
         match output {
             Ok(out) => {
@@ -198,9 +196,7 @@ Set-ItemProperty -Path "HKCU:\Software\Classes\Nebulae.adc\shell\open\command" -
             exe = exe.replace('\\', "\\\\")
         );
 
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .output()
+        let output = crate::utils::process::run_hidden_powershell(&script)
             .map_err(|e| format!("Failed to register Windows associations: {e}"))?;
 
         if !output.status.success() {
