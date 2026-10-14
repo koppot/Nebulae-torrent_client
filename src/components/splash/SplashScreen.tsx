@@ -22,8 +22,16 @@ export const SplashScreen: React.FC = () => {
     showButton: false,
   });
 
+  const [canDismiss, setCanDismiss] = useState(false);
+  const [isFadingOut, setIsFadingOut] = useState(false);
+  const canDismissRef = useRef(false);
+
   const handleDismiss = useCallback(() => {
-    setSplashDismissed(true);
+    if (!canDismissRef.current) return;
+    setIsFadingOut(true);
+    setTimeout(() => {
+      setSplashDismissed(true);
+    }, 400);
   }, [setSplashDismissed]);
 
   const handleOpenCommunity = (e: React.MouseEvent) => {
@@ -34,10 +42,11 @@ export const SplashScreen: React.FC = () => {
     });
   };
 
-  // Keyboard dismiss (Escape, Space, Enter)
+  // Keyboard dismiss (Escape, Space, Enter) - only active after 3 seconds
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === ' ' || e.key === 'Enter') {
+        if (!canDismissRef.current) return;
         e.preventDefault();
         handleDismiss();
       }
@@ -47,15 +56,23 @@ export const SplashScreen: React.FC = () => {
   }, [handleDismiss]);
 
   // UI entrance timeline matching Asian DVD Club streaming intro (watch.php)
+  // Guaranteed to play for at least 3 seconds so users can read all text
   useEffect(() => {
     if (settings.enable_splash === false) {
-      handleDismiss();
+      setSplashDismissed(true);
       return;
     }
 
+    // Minimum display guarantee of at least 3 seconds (3000ms)
+    const tMinDuration = setTimeout(() => {
+      canDismissRef.current = true;
+      setCanDismiss(true);
+    }, 3000);
+
+    // Entrance timeline: fast and elegant animation so everything is readable within the 3s window
     const tLogo = setTimeout(() => {
       setUiState((prev) => ({ ...prev, logoLive: true }));
-    }, 1800);
+    }, 200);
 
     const tFlash = setTimeout(() => {
       if (flashRef.current) {
@@ -67,34 +84,37 @@ export const SplashScreen: React.FC = () => {
           }
         }, 80);
       }
-    }, 2000);
+    }, 350);
 
     const tBrand = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showBrand: true }));
-    }, 2800);
+    }, 500);
 
     const tPresents = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showPresents: true }));
-    }, 3200);
+    }, 700);
 
     const tDivider = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showDivider: true }));
-    }, 3500);
+    }, 900);
 
     const tMessage = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showMessage: true }));
-    }, 3800);
+    }, 1100);
 
     const tButton = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showButton: true }));
-    }, 4400);
+    }, 1500);
 
-    // Auto-dismiss after full intro display (12s) if not clicked
+    // Auto-dismiss after users have had ample time (6 seconds total) to see and read what's written
     const tAutoDismiss = setTimeout(() => {
+      canDismissRef.current = true;
+      setCanDismiss(true);
       handleDismiss();
-    }, 12000);
+    }, 6000);
 
     return () => {
+      clearTimeout(tMinDuration);
       clearTimeout(tLogo);
       clearTimeout(tFlash);
       clearTimeout(tBrand);
@@ -104,7 +124,7 @@ export const SplashScreen: React.FC = () => {
       clearTimeout(tButton);
       clearTimeout(tAutoDismiss);
     };
-  }, [settings.enable_splash, handleDismiss]);
+  }, [settings.enable_splash, handleDismiss, setSplashDismissed]);
 
   // Canvas animation logic replicating ADC streaming intro
   useEffect(() => {
@@ -614,7 +634,9 @@ export const SplashScreen: React.FC = () => {
   return (
     <div
       onClick={handleDismiss}
-      className="fixed inset-0 z-50 overflow-hidden bg-[#0a0a0c] text-white select-none font-serif cursor-default"
+      className={`fixed inset-0 z-50 overflow-hidden bg-[#0a0a0c] text-white select-none font-serif cursor-default transition-opacity duration-400 ${
+        isFadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      }`}
       style={{ fontFamily: "'Cinzel', 'Trajan Pro', Georgia, serif" }}
     >
       {/* 1. Full-Window Animated Intro Canvas */}
@@ -640,14 +662,25 @@ export const SplashScreen: React.FC = () => {
             e.stopPropagation();
             handleDismiss();
           }}
-          className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-black/40 hover:bg-black/60 border border-[#d4af37]/30 hover:border-[#d4af37]/60 text-xs text-[#ECE9D8] backdrop-blur-md transition shadow-lg group cursor-pointer"
-          title="Skip intro (Esc)"
+          disabled={!canDismiss}
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs text-[#ECE9D8] backdrop-blur-md transition shadow-lg group ${
+            canDismiss
+              ? 'bg-black/40 hover:bg-black/60 border-[#d4af37]/30 hover:border-[#d4af37]/60 cursor-pointer'
+              : 'bg-black/20 border-[#d4af37]/10 opacity-60 cursor-not-allowed'
+          }`}
+          title={canDismiss ? 'Skip intro (Esc)' : 'Intro playing...'}
         >
-          <span className="font-serif tracking-widest text-[11px] uppercase">Skip</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-black/60 text-[#d4af37] border border-[#d4af37]/30 group-hover:text-white transition">
-            Esc
+          <span className="font-serif tracking-widest text-[11px] uppercase">
+            {canDismiss ? 'Skip' : 'Intro'}
           </span>
-          <X className="w-3.5 h-3.5 text-[#d4af37] group-hover:text-white transition" />
+          {canDismiss && (
+            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-black/60 text-[#d4af37] border border-[#d4af37]/30 group-hover:text-white transition">
+              Esc
+            </span>
+          )}
+          {canDismiss && (
+            <X className="w-3.5 h-3.5 text-[#d4af37] group-hover:text-white transition" />
+          )}
         </button>
       </div>
 
@@ -748,7 +781,8 @@ export const SplashScreen: React.FC = () => {
               e.stopPropagation();
               handleDismiss();
             }}
-            className="adc-cine-btn"
+            disabled={!canDismiss}
+            className={`adc-cine-btn ${!canDismiss ? 'opacity-70 cursor-not-allowed' : ''}`}
           >
             <span className="adc-cine-glow" />
             <span className="adc-cine-shine" />
