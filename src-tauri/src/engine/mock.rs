@@ -512,7 +512,7 @@ impl TorrentEngine for MockTorrentEngine {
                         name: dir_name,
                         total_bytes: total,
                         piece_size: 1_048_576,
-                        total_pieces: ((total + 1_048_575) / 1_048_576) as u32,
+                        total_pieces: total.div_ceil(1_048_576) as u32,
                         info_hash: format!("local_{:x}", total),
                         raw_info_hash: [0u8; 20],
                         is_private: false,

@@ -202,7 +202,7 @@ pub fn inspect_torrent_file(
                     name: dir_name,
                     total_bytes,
                     piece_size: 1_048_576,
-                    total_pieces: ((total_bytes + 1_048_575) / 1_048_576) as u32,
+                    total_pieces: total_bytes.div_ceil(1_048_576) as u32,
                     info_hash: format!("local_{:x}", total_bytes),
                     is_private: false,
                     comment: "Local Storage Directory".to_string(),
