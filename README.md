@@ -78,9 +78,9 @@ Detailed installation instructions covering Windows SmartScreen, macOS Gatekeepe
 
 ## Code signing policy
 
-> **SignPath Foundation application pending; signing is not yet enabled.** Windows artifacts in current releases are **unsigned** beta builds.
+> **SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.**
 
-Once the application is accepted, Windows releases will carry: **Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)**
+Windows artifacts in current releases are **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher on first run. No certificate has been issued, and no signing provider is active. The prepared SignPath integration is preserved but inactive (`docs/signpath-ci-integration.md`), and the [code signing policy](docs/code-signing-policy.md) states the provider-neutral rules that will govern signed releases under whichever provider is onboarded in the future.
 
 - Full policy (roles, approvers, verifiable-build rules, per-release manual approval): **[docs/code-signing-policy.md](docs/code-signing-policy.md)**
 - Privacy policy: **[docs/privacy.md](docs/privacy.md)**

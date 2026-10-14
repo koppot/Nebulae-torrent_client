@@ -16,9 +16,13 @@ jobs:
     permissions:
       contents: write
     env:
-      # SignPath integration values are supplied as repository VARIABLES and a SECRET
-      # after SignPath Foundation onboarding (docs/signpath-ci-integration.md).
-      # While any of them is unset, signing is skipped and builds stay UNSIGNED.
+      # Windows code signing is provider-neutral. With no provider configured
+      # (the current state: the SignPath Foundation application was declined on
+      # 2026-10-14 for insufficient project history), Windows artifacts are
+      # published UNSIGNED and the release still succeeds. To enable a provider,
+      # set the repository variable WINDOWS_SIGN_PROVIDER plus that provider's
+      # credentials; SignPath's are listed in docs/signpath-ci-integration.md.
+      WINDOWS_SIGN_PROVIDER: ${{ vars.WINDOWS_SIGN_PROVIDER }}
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
       SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
       SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
@@ -121,6 +125,9 @@ jobs:
               - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
               - `Nebulae-macOS-x64.dmg-app.zip` (direct application bundle)
             
+            ### Windows code signing status
+            Windows artifacts (`Nebulae-Setup-x64.exe`, `nebulae.exe`) in this release are **unsigned beta builds**: the SignPath Foundation application was declined (insufficient project history) and no other signing provider is configured. SmartScreen will warn on first run — see the [installation guide](docs/installation.md). Per-release status: `WINDOWS-SIGNING-STATUS.txt`; verify downloads against `SHA256SUMS.txt`.
+
             ### Verification
             All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
             
@@ -128,29 +135,38 @@ jobs:
           releaseDraft: false
           prerelease: true
 
-      # --- SignPath code signing (Windows) -------------------------------------
-      # Active only when the SignPath Foundation application is accepted and the
-      # owner has configured the four repository values listed in
-      # docs/signpath-ci-integration.md. Until then every step below is skipped
-      # and releases are published UNSIGNED.
+      # --- Windows code signing (provider-neutral gate) --------------------------
+      # WINDOWS_SIGN_PROVIDER selects the provider. Unset/'none'/'unsigned' skips
+      # every step below and publishes unsigned artifacts; 'signpath' runs the
+      # preserved SignPath block (prepared before the Foundation declined the
+      # first application on 2026-10-14 — kept inactive for a future
+      # application). A different signing service can be added later as new
+      # steps gated on the same WINDOWS_SIGNING_ENABLED condition, without
+      # redesigning this workflow. See docs/signpath-ci-integration.md.
 
-      - name: Detect SignPath configuration
+      - name: Detect signing provider configuration
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace("$env:SIGNPATH_API_TOKEN") -or
-              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_ORGANIZATION_ID") -or
-              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_PROJECT_SLUG") -or
-              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_SIGNING_POLICY_SLUG")) {
-            "SIGNPATH_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
-            Write-Host "SignPath not configured - building UNSIGNED beta artifacts (application pending)."
-          } else {
-            "SIGNPATH_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $provider = "$env:WINDOWS_SIGN_PROVIDER".Trim().ToLowerInvariant()
+          if ([string]::IsNullOrWhiteSpace($provider) -or $provider -in @('none', 'unsigned')) {
+            "WINDOWS_SIGNING_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "No signing provider configured (WINDOWS_SIGN_PROVIDER='$provider') - building UNSIGNED beta artifacts."
+          } elseif ($provider -eq 'signpath') {
+            if ([string]::IsNullOrWhiteSpace("$env:SIGNPATH_API_TOKEN") -or
+                [string]::IsNullOrWhiteSpace("$env:SIGNPATH_ORGANIZATION_ID") -or
+                [string]::IsNullOrWhiteSpace("$env:SIGNPATH_PROJECT_SLUG") -or
+                [string]::IsNullOrWhiteSpace("$env:SIGNPATH_SIGNING_POLICY_SLUG")) {
+              throw "WINDOWS_SIGN_PROVIDER=signpath but one or more SignPath values are unset (SIGNPATH_API_TOKEN secret; SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG variables). Set them all per docs/signpath-ci-integration.md, or unset WINDOWS_SIGN_PROVIDER to publish unsigned."
+            }
+            "WINDOWS_SIGNING_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
             Write-Host "SignPath configured - signing will be requested for nebulae.exe and the installer."
+          } else {
+            throw "Unsupported WINDOWS_SIGN_PROVIDER '$provider'. Supported values: none/unsigned (default), signpath."
           }
 
       - name: Upload unsigned nebulae.exe for signing
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         id: upload-exe-signing
         uses: actions/upload-artifact@v4
         with:
@@ -160,7 +176,7 @@ jobs:
           retention-days: 5
 
       - name: Submit nebulae.exe signing request (SignPath)
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
@@ -173,7 +189,7 @@ jobs:
           output-artifact-directory: 'signpath-signed/exe'
 
       - name: Install signed nebulae.exe into the build tree
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
           $signed = Get-ChildItem -Path 'signpath-signed/exe' -Recurse -Filter 'nebulae.exe' | Select-Object -First 1
@@ -184,12 +200,12 @@ jobs:
           "SIGNED_EXE_HASH=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Re-bundle NSIS installer around the signed executable
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: pnpm tauri build --bundles nsis
 
       - name: Guard - signed executable must be unchanged after bundling
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
           $hash = (Get-FileHash -Path 'src-tauri/target/release/nebulae.exe' -Algorithm SHA256).Hash
@@ -197,7 +213,7 @@ jobs:
           Write-Host "nebulae.exe in the installer tree matches the SignPath-signed binary."
 
       - name: Stage installer for signing
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
           $setup = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
@@ -205,7 +221,7 @@ jobs:
           Copy-Item $setup.FullName -Destination 'Nebulae-Setup-x64.exe' -Force
 
       - name: Upload unsigned installer for signing
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         id: upload-installer-signing
         uses: actions/upload-artifact@v4
         with:
@@ -215,7 +231,7 @@ jobs:
           retention-days: 5
 
       - name: Submit installer signing request (SignPath)
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         uses: signpath/github-action-submit-signing-request@v3
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
@@ -228,7 +244,7 @@ jobs:
           output-artifact-directory: 'signpath-signed/installer'
 
       - name: Verify Authenticode signatures and timestamps
-        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
           $signedSetup = Get-ChildItem -Path 'signpath-signed/installer' -Recurse -Filter 'Nebulae-Setup-x64.exe' | Select-Object -First 1
@@ -244,7 +260,7 @@ jobs:
           & $signtool verify /pa /all /v 'Nebulae-Setup-x64.exe'
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for Nebulae-Setup-x64.exe" }
 
-      # --- End SignPath block ---------------------------------------------------
+      # --- End Windows signing block --------------------------------------------
 
       - name: Prepare and upload named artifact (macOS)
         if: runner.os == 'macOS'
@@ -326,17 +342,27 @@ jobs:
         run: |
           $tag = if ("${{ github.event.inputs.tag_name }}") { "${{ github.event.inputs.tag_name }}" } else { "${{ github.ref_name }}" }
 
-          if ($env:SIGNPATH_ENABLED -eq 'true') {
+          if ($env:WINDOWS_SIGNING_ENABLED -eq 'true') {
             # Signed path: verify step staged Nebulae-Setup-x64.exe; nebulae.exe was staged when installed into the build tree.
             if (-not (Test-Path 'Nebulae-Setup-x64.exe')) { throw "Signed installer missing before upload." }
             if (-not (Test-Path 'nebulae.exe')) { throw "Signed nebulae.exe missing before upload." }
             Write-Host "Publishing SIGNED Windows artifacts."
+            @(
+              "Windows code signing status: SIGNED"
+              "Provider: $env:WINDOWS_SIGN_PROVIDER"
+            ) | Out-File -FilePath 'WINDOWS-SIGNING-STATUS.txt' -Encoding utf8
           } else {
-            Write-Host "SIGNPATH not configured - publishing UNSIGNED beta artifacts."
+            Write-Host "No signing provider configured - publishing UNSIGNED beta artifacts."
             $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
             if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
             $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
             if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
+            @(
+              "Windows code signing status: UNSIGNED"
+              "Provider: none"
+              "SignPath Foundation application declined (2026-10-14, insufficient project history); no other signing provider is configured."
+              "These are beta builds: SmartScreen will warn on first run. Verify downloads against SHA256SUMS.txt."
+            ) | Out-File -FilePath 'WINDOWS-SIGNING-STATUS.txt' -Encoding utf8
           }
 
           # SHA-256 checksums are always generated from the FINAL (signed when enabled) files.
@@ -348,6 +374,11 @@ jobs:
             } else {
               Write-Host "Skipping $name - not produced."
             }
+          }
+
+          # Machine-readable signing status for this release.
+          if (Test-Path 'WINDOWS-SIGNING-STATUS.txt') {
+            gh release upload "$tag" 'WINDOWS-SIGNING-STATUS.txt' --clobber
           }
 
           # Stage or re-sign Tauri updater signature (.sig)
@@ -474,6 +505,7 @@ jobs:
             Nebulae-Linux*
             nebulae-linux*
             nebulae.exe*
+            WINDOWS-SIGNING-STATUS.txt
             *.deb
             *.rpm
             *.AppImage*

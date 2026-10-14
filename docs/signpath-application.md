@@ -1,6 +1,8 @@
-# SignPath Foundation application — Nebulae (SUBMITTED 2026-10-14)
+# SignPath Foundation application — Nebulae (submitted 2026-10-14, DECLINED)
 
-> **Status: submitted via the official form at <https://signpath.org/apply> on 2026-10-14 ("Form submitted - Thank you, we'll be in touch soon."). Awaiting SignPath Foundation response to admin@dimateploff.com. No acceptance exists yet, and no signing is enabled.**
+> **Outcome: DECLINED by SignPath Foundation (response received 2026-10-14) — insufficient project history.**
+>
+> The application was submitted via the official form at <https://signpath.org/apply> on 2026-10-14 ("Form submitted - Thank you, we'll be in touch soon."). After the decline: no acceptance exists, no certificate was issued, no signing is enabled, and no SignPath relationship is active. This document and the prepared CI integration ([signpath-ci-integration.md](signpath-ci-integration.md)) are preserved unchanged as the basis for a future application once the project has more verifiable history. Windows releases continue as unsigned beta builds.
 
 ## Application data (mapped to the official form fields)
 

@@ -61,7 +61,7 @@ Access to diagnostic data is guarded by the **Show Advanced Diagnostics** sectio
 
 ## 6. Automatic Software Updates & Network Telemetry Boundaries
 
-Nebulae incorporates an optional background auto-update subsystem designed in strict alignment with our privacy architecture and the SignPath Foundation requirements:
+Nebulae incorporates an optional background auto-update subsystem designed in strict alignment with our privacy architecture and the silent-update consent conditions recorded in our [code signing policy](code-signing-policy.md) (originally drafted against the SignPath Foundation OSS terms; enforced regardless of which signing provider, if any, is onboarded):
 
 - **Default State & One-Time Consent**: Auto-updates are enabled by default (`auto_update_enabled: true`) to ensure security patches, cryptographic updates, and community tracker compatibility reach users promptly. A clear toggle is provided on first run and in **Settings → Behavior**.
 - **Network Scope & Telemetry**:

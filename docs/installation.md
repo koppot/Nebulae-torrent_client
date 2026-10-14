@@ -82,7 +82,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 
 #### Code signing policy
 
-> **SignPath Foundation application pending; signing is not yet enabled.** Windows artifacts are currently **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher. See the [Code signing policy](code-signing-policy.md) for the policy that will govern signed releases. Once accepted: Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+> **SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.** SmartScreen will warn about an unrecognized publisher; see the notice below, and verify downloads against `SHA256SUMS.txt`. The [Code signing policy](code-signing-policy.md) describes the provider-neutral rules that will govern signed releases once a provider is onboarded; no signing provider is active today, and no signature is claimed for any Windows artifact.
 
 ### Windows SmartScreen & Antivirus Notice
 
@@ -127,7 +127,7 @@ When Nebulae launches for the first time, Windows Defender Firewall will prompt 
 
 ### Updating Nebulae on Windows
 
-Nebulae includes an integrated, silent background updater compliant with SignPath Foundation guidelines:
+Nebulae includes an integrated, silent background updater designed around explicit user consent:
 
 - **Automatic Silent Updates (Recommended & Default)**: When *"Automatically keep Nebulae updated (recommended)"* is enabled, Nebulae checks for signed releases on startup, downloads updates quietly in the background without any popups, and stages them to apply automatically when you naturally quit the application. Active torrent downloads and seeding swarms are never interrupted.
 - **Disabling Automatic Updates**: You can disable auto-updates at any time in **Settings → Options (Behavior)**. When disabled, Nebulae makes zero network requests or DNS queries to the update server.
