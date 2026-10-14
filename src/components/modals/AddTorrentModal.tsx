@@ -22,7 +22,7 @@ export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource } =
     useUiStore();
   const { addTorrent, inspectTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
-  const { settings, addRecentDirectory } = useSettingsStore();
+  const { settings, addRecentDirectory, engineMode } = useSettingsStore();
 
   const [torrentSource, setTorrentSource] = useState('');
   const [downloadDir, setDownloadDir] = useState(settings.download_directory);
@@ -543,15 +543,17 @@ export const AddTorrentModal: React.FC = () => {
               />
               <span className="text-white">Start torrent immediately</span>
             </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={sequentialDownload}
-                onChange={(e) => setSequentialDownload(e.target.checked)}
-                className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-              />
-              <span className="text-white">Download in sequential order (media stream preview)</span>
-            </label>
+            {engineMode !== 'rtorrent_server' && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sequentialDownload}
+                  onChange={(e) => setSequentialDownload(e.target.checked)}
+                  className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                />
+                <span className="text-white">Download in sequential order (media stream preview)</span>
+              </label>
+            )}
           </div>
 
           {/* Error Message */}

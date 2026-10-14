@@ -52,13 +52,21 @@ pub struct TorrentItem {
     pub total_pieces: u32,
     pub sequential_download: bool,
     pub first_last_piece_prio: bool,
+    #[serde(default)]
     pub super_seeding: bool,
+    #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub files: Vec<TorrentFileItem>,
+    #[serde(default)]
     pub trackers: Vec<TorrentTrackerItem>,
+    #[serde(default)]
     pub download_limit_kib: u32,
+    #[serde(default)]
     pub upload_limit_kib: u32,
+    #[serde(default)]
     pub ratio_limit: f32,
+    #[serde(default)]
     pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import {
   Trash2,
   X,
@@ -13,6 +14,7 @@ import {
 export const DeleteTorrentModal: React.FC = () => {
   const { deleteModalTarget, setDeleteModalTarget } = useUiStore();
   const { removeTorrent } = useTorrentStore();
+  const { engineMode } = useSettingsStore();
 
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -99,22 +101,25 @@ export const DeleteTorrentModal: React.FC = () => {
             </span>
           </div>
 
-          {/* qBittorrent Checkbox Option */}
-          <label className="flex items-center gap-2.5 p-2 rounded hover:bg-[#1a1a1a] cursor-pointer transition select-none">
-            <input
-              type="checkbox"
-              checked={deleteFiles}
-              onChange={(e) => setDeleteFiles(e.target.checked)}
-              disabled={isDeleting}
-              className="w-4 h-4 rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-[#e50914] focus:ring-offset-0 cursor-pointer accent-[#e50914]"
-            />
-            <span className="text-xs font-medium text-white">
-              Also delete the files on the hard disk
-            </span>
-          </label>
+          {/* qBittorrent Checkbox Option — rtorrent (server mode) erases the
+              torrent only and refuses data deletion over RPC */}
+          {engineMode !== 'rtorrent_server' && (
+            <label className="flex items-center gap-2.5 p-2 rounded hover:bg-[#1a1a1a] cursor-pointer transition select-none">
+              <input
+                type="checkbox"
+                checked={deleteFiles}
+                onChange={(e) => setDeleteFiles(e.target.checked)}
+                disabled={isDeleting}
+                className="w-4 h-4 rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-[#e50914] focus:ring-offset-0 cursor-pointer accent-[#e50914]"
+              />
+              <span className="text-xs font-medium text-white">
+                Also delete the files on the hard disk
+              </span>
+            </label>
+          )}
 
           {/* Warning Banner when Delete Files is checked */}
-          {deleteFiles && (
+          {deleteFiles && engineMode !== 'rtorrent_server' && (
             <div className="p-3 rounded bg-[#261010] border border-[#e50914]/50 flex items-start gap-2.5 text-xs text-red-200">
               <AlertTriangle className="w-4 h-4 text-[#e50914] flex-shrink-0 mt-0.5" />
               <div className="leading-snug">

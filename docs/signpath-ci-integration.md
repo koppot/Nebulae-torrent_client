@@ -2,7 +2,7 @@
 
 This document records exactly what is prepared in `.github/workflows/release.yml` and which values the repository owner must supply **after SignPath Foundation onboarding**. No real SignPath identifiers exist yet; none are invented here.
 
-> **Status: SignPath Foundation application pending.** The signing steps in the release workflow are gated and remain inactive until the real values below are configured. Beta releases continue to publish **unsigned** artifacts.
+> **Status: SignPath Foundation application declined (2026-10-14, insufficient project history); this integration is preserved but inactive.** The signing steps in the release workflow are gated behind the repository variable `WINDOWS_SIGN_PROVIDER` and stay skipped until a provider is onboarded. Beta releases continue to publish **unsigned** artifacts, and missing SignPath credentials never break Windows builds — with no provider configured, the release pipeline succeeds and publishes unsigned binaries.
 
 ## Official references
 

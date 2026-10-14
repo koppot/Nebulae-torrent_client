@@ -25,6 +25,8 @@ pub struct EngineStatus {
 pub trait TorrentEngine: Send + Sync {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String>;
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String>;
+    /// Add a torrent from raw .torrent bencode bytes (in-memory upload, e.g.
+    /// drag-and-drop without a file path).
     fn add_torrent_from_bytes(
         &self,
         bytes: &[u8],

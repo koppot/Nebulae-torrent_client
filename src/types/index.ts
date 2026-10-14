@@ -203,6 +203,11 @@ export interface UserSettings {
   coalesce_reads_writes: boolean;
   embedded_tracker_enabled: boolean;
   embedded_tracker_port: number;
+
+  // 9. rTorrent Server (Nebulae Server bridge) — applies on app restart
+  rtorrent_server_enabled: boolean;
+  rtorrent_server_url: string;
+  rtorrent_server_token: string;
 }
 
 export interface CreateTorrentParams {

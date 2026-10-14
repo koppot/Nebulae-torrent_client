@@ -7,7 +7,7 @@ pub mod utils;
 
 use commands::diagnostics::EngineInitState;
 use db::Database;
-use engine::SharedEngine;
+use engine::{RemoteServerEngine, SharedEngine};
 use std::sync::Arc;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
@@ -50,90 +50,110 @@ pub fn run() {
 
     let listening_port = settings.listening_port;
 
-    // 4. Initialize production engine (RqbitTorrentEngine)
-    // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
+    let rtorrent_server_mode =
+        settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty();
+
     let mut real_engine_opt = None;
     let mut init_error: Option<String> = None;
 
-    match engine::RqbitTorrentEngine::new(
-        Arc::clone(&paths),
-        Arc::clone(&db),
-        download_dir.clone(),
-        listening_port,
-    ) {
-        Ok(real_engine) => {
-            SafeLogger::log_to_file(
-                &paths.logs_dir,
-                "INFO",
-                &format!("Initialized librqbit production engine on port {listening_port}"),
-            );
-            real_engine_opt = Some(real_engine);
-        }
-        Err(e) => {
-            SafeLogger::log_to_file(
-                &paths.logs_dir,
-                "WARN",
-                &format!("First engine initialization attempt failed: {e}. Retrying in 500ms..."),
-            );
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            match engine::RqbitTorrentEngine::new(
-                Arc::clone(&paths),
-                Arc::clone(&db),
-                download_dir,
-                listening_port,
-            ) {
-                Ok(real_engine) => {
-                    SafeLogger::log_to_file(
-                        &paths.logs_dir,
-                        "INFO",
-                        &format!("Initialized librqbit production engine on retry on port {listening_port}"),
-                    );
-                    real_engine_opt = Some(real_engine);
-                }
-                Err(retry_err) => {
-                    SafeLogger::log_to_file(
-                        &paths.logs_dir,
-                        "ERROR",
-                        &format!("Failed to initialize real engine after retry: {retry_err}"),
-                    );
-                    init_error = Some(retry_err);
+    let engine: SharedEngine = if rtorrent_server_mode {
+        SafeLogger::log_to_file(
+            &paths.logs_dir,
+            "INFO",
+            &format!(
+                "Nebulae starting in rtorrent server mode: {}",
+                settings.rtorrent_server_url.trim()
+            ),
+        );
+        Arc::new(RemoteServerEngine::new(
+            settings.rtorrent_server_url.clone(),
+            settings.rtorrent_server_token.clone(),
+        ))
+    } else {
+        // 4. Initialize production engine (RqbitTorrentEngine)
+        // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
+        match engine::RqbitTorrentEngine::new(
+            Arc::clone(&paths),
+            Arc::clone(&db),
+            download_dir.clone(),
+            listening_port,
+        ) {
+            Ok(real_engine) => {
+                SafeLogger::log_to_file(
+                    &paths.logs_dir,
+                    "INFO",
+                    &format!("Initialized librqbit production engine on port {listening_port}"),
+                );
+                real_engine_opt = Some(real_engine);
+            }
+            Err(e) => {
+                SafeLogger::log_to_file(
+                    &paths.logs_dir,
+                    "WARN",
+                    &format!(
+                        "First engine initialization attempt failed: {e}. Retrying in 500ms..."
+                    ),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                match engine::RqbitTorrentEngine::new(
+                    Arc::clone(&paths),
+                    Arc::clone(&db),
+                    download_dir,
+                    listening_port,
+                ) {
+                    Ok(real_engine) => {
+                        SafeLogger::log_to_file(
+                            &paths.logs_dir,
+                            "INFO",
+                            &format!("Initialized librqbit production engine on retry on port {listening_port}"),
+                        );
+                        real_engine_opt = Some(real_engine);
+                    }
+                    Err(retry_err) => {
+                        SafeLogger::log_to_file(
+                            &paths.logs_dir,
+                            "ERROR",
+                            &format!("Failed to initialize real engine after retry: {retry_err}"),
+                        );
+                        init_error = Some(retry_err);
+                    }
                 }
             }
         }
-    }
 
-    let allow_mock = {
-        #[cfg(debug_assertions)]
-        {
-            std::env::var("NEBULAE_FORCE_MOCK_ENGINE").as_deref() == Ok("1")
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            false
-        }
-    };
+        let allow_mock = {
+            #[cfg(debug_assertions)]
+            {
+                std::env::var("NEBULAE_FORCE_MOCK_ENGINE").as_deref() == Ok("1")
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                false
+            }
+        };
 
-    let engine: SharedEngine = if let Some(real_engine) = real_engine_opt {
-        Arc::new(real_engine)
-    } else if allow_mock {
-        SafeLogger::log_to_file(
-            &paths.logs_dir,
-            "WARN",
-            "NEBULAE_FORCE_MOCK_ENGINE=1 enabled: using MockTorrentEngine in debug environment",
-        );
-        Arc::new(engine::MockTorrentEngine::new())
-    } else {
-        let err_msg = init_error
-            .clone()
-            .unwrap_or_else(|| "Engine initialization failed".to_string());
-        SafeLogger::log_to_file(
-            &paths.logs_dir,
-            "ERROR",
-            &format!(
-                "Mock engine disallowed in production/release. Entering recovery state: {err_msg}"
-            ),
-        );
-        Arc::new(engine::FailedTorrentEngine::new(err_msg))
+        if let Some(real_engine) = real_engine_opt {
+            Arc::new(real_engine)
+        } else if allow_mock {
+            SafeLogger::log_to_file(
+                &paths.logs_dir,
+                "WARN",
+                "NEBULAE_FORCE_MOCK_ENGINE=1 enabled: using MockTorrentEngine in debug environment",
+            );
+            Arc::new(engine::MockTorrentEngine::new())
+        } else {
+            let err_msg = init_error
+                .clone()
+                .unwrap_or_else(|| "Engine initialization failed".to_string());
+            SafeLogger::log_to_file(
+                &paths.logs_dir,
+                "ERROR",
+                &format!(
+                    "Mock engine disallowed in production/release. Entering recovery state: {err_msg}"
+                ),
+            );
+            Arc::new(engine::FailedTorrentEngine::new(err_msg))
+        }
     };
 
     let engine_init_state = EngineInitState(Arc::new(std::sync::Mutex::new(init_error)));
@@ -159,6 +179,13 @@ pub fn run() {
         }
     }
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
+    // The GUI hides options the active engine cannot fulfill (e.g. features
+    // rtorrent does not have) based on this session-wide mode.
+    let engine_mode = commands::settings::EngineMode(if rtorrent_server_mode {
+        "rtorrent_server".to_string()
+    } else {
+        "local".to_string()
+    });
 
     let engine_for_seeding = Arc::clone(&engine);
     let db_for_seeding = Arc::clone(&db);
@@ -178,6 +205,7 @@ pub fn run() {
         .manage(db.clone())
         .manage(engine)
         .manage(engine_init_state)
+        .manage(engine_mode)
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
         .setup(move |app| {
@@ -301,6 +329,8 @@ pub fn run() {
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
+            commands::settings::get_engine_mode,
+            commands::settings::test_rtorrent_server_connection,
             // Torrent & Engine
             commands::torrent::list_torrents,
             commands::torrent::add_torrent,

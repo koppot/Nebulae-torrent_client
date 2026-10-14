@@ -12,6 +12,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "nebulae"
 path = "src/main.rs"
 
+[[bin]]
+name = "nebulae-server"
+path = "src/bin/nebulae-server.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -32,10 +36,13 @@ url = "2"
 sha1 = "0.11.0"
 serde_bencode = "0.2.4"
 serde_bytes = "0.11.19"
-reqwest = "0.13.5"
+reqwest = { version = "0.13.5", features = ["blocking", "json"] }
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
 keyring = "3"
 network-interface = "2.0.5"
+roxmltree = "0.20"
+base64 = "0.22"
+axum = "0.8"
 tauri-plugin-process = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>nebulae-server</Name>
+  <Repository>ghcr.io/koppot/nebulae-server:beta</Repository>
+  <Registry>https://ghcr.io/koppot/nebulae-server</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/koppot/Nebulae-torrent_client/issues</Support>
+  <Project>https://github.com/koppot/Nebulae-torrent_client</Project>
+  <Overview>
+    Nebulae Server runs rtorrent plus the headless Nebulae engine bridge on your
+    Unraid server. Install the original Nebulae desktop app on your workstation,
+    then point it at this container (Settings - Server): the exact same native
+    interface drives the torrents on the server. There is no web UI by design.
+    Beta: the bridge serves plain HTTP on your LAN; keep it inside a trusted network.
+  </Overview>
+  <Category>Downloaders:</Category>
+  <WebUI>http://[IP]:[PORT:9174]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/koppot/Nebulae-torrent_client/nebulae-server/server/nebulae-server-unraid.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/koppot/Nebulae-torrent_client/nebulae-server/src/assets/icon.png</Icon>
+  <Config Name="API Token" Target="NEBULAE_SERVER_TOKEN" Default="" Mode="" Description="Bearer token the Nebulae desktop app must present (pick a long random string)" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Data directory" Target="/data" Default="/mnt/user/appdata/nebulae-server" Mode="rw" Description="Downloads, session state and watch folder" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Bridge port" Target="9174" Default="9174" Mode="tcp" Description="Nebulae bridge API (desktop app connects here)" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="BitTorrent port" Target="6881" Default="6881" Mode="tcp" Description="BitTorrent peer traffic (TCP)" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="DHT port" Target="6881" Default="6881" Mode="udp" Description="DHT (UDP)" Type="Port" Display="always" Required="false" Mask="false"/>
+</Container>

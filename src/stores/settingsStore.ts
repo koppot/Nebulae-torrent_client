@@ -5,7 +5,11 @@ import { invoke } from '@tauri-apps/api/core';
 interface SettingsState {
   settings: UserSettings;
   isLoading: boolean;
+  /** Session engine mode reported by the backend: 'local' (librqbit/mock)
+   *  or 'rtorrent_server'. The GUI hides options the engine cannot fulfill. */
+  engineMode: 'local' | 'rtorrent_server';
   loadSettings: () => Promise<void>;
+  fetchEngineMode: () => Promise<void>;
   saveSettings: (updated: Partial<UserSettings>) => Promise<void>;
   addRecentDirectory: (dir: string) => Promise<void>;
 }
@@ -130,11 +134,28 @@ export const defaultSettings: UserSettings = {
   coalesce_reads_writes: true,
   embedded_tracker_enabled: false,
   embedded_tracker_port: 9000,
+
+  // 9. rTorrent Server (Nebulae Server bridge)
+  rtorrent_server_enabled: false,
+  rtorrent_server_url: '',
+  rtorrent_server_token: '',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaultSettings,
   isLoading: false,
+  engineMode: 'local',
+
+  fetchEngineMode: async () => {
+    try {
+      const mode = await invoke<string>('get_engine_mode');
+      if (mode === 'rtorrent_server' || mode === 'local') {
+        set({ engineMode: mode });
+      }
+    } catch {
+      // Keep the default; the GUI stays fully enabled.
+    }
+  },
 
   loadSettings: async () => {
     set({ isLoading: true });

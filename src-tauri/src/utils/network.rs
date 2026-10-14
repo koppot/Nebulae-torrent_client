@@ -71,6 +71,6 @@ mod tests {
     fn test_list_interfaces_runs() {
         let interfaces = list_network_interfaces();
         // Should execute without panicking on any platform
-        assert!(interfaces.len() >= 1);
+        assert!(!interfaces.is_empty());
     }
 }

@@ -26,7 +26,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
-  const { loadSettings } = useSettingsStore();
+  const { loadSettings, fetchEngineMode } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
@@ -44,6 +44,7 @@ export const App: React.FC = () => {
       .catch(() => {});
 
     loadSettings();
+    fetchEngineMode();
     fetchTorrents();
     runDoctorTest();
     fetchVpnStatus();
@@ -179,7 +180,7 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       for (const un of unlistenFns) un();
     };
-  }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);
+  }, [loadSettings, fetchEngineMode, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();

@@ -460,15 +460,6 @@ impl MockTorrentEngine {
 
         Ok(new_id)
     }
-
-    pub fn add_torrent_from_bytes(
-        &self,
-        bytes: &[u8],
-        download_dir: Option<&str>,
-    ) -> Result<String, String> {
-        let parsed = ParsedTorrent::parse_bytes(bytes)?;
-        self.add_parsed_torrent(parsed, download_dir)
-    }
 }
 
 impl TorrentEngine for MockTorrentEngine {

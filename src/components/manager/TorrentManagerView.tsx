@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
 import { TorrentFileItem } from '../../types';
 import {
@@ -164,6 +165,10 @@ export const TorrentManagerView: React.FC = () => {
   } = useUiStore();
 
   const { peers, fetchPeers } = usePeeringStore();
+  const { engineMode } = useSettingsStore();
+  // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
+  // fulfill instead of offering actions that only produce errors.
+  const isRemoteServer = engineMode === 'rtorrent_server';
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -504,15 +509,17 @@ export const TorrentManagerView: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
-              <button
-                type="button"
-                onClick={() => openRenameFolderModal(node.path, node.name)}
-                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                title={`Rename Folder "${node.name}" on disk`}
-              >
-                <Edit2 className="w-3 h-3 text-[#e50914]" />
-                <span>Rename Folder</span>
-              </button>
+              {!isRemoteServer && (
+                <button
+                  type="button"
+                  onClick={() => openRenameFolderModal(node.path, node.name)}
+                  className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                  title={`Rename Folder "${node.name}" on disk`}
+                >
+                  <Edit2 className="w-3 h-3 text-[#e50914]" />
+                  <span>Rename Folder</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -557,7 +564,7 @@ export const TorrentManagerView: React.FC = () => {
             <option value={2}>High Priority</option>
             <option value={3}>Maximum Priority</option>
           </select>
-          {isMediaFileName(file.name) && (
+          {!isRemoteServer && isMediaFileName(file.name) && (
             <button
               type="button"
               onClick={() => {
@@ -571,15 +578,17 @@ export const TorrentManagerView: React.FC = () => {
               <span>Play</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => openRenameFileModal(file.index, file.name)}
-            className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-            title={`Rename File "${node.name}" on disk`}
-          >
-            <Edit2 className="w-3 h-3 text-[#e50914]" />
-            <span>Rename File</span>
-          </button>
+          {!isRemoteServer && (
+            <button
+              type="button"
+              onClick={() => openRenameFileModal(file.index, file.name)}
+              className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+              title={`Rename File "${node.name}" on disk`}
+            >
+              <Edit2 className="w-3 h-3 text-[#e50914]" />
+              <span>Rename File</span>
+            </button>
+          )}
         </div>
       </div>
     );
@@ -705,7 +714,7 @@ export const TorrentManagerView: React.FC = () => {
                     key={t.id}
                     onClick={() => setSelectedId(t.id)}
                     onContextMenu={(e) => handleContextMenu(e, t.id)}
-                    onDoubleClick={openRenameTorrentModal}
+                    onDoubleClick={isRemoteServer ? undefined : openRenameTorrentModal}
                     className={`cursor-pointer transition select-none ${
                       isSelected
                         ? 'bg-[#1f1f1f] border-l-2 border-[#e50914] text-white'
@@ -836,82 +845,86 @@ export const TorrentManagerView: React.FC = () => {
                         {selectedTorrent.info_hash}
                       </span>
                     </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Speed Limits
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-white text-[11px]">
-                          {selectedTorrent.download_limit_kib > 0 ? `DL: ${selectedTorrent.download_limit_kib}K` : 'DL: Max'} / {selectedTorrent.upload_limit_kib > 0 ? `UL: ${selectedTorrent.upload_limit_kib}K` : 'UL: Max'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setLimitsModal({
-                              isOpen: true,
-                              id: selectedTorrent.id,
-                              dlKib: selectedTorrent.download_limit_kib,
-                              ulKib: selectedTorrent.upload_limit_kib,
-                              ratioLimit: selectedTorrent.ratio_limit,
-                            })
-                          }
-                          className="px-1.5 py-0.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[10px] text-white flex items-center gap-1 transition"
-                        >
-                          <Sliders className="w-3 h-3 text-[#e50914]" />
-                          <span>Edit</span>
-                        </button>
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Swarm Controls
-                      </span>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => toggleSequential(selectedTorrent.id)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
-                            selectedTorrent.sequential_download
-                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
-                          }`}
-                          title="Sequential Downloading (Stream in order)"
-                        >
-                          Sequential: {selectedTorrent.sequential_download ? 'ON' : 'OFF'}
-                        </button>
+                    {!isRemoteServer && (
+                      <>
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                            Speed Limits
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-white text-[11px]">
+                              {selectedTorrent.download_limit_kib > 0 ? `DL: ${selectedTorrent.download_limit_kib}K` : 'DL: Max'} / {selectedTorrent.upload_limit_kib > 0 ? `UL: ${selectedTorrent.upload_limit_kib}K` : 'UL: Max'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLimitsModal({
+                                  isOpen: true,
+                                  id: selectedTorrent.id,
+                                  dlKib: selectedTorrent.download_limit_kib,
+                                  ulKib: selectedTorrent.upload_limit_kib,
+                                  ratioLimit: selectedTorrent.ratio_limit,
+                                })
+                              }
+                              className="px-1.5 py-0.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[10px] text-white flex items-center gap-1 transition"
+                            >
+                              <Sliders className="w-3 h-3 text-[#e50914]" />
+                              <span>Edit</span>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                            Swarm Controls
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleSequential(selectedTorrent.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                                selectedTorrent.sequential_download
+                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                              }`}
+                              title="Sequential Downloading (Stream in order)"
+                            >
+                              Sequential: {selectedTorrent.sequential_download ? 'ON' : 'OFF'}
+                            </button>
 
-                        <button
-                          type="button"
-                          onClick={() => toggleFirstLast(selectedTorrent.id)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
-                            selectedTorrent.first_last_piece_prio
-                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
-                          }`}
-                          title="Prioritize first and last piece for container headers"
-                        >
-                          1st/Last: {selectedTorrent.first_last_piece_prio ? 'ON' : 'OFF'}
-                        </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleFirstLast(selectedTorrent.id)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                                selectedTorrent.first_last_piece_prio
+                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                              }`}
+                              title="Prioritize first and last piece for container headers"
+                            >
+                              1st/Last: {selectedTorrent.first_last_piece_prio ? 'ON' : 'OFF'}
+                            </button>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            toggleSuperSeeding(selectedTorrent.id);
-                            setSuperSeedingNotice(
-                              'Observational: Super-Seeding (BEP 16) is not supported by upstream librqbit 9.0.1. Tracked in docs/upstream-issues/rqbit-super-seeding.md.'
-                            );
-                          }}
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
-                            selectedTorrent.super_seeding
-                              ? 'bg-pink-500/20 text-pink-400 border-pink-500/40'
-                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
-                          }`}
-                          title="Super-Seeding Mode (Initial Seeding / BEP 16)"
-                        >
-                          Super-Seed: {selectedTorrent.super_seeding ? 'ON' : 'OFF'}
-                        </button>
-                      </div>
-                    </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                toggleSuperSeeding(selectedTorrent.id);
+                                setSuperSeedingNotice(
+                                  'Observational: Super-Seeding (BEP 16) is not supported by upstream librqbit 9.0.1. Tracked in docs/upstream-issues/rqbit-super-seeding.md.'
+                                );
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                                selectedTorrent.super_seeding
+                                  ? 'bg-pink-500/20 text-pink-400 border-pink-500/40'
+                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                              }`}
+                              title="Super-Seeding Mode (Initial Seeding / BEP 16)"
+                            >
+                              Super-Seed: {selectedTorrent.super_seeding ? 'ON' : 'OFF'}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ) : activeManagerTab === 'files' ? (
@@ -1043,7 +1056,7 @@ export const TorrentManagerView: React.FC = () => {
                                 <option value={2}>High Priority</option>
                                 <option value={3}>Maximum Priority</option>
                               </select>
-                              {isMediaFileName(file.name) && (
+                              {!isRemoteServer && isMediaFileName(file.name) && (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1057,15 +1070,17 @@ export const TorrentManagerView: React.FC = () => {
                                   <span>Play</span>
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => openRenameFileModal(file.index, file.name)}
-                                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                                title="Rename File on Disk"
-                              >
-                                <Edit2 className="w-3 h-3 text-[#e50914]" />
-                                <span>Rename</span>
-                              </button>
+                              {!isRemoteServer && (
+                                <button
+                                  type="button"
+                                  onClick={() => openRenameFileModal(file.index, file.name)}
+                                  className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                                  title="Rename File on Disk"
+                                >
+                                  <Edit2 className="w-3 h-3 text-[#e50914]" />
+                                  <span>Rename</span>
+                                </button>
+                              )}
                             </div>
                           </div>
                         ))
@@ -1261,16 +1276,18 @@ export const TorrentManagerView: React.FC = () => {
             <span>Pause</span>
           </button>
           <div className="h-[1px] bg-[#333333] my-1" />
-          <button
-            onClick={() => {
-              openRenameTorrentModal();
-              setContextMenu((prev) => ({ ...prev, visible: false }));
-            }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-            <span>Rename...</span>
-          </button>
+          {!isRemoteServer && (
+            <button
+              onClick={() => {
+                openRenameTorrentModal();
+                setContextMenu((prev) => ({ ...prev, visible: false }));
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+              <span>Rename...</span>
+            </button>
+          )}
           <button
             onClick={() => {
               forceRecheck(contextMenu.torrentId);
