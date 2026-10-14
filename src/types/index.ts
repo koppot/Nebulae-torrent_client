@@ -291,6 +291,18 @@ export interface AssociationStatus {
   message: string;
 }
 
+export interface DiscPlayerStatus {
+  player_type: string;
+  player_name: string;
+  player_path?: string | null;
+  supports_dvd_menu: boolean;
+  supports_bluray_menu: boolean;
+  java_home?: string | null;
+  has_jvm: boolean;
+  bd_j_supported: boolean;
+  note?: string | null;
+}
+
 export * from './peering';
 export * from './connectivity';
 export * from './vpn';

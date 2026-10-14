@@ -40,6 +40,10 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
    - [Linux Desktop Integration & File Pickers](#linux-desktop-integration)
    - [Uninstalling on Linux](#uninstalling-on-linux)
 6. [Isolated Internal Storage & Diagnostics](#5-isolated-internal-storage--diagnostics)
+7. [Optical Disc Cinema & Media Playback](#6-optical-disc-cinema--media-playback)
+   - [Zero-Dependency Bundled Player](#zero-dependency-bundled-player)
+   - [UHD Blu-ray & Commercial Discs (AACS Limitation)](#uhd-blu-ray--commercial-discs-aacs-limitation)
+   - [Java Runtime & BD-J Navigation](#java-runtime--bd-j-navigation)
 
 ---
 
@@ -404,3 +408,26 @@ To maintain a clean and reliable interface, Nebulae strictly isolates technical 
    - **Clear Internal Cache**: Safely purges temporary piece caches.
    - **Reset Settings to Factory Defaults**: Clears all user preferences.
    - **Export Logs (Sanitized)**: Displays logs with all magnet links and private URLs redacted.
+
+---
+
+## 6. Optical Disc Cinema & Media Playback
+
+Nebulae includes a dedicated media station mode designed specifically for Asian DVD Club's optical archive library, featuring interactive menu playback for DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD Blu-ray releases.
+
+### Zero-Dependency Bundled Player
+
+Beginning with the optical disc player bundle update:
+- **No manual player installation required:** Nebulae packages an embedded, isolated `mpv` player engine compiled with `libdvdnav` and `libbluray`. Users do not need to install VLC, system mpv, or any third-party software on a clean machine to play disc structures with interactive menus.
+- **Probe Order:** When launching disc playback, Nebulae probes the bundled isolated player first, followed by system `mpv`, VLC, and IINA (on macOS), before falling back to the operating system's default media player.
+- **Player Status:** Current player detection and capability details can be inspected at any time in **Settings → Media**.
+
+### UHD Blu-ray & Commercial Discs (AACS Limitation)
+
+- **Unprotected & Raw Home Rips:** Nebulae supports playback and interactive navigation of unprotected DVD, Blu-ray, and 4K UHD disc structures and community raw image dumps.
+- **Commercial Pressed Discs (AACS Limitation):** Nebulae does **not** ship or support DRM circumvention, CSS decrypters, AACS keys, key databases, or `libaacs`. Commercial encrypted retail discs must be decrypted prior to playback.
+
+### Java Runtime & BD-J Navigation
+
+- **BD-J Interactive Menus:** Dynamic Java-based interactive menus (common on modern Blu-ray and 4K UHD discs) utilize a standard Java Runtime Environment (JRE) if installed on your system (`JAVA_HOME`).
+- **Graceful Fallback:** If no JVM is installed on your computer, Nebulae automatically falls back to clean stream playback and standard title/playlist navigation with an informative log line, without crashing or presenting error dialogs.

@@ -26,6 +26,100 @@ pub fn scan_disc_artwork(file_path: String) -> Result<Option<String>, String> {
     Ok(DiscDetector::find_cover_image(path))
 }
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayerEngine {
+    BundledMpv,
+    SystemMpv,
+    Vlc,
+    Iina,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscPlayerStatus {
+    pub player_type: String,
+    pub player_name: String,
+    pub player_path: Option<String>,
+    pub supports_dvd_menu: bool,
+    pub supports_bluray_menu: bool,
+    pub java_home: Option<String>,
+    pub has_jvm: bool,
+    pub bd_j_supported: bool,
+    pub note: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
+    let player_info = find_optical_disc_player();
+    let java_home = detect_java_home().map(|p| p.to_string_lossy().to_string());
+    let has_jvm = java_home.is_some();
+
+    match player_info {
+        Some((path, engine)) => {
+            let path_str = path.to_string_lossy().to_string();
+            let mut version_str = String::new();
+            if let Ok(output) = Command::new(&path).arg("--version").output() {
+                if let Ok(s) = String::from_utf8(output.stdout) {
+                    if let Some(first_line) = s.lines().next() {
+                        version_str = first_line.trim().to_string();
+                    }
+                }
+            }
+
+            let (p_type, p_name) = match engine {
+                PlayerEngine::BundledMpv => (
+                    "bundled_mpv".to_string(),
+                    if !version_str.is_empty() {
+                        format!("Bundled mpv ({version_str})")
+                    } else {
+                        "Bundled mpv (Isolated)".to_string()
+                    },
+                ),
+                PlayerEngine::SystemMpv => (
+                    "system_mpv".to_string(),
+                    if !version_str.is_empty() {
+                        format!("System mpv ({version_str})")
+                    } else {
+                        "System mpv".to_string()
+                    },
+                ),
+                PlayerEngine::Vlc => ("vlc".to_string(), "VLC Media Player".to_string()),
+                PlayerEngine::Iina => ("iina".to_string(), "IINA Media Player".to_string()),
+            };
+
+            let note = if !has_jvm {
+                Some("Java runtime (JRE) not detected. BD-J interactive menus may have limited navigation; standard Blu-ray and DVD menus are fully supported.".to_string())
+            } else {
+                Some("Full DVD, Blu-ray, and BD-J interactive menu navigation supported.".to_string())
+            };
+
+            Ok(DiscPlayerStatus {
+                player_type: p_type,
+                player_name: p_name,
+                player_path: Some(path_str),
+                supports_dvd_menu: true,
+                supports_bluray_menu: engine != PlayerEngine::Iina,
+                java_home,
+                has_jvm,
+                bd_j_supported: has_jvm && engine != PlayerEngine::Iina,
+                note,
+            })
+        }
+        None => Ok(DiscPlayerStatus {
+            player_type: "none".to_string(),
+            player_name: "None found (system default launcher will be used)".to_string(),
+            player_path: None,
+            supports_dvd_menu: false,
+            supports_bluray_menu: false,
+            java_home,
+            has_jvm,
+            bd_j_supported: false,
+            note: Some("No media player detected. For interactive DVD and Blu-ray menus, bundled mpv or system mpv/VLC is recommended.".to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Result<(), String> {
     let path = Path::new(&file_path);
@@ -36,46 +130,78 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
     let disc_info = DiscDetector::inspect(path);
     let use_menu = prefer_menu.unwrap_or(true);
 
-    // Locate preferred disc player (bundled mpv -> system mpv -> system VLC -> system default)
-    if let Some((player_bin, is_mpv)) = find_optical_disc_player() {
+    // Locate preferred disc player (bundled mpv -> system mpv -> VLC -> IINA -> system default)
+    if let Some((player_bin, engine)) = find_optical_disc_player() {
         let mut cmd = Command::new(&player_bin);
 
         // Ensure Java runtime is accessible to libbluray for BD-J and 4K UHD menus
-        if let Some(java_home) = detect_java_home() {
-            cmd.env("JAVA_HOME", java_home);
+        let java_home = detect_java_home();
+        if let Some(ref jh) = java_home {
+            cmd.env("JAVA_HOME", jh);
         }
 
         if let Some(disc) = &disc_info {
             let target = &disc.play_target;
             let title = format!("Nebulae Cinema — {}", disc.title);
 
-            if is_mpv {
-                cmd.arg(format!("--title={title}"));
-                match disc.disc_type {
-                    DiscType::DvdVideo | DiscType::DvdAudio => {
-                        if use_menu {
-                            cmd.arg(format!("--dvd-device={target}"));
-                            cmd.arg("dvdnav://");
-                        } else {
+            // Log if launching Blu-ray/UHD without JVM
+            if (disc.disc_type == DiscType::BluRay || disc.disc_type == DiscType::UhdBluRay)
+                && use_menu
+                && java_home.is_none()
+            {
+                tracing::info!(
+                    "Launching Blu-ray/UHD menu without detected JVM. Standard menus active; BD-J interactive features require JRE."
+                );
+            }
+
+            match engine {
+                PlayerEngine::BundledMpv | PlayerEngine::SystemMpv => {
+                    cmd.arg(format!("--title={title}"));
+                    match disc.disc_type {
+                        DiscType::DvdVideo | DiscType::DvdAudio => {
+                            if use_menu {
+                                cmd.arg(format!("--dvd-device={target}"));
+                                cmd.arg("dvdnav://");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::BluRay | DiscType::UhdBluRay => {
+                            if use_menu {
+                                cmd.arg(format!("--bluray-device={target}"));
+                                cmd.arg("bd://");
+                                cmd.arg("--demuxer-lavf-o=bluray_menu=1");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::IsoImage => {
+                            let lower = target.to_lowercase();
+                            let is_bd = lower.contains("bd")
+                                || lower.contains("bluray")
+                                || lower.contains("uhd")
+                                || disc.total_bytes > 9_500_000_000;
+                            if is_bd {
+                                if use_menu {
+                                    cmd.arg(format!("--bluray-device={target}"));
+                                    cmd.arg("bd://");
+                                    cmd.arg("--demuxer-lavf-o=bluray_menu=1");
+                                } else {
+                                    cmd.arg(target);
+                                }
+                            } else if use_menu {
+                                cmd.arg(format!("--dvd-device={target}"));
+                                cmd.arg("dvdnav://");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::Unknown => {
                             cmd.arg(target);
                         }
-                    }
-                    DiscType::BluRay | DiscType::UhdBluRay => {
-                        if use_menu {
-                            cmd.arg(format!("--bluray-device={target}"));
-                            cmd.arg("bd://");
-                            cmd.arg("--demuxer-lavf-o=bluray_menu=1");
-                        } else {
-                            cmd.arg(target);
-                        }
-                    }
-                    DiscType::IsoImage | DiscType::Unknown => {
-                        cmd.arg(target);
                     }
                 }
-            } else {
-                // VLC command line arguments
-                match disc.disc_type {
+                PlayerEngine::Vlc => match disc.disc_type {
                     DiscType::DvdVideo | DiscType::DvdAudio => {
                         if use_menu {
                             cmd.arg(format!("dvd://{target}"));
@@ -91,8 +217,71 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
                             cmd.arg(target);
                         }
                     }
-                    DiscType::IsoImage | DiscType::Unknown => {
+                    DiscType::IsoImage => {
+                        let lower = target.to_lowercase();
+                        let is_bd = lower.contains("bd")
+                            || lower.contains("bluray")
+                            || lower.contains("uhd")
+                            || disc.total_bytes > 9_500_000_000;
+                        if is_bd {
+                            if use_menu {
+                                cmd.arg("--bluray-menu");
+                                cmd.arg(format!("bluray://{target}"));
+                            } else {
+                                cmd.arg(target);
+                            }
+                        } else if use_menu {
+                            cmd.arg(format!("dvd://{target}"));
+                        } else {
+                            cmd.arg(target);
+                        }
+                    }
+                    DiscType::Unknown => {
                         cmd.arg(target);
+                    }
+                },
+                PlayerEngine::Iina => {
+                    cmd.arg(format!("--mpv-force-media-title={title}"));
+                    match disc.disc_type {
+                        DiscType::DvdVideo | DiscType::DvdAudio => {
+                            if use_menu {
+                                cmd.arg(format!("--mpv-dvd-device={target}"));
+                                cmd.arg("dvdnav://");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::BluRay | DiscType::UhdBluRay => {
+                            if use_menu {
+                                cmd.arg(format!("--mpv-bluray-device={target}"));
+                                cmd.arg("bd://");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::IsoImage => {
+                            let lower = target.to_lowercase();
+                            let is_bd = lower.contains("bd")
+                                || lower.contains("bluray")
+                                || lower.contains("uhd")
+                                || disc.total_bytes > 9_500_000_000;
+                            if is_bd {
+                                if use_menu {
+                                    cmd.arg(format!("--mpv-bluray-device={target}"));
+                                    cmd.arg("bd://");
+                                } else {
+                                    cmd.arg(target);
+                                }
+                            } else if use_menu {
+                                cmd.arg(format!("--mpv-dvd-device={target}"));
+                                cmd.arg("dvdnav://");
+                            } else {
+                                cmd.arg(target);
+                            }
+                        }
+                        DiscType::Unknown => {
+                            cmd.arg(target);
+                        }
                     }
                 }
             }
@@ -108,14 +297,33 @@ pub fn launch_disc_player(file_path: String, prefer_menu: Option<bool>) -> Resul
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let spawned = cmd.spawn();
-        if spawned.is_ok() {
-            return Ok(());
+        match cmd.spawn() {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to spawn player {:?} ({:?}): {}. Falling back to default launcher.",
+                    player_bin,
+                    engine,
+                    e
+                );
+                if let Err(fallback_err) = launch_system_default(&file_path) {
+                    return Err(format!(
+                        "Failed to launch optical disc player '{:?}' ({engine:?}): {e}. System fallback launcher also failed: {fallback_err}. Please ensure a media player (mpv or VLC) is accessible.",
+                        player_bin
+                    ));
+                }
+                return Ok(());
+            }
         }
     }
 
     // Fallback: system default file / directory launcher
-    launch_system_default(&file_path)
+    if let Err(fallback_err) = launch_system_default(&file_path) {
+        return Err(format!(
+            "No optical disc player (bundled mpv, system mpv, VLC, or IINA) was found, and system default launcher failed: {fallback_err}. For DVD and Blu-ray menu navigation, Nebulae requires mpv or VLC."
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -124,8 +332,62 @@ pub fn launch_media_player(file_path: String) -> Result<(), String> {
 }
 
 /// Discovers an installed player capable of DVD/Blu-ray/UHD menu navigation.
-fn find_optical_disc_player() -> Option<(PathBuf, bool)> {
-    // 1. Check mpv candidates
+/// Probes bundled copy first, followed by system mpv, VLC, and IINA.
+pub fn find_optical_disc_player() -> Option<(PathBuf, PlayerEngine)> {
+    // 0. Probe bundled mpv FIRST (isolated package delivery)
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            let bundled_candidates = [
+                // Windows NSIS layout ($INSTDIR/resources/player/mpv.exe)
+                exe_dir.join("resources").join("player").join("mpv.exe"),
+                exe_dir.join("resources").join("mpv.exe"),
+                exe_dir.join("player").join("mpv.exe"),
+                exe_dir.join("mpv.exe"),
+                // macOS App Bundle layout (Contents/MacOS/nebulae -> Contents/Resources/player/mpv)
+                exe_dir.join("../Resources/player/mpv"),
+                exe_dir.join("../Resources/mpv"),
+                exe_dir.join("../Frameworks/player/mpv"),
+                // Linux directory layout (resources/player/mpv)
+                exe_dir.join("resources").join("player").join("mpv"),
+                exe_dir.join("player").join("mpv"),
+                exe_dir.join("mpv"),
+            ];
+            for cand in &bundled_candidates {
+                if cand.is_file() {
+                    return Some((cand.clone(), PlayerEngine::BundledMpv));
+                }
+            }
+        }
+    }
+
+    // Check AppImage runtime environment ($APPDIR)
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        let appdir_candidates = [
+            Path::new(&appdir).join("usr/bin/mpv"),
+            Path::new(&appdir).join("resources/player/mpv"),
+            Path::new(&appdir).join("usr/lib/nebulae/resources/player/mpv"),
+        ];
+        for cand in &appdir_candidates {
+            if cand.is_file() {
+                return Some((cand.clone(), PlayerEngine::BundledMpv));
+            }
+        }
+    }
+
+    // Relative project / dev paths
+    let dev_candidates = [
+        PathBuf::from("resources/player/mpv.exe"),
+        PathBuf::from("src-tauri/resources/player/mpv.exe"),
+        PathBuf::from("resources/player/mpv"),
+        PathBuf::from("src-tauri/resources/player/mpv"),
+    ];
+    for cand in &dev_candidates {
+        if cand.is_file() {
+            return Some((cand.clone(), PlayerEngine::BundledMpv));
+        }
+    }
+
+    // 1. Probe system mpv candidates
     let mpv_candidates = [
         "/opt/homebrew/bin/mpv",
         "/usr/local/bin/mpv",
@@ -135,16 +397,15 @@ fn find_optical_disc_player() -> Option<(PathBuf, bool)> {
     ];
     for cand in &mpv_candidates {
         let p = PathBuf::from(cand);
-        if p.exists() {
-            return Some((p, true));
+        if p.is_file() {
+            return Some((p, PlayerEngine::SystemMpv));
         }
     }
-    // Check if mpv is in system PATH
     if Command::new("mpv").arg("--version").output().is_ok() {
-        return Some((PathBuf::from("mpv"), true));
+        return Some((PathBuf::from("mpv"), PlayerEngine::SystemMpv));
     }
 
-    // 2. Check VLC candidates
+    // 2. Probe VLC candidates
     let vlc_candidates = [
         "/Applications/VLC.app/Contents/MacOS/VLC",
         "/usr/bin/vlc",
@@ -154,12 +415,28 @@ fn find_optical_disc_player() -> Option<(PathBuf, bool)> {
     ];
     for cand in &vlc_candidates {
         let p = PathBuf::from(cand);
-        if p.exists() {
-            return Some((p, false));
+        if p.is_file() {
+            return Some((p, PlayerEngine::Vlc));
         }
     }
     if Command::new("vlc").arg("--version").output().is_ok() {
-        return Some((PathBuf::from("vlc"), false));
+        return Some((PathBuf::from("vlc"), PlayerEngine::Vlc));
+    }
+
+    // 3. Probe macOS IINA candidates
+    #[cfg(target_os = "macos")]
+    {
+        let iina_candidates = [
+            "/Applications/IINA.app/Contents/MacOS/iina-cli",
+            "/Applications/IINA.app/Contents/MacOS/IINA",
+            "/usr/local/bin/iina",
+        ];
+        for cand in &iina_candidates {
+            let p = PathBuf::from(cand);
+            if p.is_file() {
+                return Some((p, PlayerEngine::Iina));
+            }
+        }
     }
 
     None
@@ -176,6 +453,18 @@ fn detect_java_home() -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
+        if let Ok(output) = Command::new("/usr/libexec/java_home").output() {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !s.is_empty() {
+                    let p = PathBuf::from(s);
+                    if p.exists() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+
         let jvm_dir = Path::new("/Library/Java/JavaVirtualMachines");
         if let Ok(entries) = std::fs::read_dir(jvm_dir) {
             for entry in entries.flatten() {
@@ -203,6 +492,18 @@ fn detect_java_home() -> Option<PathBuf> {
     {
         let jvm_dir = Path::new("/usr/lib/jvm");
         if let Ok(entries) = std::fs::read_dir(jvm_dir) {
+            let default_java = jvm_dir.join("default-java");
+            if default_java.exists() {
+                return Some(default_java);
+            }
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    return Some(entry.path());
+                }
+            }
+        }
+        let jvm64_dir = Path::new("/usr/lib64/jvm");
+        if let Ok(entries) = std::fs::read_dir(jvm64_dir) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     return Some(entry.path());
@@ -370,5 +671,18 @@ mod tests {
             .exists());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_get_disc_player_status_command() {
+        let status = get_disc_player_status().expect("get_disc_player_status failed");
+        assert!(!status.player_name.is_empty());
+        assert!(!status.player_type.is_empty());
+    }
+
+    #[test]
+    fn test_disc_player_discovery() {
+        // Just verify discovery returns without panic
+        let _ = find_optical_disc_player();
     }
 }

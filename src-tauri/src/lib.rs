@@ -387,6 +387,7 @@ pub fn run() {
             // Media Station & Optical Disc Cinema
             commands::media::launch_media_player,
             commands::media::launch_disc_player,
+            commands::media::get_disc_player_status,
             commands::media::detect_disc_format,
             commands::media::scan_disc_artwork,
             commands::media::parse_media_title,

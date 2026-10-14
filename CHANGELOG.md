@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bundled Optical Disc Player (Zero-Prerequisite Playback)**:
+  - **Windows (NSIS)**: Bundled pinned portable `mpv.exe` + `d3dcompiler_43.dll` compiled with `libdvdnav` and `libbluray` (`shinchiro/mpv-winbuild-cmake` tag `20261014`, SHA-256: `ab6236a2b78a3e9e93a156c1f638d3182ee906006d019c15d1b7b056a7c9a4c5`) into `$INSTDIR/resources/player/`.
+  - **Linux (.deb, .rpm, AppImage)**: Added `mpv` to Debian and RPM package dependencies; bundled standalone `mpv` into AppImage resources directory with Linux JVM detection (`/usr/lib/jvm/default-java`, `/usr/lib/jvm/*`).
+  - **macOS (.dmg, .app)**: Bundled relocatable `mpv` binary and complete non-system dynamic library tree (`scripts/bundle-macos-mpv.sh`) with `@rpath` rewriting and hardened runtime codesigning.
+  - **Player Probe Order**: `find_optical_disc_player` probes bundled isolated player first, followed by system `mpv`, `VLC`, `IINA` (on macOS), and OS default launcher.
+  - **ISO Menu Routing**: Routed DVD and Blu-ray ISO images (`.iso`, `.img`) through `dvdnav://` and `bd://` device paths, enabling interactive menu navigation for raw disc dumps.
+  - **Settings → Media**: Added dedicated Media preferences tab displaying detected player engine, binary locations, format capabilities, BD-J Java runtime status, and commercial AACS limitations.
+  - **Informative Launch Diagnostics**: Informative failure and warning reporting indicating attempted player binary and troubleshooting guidance.
+  - **Third-Party GPL Compliance**: Shipped `THIRD-PARTY-NOTICES.md` documenting `mpv` (GPLv2+) license terms and upstream source repositories.
 - **Optical Disc Cinema & Interactive Menu Launcher (Phase 4)**:
   - Real optical disc structure detector (`DiscDetector`) identifying DVD-Video (`VIDEO_TS`), DVD-Audio (`AUDIO_TS`), Blu-ray (`BDMV`), 4K UHD Blu-ray, and disc ISOs (`.iso`/`.img`).
   - Layer specification classification: DVD-5, DVD-9, BD-25, BD-50, UHD BD-66, and UHD BD-100.

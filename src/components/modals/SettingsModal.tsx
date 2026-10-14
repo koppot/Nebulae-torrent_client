@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { DiagnosticSummary, AssociationStatus } from '../../types';
+import { DiagnosticSummary, AssociationStatus, DiscPlayerStatus } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
@@ -24,6 +24,7 @@ import {
   FileCheck,
   CheckCircle2,
   RefreshCw,
+  Film,
 } from 'lucide-react';
 
 export const SettingsModal: React.FC = () => {
@@ -32,7 +33,7 @@ export const SettingsModal: React.FC = () => {
   const { selectDownloadDirectory } = useTorrentStore();
 
   const [activeTab, setActiveTab] = useState<
-    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'rtorrent' | 'advanced'
+    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'rtorrent' | 'media' | 'advanced'
   >('behavior');
 
   const [copiedSummary, setCopiedSummary] = useState(false);
@@ -41,11 +42,22 @@ export const SettingsModal: React.FC = () => {
   const [isRegistering, setIsRegistering] = useState(false);
   const [serverTestResult, setServerTestResult] = useState<string | null>(null);
   const [isTestingServer, setIsTestingServer] = useState(false);
+  const [discPlayerStatus, setDiscPlayerStatus] = useState<DiscPlayerStatus | null>(null);
+  const [isProbingPlayer, setIsProbingPlayer] = useState(false);
+
+  const probePlayer = () => {
+    setIsProbingPlayer(true);
+    invoke<DiscPlayerStatus>('get_disc_player_status')
+      .then(setDiscPlayerStatus)
+      .catch(() => {})
+      .finally(() => setIsProbingPlayer(false));
+  };
 
   useEffect(() => {
     invoke<AssociationStatus>('check_associations_status')
       .then(setAssociationStatus)
       .catch(() => {});
+    probePlayer();
   }, []);
 
   if (!showSettings) return null;
@@ -191,6 +203,7 @@ export const SettingsModal: React.FC = () => {
               { id: 'rss', label: 'RSS', icon: Rss },
               { id: 'webui', label: 'Web UI', icon: Globe },
               { id: 'rtorrent', label: 'Server', icon: Server },
+              { id: 'media', label: 'Media', icon: Film },
               { id: 'advanced', label: 'Advanced', icon: Cpu },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -1297,6 +1310,134 @@ export const SettingsModal: React.FC = () => {
                     Note: the server beta serves plain HTTP on your LAN. Keep it inside a trusted network or put a
                     reverse proxy with TLS in front. Some preview features (per-file priority, renaming, categories,
                     super-seeding) are unavailable in remote mode and will say so when used.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* 9. MEDIA (Optical Disc Cinema & Player Detection) */}
+            {activeTab === 'media' && (
+              <div className="space-y-5">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+                      <Film className="w-4 h-4 text-[#e50914]" />
+                      <span>Optical Disc Cinema & Media Player</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={probePlayer}
+                      disabled={isProbingPlayer}
+                      className="px-2.5 py-1 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-white text-[11px] flex items-center gap-1.5 transition"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isProbingPlayer ? 'animate-spin text-[#e50914]' : ''}`} />
+                      <span>{isProbingPlayer ? 'Detecting...' : 'Re-probe Player'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[#8c8c8c] mb-4">
+                    Nebulae features an isolated optical disc engine capable of navigating DVD menus (VIDEO_TS, ISO) and Blu-ray menus (BDMV, ISO) without third-party installations.
+                  </p>
+                </div>
+
+                {/* Player Status Card */}
+                <div className="p-4 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#333333]">
+                    <span className="text-xs font-semibold text-white">Detected Disc Player</span>
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
+                        discPlayerStatus?.player_type === 'bundled_mpv'
+                          ? 'bg-green-950/80 border border-green-700/60 text-green-300'
+                          : discPlayerStatus?.player_type === 'none'
+                          ? 'bg-amber-950/80 border border-amber-700/60 text-amber-300'
+                          : 'bg-blue-950/80 border border-blue-700/60 text-blue-300'
+                      }`}
+                    >
+                      {discPlayerStatus?.player_type === 'bundled_mpv'
+                        ? 'Bundled (Isolated)'
+                        : discPlayerStatus?.player_type === 'none'
+                        ? 'System Default Only'
+                        : 'System Player'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[#a3a3a3]">Player Name:</span>
+                      <span className="font-mono text-white font-medium">
+                        {discPlayerStatus?.player_name || 'Probing player...'}
+                      </span>
+                    </div>
+                    {discPlayerStatus?.player_path && (
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-[#a3a3a3]">Binary Location:</span>
+                        <span className="font-mono text-slate-300 truncate max-w-xs" title={discPlayerStatus.player_path}>
+                          {discPlayerStatus.player_path}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Capabilities Matrix */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                    Disc Format & Menu Capabilities
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-white">DVD Menus (dvdnav)</span>
+                        <span className={`text-[10px] font-mono font-bold ${discPlayerStatus?.supports_dvd_menu ? 'text-green-400' : 'text-slate-500'}`}>
+                          {discPlayerStatus?.supports_dvd_menu ? 'SUPPORTED' : 'UNAVAILABLE'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#8c8c8c]">
+                        Interactive main and chapter menus for VIDEO_TS folders and DVD ISO images.
+                      </p>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-white">Blu-ray Menus (libbluray)</span>
+                        <span className={`text-[10px] font-mono font-bold ${discPlayerStatus?.supports_bluray_menu ? 'text-green-400' : 'text-slate-500'}`}>
+                          {discPlayerStatus?.supports_bluray_menu ? 'SUPPORTED' : 'UNAVAILABLE'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#8c8c8c]">
+                        Full BDMV and ISO title/playlist navigation for 1080p Blu-ray and 4K UHD images.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* BD-J & JVM Status Card */}
+                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white">BD-J Interactive Java Menus</span>
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                        discPlayerStatus?.has_jvm
+                          ? 'bg-green-950/80 border border-green-700/60 text-green-300'
+                          : 'bg-amber-950/80 border border-amber-700/60 text-amber-300'
+                      }`}
+                    >
+                      {discPlayerStatus?.has_jvm ? 'JVM ACTIVE' : 'LIMITED (NO JVM)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#8c8c8c]">
+                    {discPlayerStatus?.has_jvm
+                      ? `System Java Virtual Machine detected at ${discPlayerStatus.java_home}. Full interactive BD-J menus and extras enabled.`
+                      : 'No Java Runtime Environment (JAVA_HOME) detected. Standard playlist and title navigation will operate cleanly; advanced BD-J animated menus are limited.'}
+                  </p>
+                </div>
+
+                {/* Protected Discs Notice */}
+                <div className="p-3.5 rounded-lg bg-[#1a1811] border border-amber-900/40 text-amber-200/90 text-xs space-y-1">
+                  <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>AACS & Commercial Discs Limitation</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-300/80">
+                    Nebulae strictly supports unprotected raw optical disc structures and community home rips. Commercial pressed discs with active AACS or BD+ encryption require prior decryption. Nebulae contains zero DRM circumvention tools or decryption keys.
                   </p>
                 </div>
               </div>

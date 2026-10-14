@@ -97,3 +97,24 @@ commit `087e99e` (this repository). Context and history: this file.
 
 ### 2026-10-14 — Antigravity session
 - Tasking acknowledged, starting Phase 1 (Windows bundling).
+- **Embedded Optical Disc Player Bundling Completed (Phases 1, 2, 3 & Cross-Cutting)**:
+  - **Phase 1 (Windows)**:
+    - Download URL: `https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261014/mpv-x86_64-20261014-git-ec38361c56.7z`
+    - Pinned SHA-256: `ab6236a2b78a3e9e93a156c1f638d3182ee906006d019c15d1b7b056a7c9a4c5`
+    - Implemented `scripts/bundle-windows-mpv.ps1`: downloads archive, validates SHA-256 checksum, unpacks `mpv.exe` + `d3dcompiler_43.dll` into `src-tauri/resources/player/`, and executes a CI smoke test verifying `dvdnav` and `libbluray` features.
+    - Updated `src-tauri/tauri.conf.json` with `"resources": ["resources/**/*"]` so NSIS bundles the player alongside `nebulae.exe`.
+  - **Phase 2 (Linux)**:
+    - Updated `tauri.conf.json` deb and rpm package declarations to include `mpv` in `Depends`/`Requires`.
+    - Added `scripts/bundle-linux-mpv.sh` staging `mpv` into bundle resources for AppImage packaging.
+    - Extended `detect_java_home()` with `/usr/lib/jvm/default-java`, `/usr/lib/jvm/*`, and `/usr/lib64/jvm/*`.
+  - **Phase 3 (macOS)**:
+    - Implemented `scripts/bundle-macos-mpv.sh`: resolves host Homebrew `mpv`, extracts all non-system dynamic library dependencies via `otool -L`, copies them into `resources/player/lib/`, rewrites install IDs and load paths to `@rpath/<name>`, adds `@executable_path/lib` and `@loader_path/lib` LC_RPATHs to `mpv`, and code-signs all binaries (`codesign --force --sign ...`). Verified smoke test passes (`mpv v0.41.0`).
+    - Extended probe order on macOS: bundled mpv → system mpv → VLC → IINA → OS default.
+  - **Cross-Cutting Engine & UI**:
+    - ISO Routing: DVD and Blu-ray ISO images (`.iso`, `.img`) are routed through `dvdnav://` and `bd://` with the ISO as device, enabling full interactive menu navigation.
+    - Added `get_disc_player_status` command in `src-tauri/src/commands/media.rs` and registered in `src-tauri/src/lib.rs`.
+    - Added **Settings → Media** pane in `src/components/modals/SettingsModal.tsx` displaying detected player (`Bundled mpv`, `System mpv`, `VLC`, `IINA`), executable path, DVD/Blu-ray capabilities, JVM status, and honest commercial AACS notice.
+    - Provided informative failure diagnostics for launch attempts instead of bare errno strings.
+    - Created `THIRD-PARTY-NOTICES.md` with full GPLv2+ notice and upstream source links for `mpv`.
+    - Updated `docs/installation.md` removing manual player requirements and documenting UHD AACS boundaries.
+    - Preserved provider-neutral `WINDOWS_SIGN_PROVIDER` and Tauri signing secrets in `.github/workflows/release.yml`.
