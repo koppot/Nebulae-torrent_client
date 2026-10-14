@@ -136,10 +136,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");
 
-    let event_payloads = initial_payloads.clone();
-    app.run(move |app_handle, event| {
+    let _event_payloads = initial_payloads.clone();
+    app.run(move |_app_handle, _event| {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let tauri::RunEvent::Opened { urls } = event {
+        if let tauri::RunEvent::Opened { urls } = _event {
             use tauri::Emitter;
             for url in urls {
                 let payload = if url.scheme() == "file" {
@@ -150,10 +150,10 @@ pub fn run() {
                 } else {
                     url.to_string()
                 };
-                if let Ok(mut lock) = event_payloads.lock() {
+                if let Ok(mut lock) = _event_payloads.lock() {
                     lock.push(payload.clone());
                 }
-                let _ = app_handle.emit("nebulae://open-uri", payload);
+                let _ = _app_handle.emit("nebulae://open-uri", payload);
             }
         }
     });
