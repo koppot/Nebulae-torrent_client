@@ -118,3 +118,4 @@ commit `087e99e` (this repository). Context and history: this file.
     - Created `THIRD-PARTY-NOTICES.md` with full GPLv2+ notice and upstream source links for `mpv`.
     - Updated `docs/installation.md` removing manual player requirements and documenting UHD AACS boundaries.
     - Preserved provider-neutral `WINDOWS_SIGN_PROVIDER` and Tauri signing secrets in `.github/workflows/release.yml`.
+    - **CI Verification**: GitHub Actions CI run [38653344827](https://github.com/koppot/Nebulae-torrent_client/actions/runs/38653344827) verified 100% green (lint-and-check, TypeScript build, format check, clippy, and all 74 Rust tests passed).
