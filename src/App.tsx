@@ -17,6 +17,7 @@ import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorM
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
+import { RecoveryScreen } from './components/recovery/RecoveryScreen';
 import { FileUp } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -29,8 +30,17 @@ export const App: React.FC = () => {
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
   const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
   const [isDragging, setIsDragging] = useState(false);
+  const [engineInitError, setEngineInitError] = useState<string | null>(null);
 
   useEffect(() => {
+    invoke<string | null>('get_engine_init_error')
+      .then((err) => {
+        if (err) {
+          setEngineInitError(err);
+        }
+      })
+      .catch(() => {});
+
     loadSettings();
     fetchTorrents();
     runDoctorTest();
@@ -178,6 +188,10 @@ export const App: React.FC = () => {
       openAddTorrentWithSource(source);
     }
   };
+
+  if (engineInitError) {
+    return <RecoveryScreen error={engineInitError} />;
+  }
 
   return (
     <div

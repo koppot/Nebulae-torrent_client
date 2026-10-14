@@ -19,13 +19,14 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 ---
 
 ## Phase 2: Engine Integration & Core BitTorrent Operations
-- [ ] Connect `librqbit::Session` directly into Tauri backend state.
+- [x] Connect `librqbit::Session` directly into Tauri backend state (`RqbitTorrentEngine`).
+- [x] Enforce Three-Tier Honesty Policy: MockTorrentEngine disallowed in release; FailedTorrentEngine & RecoveryScreen.
+- [x] Implement `.torrent` file parsing, hashing, and storage allocation (metainfo).
+- [x] Wire up real-time download and upload speeds in Simple Media and Manager views.
+- [x] Implement torrent lifecycle controls: Pause, Resume, Remove, Delete Files, Force Recheck.
 - [ ] Implement magnet link resolver (`ut_metadata` BEP 9).
-- [ ] Implement `.torrent` file parsing, hashing, and storage allocation.
 - [ ] Implement file priority tree (allow selective file downloading and skipping).
 - [ ] Implement throttled 500ms telemetry IPC stream from Rust to React frontend.
-- [ ] Wire up real-time download and upload speeds in Simple Media and Manager views.
-- [ ] Implement torrent lifecycle controls: Pause, Resume, Remove, Delete Files, Force Recheck.
 
 ---
 

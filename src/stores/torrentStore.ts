@@ -62,7 +62,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   pauseTorrent: async (id: string) => {
     try {
-      await invoke('pause_torrent_stub', { id });
+      await invoke('pause_torrent', { id });
     } catch {
       //
     }
@@ -75,7 +75,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   resumeTorrent: async (id: string) => {
     try {
-      await invoke('resume_torrent_stub', { id });
+      await invoke('resume_torrent', { id });
     } catch {
       //
     }
@@ -88,9 +88,9 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   removeTorrent: async (id: string, deleteFiles?: boolean) => {
     try {
-      await invoke('remove_torrent_stub', { id, deleteFiles: !!deleteFiles });
+      await invoke('remove_torrent', { id, deleteFiles: !!deleteFiles });
     } catch (err) {
-      console.error('remove_torrent_stub error:', err);
+      console.error('remove_torrent error:', err);
       throw err;
     }
     const remaining = get().torrents.filter((t) => t.id !== id);
@@ -101,72 +101,8 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   addTorrent: async (source: string, downloadDir?: string, bytes?: number[]) => {
-    try {
-      await invoke('add_torrent_stub', { source, downloadDir, bytes });
-      await get().fetchTorrents();
-    } catch {
-      // Offline/fallback state update
-      const newId = `manual-${Date.now()}`;
-      const name = source.split('/').pop()?.split('\\').pop() || source;
-      const now = Math.floor(Date.now() / 1000);
-      set({
-        torrents: [
-          ...get().torrents,
-          {
-            id: newId,
-            name: name.replace(/\.torrent$/i, ''),
-            total_bytes: 1_500_000_000,
-            downloaded_bytes: 0,
-            uploaded_bytes: 0,
-            download_rate: 2_400_000,
-            upload_rate: 150_000,
-            progress: 0.05,
-            status: 'Downloading',
-            eta_seconds: 620,
-            seeds: 12,
-            peers: 5,
-            ratio: 0.0,
-            category: 'General',
-            is_media: false,
-            info_hash: `hash_${now}`,
-            save_path: downloadDir || '~/Downloads',
-            added_on: now,
-            completed_on: undefined,
-            comment: 'Added via Nebulae',
-            created_by: 'Nebulae Client',
-            piece_size: 1048576,
-            total_pieces: 1430,
-            sequential_download: false,
-            first_last_piece_prio: false,
-            super_seeding: false,
-            tags: ['New'],
-            files: [
-              {
-                index: 0,
-                name: name.replace(/\.torrent$/i, ''),
-                size_bytes: 1_500_000_000,
-                progress: 0.05,
-                priority: 1,
-              },
-            ],
-            trackers: [
-              {
-                tier: 0,
-                url: 'https://tracker.asiandvdclub.org:2710/announce',
-                status: 'Working',
-                seeds: 12,
-                peers: 5,
-                downloaded: 0,
-                message: 'Announce OK',
-              },
-            ],
-            download_limit_kib: 0,
-            upload_limit_kib: 0,
-          },
-        ],
-        selectedId: newId,
-      });
-    }
+    await invoke('add_torrent', { source, downloadDir, bytes });
+    await get().fetchTorrents();
   },
 
   inspectTorrent: async (source?: string, bytes?: number[]) => {

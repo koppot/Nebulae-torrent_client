@@ -5,6 +5,7 @@ pub mod models;
 pub mod updater;
 pub mod utils;
 
+use commands::diagnostics::EngineInitState;
 use db::Database;
 use engine::SharedEngine;
 use std::sync::Arc;
@@ -49,11 +50,15 @@ pub fn run() {
 
     let listening_port = settings.listening_port;
 
-    // 4. Initialize production engine (RqbitTorrentEngine) with fallback to MockTorrentEngine
-    let engine: SharedEngine = match engine::RqbitTorrentEngine::new(
+    // 4. Initialize production engine (RqbitTorrentEngine)
+    // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
+    let mut real_engine_opt = None;
+    let mut init_error: Option<String> = None;
+
+    match engine::RqbitTorrentEngine::new(
         Arc::clone(&paths),
         Arc::clone(&db),
-        download_dir,
+        download_dir.clone(),
         listening_port,
     ) {
         Ok(real_engine) => {
@@ -62,17 +67,76 @@ pub fn run() {
                 "INFO",
                 &format!("Initialized librqbit production engine on port {listening_port}"),
             );
-            Arc::new(real_engine)
+            real_engine_opt = Some(real_engine);
         }
         Err(e) => {
             SafeLogger::log_to_file(
                 &paths.logs_dir,
                 "WARN",
-                &format!("Failed to initialize real engine, using mock engine: {e}"),
+                &format!("First engine initialization attempt failed: {e}. Retrying in 500ms..."),
             );
-            Arc::new(engine::MockTorrentEngine::new())
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            match engine::RqbitTorrentEngine::new(
+                Arc::clone(&paths),
+                Arc::clone(&db),
+                download_dir,
+                listening_port,
+            ) {
+                Ok(real_engine) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "INFO",
+                        &format!("Initialized librqbit production engine on retry on port {listening_port}"),
+                    );
+                    real_engine_opt = Some(real_engine);
+                }
+                Err(retry_err) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "ERROR",
+                        &format!("Failed to initialize real engine after retry: {retry_err}"),
+                    );
+                    init_error = Some(retry_err);
+                }
+            }
+        }
+    }
+
+    let allow_mock = {
+        #[cfg(debug_assertions)]
+        {
+            std::env::var("NEBULAE_FORCE_MOCK_ENGINE").as_deref() == Ok("1")
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            false
         }
     };
+
+    let engine: SharedEngine = if let Some(real_engine) = real_engine_opt {
+        Arc::new(real_engine)
+    } else if allow_mock {
+        SafeLogger::log_to_file(
+            &paths.logs_dir,
+            "WARN",
+            "NEBULAE_FORCE_MOCK_ENGINE=1 enabled: using MockTorrentEngine in debug environment",
+        );
+        Arc::new(engine::MockTorrentEngine::new())
+    } else {
+        let err_msg = init_error
+            .clone()
+            .unwrap_or_else(|| "Engine initialization failed".to_string());
+        SafeLogger::log_to_file(
+            &paths.logs_dir,
+            "ERROR",
+            &format!(
+                "Mock engine disallowed in production/release. Entering recovery state: {err_msg}"
+            ),
+        );
+        Arc::new(engine::FailedTorrentEngine::new(err_msg))
+    };
+
+    let engine_init_state = EngineInitState(Arc::new(std::sync::Mutex::new(init_error)));
 
     SafeLogger::log_to_file(
         &paths.logs_dir,
@@ -103,6 +167,7 @@ pub fn run() {
         .manage(paths)
         .manage(db.clone())
         .manage(engine)
+        .manage(engine_init_state)
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
         .setup(move |app| {
@@ -208,7 +273,8 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            // Diagnostics
+            // Diagnostics & Recovery
+            commands::diagnostics::get_engine_init_error,
             commands::diagnostics::open_logs_folder,
             commands::diagnostics::get_diagnostic_summary,
             commands::diagnostics::clear_cache,
@@ -221,10 +287,10 @@ pub fn run() {
             commands::settings::save_user_settings,
             // Torrent & Engine
             commands::torrent::list_torrents,
-            commands::torrent::add_torrent_stub,
-            commands::torrent::remove_torrent_stub,
-            commands::torrent::pause_torrent_stub,
-            commands::torrent::resume_torrent_stub,
+            commands::torrent::add_torrent,
+            commands::torrent::remove_torrent,
+            commands::torrent::pause_torrent,
+            commands::torrent::resume_torrent,
             commands::torrent::force_recheck_torrent,
             commands::torrent::reannounce_torrent,
             commands::torrent::set_torrent_location,

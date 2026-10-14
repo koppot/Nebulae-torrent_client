@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Three-Tier Honesty Engine & Production Recovery (P0)**:
+  - Eliminated mock engine fallback in release builds: production builds strictly disallow `MockTorrentEngine` unless explicitly forced via `NEBULAE_FORCE_MOCK_ENGINE=1` in debug mode.
+  - Implemented single bounded engine startup retry with 500ms backoff on startup failure.
+  - Added Tier 3 Recovery Screen (`RecoveryScreen.tsx`) presenting clear, non-alarming guidance with one-click "Restart Nebulae", "Copy Diagnostic Report", and "Quit Application" controls.
+  - Production command renaming: promoted `add_torrent_stub`, `remove_torrent_stub`, `pause_torrent_stub`, and `resume_torrent_stub` to production IPC handlers `add_torrent`, `remove_torrent`, `pause_torrent`, and `resume_torrent`.
+  - Honest error reporting: removed synthetic 1.5GB torrent fallback generator; added Tier 2 error banner to `AddTorrentModal`.
+  - Honest connectivity diagnostics: eliminated hardcoded mock report and fake certificate fallback; displays honest neutral probing/untested states.
 - **Core Architecture**:
   - Tauri v2 + React 19 + TypeScript + Tailwind CSS application foundation.
   - Rust backend with SQLite database persistence under isolated platform directory (`ADC/internal/`).

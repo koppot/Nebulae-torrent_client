@@ -57,12 +57,13 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   Connectivity Certificate
                 </span>
                 <p className="text-xs font-mono text-white mt-1">
-                  {report?.certificate_text || 'Connectable: Yes · Port 51413 Open · IPv6 Ready · Tracker Healthy'}
+                  {report?.certificate_text || (isRunningTest ? 'Probing network connectivity…' : 'Diagnostics not run yet — Click Retest Network below')}
                 </p>
               </div>
               <button
                 onClick={copyCertificate}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-white transition"
+                disabled={!report?.certificate_text}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-white disabled:opacity-40 transition"
               >
                 {copiedCert ? <Check className="w-3.5 h-3.5 text-[#e50914]" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedCert ? 'Copied' : 'Copy'}</span>
@@ -75,9 +76,11 @@ export const ConnectivityDoctorModal: React.FC = () => {
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
               <span className="text-[10px] text-[#a3a3a3] block">Listening Port</span>
               <div className="mt-1 flex items-center justify-between font-mono">
-                <span className="text-sm font-bold text-white">{report?.listening_port || 51413}</span>
+                <span className="text-sm font-bold text-white">
+                  {report ? report.listening_port : (isRunningTest ? 'Checking…' : '—')}
+                </span>
                 <span className="text-[10px] text-white bg-[#141414] px-1.5 py-0.5 rounded border border-[#333333]">
-                  {report?.port_status || 'Open'}
+                  {report ? report.port_status : (isRunningTest ? 'Testing' : 'Untested')}
                 </span>
               </div>
             </div>
@@ -85,24 +88,36 @@ export const ConnectivityDoctorModal: React.FC = () => {
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
               <span className="text-[10px] text-[#a3a3a3] block">NAT Mapping</span>
               <div className="mt-1 flex items-center justify-between font-mono">
-                <span className="text-sm font-bold text-white">{report?.upnp_available ? 'UPnP' : 'Manual'}</span>
-                <span className="text-[10px] text-[#a3a3a3]">Active</span>
+                <span className="text-sm font-bold text-white">
+                  {report ? (report.upnp_available ? 'UPnP' : report.nat_pmp_available ? 'NAT-PMP' : 'Manual') : (isRunningTest ? 'Probing…' : '—')}
+                </span>
+                <span className="text-[10px] text-[#a3a3a3]">
+                  {report ? (report.upnp_available || report.nat_pmp_available ? 'Active' : 'Router Only') : (isRunningTest ? 'Probing' : '—')}
+                </span>
               </div>
             </div>
 
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
               <span className="text-[10px] text-[#a3a3a3] block">IPv6 Status</span>
               <div className="mt-1 flex items-center justify-between font-mono">
-                <span className="text-sm font-bold text-white">{report?.ipv6_healthy ? 'Ready' : 'IPv4'}</span>
-                <span className="text-[10px] text-[#a3a3a3]">Dual-Stack</span>
+                <span className="text-sm font-bold text-white">
+                  {report ? (report.ipv6_healthy ? 'Ready' : 'IPv4 Only') : (isRunningTest ? 'Probing…' : '—')}
+                </span>
+                <span className="text-[10px] text-[#a3a3a3]">
+                  {report ? (report.ipv6_healthy ? 'Dual-Stack' : 'Single-Stack') : (isRunningTest ? 'Probing' : '—')}
+                </span>
               </div>
             </div>
 
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
               <span className="text-[10px] text-[#a3a3a3] block">DNS Latency</span>
               <div className="mt-1 flex items-center justify-between font-mono">
-                <span className="text-sm font-bold text-white">{report?.dns_health_ms || 18} ms</span>
-                <span className="text-[10px] text-[#a3a3a3]">Normal</span>
+                <span className="text-sm font-bold text-white">
+                  {report ? `${report.dns_health_ms} ms` : (isRunningTest ? 'Measuring…' : '—')}
+                </span>
+                <span className="text-[10px] text-[#a3a3a3]">
+                  {report ? (report.dns_health_ms < 50 ? 'Healthy' : 'High Latency') : (isRunningTest ? 'Testing' : '—')}
+                </span>
               </div>
             </div>
           </div>
@@ -113,14 +128,20 @@ export const ConnectivityDoctorModal: React.FC = () => {
               <Shield className="w-3.5 h-3.5 text-[#e50914]" />
               <span>Findings</span>
             </h3>
-            <ul className="space-y-1 text-xs text-[#a3a3a3]">
-              {report?.plain_language_findings.map((f, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <CheckCircle className="w-3.5 h-3.5 text-[#e50914] shrink-0 mt-0.5" />
-                  <span>{f}</span>
-                </li>
-              ))}
-            </ul>
+            {report && report.plain_language_findings && report.plain_language_findings.length > 0 ? (
+              <ul className="space-y-1 text-xs text-[#a3a3a3]">
+                {report.plain_language_findings.map((f, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <CheckCircle className="w-3.5 h-3.5 text-[#e50914] shrink-0 mt-0.5" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-[#a3a3a3]">
+                {isRunningTest ? 'Running automated connectivity probes…' : 'No diagnostic findings yet. Click Retest Network below to run tests.'}
+              </p>
+            )}
           </div>
 
           {/* Retest Bar */}

@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  AlertCircle,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 
@@ -36,6 +37,7 @@ export const AddTorrentModal: React.FC = () => {
   const [sequentialDownload, setSequentialDownload] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -275,18 +277,25 @@ export const AddTorrentModal: React.FC = () => {
     const source = (torrentSource || selectedFileName || '').trim();
     if (!source) return;
 
-    setIsSubmitting(true);
-    await addTorrent(source, downloadDir, selectedFileBytes || undefined);
-    if (downloadDir) {
-      await addRecentDirectory(downloadDir);
+    try {
+      setIsSubmitting(true);
+      setErrorMessage(null);
+      await addTorrent(source, downloadDir, selectedFileBytes || undefined);
+      if (downloadDir) {
+        await addRecentDirectory(downloadDir);
+      }
+      setTorrentSource('');
+      setSelectedFileName(null);
+      setSelectedFileSize(null);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
+      setShowAddTorrent(false);
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || 'Failed to add torrent';
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
-    setTorrentSource('');
-    setSelectedFileName(null);
-    setSelectedFileSize(null);
-    setSelectedFileBytes(null);
-    setInspectPreview(null);
-    setShowAddTorrent(false);
   };
 
   return (
@@ -544,6 +553,14 @@ export const AddTorrentModal: React.FC = () => {
               <span className="text-white">Download in sequential order (media stream preview)</span>
             </label>
           </div>
+
+          {/* Error Message */}
+          {errorMessage && (
+            <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/60 text-xs text-red-200 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <span>The torrent could not be added: {errorMessage}</span>
+            </div>
+          )}
 
           {/* Footer Actions */}
           <div className="flex justify-end gap-2 pt-3 border-t border-[#333333]">

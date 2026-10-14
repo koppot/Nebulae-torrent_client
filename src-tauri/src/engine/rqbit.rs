@@ -774,4 +774,15 @@ impl TorrentEngine for RqbitTorrentEngine {
         let _handle = self.get_handle(id)?;
         Ok(())
     }
+
+    fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
+        let handle = self.get_handle(id)?;
+        let bytes = handle
+            .with_metadata(|meta| meta.torrent_bytes.to_vec())
+            .map_err(|_| "Metadata not downloaded yet".to_string())?;
+        if bytes.is_empty() {
+            return Err("Torrent metainfo bytes are empty".to_string());
+        }
+        Ok(bytes)
+    }
 }

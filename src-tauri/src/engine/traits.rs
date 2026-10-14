@@ -70,4 +70,5 @@ pub trait TorrentEngine: Send + Sync {
         old_folder_path: &str,
         new_folder_name: &str,
     ) -> Result<(), String>;
+    fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String>;
 }

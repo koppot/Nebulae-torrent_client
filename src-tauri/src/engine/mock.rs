@@ -1126,6 +1126,15 @@ impl TorrentEngine for MockTorrentEngine {
             Err(format!("Torrent with id '{id}' not found"))
         }
     }
+
+    fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
+        let list = self.torrents.lock().unwrap();
+        if list.iter().any(|t| t.id == id) {
+            Ok(b"d8:announce41:https://tracker.asiandvdclub.org/announcee".to_vec())
+        } else {
+            Err(format!("Torrent with id '{id}' not found"))
+        }
+    }
 }
 
 fn start_engine_transfer_loop(

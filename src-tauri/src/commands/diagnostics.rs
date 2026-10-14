@@ -5,6 +5,14 @@ use std::fs;
 use std::sync::Arc;
 use tauri::State;
 
+#[derive(Clone, Default)]
+pub struct EngineInitState(pub Arc<std::sync::Mutex<Option<String>>>);
+
+#[tauri::command]
+pub fn get_engine_init_error(state: State<EngineInitState>) -> Option<String> {
+    state.0.lock().unwrap().clone()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiagnosticSummary {
     pub app_name: String,

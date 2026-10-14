@@ -226,7 +226,7 @@ pub fn list_torrents(engine: State<SharedEngine>) -> Result<Vec<TorrentItem>, St
 }
 
 #[tauri::command]
-pub fn add_torrent_stub(
+pub fn add_torrent(
     source: String,
     download_dir: Option<String>,
     bytes: Option<Vec<u8>>,
@@ -250,7 +250,7 @@ pub fn add_torrent_bytes(
 }
 
 #[tauri::command]
-pub fn remove_torrent_stub(
+pub fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
     engine: State<SharedEngine>,
@@ -259,12 +259,12 @@ pub fn remove_torrent_stub(
 }
 
 #[tauri::command]
-pub fn pause_torrent_stub(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub fn pause_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
     engine.pause_torrent(&id)
 }
 
 #[tauri::command]
-pub fn resume_torrent_stub(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub fn resume_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
     engine.resume_torrent(&id)
 }
 
@@ -417,16 +417,46 @@ pub async fn create_torrent_file(
 }
 
 #[tauri::command]
-pub fn export_torrent_file(id: String, engine: State<SharedEngine>) -> Result<String, String> {
+pub fn export_torrent_file(
+    id: String,
+    destination_path: Option<String>,
+    engine: State<SharedEngine>,
+) -> Result<String, String> {
+    let bytes = engine.export_torrent_bytes(&id)?;
     let torrents = engine.list_torrents()?;
-    let item = torrents
-        .iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
+    let item = torrents.iter().find(|t| t.id == id);
+    let raw_name = item.map(|t| t.name.clone()).unwrap_or_else(|| id.clone());
+    let clean_name = raw_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    let filename = if clean_name.to_lowercase().ends_with(".torrent") {
+        clean_name
+    } else {
+        format!("{clean_name}.torrent")
+    };
 
-    let downloads = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let export_path = downloads.join(format!("{}.torrent", item.name));
-    Ok(export_path.to_string_lossy().to_string())
+    let target_path = if let Some(dest) = destination_path {
+        let p = std::path::PathBuf::from(dest.trim());
+        if p.is_dir() {
+            p.join(&filename)
+        } else {
+            p
+        }
+    } else {
+        let downloads = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        downloads.join(&filename)
+    };
+
+    if let Some(parent) = target_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    std::fs::write(&target_path, &bytes).map_err(|e| {
+        format!(
+            "Failed to write exported .torrent file to '{}': {e}",
+            target_path.display()
+        )
+    })?;
+
+    Ok(target_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
