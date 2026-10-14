@@ -45,6 +45,53 @@ export interface ParsedMediaMetadata {
   release_group?: string;
 }
 
+export type DiscType = 'DvdVideo' | 'DvdAudio' | 'BluRay' | 'UhdBluRay' | 'IsoImage' | 'Unknown';
+export type DiscLayerSpec = 'Dvd5' | 'Dvd9' | 'Bd25' | 'Bd50' | 'UhdBd66' | 'UhdBd100' | 'Unknown';
+
+export interface DiscStructureInfo {
+  disc_type: DiscType;
+  layer_spec: DiscLayerSpec;
+  has_menu: boolean;
+  root_path: string;
+  play_target: string;
+  cover_image?: string | null;
+  total_bytes: number;
+  title: string;
+  disc_number?: number | null;
+  total_discs?: number | null;
+}
+
+export interface VolumeSpaceInfo {
+  mount_point: string;
+  total_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+  used_percent: number;
+}
+
+export interface CacheCleanupReport {
+  scanned_directories: string[];
+  files_scanned: number;
+  files_removed: number;
+  bytes_reclaimed: number;
+  dry_run: boolean;
+}
+
+export interface OrganizeMediaReport {
+  source_path: string;
+  destination_path: string;
+  files_moved: number;
+  bytes_moved: number;
+  success: boolean;
+  message: string;
+}
+
+export interface ThumbnailResult {
+  thumbnail_path?: string | null;
+  is_disc_artwork: boolean;
+  source: string;
+}
+
 export interface TorrentItem {
   id: string;
   name: string;
@@ -80,6 +127,7 @@ export interface TorrentItem {
   upload_limit_kib: number;
   ratio_limit: number;
   media_meta?: ParsedMediaMetadata;
+  disc_info?: DiscStructureInfo;
 }
 
 export interface UserSettings {

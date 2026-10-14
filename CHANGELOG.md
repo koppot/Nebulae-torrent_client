@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Optical Disc Cinema & Interactive Menu Launcher (Phase 4)**:
+  - Real optical disc structure detector (`DiscDetector`) identifying DVD-Video (`VIDEO_TS`), DVD-Audio (`AUDIO_TS`), Blu-ray (`BDMV`), 4K UHD Blu-ray, and disc ISOs (`.iso`/`.img`).
+  - Layer specification classification: DVD-5, DVD-9, BD-25, BD-50, UHD BD-66, and UHD BD-100.
+  - Interactive menu launcher (`launch_disc_player`) with automated Java JRE environment injection (`JAVA_HOME`) for BD-J and 4K UHD menu rendering via `libbluray`.
+  - Local cover art and disc scan detection (`scan_disc_artwork`) searching for authentic booklet and cover scans (`folder.jpg`, `cover.jpg`, `scans/`).
+  - Video frame thumbnail generator with persistent caching under `Nebulae/internal/cache/thumbnails/`.
+- **Multi-Disc Boxset & Series Aggregator**:
+  - Clustered multi-disc releases into unified Boxset carousels in `SimpleMediaView` with individual disc selection pills.
+- **Disk Space Cleaner & Completed Media Organizer**:
+  - Volume disk space inspection (`get_volume_disk_space`) surfacing free headroom and usage gauges.
+  - Temporary piece cache pruner (`clean_cache_files`) supporting dry-run inspection and safe cleanup.
+  - Completed media organizer (`organize_completed_media`) automatically structuring finished discs into archival library paths.
+- **CI Modernization**:
+  - Updated `pnpm/action-setup` to `v4` across CI and release workflows, eliminating Node.js 20 runner deprecation warnings.
 - **BEP 9 Magnet Link Resolver (`ut_metadata`)**:
   - Non-blocking asynchronous magnet link ingestion in `RqbitTorrentEngine` with honest `Downloading Metadata` status and live tracker resolution.
   - Added Magnet Link / URL tab in `AddTorrentModal` with instant `dn=` title preview and validation.

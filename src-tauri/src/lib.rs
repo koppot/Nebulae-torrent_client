@@ -384,9 +384,16 @@ pub fn run() {
             commands::vpn::list_vpn_profiles,
             commands::vpn::delete_vpn_profile,
             commands::vpn::get_network_interfaces,
-            // Media Station
+            // Media Station & Optical Disc Cinema
             commands::media::launch_media_player,
+            commands::media::launch_disc_player,
+            commands::media::detect_disc_format,
+            commands::media::scan_disc_artwork,
             commands::media::parse_media_title,
+            commands::media::get_volume_disk_space,
+            commands::media::clean_cache_files,
+            commands::media::organize_completed_media,
+            commands::media::get_media_thumbnail,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
             commands::tracker::link_adc_account,

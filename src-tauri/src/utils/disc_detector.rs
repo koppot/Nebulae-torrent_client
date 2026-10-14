@@ -1,0 +1,430 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiscType {
+    DvdVideo,
+    DvdAudio,
+    BluRay,
+    UhdBluRay,
+    IsoImage,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiscLayerSpec {
+    Dvd5,     // Single Layer DVD (<= 4.7 GB)
+    Dvd9,     // Dual Layer DVD (<= 8.5 GB)
+    Bd25,     // Single Layer Blu-ray (<= 25 GB)
+    Bd50,     // Dual Layer Blu-ray (<= 50 GB)
+    UhdBd66,  // Dual Layer 4K UHD Blu-ray (<= 66 GB)
+    UhdBd100, // Triple Layer 4K UHD Blu-ray (<= 100 GB)
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscStructureInfo {
+    pub disc_type: DiscType,
+    pub layer_spec: DiscLayerSpec,
+    pub has_menu: bool,
+    pub root_path: String,
+    pub play_target: String,
+    pub cover_image: Option<String>,
+    pub total_bytes: u64,
+    pub title: String,
+    pub disc_number: Option<u32>,
+    pub total_discs: Option<u32>,
+}
+
+pub struct DiscDetector;
+
+impl DiscDetector {
+    /// Inspect a torrent save directory or file to identify optical disc structures.
+    pub fn inspect(path: &Path) -> Option<DiscStructureInfo> {
+        if !path.exists() {
+            return None;
+        }
+
+        let total_bytes = Self::calculate_total_bytes(path);
+        let title = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown Disc".to_string());
+
+        let (disc_number, total_discs) = Self::parse_disc_numbers(&title);
+        let cover_image = Self::find_cover_image(path);
+
+        // 1. Single file: Check for ISO / IMG disc image
+        if path.is_file() {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext == "iso" || ext == "img" {
+                let lower_title = title.to_lowercase();
+                let is_uhd = lower_title.contains("uhd")
+                    || lower_title.contains("2160p")
+                    || lower_title.contains("4k")
+                    || total_bytes > 55 * 1024 * 1024 * 1024;
+
+                let (disc_type, layer_spec) = if is_uhd {
+                    let spec = if total_bytes <= 66 * 1024 * 1024 * 1024 {
+                        DiscLayerSpec::UhdBd66
+                    } else {
+                        DiscLayerSpec::UhdBd100
+                    };
+                    (DiscType::UhdBluRay, spec)
+                } else if total_bytes > 9_500_000_000 {
+                    let spec = if total_bytes <= 25 * 1024 * 1024 * 1024 {
+                        DiscLayerSpec::Bd25
+                    } else {
+                        DiscLayerSpec::Bd50
+                    };
+                    (DiscType::BluRay, spec)
+                } else {
+                    let spec = if total_bytes <= 4_700_000_000 {
+                        DiscLayerSpec::Dvd5
+                    } else {
+                        DiscLayerSpec::Dvd9
+                    };
+                    (DiscType::DvdVideo, spec)
+                };
+
+                return Some(DiscStructureInfo {
+                    disc_type,
+                    layer_spec,
+                    has_menu: true,
+                    root_path: path.to_string_lossy().to_string(),
+                    play_target: path.to_string_lossy().to_string(),
+                    cover_image,
+                    total_bytes,
+                    title,
+                    disc_number,
+                    total_discs,
+                });
+            }
+        }
+
+        // 2. Directory inspection
+        if path.is_dir() {
+            // Check for Blu-ray BDMV structure
+            if let Some(bdmv_path) = Self::find_subpath(path, "BDMV") {
+                let lower_title = title.to_lowercase();
+                let is_uhd = lower_title.contains("uhd")
+                    || lower_title.contains("2160p")
+                    || lower_title.contains("4k")
+                    || total_bytes > 55 * 1024 * 1024 * 1024;
+
+                let (disc_type, layer_spec) = if is_uhd {
+                    let spec = if total_bytes <= 66 * 1024 * 1024 * 1024 {
+                        DiscLayerSpec::UhdBd66
+                    } else {
+                        DiscLayerSpec::UhdBd100
+                    };
+                    (DiscType::UhdBluRay, spec)
+                } else {
+                    let spec = if total_bytes <= 25 * 1024 * 1024 * 1024 {
+                        DiscLayerSpec::Bd25
+                    } else {
+                        DiscLayerSpec::Bd50
+                    };
+                    (DiscType::BluRay, spec)
+                };
+
+                return Some(DiscStructureInfo {
+                    disc_type,
+                    layer_spec,
+                    has_menu: true,
+                    root_path: path.to_string_lossy().to_string(),
+                    play_target: bdmv_path.to_string_lossy().to_string(),
+                    cover_image,
+                    total_bytes,
+                    title,
+                    disc_number,
+                    total_discs,
+                });
+            }
+
+            // Check for DVD VIDEO_TS structure
+            if let Some(video_ts_path) = Self::find_subpath(path, "VIDEO_TS") {
+                let layer_spec = if total_bytes <= 4_700_000_000 {
+                    DiscLayerSpec::Dvd5
+                } else {
+                    DiscLayerSpec::Dvd9
+                };
+
+                return Some(DiscStructureInfo {
+                    disc_type: DiscType::DvdVideo,
+                    layer_spec,
+                    has_menu: true,
+                    root_path: path.to_string_lossy().to_string(),
+                    play_target: video_ts_path.to_string_lossy().to_string(),
+                    cover_image,
+                    total_bytes,
+                    title,
+                    disc_number,
+                    total_discs,
+                });
+            }
+
+            // Check for DVD AUDIO_TS structure
+            if let Some(audio_ts_path) = Self::find_subpath(path, "AUDIO_TS") {
+                return Some(DiscStructureInfo {
+                    disc_type: DiscType::DvdAudio,
+                    layer_spec: DiscLayerSpec::Dvd9,
+                    has_menu: true,
+                    root_path: path.to_string_lossy().to_string(),
+                    play_target: audio_ts_path.to_string_lossy().to_string(),
+                    cover_image,
+                    total_bytes,
+                    title,
+                    disc_number,
+                    total_discs,
+                });
+            }
+
+            // Check for ISO image inside directory
+            if let Ok(entries) = fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        let ext = p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if ext == "iso" || ext == "img" {
+                            let iso_bytes = p.metadata().map(|m| m.len()).unwrap_or(0);
+                            let lower = p.to_string_lossy().to_lowercase();
+                            let is_uhd = lower.contains("uhd")
+                                || lower.contains("2160p")
+                                || iso_bytes > 55 * 1024 * 1024 * 1024;
+                            let (disc_type, layer_spec) = if is_uhd {
+                                (DiscType::UhdBluRay, DiscLayerSpec::UhdBd66)
+                            } else if iso_bytes > 9_500_000_000 {
+                                (DiscType::BluRay, DiscLayerSpec::Bd50)
+                            } else {
+                                (DiscType::DvdVideo, DiscLayerSpec::Dvd9)
+                            };
+
+                            return Some(DiscStructureInfo {
+                                disc_type,
+                                layer_spec,
+                                has_menu: true,
+                                root_path: path.to_string_lossy().to_string(),
+                                play_target: p.to_string_lossy().to_string(),
+                                cover_image,
+                                total_bytes: iso_bytes,
+                                title,
+                                disc_number,
+                                total_discs,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Recursively calculate total size in bytes of file or directory.
+    fn calculate_total_bytes(path: &Path) -> u64 {
+        if path.is_file() {
+            return path.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+        let mut total = 0;
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    total += p.metadata().map(|m| m.len()).unwrap_or(0);
+                } else if p.is_dir() {
+                    total += Self::calculate_total_bytes(&p);
+                }
+            }
+        }
+        total
+    }
+
+    /// Case-insensitive search for a child directory or file (e.g. "VIDEO_TS" or "BDMV").
+    fn find_subpath(parent: &Path, target_name: &str) -> Option<PathBuf> {
+        let direct = parent.join(target_name);
+        if direct.exists() {
+            return Some(direct);
+        }
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.eq_ignore_ascii_case(target_name) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Search for local cover art, disc scans, or poster images in directory.
+    pub fn find_cover_image(path: &Path) -> Option<String> {
+        let dir = if path.is_file() { path.parent()? } else { path };
+
+        let common_names = [
+            "folder.jpg",
+            "folder.png",
+            "cover.jpg",
+            "cover.png",
+            "front.jpg",
+            "front.png",
+            "poster.jpg",
+            "poster.png",
+            "disc.jpg",
+            "disc1.jpg",
+        ];
+
+        // 1. Direct check in directory
+        for name in &common_names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+
+        // 2. Case-insensitive scan
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(fname) = p.file_name().and_then(|n| n.to_str()) {
+                        let lower = fname.to_lowercase();
+                        for cn in &common_names {
+                            if lower == *cn {
+                                return Some(p.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                } else if p.is_dir() {
+                    // Check sub-folder like "Scans" or "Artwork"
+                    let dname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if dname.eq_ignore_ascii_case("scans") || dname.eq_ignore_ascii_case("artwork")
+                    {
+                        if let Ok(sub_entries) = fs::read_dir(&p) {
+                            for sub in sub_entries.flatten() {
+                                let sp = sub.path();
+                                if sp.is_file() {
+                                    let ext = sp
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("")
+                                        .to_lowercase();
+                                    if ext == "jpg" || ext == "jpeg" || ext == "png" {
+                                        return Some(sp.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Extract disc number and total discs from title (e.g. "Boxset Disc 2", "Vol. 1", "BD3", "DVD 4").
+    pub fn parse_disc_numbers(title: &str) -> (Option<u32>, Option<u32>) {
+        let lower = title.to_lowercase();
+
+        // Pattern: "disc X" or "cd X" or "bd X" or "dvd X"
+        let markers = ["disc", "disk", "bd", "dvd", "vol", "volume", "part"];
+        for marker in &markers {
+            if let Some(idx) = lower.find(marker) {
+                let remainder = &lower[idx + marker.len()..].trim_start();
+                // Strip separators like '.', '-', '_'
+                let clean = remainder.trim_start_matches(['.', '-', '_']);
+                let digits: String = clean.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(num) = digits.parse::<u32>() {
+                    // Ignore optical media layer spec markers (DVD-5, DVD-9, BD-25, BD-50, etc.)
+                    if (*marker == "dvd" && (num == 5 || num == 9))
+                        || (*marker == "bd" && (num == 25 || num == 50 || num == 66 || num == 100))
+                    {
+                        continue;
+                    }
+                    if num > 0 && num <= 99 {
+                        return (Some(num), None);
+                    }
+                }
+            }
+        }
+
+        (None, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_dvd_video_ts_structure() {
+        let tmp = std::env::temp_dir().join("nebulae_disc_test_dvd");
+        let video_ts = tmp.join("VIDEO_TS");
+        let _ = fs::create_dir_all(&video_ts);
+        fs::write(video_ts.join("VIDEO_TS.IFO"), b"fake ifo header").unwrap();
+        fs::write(video_ts.join("VTS_01_1.VOB"), vec![0u8; 100_000]).unwrap();
+
+        let detected = DiscDetector::inspect(&tmp).expect("Failed to detect DVD");
+        assert_eq!(detected.disc_type, DiscType::DvdVideo);
+        assert_eq!(detected.layer_spec, DiscLayerSpec::Dvd5);
+        assert!(detected.has_menu);
+        assert!(detected.play_target.contains("VIDEO_TS"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_detect_bluray_bdmv_structure() {
+        let tmp = std::env::temp_dir().join("nebulae_disc_test_bdmv");
+        let bdmv = tmp.join("BDMV");
+        let _ = fs::create_dir_all(&bdmv);
+        fs::write(bdmv.join("index.bdmv"), b"fake bdmv index").unwrap();
+
+        let detected = DiscDetector::inspect(&tmp).expect("Failed to detect Blu-ray");
+        assert_eq!(detected.disc_type, DiscType::BluRay);
+        assert!(detected.has_menu);
+        assert!(detected.play_target.contains("BDMV"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_detect_4k_uhd_iso() {
+        let tmp = std::env::temp_dir().join("nebulae_disc_test_uhd.iso");
+        fs::write(&tmp, b"fake uhd iso content").unwrap();
+
+        let detected = DiscDetector::inspect(&tmp).expect("Failed to detect UHD ISO");
+        assert_eq!(detected.disc_type, DiscType::UhdBluRay);
+        assert!(detected.has_menu);
+
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_parse_disc_number_patterns() {
+        assert_eq!(
+            DiscDetector::parse_disc_numbers("Tokyo_Story_1953_Criterion_BD1"),
+            (Some(1), None)
+        );
+        assert_eq!(
+            DiscDetector::parse_disc_numbers("Seven_Samurai_1954_Disc 2_Special_Features"),
+            (Some(2), None)
+        );
+        assert_eq!(
+            DiscDetector::parse_disc_numbers("A_City_of_Sadness_DVD-9"),
+            (None, None) // DVD-9 is layer spec, not disc index
+        );
+    }
+}
