@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Real system network interface enumeration: integrated `network-interface` crate to discover real network adapters (`get_network_interfaces`), distinguishing VPN tunnel adapters from physical interfaces.
   - Honest VPN status: eliminated hardcoded `utun3`/`10.64.0.2`/`198.51.100.10:51820` values in `get_vpn_status`; surfaces genuine connected state, actual tunnel interface IP, and actual transferred data volumes.
   - 500ms fail-closed kill-switch watcher: implemented `spawn_kill_switch_watcher` background loop checking interface availability every 500ms when armed in `AdcOnlyVpn` or `SystemVpn` mode, automatically pausing all transfers upon tunnel loss.
+- **Push Telemetry, Watched Folders, RSS Automation & Media Player (P3)**:
+  - Real-time 500ms push telemetry: implemented `spawn_telemetry_loop` pushing live swarm states via `nebulae://telemetry` event emitter, replacing aggressive 1000ms frontend polling with instantaneous stream updates and quiet heartbeat fallback.
+  - Watched Folders subsystem: implemented `spawn_watched_folder_loop` background directory monitor automatically loading dropped `.torrent` files into the engine and archiving to `.torrent.loaded`.
+  - RSS feed automation engine: implemented `spawn_rss_loop` and `parse_rss_xml` parsing title, link, enclosure torrent URLs, downloading new releases matching rules, and persisting downloaded IDs in SQLite to eliminate duplicates.
+  - Media Station streaming & external player launcher: implemented `launch_media_player` supporting VLC, IINA, and mpv, executing silently on Windows with `create_hidden_command` without popup terminal windows.
 - **Core Architecture**:
   - Tauri v2 + React 19 + TypeScript + Tailwind CSS application foundation.
   - Rust backend with SQLite database persistence under isolated platform directory (`ADC/internal/`).

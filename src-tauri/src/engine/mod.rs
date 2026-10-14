@@ -3,8 +3,11 @@ pub mod killswitch;
 pub mod metainfo;
 pub mod mock;
 pub mod rqbit;
+pub mod rss;
 pub mod seeding;
+pub mod telemetry;
 pub mod traits;
+pub mod watcher;
 
 pub use failed::FailedTorrentEngine;
 pub use mock::MockTorrentEngine;

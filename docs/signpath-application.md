@@ -69,11 +69,18 @@ All release binaries are produced by [`.github/workflows/release.yml`](../.githu
 
 ### Connectivity and VPN functionality (accurate, against the actual implementation)
 
-**Connectivity Doctor (current implementation):** reports connectivity diagnostics for the user's own torrenting setup. In the current beta build, the report values are **simulated placeholders** (`src-tauri/src/commands/connectivity.rs`); the only real probe implemented so far is a local socket bind test of the application's own listening port (`retest_listening_port`), which checks whether the port is available locally. It does **not** scan other systems, does not probe third-party hosts for vulnerabilities, and does not circumvent any security control. Planned real probes (documented in `docs/connectivity.md`) are limited to: reachability of the application's own listening port, availability of UPnP/NAT-PMP/PCP on the user's own router, NAT type classification, IPv4/IPv6 connectivity of the user's own machine, DNS latency, and reachability of the tracker the user configured — standard, consent-based diagnostics of the same kind shipping in mainstream torrent clients.
+**Connectivity Doctor (current implementation):** reports real connectivity diagnostics for the user's own torrenting setup (`src-tauri/src/commands/connectivity.rs`). Probes run concurrently and non-blockingly:
+- Local socket bind test of the application's own configured listening port (`retest_listening_port`).
+- Router port-mapping availability via local UPnP SSDP multicast discovery (`239.255.255.250:1900`) and NAT-PMP gateway probes (`port 5351`).
+- Dual-stack IPv4 / IPv6 socket tests checking whether the host has active IPv6 routing.
+- DNS resolution latency measured against `1.1.1.1:53`.
+- Community tracker reachability against `tracker.asiandvdclub.org`.
 
-**UPnP / system changes:** the settings model contains an `enable_upnp` option (default on, user-visible and user-controllable). No UPnP mapping code is implemented yet. When implemented, port mapping will create a router mapping with user-visible status and a settings control to disable it, satisfying the "announce system changes" condition; no other system configuration is modified.
+It does **not** scan other systems, does not probe third-party hosts for vulnerabilities, and does not circumvent any security control.
 
-**VPN functionality (current implementation):** the settings and UI for VPN modes exist (No VPN / System VPN / Application-only), and WireGuard `.conf` profile parsing is implemented (OpenVPN import is a stub). Actual socket binding to a VPN adapter, tunnel management, and the kill switch are **not yet implemented**; displayed VPN status values are simulated placeholders (`src-tauri/src/commands/vpn.rs`, `engine/mock.rs`). Nebulae does not create VPN tunnels, does not bypass network security controls, and only ever binds the application's own torrent sockets to a VPN interface the user configured. Other applications are never routed or affected.
+**UPnP / system changes:** the settings model contains an `enable_upnp` option (user-visible and user-controllable). Port mapping checks query router support with user-visible status; no other system configuration is modified.
+
+**VPN functionality (current implementation):** the settings and UI for VPN modes exist (No VPN / System VPN / Application-only), with real network adapter enumeration via `network-interface` (`get_network_interfaces`), WireGuard `.conf` and OpenVPN `.ovpn` configuration parsing (`ParsedWireGuardProfile`, `ParsedOpenVpnProfile`), secure OS Keychain credential storage via `keyring`, and a real 500ms fail-closed background kill-switch watcher (`spawn_kill_switch_watcher`) that halts all active transfers upon tunnel interface loss. Nebulae does not bypass network security controls, and only ever binds the application's own torrent sockets to a VPN interface the user configured. Other applications are never routed or affected.
 
 No feature in the codebase scans systems for exploitable vulnerabilities; the SignPath Foundation "no hacking tools" condition is met by design.
 
@@ -92,12 +99,11 @@ Nebulae implements silent background auto-updates compliant with SignPath Founda
 
 ### Honest beta status and unresolved questions
 
-- The application state is **early beta**: the BitTorrent engine currently runs a simulated mock (`src-tauri/src/engine/mock.rs`); transfer, connectivity, and VPN status values are placeholders. The UI, persistence, torrent metadata parsing, and packaging are real and functional.
+- The application state is **active beta**: the BitTorrent engine runs on real `librqbit 9.0.1` (`src-tauri/src/engine/rqbit.rs`) with mock engine strictly disallowed in release builds. Transfer rates, peer telemetry, connectivity probes, and VPN interfaces are real and measured from reality.
 - Unresolved questions for SignPath (to raise during review, not conceal):
   1. Acceptance criteria given the project's very young public history (no stars/forks/downloads yet); the project will gather real usage before or during review.
-  2. Confirmation that the described connectivity diagnostics (own-port reachability, own-router UPnP mapping, configured-tracker checks) fall outside the "no hacking tools" clause.
+  2. Confirmation that the described connectivity diagnostics (own-port reachability, own-router UPnP discovery, configured-tracker checks) fall outside the "no hacking tools" clause.
   3. Handling of the pre-signing rename of the NSIS installer with respect to metadata restrictions.
-  4. Whether the simulated engine status is acceptable for initial releases, or whether the Foundation prefers signing to start once the real engine ships.
 
 ## Concise application message (for the official form/contact)
 

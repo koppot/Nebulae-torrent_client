@@ -164,6 +164,11 @@ pub fn run() {
     let db_for_seeding = Arc::clone(&db);
     let engine_for_killswitch = Arc::clone(&engine);
     let db_for_killswitch = Arc::clone(&db);
+    let engine_for_telemetry = Arc::clone(&engine);
+    let engine_for_watcher = Arc::clone(&engine);
+    let db_for_watcher = Arc::clone(&db);
+    let engine_for_rss = Arc::clone(&engine);
+    let db_for_rss = Arc::clone(&db);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -180,6 +185,9 @@ pub fn run() {
 
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
+            engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
+            engine::watcher::spawn_watched_folder_loop(engine_for_watcher, db_for_watcher);
+            engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
 
             #[cfg(desktop)]
             {
@@ -344,6 +352,8 @@ pub fn run() {
             commands::vpn::list_vpn_profiles,
             commands::vpn::delete_vpn_profile,
             commands::vpn::get_network_interfaces,
+            // Media Station
+            commands::media::launch_media_player,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
             commands::tracker::link_adc_account,

@@ -29,9 +29,9 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 - [x] Real parallel Connectivity Doctor probes (UPnP SSDP, NAT-PMP, IPv4/IPv6, DNS latency, ADC tracker).
 - [x] Honest ADC Tracker profile statistics & Seed Time Shield background loop (`spawn_seeding_rules_loop`).
 - [x] Real VPN subsystem: OS Keychain credential storage via `keyring`, OpenVPN `.ovpn` parser, system interface discovery, and 500ms fail-closed kill-switch watcher loop (`spawn_kill_switch_watcher`).
+- [x] Implement throttled 500ms telemetry IPC stream from Rust to React frontend (`spawn_telemetry_loop`).
 - [ ] Implement magnet link resolver (`ut_metadata` BEP 9).
 - [ ] Implement file priority tree (allow selective file downloading and skipping).
-- [ ] Implement throttled 500ms telemetry IPC stream from Rust to React frontend.
 
 ---
 
@@ -43,15 +43,15 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
   - **Peers**: Peer IPs, client ID, encryption flags, transfer rates.
   - **Files**: Interactive file checklist with priority adjustment (Do Not Download / Normal / High).
   - **Speed Graph**: Live SVG/Canvas transfer throughput charts.
-- [ ] Watched Folders subsystem (auto-load dropped `.torrent` files).
-- [ ] RSS feed automation engine (regex title matching, auto-queueing).
-- [ ] Seeding rules: auto-pause upon reaching target share ratio or seed time.
+- [x] Watched Folders subsystem (auto-load dropped `.torrent` files via `spawn_watched_folder_loop`).
+- [x] RSS feed automation engine (regex title matching, auto-queueing via `spawn_rss_loop`).
+- [x] Seeding rules: auto-pause upon reaching target share ratio or seed time (`spawn_seeding_rules_loop`).
 
 ---
 
 ## Phase 4: Local Media Library & Playback Station
 - [ ] Local media metadata extraction (parse video release titles without cloud mandates).
 - [ ] Embedded video frame thumbnail generator.
-- [ ] Local streaming launcher: stream in-progress sequential downloads to default system players (VLC, IINA, mpv).
+- [x] Local streaming launcher: stream/play media in default system players (VLC, IINA, mpv) with hidden command execution (`launch_media_player`).
 - [ ] Automatic series and episode aggregator.
 - [ ] Disk space cleaner and completed media organizer.

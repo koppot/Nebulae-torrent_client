@@ -95,6 +95,7 @@ export interface UserSettings {
   use_temp_incomplete_dir: boolean;
   copy_torrent_files_to: string;
   copy_finished_torrents_to: string;
+  watched_folder_directory: string;
   auto_management_mode: boolean;
   do_not_start_automatically: boolean;
   show_torrent_content_dialog: boolean;

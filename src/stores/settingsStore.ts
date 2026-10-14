@@ -37,6 +37,7 @@ export const defaultSettings: UserSettings = {
   use_temp_incomplete_dir: false,
   copy_torrent_files_to: '',
   copy_finished_torrents_to: '',
+  watched_folder_directory: '',
   auto_management_mode: true,
   do_not_start_automatically: false,
   show_torrent_content_dialog: true,

@@ -47,9 +47,22 @@ export const App: React.FC = () => {
     fetchVpnStatus();
     fetchTrackerProfile();
 
+    // Listen for live opened URIs / files from macOS LaunchServices or secondary process
+    const unlistenFns: Array<() => void> = [];
+
+    // Real-time 500ms push telemetry from Rust engine
+    listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
+      if (event.payload) {
+        useTorrentStore.setState({ torrents: event.payload, isLoading: false });
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    // Relaxed background heartbeat fallback
     const torrentPollInterval = setInterval(() => {
       fetchTorrents();
-    }, 1000);
+    }, 5000);
 
     // Check for pending launch payload (file or protocol URI)
     invoke<string[]>('get_pending_open_payloads')
@@ -59,9 +72,6 @@ export const App: React.FC = () => {
         }
       })
       .catch(() => {});
-
-    // Listen for live opened URIs / files from macOS LaunchServices or secondary process
-    const unlistenFns: Array<() => void> = [];
 
     listen<string>('nebulae://open-uri', (event) => {
       if (event.payload) {

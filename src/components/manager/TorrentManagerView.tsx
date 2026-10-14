@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
@@ -420,6 +421,9 @@ export const TorrentManagerView: React.FC = () => {
     return <File className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />;
   };
 
+  const isMediaFileName = (name: string) =>
+    /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|iso|mp3|flac|wav|m4a|aac)$/i.test(name);
+
   const renderTreeNode = (node: FileTreeNode, depth = 0): React.ReactNode => {
     if (node.isFolder) {
       const isCollapsed = !!collapsedFolders[node.path];
@@ -515,6 +519,20 @@ export const TorrentManagerView: React.FC = () => {
             <option value={2}>High Priority</option>
             <option value={3}>Maximum Priority</option>
           </select>
+          {isMediaFileName(file.name) && (
+            <button
+              type="button"
+              onClick={() => {
+                const fullPath = `${selectedTorrent!.save_path}/${file.name}`;
+                invoke('launch_media_player', { filePath: fullPath }).catch(() => {});
+              }}
+              className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+              title={`Play "${node.name}" in media player`}
+            >
+              <Play className="w-3 h-3 text-[#e50914]" />
+              <span>Play</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => openRenameFileModal(file.index, file.name)}
@@ -911,6 +929,20 @@ export const TorrentManagerView: React.FC = () => {
                                 <option value={2}>High Priority</option>
                                 <option value={3}>Maximum Priority</option>
                               </select>
+                              {isMediaFileName(file.name) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const fullPath = `${selectedTorrent.save_path}/${file.name}`;
+                                    invoke('launch_media_player', { filePath: fullPath }).catch(() => {});
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                                  title="Play in media player"
+                                >
+                                  <Play className="w-3 h-3 text-[#e50914]" />
+                                  <span>Play</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => openRenameFileModal(file.index, file.name)}

@@ -1,6 +1,7 @@
 pub mod association;
 pub mod connectivity;
 pub mod diagnostics;
+pub mod media;
 pub mod peering;
 pub mod settings;
 pub mod torrent;
