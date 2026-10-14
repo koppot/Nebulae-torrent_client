@@ -194,3 +194,66 @@ jobs:
           cd ..
           cat SHA256SUMS.txt
           gh release upload "$TAG" SHA256SUMS.txt --clobber || true
+
+      - name: Broadcast release announcement on Discord
+        env:
+          TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
+          ANNOUNCEMENT_WEBHOOK: "https://discord.com/api/webhooks/1559680176160378900/ZxWpcddd-lGKjbjd8bcE3_h9GQjEn-RLZ-bFCfGIOEGX6Nse8ymwVYE_fKWa_B6tA4ac"
+        run: |
+          python3 -c '
+          import os, json, urllib.request
+
+          tag = os.environ.get("TAG", "v0.1.0-beta.4")
+          webhook = os.environ.get("ANNOUNCEMENT_WEBHOOK")
+          repo_url = "https://github.com/koppot/Nebulae-torrent_client"
+          logo = "https://asiandvdclub.org/images/logo.png"
+
+          embed = {
+              "title": f"🚀 Nebulae {tag} Released!",
+              "url": f"{repo_url}/releases/tag/{tag}",
+              "description": f"Official release build of **Nebulae** ({tag}) is now published and available for download.",
+              "color": 15010068,
+              "thumbnail": {"url": logo},
+              "fields": [
+                  {
+                      "name": "🍏 macOS (Apple Silicon)",
+                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg) • [DMG.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg.zip) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg-app.zip)",
+                      "inline": False
+                  },
+                  {
+                      "name": "🖥️ macOS (Intel x86_64)",
+                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg) • [DMG.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg.zip) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg-app.zip)",
+                      "inline": False
+                  },
+                  {
+                      "name": "🪟 Windows (x64)",
+                      "value": f"[Setup Installer]({repo_url}/releases/download/{tag}/Nebulae-Setup-x64.exe) • [Executable]({repo_url}/releases/download/{tag}/nebulae.exe)",
+                      "inline": False
+                  },
+                  {
+                      "name": "📦 Checksums & Verification",
+                      "value": f"Verified via [SHA256SUMS.txt]({repo_url}/releases/download/{tag}/SHA256SUMS.txt)",
+                      "inline": False
+                  }
+              ],
+              "footer": {"text": "Asian DVD Club Community • Automated Release Pipeline", "icon_url": logo}
+          }
+
+          payload = {
+              "username": "Nebulae Core",
+              "avatar_url": logo,
+              "content": f"📢 **New Release Announcement:** `{tag}` is now live! @everyone",
+              "embeds": [embed]
+          }
+
+          req = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json", "User-Agent": "GitHub-Actions-Release"}
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  print(f"Announced {tag} to Discord: HTTP {resp.status}")
+          except Exception as e:
+              print(f"Warning: Failed to send announcement: {e}")
+          ' || true
