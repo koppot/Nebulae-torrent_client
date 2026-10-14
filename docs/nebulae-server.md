@@ -39,7 +39,9 @@ docker run -d --name nebulae-server \
 
 ### Unraid (Community Applications)
 
-Install the `nebulae-server` template (`server/nebulae-server-unraid.xml`). Set:
+See the step-by-step end-user guide: **[docs/unraid-install.md](unraid-install.md)**.
+
+In short: install the `nebulae-server` template (`server/nebulae-server-unraid.xml`). Set:
 - **API Token** — a long random string; the desktop app must present it
 - **Data directory** — where downloads, session state and the watch folder live
 
