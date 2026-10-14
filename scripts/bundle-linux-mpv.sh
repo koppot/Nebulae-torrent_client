@@ -141,13 +141,16 @@ echo "All dependencies resolve from the bundled tree."
 echo "==> Smoke test on bundled mpv..."
 VERSION_OUT="$(LD_LIBRARY_PATH="$LIB_DIR" "$TARGET_DIR/mpv" --version)"
 echo "$VERSION_OUT" | head -n 6
-case "$VERSION_OUT" in
-    *dvdnav*)   : ;;
-    *) echo "ERROR: dvdnav feature missing from bundled mpv!"; exit 1 ;;
+# mpv 0.41+ no longer prints a feature list in --version output; verify
+# compiled-in disc support via the presence of the device options instead.
+OPTIONS_OUT="$(LD_LIBRARY_PATH="$LIB_DIR" "$TARGET_DIR/mpv" --list-options)"
+case "$OPTIONS_OUT" in
+    *--dvd-device*)   : ;;
+    *) echo "ERROR: DVD menu support (--dvd-device) missing from bundled mpv!"; exit 1 ;;
 esac
-case "$VERSION_OUT" in
-    *libbluray*) : ;;
-    *) echo "ERROR: libbluray feature missing from bundled mpv!"; exit 1 ;;
+case "$OPTIONS_OUT" in
+    *--bluray-device*) : ;;
+    *) echo "ERROR: Blu-ray menu support (--bluray-device) missing from bundled mpv!"; exit 1 ;;
 esac
 
 echo "SUCCESS: Linux bundle is self-contained (mpv + library tree + JRE)."

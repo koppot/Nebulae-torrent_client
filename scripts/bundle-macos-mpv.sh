@@ -30,6 +30,32 @@ fi
 
 echo "Source mpv binary: $MPV_BIN"
 
+# --- DVD menu capability gate ----------------------------------------------
+# Homebrew's mpv formula dropped libdvdnav, so a brew mpv cannot play DVD
+# menus (no --dvd-device option). The owner requires ALL menus to play, so
+# when the host mpv lacks DVD support, build mpv from the pinned source tag
+# with libdvdnav enabled. Every other build dependency is already present
+# (they are Homebrew mpv's own dependencies).
+if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
+    echo "==> Host mpv lacks libdvdnav (Homebrew dropped it from the formula)."
+    echo "==> Building mpv v0.41.0 from source with DVD + Blu-ray menu support..."
+    brew install -q libdvdnav libdvdread meson ninja pkg-config
+    BUILD_ROOT="$(mktemp -d)"
+    trap 'rm -rf "$BUILD_ROOT"' EXIT
+    git clone --depth 1 --branch v0.41.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
+    ( cd "$BUILD_ROOT/mpv" &&
+      meson setup build -Dgpl=true \
+          -Dlibdvdnav=enabled -Dlibdvdread=enabled -Dlibbluray=enabled \
+          -Dtests=false --prefix "$BUILD_ROOT/install" --buildtype release &&
+      ninja -C build &&
+      ninja -C build install ) || {
+        echo "ERROR: source build of mpv with libdvdnav failed."
+        exit 1
+    }
+    MPV_BIN="$BUILD_ROOT/install/bin/mpv"
+    echo "Built mpv with DVD menu support: $MPV_BIN"
+fi
+
 mkdir -p "$TARGET_DIR/lib"
 cp -L "$MPV_BIN" "$TARGET_DIR/mpv"
 chmod 755 "$TARGET_DIR/mpv"
@@ -153,12 +179,13 @@ fi
 echo "==> Running smoke test on bundled macOS mpv binary..."
 SMOKE_OUT=$("$TARGET_DIR/mpv" --version)
 echo "$SMOKE_OUT" | head -n 6
-case "$SMOKE_OUT" in
-    *dvdnav*)   : ;;
-    *) echo "ERROR: dvdnav feature missing from bundled mpv!"; exit 1 ;;
+OPTIONS_OUT=$("$TARGET_DIR/mpv" --list-options)
+case "$OPTIONS_OUT" in
+    *--dvd-device*)   : ;;
+    *) echo "ERROR: DVD menu support (--dvd-device) missing from bundled mpv!"; exit 1 ;;
 esac
-case "$SMOKE_OUT" in
-    *libbluray*) : ;;
-    *) echo "ERROR: libbluray feature missing from bundled mpv!"; exit 1 ;;
+case "$OPTIONS_OUT" in
+    *--bluray-device*) : ;;
+    *) echo "ERROR: Blu-ray menu support (--bluray-device) missing from bundled mpv!"; exit 1 ;;
 esac
-echo "SUCCESS: macOS disc player, dylib tree, and JRE bundled and verified."
+echo "SUCCESS: macOS disc player, dylib tree, and JRE bundled and verified (DVD + Blu-ray menus)."

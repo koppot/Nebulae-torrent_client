@@ -94,17 +94,15 @@ Write-Host "==> Running smoke test on bundled mpv.exe..."
 $VersionInfo = & $MpvDest --version
 Write-Host $VersionInfo
 
-$FeaturesLine = $VersionInfo | Select-String "List of enabled features:"
-if (-not $FeaturesLine) {
-    throw "Could not determine enabled features from mpv --version output"
+# mpv 0.41+ no longer prints a feature list in --version output; verify
+# compiled-in disc support via the presence of the device options instead.
+Write-Host "Verifying optical disc support in bundled mpv.exe..."
+$ListOptions = & $MpvDest --list-options
+if (-not ($ListOptions -match "--dvd-device")) {
+    throw "Validation failed: DVD menu support (--dvd-device) missing from bundled mpv.exe!"
+}
+if (-not ($ListOptions -match "--bluray-device")) {
+    throw "Validation failed: Blu-ray menu support (--bluray-device) missing from bundled mpv.exe!"
 }
 
-Write-Host "Verifying optical disc features in binary..."
-if (-not ($FeaturesLine -match "dvdnav")) {
-    throw "Validation failed: dvdnav feature missing from bundled mpv.exe!"
-}
-if (-not ($FeaturesLine -match "libbluray")) {
-    throw "Validation failed: libbluray feature missing from bundled mpv.exe!"
-}
-
-Write-Host "SUCCESS: Windows bundled disc player verified with dvdnav and libbluray."
+Write-Host "SUCCESS: Windows bundled disc player verified with DVD and Blu-ray menu support."
