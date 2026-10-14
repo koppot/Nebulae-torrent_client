@@ -32,6 +32,9 @@ import {
   Search,
   List,
   FolderTree,
+  LineChart,
+  Sliders,
+  Zap,
 } from 'lucide-react';
 
 interface ContextMenuState {
@@ -145,6 +148,10 @@ export const TorrentManagerView: React.FC = () => {
     renameTorrentFile,
     renameTorrentFolder,
     setFilePriority,
+    toggleSequential,
+    toggleFirstLast,
+    toggleSuperSeeding,
+    setTorrentLimits,
   } = useTorrentStore();
 
   const {
@@ -188,11 +195,33 @@ export const TorrentManagerView: React.FC = () => {
 
   const [renameError, setRenameError] = useState<string | null>(null);
 
+  const [speedHistory, setSpeedHistory] = useState<Array<{ dl: number; ul: number }>>([]);
+  const [limitsModal, setLimitsModal] = useState<{
+    isOpen: boolean;
+    id: string;
+    dlKib: number;
+    ulKib: number;
+    ratioLimit: number;
+  }>({
+    isOpen: false,
+    id: '',
+    dlKib: 0,
+    ulKib: 0,
+    ratioLimit: -1,
+  });
+  const [superSeedingNotice, setSuperSeedingNotice] = useState<string | null>(null);
+
   useEffect(() => {
-    if (selectedId) {
+    if (activeManagerTab === 'peers' && selectedId) {
+      fetchPeers(selectedId);
+      const interval = setInterval(() => {
+        fetchPeers(selectedId);
+      }, 2500);
+      return () => clearInterval(interval);
+    } else if (selectedId) {
       fetchPeers(selectedId);
     }
-  }, [selectedId, fetchPeers]);
+  }, [selectedId, activeManagerTab, fetchPeers]);
 
   // Keyboard navigation & actions
   useEffect(() => {
@@ -269,6 +298,15 @@ export const TorrentManagerView: React.FC = () => {
   });
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || filteredTorrents[0];
+
+  useEffect(() => {
+    if (selectedTorrent) {
+      setSpeedHistory((prev) => {
+        const next = [...prev, { dl: selectedTorrent.download_rate, ul: selectedTorrent.upload_rate }];
+        return next.slice(-40);
+      });
+    }
+  }, [selectedTorrent?.download_rate, selectedTorrent?.upload_rate]);
 
   const handleContextMenu = (e: React.MouseEvent, torrentId: string) => {
     e.preventDefault();
@@ -716,6 +754,7 @@ export const TorrentManagerView: React.FC = () => {
               { id: 'files', label: 'Files / Content', icon: FileText },
               { id: 'trackers', label: 'Trackers', icon: Layers },
               { id: 'peers', label: 'Peers', icon: Users },
+              { id: 'speed', label: 'Speed Graph', icon: LineChart },
             ].map((tab) => {
               const Icon = tab.icon;
               const isActive = activeManagerTab === tab.id;
@@ -740,64 +779,139 @@ export const TorrentManagerView: React.FC = () => {
           <div className="flex-1 p-3 overflow-y-auto text-xs bg-[#141414]">
             {selectedTorrent ? (
               activeManagerTab === 'general' ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Size</span>
-                    <span className="text-white">{formatBytes(selectedTorrent.total_bytes)}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Downloaded
-                    </span>
-                    <span className="text-white">
-                      {formatBytes(selectedTorrent.downloaded_bytes)}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Uploaded
-                    </span>
-                    <span className="text-white">
-                      {formatBytes(selectedTorrent.uploaded_bytes)}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Share Ratio
-                    </span>
-                    <span className="text-white font-bold">{formatRatio(selectedTorrent.ratio)}</span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Save Path
-                    </span>
-                    <span className="text-white truncate block max-w-xs" title={selectedTorrent.save_path}>
-                      {selectedTorrent.save_path}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Info Hash
-                    </span>
-                    <span className="text-white truncate block max-w-xs font-mono text-[10px]">
-                      {selectedTorrent.info_hash}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Sequential Mode
-                    </span>
-                    <span className="text-white">
-                      {selectedTorrent.sequential_download ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                      Super-Seeding
-                    </span>
-                    <span className="text-white">
-                      {selectedTorrent.super_seeding ? 'Active' : 'Inactive'}
-                    </span>
+                <div className="space-y-3">
+                  {superSeedingNotice && (
+                    <div className="flex items-center justify-between p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+                      <span>{superSeedingNotice}</span>
+                      <button
+                        type="button"
+                        onClick={() => setSuperSeedingNotice(null)}
+                        className="p-1 hover:text-white"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Size</span>
+                      <span className="text-white">{formatBytes(selectedTorrent.total_bytes)}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Downloaded
+                      </span>
+                      <span className="text-white">
+                        {formatBytes(selectedTorrent.downloaded_bytes)}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Uploaded
+                      </span>
+                      <span className="text-white">
+                        {formatBytes(selectedTorrent.uploaded_bytes)}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Share Ratio
+                      </span>
+                      <span className="text-white font-bold">{formatRatio(selectedTorrent.ratio)}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Save Path
+                      </span>
+                      <span className="text-white truncate block max-w-xs" title={selectedTorrent.save_path}>
+                        {selectedTorrent.save_path}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Info Hash
+                      </span>
+                      <span className="text-white truncate block max-w-xs font-mono text-[10px]">
+                        {selectedTorrent.info_hash}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Speed Limits
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white text-[11px]">
+                          {selectedTorrent.download_limit_kib > 0 ? `DL: ${selectedTorrent.download_limit_kib}K` : 'DL: Max'} / {selectedTorrent.upload_limit_kib > 0 ? `UL: ${selectedTorrent.upload_limit_kib}K` : 'UL: Max'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLimitsModal({
+                              isOpen: true,
+                              id: selectedTorrent.id,
+                              dlKib: selectedTorrent.download_limit_kib,
+                              ulKib: selectedTorrent.upload_limit_kib,
+                              ratioLimit: selectedTorrent.ratio_limit,
+                            })
+                          }
+                          className="px-1.5 py-0.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[10px] text-white flex items-center gap-1 transition"
+                        >
+                          <Sliders className="w-3 h-3 text-[#e50914]" />
+                          <span>Edit</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Swarm Controls
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => toggleSequential(selectedTorrent.id)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                            selectedTorrent.sequential_download
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                          }`}
+                          title="Sequential Downloading (Stream in order)"
+                        >
+                          Sequential: {selectedTorrent.sequential_download ? 'ON' : 'OFF'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleFirstLast(selectedTorrent.id)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                            selectedTorrent.first_last_piece_prio
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                          }`}
+                          title="Prioritize first and last piece for container headers"
+                        >
+                          1st/Last: {selectedTorrent.first_last_piece_prio ? 'ON' : 'OFF'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            toggleSuperSeeding(selectedTorrent.id);
+                            setSuperSeedingNotice(
+                              'Observational: Super-Seeding (BEP 16) is not supported by upstream librqbit 9.0.1. Tracked in docs/upstream-issues/rqbit-super-seeding.md.'
+                            );
+                          }}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                            selectedTorrent.super_seeding
+                              ? 'bg-pink-500/20 text-pink-400 border-pink-500/40'
+                              : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                          }`}
+                          title="Super-Seeding Mode (Initial Seeding / BEP 16)"
+                        >
+                          Super-Seed: {selectedTorrent.super_seeding ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : activeManagerTab === 'files' ? (
@@ -964,29 +1078,40 @@ export const TorrentManagerView: React.FC = () => {
                   </div>
                 </div>
               ) : activeManagerTab === 'trackers' ? (
-                <div className="font-mono text-xs space-y-1">
+                <div className="font-mono text-xs space-y-1.5">
                   {selectedTorrent.trackers && selectedTorrent.trackers.length > 0 ? (
                     selectedTorrent.trackers.map((tr, idx) => (
                       <div
                         key={idx}
-                        className="p-1.5 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between text-[11px]"
+                        className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex items-center justify-between text-[11px]"
                       >
-                        <span className="text-[#a3a3a3] truncate max-w-md">{tr.url}</span>
-                        <span className="text-white font-semibold flex-shrink-0 ml-2">
-                          {tr.status} (Seeds: {tr.seeds}, Peers: {tr.peers})
-                        </span>
+                        <div className="min-w-0 pr-3">
+                          <span className="text-[#a3a3a3] truncate block max-w-lg">{tr.url}</span>
+                          <span className="text-[10px] text-slate-500">Tier {tr.tier} • Seeds: {tr.seeds} • Peers: {tr.peers}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-white font-semibold px-1.5 py-0.5 rounded bg-[#141414] border border-[#262626]">
+                            {tr.status}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => reannounce(selectedTorrent.id)}
+                            className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[10px] text-white flex items-center gap-1 transition"
+                            title="Trigger immediate re-announce to this tracker"
+                          >
+                            <RotateCw className="w-3 h-3 text-[#e50914]" />
+                            <span>Reannounce</span>
+                          </button>
+                        </div>
                       </div>
                     ))
                   ) : (
-                    <div className="p-1.5 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between text-[11px]">
-                      <span className="text-[#a3a3a3]">
-                        https://tracker.asiandvdclub.org:2710/announce
-                      </span>
-                      <span className="text-white font-semibold">Announce OK</span>
+                    <div className="p-4 rounded bg-[#1f1f1f] border border-[#262626] text-center text-[#a3a3a3] text-xs font-sans">
+                      No external announce trackers registered for this transfer (DHT / PEX only swarm).
                     </div>
                   )}
                 </div>
-              ) : (
+              ) : activeManagerTab === 'peers' ? (
                 /* Peers Tab */
                 <div className="overflow-x-auto border border-[#262626] rounded">
                   <table className="w-full text-left border-collapse text-xs">
@@ -1002,8 +1127,8 @@ export const TorrentManagerView: React.FC = () => {
                     <tbody className="divide-y divide-[#262626] font-mono text-[11px]">
                       {peers.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="py-3 text-center text-[#a3a3a3]">
-                            No active peers connected
+                          <td colSpan={5} className="py-4 text-center text-[#a3a3a3]">
+                            No active peers connected yet
                           </td>
                         </tr>
                       ) : (
@@ -1027,6 +1152,78 @@ export const TorrentManagerView: React.FC = () => {
                       )}
                     </tbody>
                   </table>
+                </div>
+              ) : (
+                /* Speed Graph Tab */
+                <div className="flex flex-col h-full space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-mono px-1 text-slate-400">
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5 text-adc-cyan">
+                        <span className="w-2.5 h-2.5 rounded-full bg-adc-cyan" />
+                        <span>Down: {formatSpeed(selectedTorrent.download_rate)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-adc-emerald">
+                        <span className="w-2.5 h-2.5 rounded-full bg-adc-emerald" />
+                        <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px]">Real-time Telemetry (500ms Push)</span>
+                  </div>
+
+                  <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">
+                    {speedHistory.length < 2 ? (
+                      <div className="w-full h-full flex items-center justify-center text-slate-500 font-sans text-xs">
+                        Gathering throughput telemetry...
+                      </div>
+                    ) : (
+                      <svg className="w-full h-full" viewBox="0 0 500 120" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient id="dlGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.4" />
+                            <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.0" />
+                          </linearGradient>
+                          <linearGradient id="ulGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#10B981" stopOpacity="0.4" />
+                            <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                          </linearGradient>
+                        </defs>
+
+                        {(() => {
+                          const maxSpeed = Math.max(
+                            ...speedHistory.map((s) => Math.max(s.dl, s.ul)),
+                            1024 * 50
+                          );
+                          const w = 500;
+                          const h = 120;
+                          const step = w / Math.max(speedHistory.length - 1, 1);
+
+                          const dlPoints = speedHistory.map((s, i) => [
+                            i * step,
+                            h - (s.dl / maxSpeed) * (h - 15),
+                          ]);
+                          const ulPoints = speedHistory.map((s, i) => [
+                            i * step,
+                            h - (s.ul / maxSpeed) * (h - 15),
+                          ]);
+
+                          const dlD = `M ${dlPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
+                          const dlArea = `${dlD} L ${w},${h} L 0,${h} Z`;
+
+                          const ulD = `M ${ulPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
+                          const ulArea = `${ulD} L ${w},${h} L 0,${h} Z`;
+
+                          return (
+                            <>
+                              <path d={dlArea} fill="url(#dlGrad)" />
+                              <path d={dlD} fill="none" stroke="#06B6D4" strokeWidth="2" />
+                              <path d={ulArea} fill="url(#ulGrad)" />
+                              <path d={ulD} fill="none" stroke="#10B981" strokeWidth="2" />
+                            </>
+                          );
+                        })()}
+                      </svg>
+                    )}
+                  </div>
                 </div>
               )
             ) : (
@@ -1103,6 +1300,36 @@ export const TorrentManagerView: React.FC = () => {
           >
             <Copy className="w-3.5 h-3.5" />
             <span>Copy Info Hash</span>
+          </button>
+          <div className="h-[1px] bg-[#333333] my-1" />
+          <button
+            onClick={() => {
+              const t = torrents.find((item) => item.id === contextMenu.torrentId);
+              if (t) {
+                setLimitsModal({
+                  isOpen: true,
+                  id: t.id,
+                  dlKib: t.download_limit_kib,
+                  ulKib: t.upload_limit_kib,
+                  ratioLimit: t.ratio_limit,
+                });
+              }
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Set Speed Limits...</span>
+          </button>
+          <button
+            onClick={() => {
+              toggleSequential(contextMenu.torrentId);
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>Toggle Sequential Download</span>
           </button>
           <div className="h-[1px] bg-[#333333] my-1" />
           <button
@@ -1217,6 +1444,103 @@ export const TorrentManagerView: React.FC = () => {
                   className="px-5 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-white font-semibold transition shadow"
                 >
                   Apply Rename
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Speed & Ratio Limits Modal */}
+      {limitsModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
+          <div className="relative w-full max-w-md bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col text-white">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#333333] bg-[#1f1f1f]">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-[#e50914]" />
+                <h2 className="text-sm font-bold text-white">Torrent Speed & Seeding Limits</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLimitsModal((prev) => ({ ...prev, isOpen: false }))}
+                className="p-1 rounded text-[#a3a3a3] hover:text-white transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setTorrentLimits(
+                  limitsModal.id,
+                  Number(limitsModal.dlKib) || 0,
+                  Number(limitsModal.ulKib) || 0,
+                  Number(limitsModal.ratioLimit) ?? -1
+                );
+                setLimitsModal((prev) => ({ ...prev, isOpen: false }));
+              }}
+              className="p-5 space-y-4"
+            >
+              <div>
+                <label className="text-xs text-[#a3a3a3] block font-mono mb-1">
+                  Download Limit (KiB/s, 0 = unlimited):
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={limitsModal.dlKib}
+                  onChange={(e) =>
+                    setLimitsModal((prev) => ({ ...prev, dlKib: Math.max(0, parseInt(e.target.value) || 0) }))
+                  }
+                  className="w-full px-3 py-2 bg-[#0B0F19] border border-[#333333] rounded-lg text-white font-mono text-sm focus:outline-none focus:border-[#06B6D4]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-[#a3a3a3] block font-mono mb-1">
+                  Upload Limit (KiB/s, 0 = unlimited):
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={limitsModal.ulKib}
+                  onChange={(e) =>
+                    setLimitsModal((prev) => ({ ...prev, ulKib: Math.max(0, parseInt(e.target.value) || 0) }))
+                  }
+                  className="w-full px-3 py-2 bg-[#0B0F19] border border-[#333333] rounded-lg text-white font-mono text-sm focus:outline-none focus:border-[#10B981]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-[#a3a3a3] block font-mono mb-1">
+                  Stop Seeding at Ratio (-1 = no limit):
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="-1"
+                  value={limitsModal.ratioLimit}
+                  onChange={(e) =>
+                    setLimitsModal((prev) => ({ ...prev, ratioLimit: parseFloat(e.target.value) || -1 }))
+                  }
+                  className="w-full px-3 py-2 bg-[#0B0F19] border border-[#333333] rounded-lg text-white font-mono text-sm focus:outline-none focus:border-[#F59E0B]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#333333]">
+                <button
+                  type="button"
+                  onClick={() => setLimitsModal((prev) => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-1.5 rounded-lg text-[#a3a3a3] hover:text-white transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-white font-semibold transition shadow"
+                >
+                  Save Limits
                 </button>
               </div>
             </form>
