@@ -8,7 +8,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
   const { report, isRunningTest, isRetestingPort, runDoctorTest, retestPort } = useConnectivityStore();
   const [activeAccordion, setActiveAccordion] = useState<string | null>(null);
   const [copiedCert, setCopiedCert] = useState(false);
-  const [portInput, setPortInput] = useState('6881');
+  const [portInput, setPortInput] = useState('51413');
 
   useEffect(() => {
     if (showConnectivityDoctor && !report) {
@@ -57,7 +57,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   Connectivity Certificate
                 </span>
                 <p className="text-xs font-mono text-white mt-1">
-                  {report?.certificate_text || 'Connectable: Yes · Port 6881 Open · IPv6 Ready · Tracker Healthy'}
+                  {report?.certificate_text || 'Connectable: Yes · Port 51413 Open · IPv6 Ready · Tracker Healthy'}
                 </p>
               </div>
               <button
@@ -75,7 +75,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
               <span className="text-[10px] text-[#a3a3a3] block">Listening Port</span>
               <div className="mt-1 flex items-center justify-between font-mono">
-                <span className="text-sm font-bold text-white">{report?.listening_port || 6881}</span>
+                <span className="text-sm font-bold text-white">{report?.listening_port || 51413}</span>
                 <span className="text-[10px] text-white bg-[#141414] px-1.5 py-0.5 rounded border border-[#333333]">
                   {report?.port_status || 'Open'}
                 </span>
@@ -134,7 +134,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                 className="w-20 px-2 py-1 text-xs rounded border border-[#333333] bg-[#141414] text-white font-mono focus:border-[#e50914] focus:outline-none"
               />
               <button
-                onClick={() => retestPort(parseInt(portInput) || 6881)}
+                onClick={() => retestPort(parseInt(portInput) || 51413)}
                 disabled={isRetestingPort}
                 className="px-2.5 py-1 text-xs rounded border border-[#333333] bg-[#141414] hover:bg-[#262626] text-white transition"
               >
@@ -171,7 +171,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   <div className="px-3 py-2 bg-[#141414] text-[#a3a3a3] space-y-1 font-mono text-[11px]">
                     <p>1. Open http://router.asus.com in your browser.</p>
                     <p>2. Go to WAN → Virtual Server / Port Forwarding.</p>
-                    <p>3. Add Profile: Port = 6881, Protocol = BOTH, Local IP = device IP.</p>
+                    <p>3. Add Profile: Port = 51413, Protocol = BOTH, Local IP = device IP.</p>
                   </div>
                 )}
               </div>
@@ -188,7 +188,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   <div className="px-3 py-2 bg-[#141414] text-[#a3a3a3] space-y-1 font-mono text-[11px]">
                     <p>1. Open http://routerlogin.net.</p>
                     <p>2. Go to Advanced → Port Forwarding.</p>
-                    <p>3. Forward port 6881 to your local IP address.</p>
+                    <p>3. Forward port 51413 to your local IP address.</p>
                   </div>
                 )}
               </div>

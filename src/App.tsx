@@ -36,6 +36,10 @@ export const App: React.FC = () => {
     fetchVpnStatus();
     fetchTrackerProfile();
 
+    const torrentPollInterval = setInterval(() => {
+      fetchTorrents();
+    }, 1000);
+
     // Check for pending launch payload (file or protocol URI)
     invoke<string[]>('get_pending_open_payloads')
       .then((payloads) => {
@@ -104,7 +108,7 @@ export const App: React.FC = () => {
 
     if (splashParam === 'true') {
       useUiStore.getState().setSplashDismissed(false);
-    } else if (splashParam === 'false' || viewParam || modalParam) {
+    } else if (splashParam === 'false') {
       useUiStore.getState().setSplashDismissed(true);
     }
 
@@ -131,6 +135,7 @@ export const App: React.FC = () => {
     }
 
     return () => {
+      clearInterval(torrentPollInterval);
       for (const un of unlistenFns) un();
     };
   }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);

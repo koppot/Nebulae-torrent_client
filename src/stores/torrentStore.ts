@@ -43,15 +43,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   isLoading: false,
 
   fetchTorrents: async () => {
-    set({ isLoading: true });
+    if (get().torrents.length === 0) {
+      set({ isLoading: true });
+    }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
       set({ torrents: data, isLoading: false });
     } catch {
-      set({
-        torrents: [],
-        isLoading: false,
-      });
+      set({ isLoading: false });
     }
   },
 

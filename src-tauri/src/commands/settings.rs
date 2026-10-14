@@ -170,7 +170,7 @@ impl Default for UserSettings {
 
             // 3. Connection
             peer_connection_protocol: "Both".to_string(),
-            listening_port: 6881,
+            listening_port: 51413,
             randomize_port_on_startup: false,
             enable_upnp: true,
             max_global_connections: 500,

@@ -78,7 +78,7 @@ export const usePeeringStore = create<PeeringState>((set) => ({
           {
             peer_id: 'peer-osaka-2',
             ip: '203.0.113.42',
-            port: 6881,
+            port: 51413,
             rtt_ms: 38,
             req_resp_latency_ms: 55,
             sustained_dl_bps: 2_800_000,

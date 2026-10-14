@@ -78,6 +78,5 @@ export const useUiStore = create<UiState>((set) => ({
     set({
       initialAddTorrentSource: source,
       showAddTorrent: true,
-      splashDismissed: true,
     }),
 }));

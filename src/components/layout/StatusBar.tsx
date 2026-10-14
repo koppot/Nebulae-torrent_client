@@ -12,7 +12,7 @@ export const StatusBar: React.FC = () => {
   const totalDownloaded = torrents.reduce((acc, t) => acc + (t.downloaded_bytes || 0), 0);
   const totalUploaded = torrents.reduce((acc, t) => acc + (t.uploaded_bytes || 0), 0);
 
-  const port = report?.listening_port || 6881;
+  const port = report?.listening_port || 51413;
   const isPortOpen = report?.port_status === 'Open';
 
   return (

@@ -1,3 +1,4 @@
+pub mod metainfo;
 pub mod mock;
 pub mod traits;
 

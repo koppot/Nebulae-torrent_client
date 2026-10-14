@@ -98,6 +98,13 @@ jobs:
             fi
           fi
           if [ -f "${{ matrix.artifact_name }}" ]; then
+            osascript -l JavaScript -e "
+              ObjC.import('AppKit');
+              var img = $.NSImage.alloc.initWithContentsOfFile('src-tauri/icons/icon.icns');
+              if (img) {
+                $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '${{ matrix.artifact_name }}', 0);
+              }
+            " || true
             shasum -a 256 "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256"
             gh release upload "$TAG" "${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" --clobber || true
           fi

@@ -1,12 +1,13 @@
+use super::metainfo::{announce_http_tracker, ensure_torrent_storage, ParsedTorrent};
 use super::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct MockTorrentEngine {
-    torrents: Mutex<Vec<TorrentItem>>,
-    kill_switch_active: AtomicBool,
-    bound_interface: Mutex<Option<String>>,
+    torrents: Arc<Mutex<Vec<TorrentItem>>>,
+    kill_switch_active: Arc<AtomicBool>,
+    bound_interface: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for MockTorrentEngine {
@@ -17,10 +18,14 @@ impl Default for MockTorrentEngine {
 
 impl MockTorrentEngine {
     pub fn new() -> Self {
+        let torrents = Arc::new(Mutex::new(Vec::new()));
+        let kill_switch_active = Arc::new(AtomicBool::new(false));
+        start_engine_transfer_loop(Arc::clone(&torrents), Arc::clone(&kill_switch_active));
+
         Self {
-            torrents: Mutex::new(Vec::new()),
-            kill_switch_active: AtomicBool::new(false),
-            bound_interface: Mutex::new(Some("utun3".to_string())),
+            torrents,
+            kill_switch_active,
+            bound_interface: Arc::new(Mutex::new(Some("utun3".to_string()))),
         }
     }
 
@@ -157,10 +162,14 @@ impl MockTorrentEngine {
             },
         ];
 
+        let torrents = Arc::new(Mutex::new(initial_items));
+        let kill_switch_active = Arc::new(AtomicBool::new(false));
+        start_engine_transfer_loop(Arc::clone(&torrents), Arc::clone(&kill_switch_active));
+
         Self {
-            torrents: Mutex::new(initial_items),
-            kill_switch_active: AtomicBool::new(false),
-            bound_interface: Mutex::new(Some("utun3".to_string())),
+            torrents,
+            kill_switch_active,
+            bound_interface: Arc::new(Mutex::new(Some("utun3".to_string()))),
         }
     }
 
@@ -183,36 +192,158 @@ impl TorrentEngine for MockTorrentEngine {
 
         let mut list = self.torrents.lock().unwrap();
         let new_id = format!("swarm-test-{}", list.len() + 1);
-        let save = download_dir.map(|s| s.to_string()).unwrap_or_else(|| {
-            dirs::download_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .to_string_lossy()
-                .to_string()
-        });
+        let save_base = download_dir
+            .map(|d| {
+                if let Some(stripped) = d.strip_prefix("~/") {
+                    if let Some(home) = dirs::home_dir() {
+                        home.join(stripped)
+                    } else {
+                        std::path::PathBuf::from(d)
+                    }
+                } else if d == "~" {
+                    dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(d))
+                } else {
+                    std::path::PathBuf::from(d)
+                }
+            })
+            .unwrap_or_else(|| {
+                dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+            });
 
-        let name = if source.starts_with("magnet:") {
-            let parsed_name = source
-                .split("&dn=")
-                .nth(1)
-                .and_then(|dn| dn.split('&').next())
-                .unwrap_or("Magnet Download");
-            parsed_name.replace('+', " ").replace("%20", " ")
-        } else {
-            std::path::Path::new(source)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Queued Torrent".to_string())
-        };
+        let source_path = std::path::Path::new(source);
+        let parsed_opt =
+            if source_path.exists() && (source.ends_with(".torrent") || source_path.is_file()) {
+                ParsedTorrent::parse_file(source_path).ok()
+            } else {
+                None
+            };
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        let (
+            name,
+            total_bytes,
+            files,
+            piece_size,
+            total_pieces,
+            info_hash,
+            comment,
+            created_by,
+            trackers,
+            save_path,
+            initial_seeds,
+            initial_peers,
+        ) = if let Some(parsed) = parsed_opt {
+            let content_dir = ensure_torrent_storage(&save_base, &parsed)
+                .unwrap_or_else(|_| save_base.join(&parsed.name));
+            let save_str = content_dir.to_string_lossy().to_string();
+
+            // Background tracker scrape for actual swarm counts
+            let torrents_ref = Arc::clone(&self.torrents);
+            let target_id = new_id.clone();
+            let raw_hash = parsed.raw_info_hash;
+            let left = parsed.total_bytes;
+            if let Some(first_tracker) = parsed.trackers.first() {
+                let tr_url = first_tracker.url.clone();
+                tauri::async_runtime::spawn(async move {
+                    let peer_id = b"-NE0100-849204820194";
+                    if let Ok((seeds, peers)) =
+                        announce_http_tracker(&tr_url, &raw_hash, peer_id, 51413, left).await
+                    {
+                        if let Ok(mut items) = torrents_ref.lock() {
+                            if let Some(item) = items.iter_mut().find(|t| t.id == target_id) {
+                                item.seeds = seeds;
+                                item.peers = peers;
+                                if let Some(tr) = item.trackers.first_mut() {
+                                    tr.seeds = seeds;
+                                    tr.peers = peers;
+                                    tr.status = "Working".to_string();
+                                    tr.message = "Announce OK".to_string();
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            (
+                parsed.name,
+                parsed.total_bytes,
+                parsed.files,
+                parsed.piece_size,
+                parsed.total_pieces,
+                parsed.info_hash,
+                parsed.comment,
+                parsed.created_by,
+                parsed.trackers,
+                save_str,
+                2, // Default to 2 seeds (matching actual ADC swarm) while async announce resolves
+                0,
+            )
+        } else {
+            let name = if source.starts_with("magnet:") {
+                let parsed_name = source
+                    .split("&dn=")
+                    .nth(1)
+                    .and_then(|dn| dn.split('&').next())
+                    .unwrap_or("Magnet Download");
+                parsed_name.replace('+', " ").replace("%20", " ")
+            } else {
+                source_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Queued Torrent".to_string())
+            };
+
+            let save_str = save_base.to_string_lossy().to_string();
+            (
+                name.clone(),
+                1_250_000_000,
+                vec![TorrentFileItem {
+                    index: 0,
+                    name: name.clone(),
+                    size_bytes: 1_250_000_000,
+                    progress: 0.0,
+                    priority: 1,
+                }],
+                1_048_576,
+                1192,
+                format!("hash_{:x}", now),
+                "Added via Nebulae".to_string(),
+                "Nebulae Client".to_string(),
+                vec![TorrentTrackerItem {
+                    tier: 0,
+                    url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
+                    status: "Working".to_string(),
+                    seeds: 12,
+                    peers: 4,
+                    downloaded: 0,
+                    message: "Announce OK".to_string(),
+                }],
+                save_str,
+                12,
+                4,
+            )
+        };
+
+        let is_media = name.ends_with(".mkv")
+            || name.ends_with(".mp4")
+            || name.ends_with(".iso")
+            || files.iter().any(|f| {
+                let lower = f.name.to_lowercase();
+                lower.ends_with(".iso")
+                    || lower.ends_with(".mkv")
+                    || lower.ends_with(".mp4")
+                    || lower.ends_with(".vob")
+            });
+
         list.push(TorrentItem {
             id: new_id.clone(),
-            name: name.clone(),
-            total_bytes: 1_250_000_000,
+            name,
+            total_bytes,
             downloaded_bytes: 0,
             uploaded_bytes: 0,
             download_rate: 0,
@@ -220,40 +351,26 @@ impl TorrentEngine for MockTorrentEngine {
             progress: 0.0,
             status: "Downloading".to_string(),
             eta_seconds: None,
-            seeds: 12,
-            peers: 4,
+            seeds: initial_seeds,
+            peers: initial_peers,
             ratio: 0.0,
             category: "General".to_string(),
-            is_media: name.ends_with(".mkv") || name.ends_with(".mp4") || name.ends_with(".iso"),
+            is_media,
             poster_url: None,
-            info_hash: format!("hash_{:x}", now),
-            save_path: save,
+            info_hash,
+            save_path,
             added_on: now,
             completed_on: None,
-            comment: "Added via Nebulae".to_string(),
-            created_by: "Nebulae Client".to_string(),
-            piece_size: 1_048_576,
-            total_pieces: 1192,
+            comment,
+            created_by,
+            piece_size,
+            total_pieces,
             sequential_download: false,
             first_last_piece_prio: true,
             super_seeding: false,
-            tags: vec!["New".to_string()],
-            files: vec![TorrentFileItem {
-                index: 0,
-                name: name.clone(),
-                size_bytes: 1_250_000_000,
-                progress: 0.0,
-                priority: 1,
-            }],
-            trackers: vec![TorrentTrackerItem {
-                tier: 0,
-                url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
-                status: "Working".to_string(),
-                seeds: 12,
-                peers: 4,
-                downloaded: 0,
-                message: "Announce OK".to_string(),
-            }],
+            tags: vec!["Active".to_string()],
+            files,
+            trackers,
             download_limit_kib: 0,
             upload_limit_kib: 0,
         });
@@ -543,4 +660,108 @@ impl TorrentEngine for MockTorrentEngine {
             Err(format!("Torrent with id '{id}' not found"))
         }
     }
+}
+
+fn start_engine_transfer_loop(
+    torrents: Arc<Mutex<Vec<TorrentItem>>>,
+    kill_switch_active: Arc<AtomicBool>,
+) {
+    std::thread::Builder::new()
+        .name("nebulae-engine-transfer-loop".to_string())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            if kill_switch_active.load(Ordering::SeqCst) {
+                continue;
+            }
+
+            let mut list = match torrents.lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            for item in list.iter_mut() {
+                if item.status == "Downloading" {
+                    if item.downloaded_bytes >= item.total_bytes && item.total_bytes > 0 {
+                        item.downloaded_bytes = item.total_bytes;
+                        item.progress = 1.0;
+                        item.status = "Seeding".to_string();
+                        item.download_rate = 0;
+                        item.eta_seconds = None;
+                        if item.completed_on.is_none() {
+                            item.completed_on = Some(now);
+                        }
+                        continue;
+                    }
+
+                    // Active download throughput
+                    // Base throughput around 4.5 MB/s to 9.2 MB/s if seeds exist
+                    let seed_count = item.seeds.max(1) as u64;
+                    let jitter = (now % 7) * 180_000;
+                    let mut rate = (seed_count.min(10) * 950_000) + 2_800_000 + jitter;
+
+                    if item.download_limit_kib > 0 {
+                        let max_bytes = (item.download_limit_kib as u64) * 1024;
+                        rate = rate.min(max_bytes);
+                    }
+
+                    item.download_rate = rate;
+                    item.upload_rate = (rate / 14).clamp(65_000, 750_000);
+                    item.downloaded_bytes = (item.downloaded_bytes + rate).min(item.total_bytes);
+                    item.uploaded_bytes += item.upload_rate;
+
+                    if item.total_bytes > 0 {
+                        item.progress = ((item.downloaded_bytes as f64 / item.total_bytes as f64)
+                            .clamp(0.0, 1.0)) as f32;
+                        let remaining = item.total_bytes.saturating_sub(item.downloaded_bytes);
+                        item.eta_seconds = remaining.checked_div(rate);
+                    }
+
+                    if item.downloaded_bytes >= item.total_bytes {
+                        item.downloaded_bytes = item.total_bytes;
+                        item.progress = 1.0;
+                        item.status = "Seeding".to_string();
+                        item.download_rate = 0;
+                        item.eta_seconds = None;
+                        if item.completed_on.is_none() {
+                            item.completed_on = Some(now);
+                        }
+                    }
+
+                    if item.downloaded_bytes > 0 {
+                        item.ratio =
+                            (item.uploaded_bytes as f64 / item.downloaded_bytes as f64) as f32;
+                    }
+
+                    // Keep file progress synced with overall progress
+                    for f in item.files.iter_mut() {
+                        f.progress = item.progress;
+                    }
+                } else if item.status == "Seeding" {
+                    item.download_rate = 0;
+                    item.eta_seconds = None;
+                    let mut ul_rate = 380_000 + ((now % 5) * 45_000);
+                    if item.upload_limit_kib > 0 {
+                        let max_ul = (item.upload_limit_kib as u64) * 1024;
+                        ul_rate = ul_rate.min(max_ul);
+                    }
+                    item.upload_rate = ul_rate;
+                    item.uploaded_bytes += ul_rate;
+                    if item.downloaded_bytes > 0 {
+                        item.ratio =
+                            (item.uploaded_bytes as f64 / item.downloaded_bytes as f64) as f32;
+                    }
+                } else if item.status == "Paused" {
+                    item.download_rate = 0;
+                    item.upload_rate = 0;
+                    item.eta_seconds = None;
+                }
+            }
+        })
+        .expect("Failed to spawn engine transfer loop");
 }

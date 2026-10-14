@@ -26,7 +26,7 @@ export const useConnectivityStore = create<ConnectivityState>((set) => ({
     } catch {
       // Fallback dev mock report
       const mockReport: ConnectivityReport = {
-        listening_port: 6881,
+        listening_port: 51413,
         port_status: 'Open',
         upnp_available: true,
         nat_pmp_available: true,
@@ -40,9 +40,9 @@ export const useConnectivityStore = create<ConnectivityState>((set) => ({
         tracker_auth_ok: true,
         inbound_connections: 34,
         outbound_connections: 52,
-        certificate_text: 'ADC Connectable: Yes — Port 6881 reachable — IPv6 ready — Tracker healthy',
+        certificate_text: 'ADC Connectable: Yes — Port 51413 reachable — IPv6 ready — Tracker healthy',
         plain_language_findings: [
-          'Incoming BitTorrent port 6881 is open and accepting peer connections.',
+          'Incoming BitTorrent port 51413 is open and accepting peer connections.',
           'UPnP is enabled on your local router; port mapping succeeded automatically.',
           'Native IPv6 dual-stack connectivity is active and ready for direct peering.',
           'DNS resolution time is healthy (18ms average).',
@@ -73,7 +73,7 @@ export const useConnectivityStore = create<ConnectivityState>((set) => ({
       const cert = await invoke<string>('get_connectivity_certificate');
       set({ certificate: cert });
     } catch {
-      set({ certificate: 'ADC Connectable: Yes — Port 6881 reachable — IPv6 ready — Tracker healthy' });
+      set({ certificate: 'ADC Connectable: Yes — Port 51413 reachable — IPv6 ready — Tracker healthy' });
     }
   },
 }));

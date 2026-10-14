@@ -42,16 +42,16 @@ export const SplashScreen: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleDismiss]);
 
-  // UI entrance timeline matching Asian DVD Club streaming intro
+  // UI entrance timeline matching Asian DVD Club streaming intro (watch.php)
   useEffect(() => {
-    if (!settings.enable_splash) {
+    if (settings.enable_splash === false) {
       handleDismiss();
       return;
     }
 
     const tLogo = setTimeout(() => {
       setUiState((prev) => ({ ...prev, logoLive: true }));
-    }, 1200);
+    }, 1800);
 
     const tFlash = setTimeout(() => {
       if (flashRef.current) {
@@ -63,32 +63,32 @@ export const SplashScreen: React.FC = () => {
           }
         }, 80);
       }
-    }, 1400);
+    }, 2000);
 
     const tBrand = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showBrand: true }));
-    }, 1800);
+    }, 2800);
 
     const tPresents = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showPresents: true }));
-    }, 2200);
+    }, 3200);
 
     const tDivider = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showDivider: true }));
-    }, 2500);
+    }, 3500);
 
     const tMessage = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showMessage: true }));
-    }, 2800);
+    }, 3800);
 
     const tButton = setTimeout(() => {
       setUiState((prev) => ({ ...prev, showButton: true }));
-    }, 3200);
+    }, 4400);
 
-    // Optional auto-dismiss after full intro presentation
+    // Auto-dismiss after full intro display (12s) if not clicked
     const tAutoDismiss = setTimeout(() => {
       handleDismiss();
-    }, 5500);
+    }, 12000);
 
     return () => {
       clearTimeout(tLogo);

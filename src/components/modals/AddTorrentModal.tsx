@@ -71,10 +71,31 @@ export const AddTorrentModal: React.FC = () => {
   }, [initialAddTorrentSource, setInitialAddTorrentSource]);
 
   useEffect(() => {
-    if (!downloadDir && settings.download_directory) {
-      setDownloadDir(settings.download_directory);
-    }
-  }, [settings.download_directory, downloadDir]);
+    if (!showAddTorrent) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        const source = (torrentSource || selectedFileName || '').trim();
+        if (source && !isSubmitting) {
+          e.preventDefault();
+          const targetDir = downloadDir || settings.download_directory || '~/Downloads';
+          setIsSubmitting(true);
+          addTorrent(source, targetDir).then(() => {
+            if (targetDir) addRecentDirectory(targetDir);
+            setIsSubmitting(false);
+            setTorrentSource('');
+            setSelectedFileName(null);
+            setSelectedFileSize(null);
+            setShowAddTorrent(false);
+          });
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowAddTorrent(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAddTorrent, torrentSource, selectedFileName, isSubmitting, downloadDir, settings.download_directory, addTorrent, addRecentDirectory, setShowAddTorrent]);
 
   if (!showAddTorrent) return null;
 

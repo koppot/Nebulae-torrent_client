@@ -58,7 +58,7 @@ pub fn get_peer_telemetry(_torrent_id: String) -> Result<Vec<PeerTelemetry>, Str
         PeerTelemetry {
             peer_id: "peer-osaka-2".to_string(),
             ip: "203.0.113.42".to_string(),
-            port: 6881,
+            port: 51413,
             rtt_ms: 38,
             req_resp_latency_ms: 55,
             sustained_dl_bps: 2_800_000,

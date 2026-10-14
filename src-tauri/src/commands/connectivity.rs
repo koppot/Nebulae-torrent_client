@@ -2,7 +2,7 @@ use crate::models::connectivity::{ConnectivityReport, NatType, PortStatus};
 
 #[tauri::command]
 pub fn run_connectivity_doctor_test() -> Result<ConnectivityReport, String> {
-    let port = 6881;
+    let port = 51413;
     let port_status = PortStatus::Open;
     let ipv6_healthy = true;
     let tracker_reachable = true;
@@ -18,7 +18,7 @@ pub fn run_connectivity_doctor_test() -> Result<ConnectivityReport, String> {
     );
 
     let plain_language_findings = vec![
-        "Incoming BitTorrent port 6881 is open and accepting peer connections.".to_string(),
+        "Incoming BitTorrent port 51413 is open and accepting peer connections.".to_string(),
         "UPnP is enabled on your local router; port mapping succeeded automatically.".to_string(),
         "Native IPv6 dual-stack connectivity is active and ready for direct peering.".to_string(),
         "DNS resolution time is healthy (18ms average).".to_string(),
@@ -71,7 +71,7 @@ pub fn retest_listening_port(port: u16) -> Result<bool, String> {
 #[tauri::command]
 pub fn get_connectivity_certificate() -> Result<String, String> {
     Ok(ConnectivityReport::generate_certificate(
-        6881,
+        51413,
         PortStatus::Open,
         true,
         true,
