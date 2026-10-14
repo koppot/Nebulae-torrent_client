@@ -76,9 +76,13 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 
 ### Downloading Nebulae-Setup-x64.exe
 
-1. Navigate to the official releases repository: `https://github.com/asiandvdclub/Nebulae-torrent_client/releases`
+1. Navigate to the official releases repository: `https://github.com/koppot/Nebulae-torrent_client/releases`
 2. Under the latest release header, locate the **Assets** section.
 3. Download **`Nebulae-Setup-x64.exe`**.
+
+#### Code signing policy
+
+> **SignPath Foundation application pending; signing is not yet enabled.** Windows artifacts are currently **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher. See the [Code signing policy](code-signing-policy.md) for the policy that will govern signed releases. Once accepted: Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
 
 ### Windows SmartScreen & Antivirus Notice
 
@@ -158,7 +162,7 @@ When Nebulae launches for the first time, Windows Defender Firewall will prompt 
 
 ### Downloading Nebulae-macOS-arm64.dmg
 
-1. Visit `https://github.com/asiandvdclub/Nebulae-torrent_client/releases`.
+1. Visit `https://github.com/koppot/Nebulae-torrent_client/releases`.
 2. Download **`Nebulae-macOS-arm64.dmg`**.
 
 ---

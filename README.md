@@ -15,6 +15,7 @@
   <a href="#installation">Installation</a> •
   <a href="#packages">Packages</a> •
   <a href="#internal-storage">Internal Storage</a> •
+  <a href="#code-signing-policy">Code Signing Policy</a> •
   <a href="#development">Development</a>
 </p>
 
@@ -72,6 +73,18 @@ All published binaries, installers, and packages use the approved naming convent
 Detailed installation instructions covering Windows SmartScreen, macOS Gatekeeper, firewall permissions, router port forwarding, and troubleshooting are available in:
 
 📖 **[Full Installation Guide (docs/installation.md)](docs/installation.md)**
+
+---
+
+## Code signing policy
+
+> **SignPath Foundation application pending; signing is not yet enabled.** Windows artifacts in current releases are **unsigned** beta builds.
+
+Once the application is accepted, Windows releases will carry: **Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)**
+
+- Full policy (roles, approvers, verifiable-build rules, per-release manual approval): **[docs/code-signing-policy.md](docs/code-signing-policy.md)**
+- Privacy policy: **[docs/privacy.md](docs/privacy.md)**
+- Roles: Authors/Committers and Reviewers: [koppot](https://github.com/koppot) (repository owner) · Signing approvers: [koppot](https://github.com/koppot)
 
 ---
 

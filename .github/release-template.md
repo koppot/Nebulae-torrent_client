@@ -4,6 +4,10 @@
 
 Nebulae is a modern, general-purpose peer-to-peer file-transfer client built for creators, archives, communities, and organizations that share content with permission.
 
+### Code signing policy
+
+> **SignPath Foundation application pending; signing is not yet enabled.** Windows artifacts in this release are **unsigned** beta builds unless a signature is explicitly noted below. Policy and roles: [Code signing policy](docs/code-signing-policy.md). Once accepted: Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
 ### Official Shipped Packages:
 - **Windows 10 / 11 (64-bit)**: `Nebulae-Setup-x64.exe` (NSIS Installer)
 - **macOS Apple Silicon (M1/M2/M3/M4)**: `Nebulae-macOS-arm64.dmg` (Disk Image)

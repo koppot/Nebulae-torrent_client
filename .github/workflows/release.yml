@@ -15,6 +15,14 @@ jobs:
   build-release:
     permissions:
       contents: write
+    env:
+      # SignPath integration values are supplied as repository VARIABLES and a SECRET
+      # after SignPath Foundation onboarding (docs/signpath-ci-integration.md).
+      # While any of them is unset, signing is skipped and builds stay UNSIGNED.
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +128,124 @@ jobs:
           releaseDraft: false
           prerelease: true
 
+      # --- SignPath code signing (Windows) -------------------------------------
+      # Active only when the SignPath Foundation application is accepted and the
+      # owner has configured the four repository values listed in
+      # docs/signpath-ci-integration.md. Until then every step below is skipped
+      # and releases are published UNSIGNED.
+
+      - name: Detect SignPath configuration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace("$env:SIGNPATH_API_TOKEN") -or
+              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_ORGANIZATION_ID") -or
+              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_PROJECT_SLUG") -or
+              [string]::IsNullOrWhiteSpace("$env:SIGNPATH_SIGNING_POLICY_SLUG")) {
+            "SIGNPATH_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "SignPath not configured - building UNSIGNED beta artifacts (application pending)."
+          } else {
+            "SIGNPATH_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "SignPath configured - signing will be requested for nebulae.exe and the installer."
+          }
+
+      - name: Upload unsigned nebulae.exe for signing
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        id: upload-exe-signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulae-unsigned-${{ github.run_id }}
+          path: src-tauri/target/release/nebulae.exe
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Submit nebulae.exe signing request (SignPath)
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ vars.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: '${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}'
+          github-artifact-id: '${{ steps.upload-exe-signing.outputs.artifact-id }}'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: 'signpath-signed/exe'
+
+      - name: Install signed nebulae.exe into the build tree
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem -Path 'signpath-signed/exe' -Recurse -Filter 'nebulae.exe' | Select-Object -First 1
+          if (-not $signed) { throw "Signed nebulae.exe was not returned by SignPath." }
+          $hash = (Get-FileHash -Path $signed.FullName -Algorithm SHA256).Hash
+          Copy-Item $signed.FullName -Destination 'src-tauri/target/release/nebulae.exe' -Force
+          Copy-Item $signed.FullName -Destination 'nebulae.exe' -Force
+          "SIGNED_EXE_HASH=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Re-bundle NSIS installer around the signed executable
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: pnpm tauri build --bundles nsis
+
+      - name: Guard - signed executable must be unchanged after bundling
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path 'src-tauri/target/release/nebulae.exe' -Algorithm SHA256).Hash
+          if ("$hash" -ne "$env:SIGNED_EXE_HASH") { throw "nebulae.exe changed during bundling; refusing to package an unsigned executable." }
+          Write-Host "nebulae.exe in the installer tree matches the SignPath-signed binary."
+
+      - name: Stage installer for signing
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "NSIS installer not found in build output." }
+          Copy-Item $setup.FullName -Destination 'Nebulae-Setup-x64.exe' -Force
+
+      - name: Upload unsigned installer for signing
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        id: upload-installer-signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned-${{ github.run_id }}
+          path: Nebulae-Setup-x64.exe
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Submit installer signing request (SignPath)
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: '${{ vars.SIGNPATH_PROJECT_SLUG }}'
+          signing-policy-slug: '${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}'
+          github-artifact-id: '${{ steps.upload-installer-signing.outputs.artifact-id }}'
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: 'signpath-signed/installer'
+
+      - name: Verify Authenticode signatures and timestamps
+        if: runner.os == 'Windows' && env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $signedSetup = Get-ChildItem -Path 'signpath-signed/installer' -Recurse -Filter 'Nebulae-Setup-x64.exe' | Select-Object -First 1
+          if (-not $signedSetup) { throw "Signed installer was not returned by SignPath." }
+          Copy-Item $signedSetup.FullName -Destination 'Nebulae-Setup-x64.exe' -Force
+
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like '*x64*' } | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "signtool.exe not found on the runner." }
+
+          & $signtool verify /pa /all /v 'nebulae.exe'
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for nebulae.exe" }
+          & $signtool verify /pa /all /v 'Nebulae-Setup-x64.exe'
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for Nebulae-Setup-x64.exe" }
+
+      # --- End SignPath block ---------------------------------------------------
+
       - name: Prepare and upload named artifact (macOS)
         if: runner.os == 'macOS'
         env:
@@ -188,19 +314,29 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = if ("${{ github.event.inputs.tag_name }}") { "${{ github.event.inputs.tag_name }}" } else { "${{ github.ref_name }}" }
-          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
-          if ($exe) {
-            Copy-Item $exe.FullName -Destination "${{ matrix.artifact_name }}"
-            $hash = (Get-FileHash -Path "${{ matrix.artifact_name }}" -Algorithm SHA256).Hash.ToLower()
-            "$hash  ${{ matrix.artifact_name }}" | Out-File -FilePath "${{ matrix.artifact_name }}.sha256" -Encoding utf8
-            gh release upload "$tag" "${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" --clobber
+
+          if ($env:SIGNPATH_ENABLED -eq 'true') {
+            # Signed path: verify step staged Nebulae-Setup-x64.exe; nebulae.exe was staged when installed into the build tree.
+            if (-not (Test-Path 'Nebulae-Setup-x64.exe')) { throw "Signed installer missing before upload." }
+            if (-not (Test-Path 'nebulae.exe')) { throw "Signed nebulae.exe missing before upload." }
+            Write-Host "Publishing SIGNED Windows artifacts."
+          } else {
+            Write-Host "SIGNPATH not configured - publishing UNSIGNED beta artifacts."
+            $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+            if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
+            $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
+            if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
           }
-          $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
-          if ($bin) {
-            Copy-Item $bin.FullName -Destination "nebulae.exe"
-            $binHash = (Get-FileHash -Path "nebulae.exe" -Algorithm SHA256).Hash.ToLower()
-            "$binHash  nebulae.exe" | Out-File -FilePath "nebulae.exe.sha256" -Encoding utf8
-            gh release upload "$tag" "nebulae.exe" "nebulae.exe.sha256" --clobber
+
+          # SHA-256 checksums are always generated from the FINAL (signed when enabled) files.
+          foreach ($name in @('Nebulae-Setup-x64.exe', 'nebulae.exe')) {
+            if (Test-Path $name) {
+              $hash = (Get-FileHash -Path $name -Algorithm SHA256).Hash.ToLower()
+              "$hash  $name" | Out-File -FilePath "$name.sha256" -Encoding utf8
+              gh release upload "$tag" $name "$name.sha256" --clobber
+            } else {
+              Write-Host "Skipping $name - not produced."
+            }
           }
 
       - name: Prepare, test, and upload Linux packages (Ubuntu 22.04 baseline)
@@ -410,13 +546,19 @@ jobs:
       - name: Broadcast release announcement on Discord
         env:
           TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
-          ANNOUNCEMENT_WEBHOOK: "[REDACTED-LEAKED-DISCORD-WEBHOOK]"
+          # SECURITY: the webhook URL was previously hardcoded here and leaked in git
+          # history. The old webhook must be revoked in Discord and re-created; store
+          # the new one as the repository secret DISCORD_RELEASE_WEBHOOK_URL.
+          ANNOUNCEMENT_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
         run: |
           python3 -c '
           import os, json, urllib.request
 
           tag = os.environ.get("TAG", "").strip() or "v0.1.0-beta.7"
           webhook = os.environ.get("ANNOUNCEMENT_WEBHOOK")
+          if not webhook:
+              print("DISCORD_RELEASE_WEBHOOK_URL not configured; skipping announcement.")
+              raise SystemExit(0)
           repo_url = "https://github.com/koppot/Nebulae-torrent_client"
           logo = "https://asiandvdclub.org/images/logo.png"
 
