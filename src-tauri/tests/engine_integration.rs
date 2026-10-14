@@ -204,7 +204,13 @@ fn test_torrent_creation_from_directory_and_file() {
 
 #[test]
 fn test_torrent_folder_and_file_renaming() {
-    let tmp_dir = std::env::temp_dir().join(format!("nebulae_rename_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros()));
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "nebulae_rename_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    ));
     let release_dir = tmp_dir.join("Tokyo.Story.Series");
     let season_dir = release_dir.join("Season 1");
     let subs_dir = release_dir.join("Subs");
@@ -220,14 +226,26 @@ fn test_torrent_folder_and_file_renaming() {
 
     let engine = MockTorrentEngine::new();
     let id = engine
-        .add_torrent(&release_dir.to_string_lossy(), Some(&tmp_dir.to_string_lossy()))
+        .add_torrent(
+            &release_dir.to_string_lossy(),
+            Some(&tmp_dir.to_string_lossy()),
+        )
         .expect("add torrent from dir failed");
 
     let torrents = engine.list_torrents().unwrap();
-    let item = torrents.iter().find(|t| t.id == id).expect("torrent not found");
+    let item = torrents
+        .iter()
+        .find(|t| t.id == id)
+        .expect("torrent not found");
     assert_eq!(item.files.len(), 3);
-    assert!(item.files.iter().any(|f| f.name == "Season 1/Episode 1.mkv"));
-    assert!(item.files.iter().any(|f| f.name == "Season 1/Episode 2.mkv"));
+    assert!(item
+        .files
+        .iter()
+        .any(|f| f.name == "Season 1/Episode 1.mkv"));
+    assert!(item
+        .files
+        .iter()
+        .any(|f| f.name == "Season 1/Episode 2.mkv"));
     assert!(item.files.iter().any(|f| f.name == "Subs/en.srt"));
 
     // 1. Test folder renaming: "Season 1" -> "Season 01"
@@ -237,26 +255,44 @@ fn test_torrent_folder_and_file_renaming() {
 
     let torrents_after = engine.list_torrents().unwrap();
     let item_after = torrents_after.iter().find(|t| t.id == id).unwrap();
-    assert!(item_after.files.iter().any(|f| f.name == "Season 01/Episode 1.mkv"));
-    assert!(item_after.files.iter().any(|f| f.name == "Season 01/Episode 2.mkv"));
+    assert!(item_after
+        .files
+        .iter()
+        .any(|f| f.name == "Season 01/Episode 1.mkv"));
+    assert!(item_after
+        .files
+        .iter()
+        .any(|f| f.name == "Season 01/Episode 2.mkv"));
     assert!(item_after.files.iter().any(|f| f.name == "Subs/en.srt"));
     assert!(release_dir.join("Season 01/Episode 1.mkv").exists());
     assert!(!release_dir.join("Season 1").exists());
 
     // 2. Test file renaming preserving parent directory: "Subs/en.srt" -> "english.srt"
-    let sub_file = item_after.files.iter().find(|f| f.name == "Subs/en.srt").unwrap();
+    let sub_file = item_after
+        .files
+        .iter()
+        .find(|f| f.name == "Subs/en.srt")
+        .unwrap();
     engine
         .rename_torrent_file(&id, sub_file.index, "english.srt")
         .expect("rename file failed");
 
     let torrents_after_file = engine.list_torrents().unwrap();
     let item_after_file = torrents_after_file.iter().find(|t| t.id == id).unwrap();
-    assert!(item_after_file.files.iter().any(|f| f.name == "Subs/english.srt"));
+    assert!(item_after_file
+        .files
+        .iter()
+        .any(|f| f.name == "Subs/english.srt"));
     assert!(release_dir.join("Subs/english.srt").exists());
     assert!(!release_dir.join("Subs/en.srt").exists());
 
     // 3. Test safety guard protecting qBittorrent paths
-    let qbit_id = engine.add_torrent("magnet:?xt=urn:btih:abc&dn=qbit_test", Some("/home/user/qbittorrent/downloads")).unwrap();
+    let qbit_id = engine
+        .add_torrent(
+            "magnet:?xt=urn:btih:abc&dn=qbit_test",
+            Some("/home/user/qbittorrent/downloads"),
+        )
+        .unwrap();
     let rename_guard_err = engine.rename_torrent_folder(&qbit_id, "folder", "new_folder");
     assert!(rename_guard_err.is_err());
     assert!(rename_guard_err.unwrap_err().contains("Safety Guard"));
@@ -292,7 +328,11 @@ fn test_remove_torrent_with_and_without_files() {
         )
         .expect("add retention torrent failed");
 
-    assert!(engine.list_torrents().unwrap().iter().any(|t| t.id == id_retention));
+    assert!(engine
+        .list_torrents()
+        .unwrap()
+        .iter()
+        .any(|t| t.id == id_retention));
 
     // Remove without deleting files
     engine
@@ -301,7 +341,11 @@ fn test_remove_torrent_with_and_without_files() {
 
     // Must be removed from in-memory engine list
     assert!(
-        engine.list_torrents().unwrap().iter().all(|t| t.id != id_retention),
+        engine
+            .list_torrents()
+            .unwrap()
+            .iter()
+            .all(|t| t.id != id_retention),
         "Torrent must be removed from memory list"
     );
     // Files on disk must still exist
@@ -328,7 +372,11 @@ fn test_remove_torrent_with_and_without_files() {
         )
         .expect("add delete torrent failed");
 
-    assert!(engine.list_torrents().unwrap().iter().any(|t| t.id == id_delete));
+    assert!(engine
+        .list_torrents()
+        .unwrap()
+        .iter()
+        .any(|t| t.id == id_delete));
 
     // Remove with deleting files
     engine
@@ -337,7 +385,11 @@ fn test_remove_torrent_with_and_without_files() {
 
     // Must be removed from in-memory engine list
     assert!(
-        engine.list_torrents().unwrap().iter().all(|t| t.id != id_delete),
+        engine
+            .list_torrents()
+            .unwrap()
+            .iter()
+            .all(|t| t.id != id_delete),
         "Torrent must be removed from memory list"
     );
     // Files on disk must be deleted
@@ -357,24 +409,35 @@ fn test_remove_torrent_with_and_without_files() {
     std::fs::write(&qbit_file, b"qbit data").unwrap();
 
     let id_qbit = engine
-        .add_torrent("magnet:?xt=urn:btih:fedcba9876543210&dn=qbit_test", Some(&qbit_dir.to_string_lossy()))
+        .add_torrent(
+            "magnet:?xt=urn:btih:fedcba9876543210&dn=qbit_test",
+            Some(&qbit_dir.to_string_lossy()),
+        )
         .expect("add qbit torrent failed");
 
     // Attempting to delete with delete_files = true must be blocked by the safety guard
     let guard_err = engine.remove_torrent(&id_qbit, true);
-    assert!(guard_err.is_err(), "Safety guard must reject deletion of qbittorrent managed path");
+    assert!(
+        guard_err.is_err(),
+        "Safety guard must reject deletion of qbittorrent managed path"
+    );
     assert!(guard_err.unwrap_err().contains("Safety Guard"));
 
     // Torrent must still be in the engine list
     assert!(
-        engine.list_torrents().unwrap().iter().any(|t| t.id == id_qbit),
+        engine
+            .list_torrents()
+            .unwrap()
+            .iter()
+            .any(|t| t.id == id_qbit),
         "Torrent must remain in engine list if safety guard is triggered"
     );
     // Files on disk must be untouched
-    assert!(qbit_file.exists(), "Protected qbittorrent file must remain untouched");
+    assert!(
+        qbit_file.exists(),
+        "Protected qbittorrent file must remain untouched"
+    );
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp_base);
 }
-
-

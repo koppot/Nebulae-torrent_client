@@ -5,12 +5,15 @@ pub mod models;
 pub mod utils;
 
 use db::Database;
-use engine::MockTorrentEngine;
+use engine::SharedEngine;
 use std::sync::Arc;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
 pub fn run() {
+    // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
+    SafeLogger::init_tracing();
+
     // 1. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
@@ -29,8 +32,46 @@ pub fn run() {
         }
     };
 
-    // 3. Initialize engine adapter (MockTorrentEngine for offline and test isolation)
-    let engine = Arc::new(MockTorrentEngine::new());
+    // 3. Resolve user settings for engine session (listening_port & download_directory)
+    let settings = db
+        .get_setting("user_settings_json")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<commands::settings::UserSettings>(&json).ok())
+        .unwrap_or_default();
+
+    let download_dir = if !settings.download_directory.trim().is_empty() {
+        std::path::PathBuf::from(settings.download_directory.trim())
+    } else {
+        dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+    };
+
+    let listening_port = settings.listening_port;
+
+    // 4. Initialize production engine (RqbitTorrentEngine) with fallback to MockTorrentEngine
+    let engine: SharedEngine = match engine::RqbitTorrentEngine::new(
+        Arc::clone(&paths),
+        Arc::clone(&db),
+        download_dir,
+        listening_port,
+    ) {
+        Ok(real_engine) => {
+            SafeLogger::log_to_file(
+                &paths.logs_dir,
+                "INFO",
+                &format!("Initialized librqbit production engine on port {listening_port}"),
+            );
+            Arc::new(real_engine)
+        }
+        Err(e) => {
+            SafeLogger::log_to_file(
+                &paths.logs_dir,
+                "WARN",
+                &format!("Failed to initialize real engine, using mock engine: {e}"),
+            );
+            Arc::new(engine::MockTorrentEngine::new())
+        }
+    };
 
     SafeLogger::log_to_file(
         &paths.logs_dir,
@@ -63,46 +104,50 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
 
-            let show_i = tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
-            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit Nebulae", true, None::<&str>)?;
+            let show_i =
+                tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
+            let quit_i =
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit Nebulae", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
 
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("nebulae-tray")
                 .tooltip("Nebulae — Torrent Client by Asian DVD Club")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => {
+                        app.exit(0);
                     }
+                    "show" => {
+                        if let Some(window) = app
+                            .get_webview_window("main")
+                            .or_else(|| app.webview_windows().into_values().next())
+                        {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
-                    match event {
-                        tauri::tray::TrayIconEvent::Click {
-                            button: tauri::tray::MouseButton::Left,
-                            button_state: tauri::tray::MouseButtonState::Up,
-                            ..
-                        }
-                        | tauri::tray::TrayIconEvent::DoubleClick { .. } => {
-                            let app = tray.app_handle();
-                            if let Some(window) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        _ => {}
+                .on_tray_icon_event(|tray, event| match event {
+                    tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
                     }
+                    | tauri::tray::TrayIconEvent::DoubleClick { .. } => {
+                        let app = tray.app_handle();
+                        if let Some(window) = app
+                            .get_webview_window("main")
+                            .or_else(|| app.webview_windows().into_values().next())
+                        {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    _ => {}
                 });
 
             if let Some(icon) = app.default_window_icon() {
@@ -113,38 +158,40 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    use tauri::Manager;
-                    let should_close_to_tray = if let Some(db) = window.try_state::<std::sync::Arc<crate::db::Database>>() {
-                        if let Ok(Some(json)) = db.get_setting("user_settings_json") {
-                            if let Ok(parsed) = serde_json::from_str::<crate::commands::settings::UserSettings>(&json) {
-                                parsed.close_to_tray
-                            } else {
-                                true
-                            }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                use tauri::Manager;
+                let should_close_to_tray = if let Some(db) =
+                    window.try_state::<std::sync::Arc<crate::db::Database>>()
+                {
+                    if let Ok(Some(json)) = db.get_setting("user_settings_json") {
+                        if let Ok(parsed) =
+                            serde_json::from_str::<crate::commands::settings::UserSettings>(&json)
+                        {
+                            parsed.close_to_tray
                         } else {
                             true
                         }
                     } else {
                         true
-                    };
+                    }
+                } else {
+                    true
+                };
 
-                    if should_close_to_tray {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
+                if should_close_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
-                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
-                    use tauri::Emitter;
-                    for path in paths {
-                        let path_str = path.to_string_lossy().to_string();
-                        let _ = window.emit("nebulae://file-dropped", path_str);
-                    }
-                }
-                _ => {}
             }
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                use tauri::Emitter;
+                for path in paths {
+                    let path_str = path.to_string_lossy().to_string();
+                    let _ = window.emit("nebulae://file-dropped", path_str);
+                }
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             // Diagnostics

@@ -56,7 +56,9 @@ fn percent_decode_path(input: &str) -> String {
     while let Some(b) = chars.next() {
         if b == b'%' {
             if let (Some(h1), Some(h2)) = (chars.next(), chars.next()) {
-                if let Ok(val) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                if let Ok(val) =
+                    u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16)
+                {
                     bytes.push(val);
                     continue;
                 }
@@ -72,7 +74,11 @@ fn percent_decode_path(input: &str) -> String {
 }
 
 pub fn scan_directory_files(dir: &std::path::Path) -> Result<Vec<TorrentFileItem>, String> {
-    fn walk(root: &std::path::Path, current: &std::path::Path, list: &mut Vec<TorrentFileItem>) -> Result<(), String> {
+    fn walk(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        list: &mut Vec<TorrentFileItem>,
+    ) -> Result<(), String> {
         let entries = std::fs::read_dir(current)
             .map_err(|e| format!("Failed to read directory '{}': {e}", current.display()))?;
         for entry in entries {
@@ -89,7 +95,10 @@ pub fn scan_directory_files(dir: &std::path::Path) -> Result<Vec<TorrentFileItem
                     .strip_prefix(root)
                     .map_err(|e| format!("Path prefix error: {e}"))?;
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
-                let size = entry.metadata().map_err(|e| format!("Metadata error: {e}"))?.len();
+                let size = entry
+                    .metadata()
+                    .map_err(|e| format!("Metadata error: {e}"))?
+                    .len();
                 list.push(TorrentFileItem {
                     index: list.len() as u32,
                     name: rel_str,
@@ -121,7 +130,6 @@ impl Default for MockTorrentEngine {
         Self::new()
     }
 }
-
 
 impl MockTorrentEngine {
     pub fn new() -> Self {
@@ -359,7 +367,11 @@ impl MockTorrentEngine {
             "Downloading".to_string()
         };
         let initial_progress = if already_complete { 1.0f32 } else { 0.0f32 };
-        let initial_downloaded = if already_complete { parsed.total_bytes } else { 0 };
+        let initial_downloaded = if already_complete {
+            parsed.total_bytes
+        } else {
+            0
+        };
         let completed_time = if already_complete { Some(now) } else { None };
 
         let mut final_files = parsed.files.clone();
@@ -480,7 +492,11 @@ impl TorrentEngine for MockTorrentEngine {
             trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
         } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
             Some(stripped)
-        } else if !trimmed.starts_with("magnet:") && !trimmed.contains('/') && !trimmed.contains('\\') && trimmed.len() > 100 {
+        } else if !trimmed.starts_with("magnet:")
+            && !trimmed.contains('/')
+            && !trimmed.contains('\\')
+            && trimmed.len() > 100
+        {
             Some(trimmed)
         } else {
             None
@@ -512,7 +528,7 @@ impl TorrentEngine for MockTorrentEngine {
                         name: dir_name,
                         total_bytes: total,
                         piece_size: 1_048_576,
-                        total_pieces: ((total + 1_048_575) / 1_048_576) as u32,
+                        total_pieces: total.div_ceil(1_048_576) as u32,
                         info_hash: format!("local_{:x}", total),
                         raw_info_hash: [0u8; 20],
                         is_private: false,
@@ -627,6 +643,15 @@ impl TorrentEngine for MockTorrentEngine {
             upload_limit_kib: 0,
         });
         Ok(new_id)
+    }
+
+    fn add_torrent_from_bytes(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let parsed = ParsedTorrent::parse_bytes(bytes)?;
+        self.add_parsed_torrent(parsed, download_dir)
     }
 
     fn pause_torrent(&self, id: &str) -> Result<(), String> {
@@ -1017,8 +1042,14 @@ impl TorrentEngine for MockTorrentEngine {
         if trimmed_new_name.is_empty() {
             return Err("Folder name cannot be empty".to_string());
         }
-        if trimmed_new_name.contains('/') || trimmed_new_name.contains('\\') || trimmed_new_name == ".." || trimmed_new_name == "." {
-            return Err("Folder name cannot contain path separators or relative dot tokens".to_string());
+        if trimmed_new_name.contains('/')
+            || trimmed_new_name.contains('\\')
+            || trimmed_new_name == ".."
+            || trimmed_new_name == "."
+        {
+            return Err(
+                "Folder name cannot contain path separators or relative dot tokens".to_string(),
+            );
         }
 
         let mut list = self.torrents.lock().unwrap();
@@ -1028,7 +1059,11 @@ impl TorrentEngine for MockTorrentEngine {
                 return Err("Safety Guard: Torrents and directories managed by external qBittorrent must not be amended by Nebulae.".to_string());
             }
 
-            let old_norm = old_folder_path.trim().replace('\\', "/").trim_matches('/').to_string();
+            let old_norm = old_folder_path
+                .trim()
+                .replace('\\', "/")
+                .trim_matches('/')
+                .to_string();
 
             // Check if renaming root torrent folder
             if old_norm.is_empty() || old_norm == item.name {
@@ -1050,7 +1085,11 @@ impl TorrentEngine for MockTorrentEngine {
             let old_path_obj = std::path::Path::new(&old_norm);
             let parent_prefix = old_path_obj.parent().and_then(|p| {
                 let s = p.to_string_lossy();
-                if s.is_empty() { None } else { Some(s.to_string()) }
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
             });
 
             let new_norm = match &parent_prefix {

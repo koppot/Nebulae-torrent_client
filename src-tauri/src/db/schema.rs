@@ -13,7 +13,15 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     labels TEXT,
     is_watched INTEGER DEFAULT 0,
     notes TEXT,
-    added_at INTEGER
+    added_at INTEGER,
+    completed_on INTEGER,
+    save_path TEXT,
+    download_limit_kib INTEGER DEFAULT 0,
+    upload_limit_kib INTEGER DEFAULT 0,
+    ratio_limit REAL DEFAULT -1.0,
+    sequential_download INTEGER DEFAULT 0,
+    first_last_piece_prio INTEGER DEFAULT 0,
+    super_seeding INTEGER DEFAULT 0
 );
 "#;
 

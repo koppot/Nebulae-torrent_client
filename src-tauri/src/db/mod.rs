@@ -29,6 +29,22 @@ impl Database {
         conn.execute(schema::CREATE_VPN_PROFILES_TABLE, [])?;
         conn.execute(schema::CREATE_SEED_TIME_TABLE, [])?;
 
+        // Backward compatibility migration for torrent_metadata
+        let extra_cols = [
+            ("completed_on", "INTEGER"),
+            ("save_path", "TEXT"),
+            ("download_limit_kib", "INTEGER DEFAULT 0"),
+            ("upload_limit_kib", "INTEGER DEFAULT 0"),
+            ("ratio_limit", "REAL DEFAULT -1.0"),
+            ("sequential_download", "INTEGER DEFAULT 0"),
+            ("first_last_piece_prio", "INTEGER DEFAULT 0"),
+            ("super_seeding", "INTEGER DEFAULT 0"),
+        ];
+        for (col, col_type) in extra_cols {
+            let sql = format!("ALTER TABLE torrent_metadata ADD COLUMN {col} {col_type}");
+            let _ = conn.execute(&sql, []);
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -164,4 +180,165 @@ impl Database {
         let list = iter.flatten().collect();
         Ok(list)
     }
+
+    // Torrent Metadata CRUD (Phase 1 UI-facing persistence mirroring)
+    pub fn upsert_torrent_metadata(&self, meta: &TorrentDbMetadata) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO torrent_metadata (
+                info_hash, display_title, category, labels, is_watched, notes, added_at,
+                completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
+                sequential_download, first_last_piece_prio, super_seeding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ON CONFLICT(info_hash) DO UPDATE SET
+                display_title = excluded.display_title,
+                category = excluded.category,
+                labels = excluded.labels,
+                is_watched = excluded.is_watched,
+                notes = excluded.notes,
+                completed_on = excluded.completed_on,
+                save_path = excluded.save_path,
+                download_limit_kib = excluded.download_limit_kib,
+                upload_limit_kib = excluded.upload_limit_kib,
+                ratio_limit = excluded.ratio_limit,
+                sequential_download = excluded.sequential_download,
+                first_last_piece_prio = excluded.first_last_piece_prio,
+                super_seeding = excluded.super_seeding",
+            params![
+                meta.info_hash,
+                meta.display_title,
+                meta.category,
+                meta.labels,
+                if meta.is_watched { 1 } else { 0 },
+                meta.notes,
+                meta.added_at as i64,
+                meta.completed_on.map(|c| c as i64),
+                meta.save_path,
+                meta.download_limit_kib as i64,
+                meta.upload_limit_kib as i64,
+                meta.ratio_limit as f64,
+                if meta.sequential_download { 1 } else { 0 },
+                if meta.first_last_piece_prio { 1 } else { 0 },
+                if meta.super_seeding { 1 } else { 0 },
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_torrent_metadata(&self, info_hash: &str) -> Result<Option<TorrentDbMetadata>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
+                    completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
+                    sequential_download, first_last_piece_prio, super_seeding
+             FROM torrent_metadata WHERE info_hash = ?1",
+        )?;
+        let mut rows = stmt.query(params![info_hash])?;
+        if let Some(row) = rows.next()? {
+            let is_watched_int: i32 = row.get(4)?;
+            let added_at_int: i64 = row.get(6)?;
+            let completed_on_opt: Option<i64> = row.get(7)?;
+            let dl_lim: i64 = row.get(9).unwrap_or(0);
+            let ul_lim: i64 = row.get(10).unwrap_or(0);
+            let ratio_lim: f64 = row.get(11).unwrap_or(-1.0);
+            let seq_int: i32 = row.get(12).unwrap_or(0);
+            let flp_int: i32 = row.get(13).unwrap_or(0);
+            let ss_int: i32 = row.get(14).unwrap_or(0);
+
+            Ok(Some(TorrentDbMetadata {
+                info_hash: row.get(0)?,
+                display_title: row.get(1)?,
+                category: row.get(2)?,
+                labels: row.get(3)?,
+                is_watched: is_watched_int == 1,
+                notes: row.get(5)?,
+                added_at: added_at_int.max(0) as u64,
+                completed_on: completed_on_opt.map(|c| c.max(0) as u64),
+                save_path: row.get(8)?,
+                download_limit_kib: dl_lim.max(0) as u32,
+                upload_limit_kib: ul_lim.max(0) as u32,
+                ratio_limit: ratio_lim as f32,
+                sequential_download: seq_int == 1,
+                first_last_piece_prio: flp_int == 1,
+                super_seeding: ss_int == 1,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_all_torrent_metadata(
+        &self,
+    ) -> Result<std::collections::HashMap<String, TorrentDbMetadata>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
+                    completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
+                    sequential_download, first_last_piece_prio, super_seeding
+             FROM torrent_metadata",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let is_watched_int: i32 = row.get(4)?;
+            let added_at_int: i64 = row.get(6)?;
+            let completed_on_opt: Option<i64> = row.get(7)?;
+            let dl_lim: i64 = row.get(9).unwrap_or(0);
+            let ul_lim: i64 = row.get(10).unwrap_or(0);
+            let ratio_lim: f64 = row.get(11).unwrap_or(-1.0);
+            let seq_int: i32 = row.get(12).unwrap_or(0);
+            let flp_int: i32 = row.get(13).unwrap_or(0);
+            let ss_int: i32 = row.get(14).unwrap_or(0);
+
+            Ok(TorrentDbMetadata {
+                info_hash: row.get(0)?,
+                display_title: row.get(1)?,
+                category: row.get(2)?,
+                labels: row.get(3)?,
+                is_watched: is_watched_int == 1,
+                notes: row.get(5)?,
+                added_at: added_at_int.max(0) as u64,
+                completed_on: completed_on_opt.map(|c| c.max(0) as u64),
+                save_path: row.get(8)?,
+                download_limit_kib: dl_lim.max(0) as u32,
+                upload_limit_kib: ul_lim.max(0) as u32,
+                ratio_limit: ratio_lim as f32,
+                sequential_download: seq_int == 1,
+                first_last_piece_prio: flp_int == 1,
+                super_seeding: ss_int == 1,
+            })
+        })?;
+
+        let mut map = std::collections::HashMap::new();
+        for item in rows.flatten() {
+            map.insert(item.info_hash.clone(), item);
+        }
+        Ok(map)
+    }
+
+    pub fn delete_torrent_metadata(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM torrent_metadata WHERE info_hash = ?1",
+            params![info_hash],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct TorrentDbMetadata {
+    pub info_hash: String,
+    pub display_title: Option<String>,
+    pub category: Option<String>,
+    pub labels: Option<String>,
+    pub is_watched: bool,
+    pub notes: Option<String>,
+    pub added_at: u64,
+    pub completed_on: Option<u64>,
+    pub save_path: Option<String>,
+    pub download_limit_kib: u32,
+    pub upload_limit_kib: u32,
+    pub ratio_limit: f32,
+    pub sequential_download: bool,
+    pub first_last_piece_prio: bool,
+    pub super_seeding: bool,
 }

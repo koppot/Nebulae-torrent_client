@@ -129,3 +129,26 @@ To prevent state corruption and race conditions, storage responsibilities are cl
 ### 4.7. Test & Mock Isolation
 The `TorrentEngine` trait in `src-tauri/src/engine/traits.rs` is extended additively. `MockTorrentEngine` is preserved under a debug/test flag (`#[cfg(test)]`) to provide deterministic unit and regression testing for UI components, while production application wiring in `src-tauri/src/lib.rs` executes the real engine.
 
+### 4.8. Fallback Engine Policy: `libtorrent-rasterbar`
+If `librqbit` fails to meet the Phase 1 Benchmark Gate criteria (as defined in `docs/engine-benchmarks.md`) or if upstream maintenance ceases, the designated fallback engine is **`libtorrent-rasterbar`** (Arvid Norberg).
+- **License**: BSD-3-Clause (fully permissive, MIT-compatible, and SignPath Foundation compliant).
+- **Build Model**: Must be compiled from source directly within CI workflows to satisfy SignPath Foundation's requirement that no unverified third-party binaries or pre-compiled C++ sidecars are packaged.
+- **Known Engineering Cost**:
+  1. C++ toolchain requirements (CMake, Ninja, Clang/MSVC, Boost dependencies) across all four GitHub Actions release matrix targets (`windows-latest`, `macos-latest` ARM64, `macos-13` x64, and `ubuntu-latest`).
+  2. Construction and maintenance of a custom Rust FFI shim layer (e.g. `cxx` or `bindgen`) owned directly within the Nebulae repository.
+- **Pinned Primary Baseline**: Until fallback escalation is warranted, `librqbit` is pinned at `9.0.1` (Apache-2.0), with full provenance locked in `Cargo.lock`.
+
+### 4.9. Upstream Engagement & Tracking
+Nebulae prioritizes upstream collaboration with the `librqbit` maintainers (`ikatson/rqbit`) to ensure enhancements benefit the wider Rust BitTorrent ecosystem while preserving SignPath-clean dependency provenance:
+1. **Message Stream Encryption (MSE / PE)**:
+   - *Status*: Tracking upstream PR [`ikatson/rqbit#633`](https://github.com/ikatson/rqbit/pull/633) ("Message Stream Encryption").
+   - *Policy*: Nebulae will not implement hand-rolled BitTorrent encryption. The upstream PR branch is monitored and evaluated against Nebulae's throughput and privacy standards, with adoption planned upon merge via a standard dependency bump. In the interim, Phase 5 per-application VPN socket binding mitigates ISP traffic shaping and throttling for ADC users.
+2. **Super-Seeding (Initial Seeding / BEP 16)**:
+   - *Status*: Formal feature request submitted to upstream `ikatson/rqbit` (drafted in `docs/upstream-issues/rqbit-super-seeding.md`), detailing the preservation use case for initial seeding of large archival media releases with minimal outbound redundancy.
+   - *Contingency*: If upstream decides not to accept super-seeding, Nebulae will implement it via a visible, public, open-source fork maintaining full review obligations and build transparency under SignPath rules.
+3. **Phase 5 Network Interface Binding**:
+   - Upstream engagement for `SO_BINDTODEVICE` (Linux), `IP_BOUND_IF` (macOS), and `IP_UNICAST_IF` (Windows) will be initiated prior to Phase 5 implementation.
+4. **SignPath Reputation Evidence**:
+   - Active upstream contributions, issue discussions, and PR tracking are documented as legitimate open-source participation records in `docs/signpath-application.md`.
+
+
