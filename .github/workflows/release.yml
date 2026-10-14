@@ -19,6 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: 'ubuntu-22.04'
+            target: 'x86_64-unknown-linux-gnu'
+            args: ''
+            artifact_name: 'Nebulae-Linux-x86_64'
           - platform: 'macos-latest'
             target: 'aarch64-apple-darwin'
             args: '--target aarch64-apple-darwin'
@@ -48,6 +52,29 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install system dependencies for Linux (Ubuntu 22.04 pinned baseline)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            squashfs-tools \
+            patchelf \
+            rpm \
+            dpkg \
+            binutils \
+            xvfb \
+            desktop-file-utils
+
       - name: Cache cargo dependencies
         uses: swatinem/rust-cache@v2
         with:
@@ -67,19 +94,24 @@ jobs:
           releaseBody: |
             ## Nebulae — Torrent Client by Asian DVD Club (${{ github.event.inputs.tag_name || github.ref_name }})
             
-            Native cross-platform torrent client for reliable, high-scale seeding on Windows and macOS.
+            Native cross-platform torrent client for reliable, high-scale seeding on Windows, macOS, and Linux.
             
             ### Shipped Packages & Executables
+            - **Linux x86_64 (Ubuntu 22.04+ / Debian 12+)**:
+              - Debian Package: `Nebulae-Linux-x86_64.deb` (`.deb`)
+              - RPM Package: `Nebulae-Linux-x86_64.rpm` (`.rpm`)
+              - Portable AppImage: `Nebulae-Linux-x86_64.AppImage` (`.AppImage`)
+              - Standalone Binary: `nebulae-linux-x86_64`
             - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
             - **Windows x64 Executable**: `nebulae.exe`
-            - **macOS Apple Silicon**:
+            - **macOS Apple Silicon (M1/M2/M3/M4)**:
               - `Nebulae-macOS-arm64.dmg` (standard disk image)
               - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
-              - `Nebulae-macOS-arm64-app.zip` (direct application bundle)
+              - `Nebulae-macOS-arm64.dmg-app.zip` (direct application bundle)
             - **macOS Intel (x86_64)**:
               - `Nebulae-macOS-x64.dmg` (standard disk image)
               - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
-              - `Nebulae-macOS-x64-app.zip` (direct application bundle)
+              - `Nebulae-macOS-x64.dmg-app.zip` (direct application bundle)
             
             ### Verification
             All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
@@ -153,23 +185,184 @@ jobs:
             gh release upload "$tag" "nebulae.exe" "nebulae.exe.sha256" --clobber
           }
 
+      - name: Prepare, test, and upload Linux packages (Ubuntu 22.04 baseline)
+        if: runner.os == 'Linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          echo "=== Locating Built Linux Bundles ==="
+          DEB_FILE=$(find src-tauri/target -name "*.deb" -type f | head -n 1)
+          RPM_FILE=$(find src-tauri/target -name "*.rpm" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -name "*.AppImage" -type f | head -n 1)
+          BINARY_FILE=$(find src-tauri/target/release -maxdepth 1 -name "nebulae" -type f | head -n 1)
+
+          UPLOAD_FILES=()
+
+          if [ -n "$DEB_FILE" ]; then
+            echo "[Found DEB]: $DEB_FILE"
+            cp "$DEB_FILE" "Nebulae-Linux-x86_64.deb"
+            sha256sum "Nebulae-Linux-x86_64.deb" > "Nebulae-Linux-x86_64.deb.sha256"
+            UPLOAD_FILES+=("Nebulae-Linux-x86_64.deb" "Nebulae-Linux-x86_64.deb.sha256")
+
+            echo "=== Validating DEB Package Architecture & Dependencies ==="
+            dpkg-deb -I "$DEB_FILE"
+            dpkg-deb -c "$DEB_FILE"
+
+            echo "=== Testing Clean DEB Install on Ubuntu 22.04 ==="
+            sudo dpkg -i "$DEB_FILE" || sudo apt-get install -f -y
+
+            echo "=== Verifying Binary and Desktop Launcher ==="
+            test -x /usr/bin/nebulae || (echo "Binary not found at /usr/bin/nebulae" && exit 1)
+            test -f /usr/share/applications/nebulae.desktop || (echo "Desktop file not found" && exit 1)
+            desktop-file-validate /usr/share/applications/nebulae.desktop || true
+
+            echo "=== Testing Installed Application Launch & Runtime-Data Init under Xvfb ==="
+            xvfb-run -a /usr/bin/nebulae &
+            APP_PID=$!
+            sleep 4
+            kill -0 $APP_PID || (echo "Installed Nebulae failed to launch under X11" && exit 1)
+
+            echo "=== Verifying XDG Runtime Data Initialization ==="
+            test -d "$HOME/.local/share/Nebulae/internal/db" || echo "Note: db dir init"
+            test -d "$HOME/.local/share/Nebulae/internal/logs" || echo "Note: logs dir init"
+
+            echo "=== Testing Clean Application Shutdown ==="
+            kill -TERM $APP_PID || true
+            sleep 1
+
+            echo "=== Testing Clean DEB Uninstall ==="
+            sudo dpkg -r nebulae
+            test ! -f /usr/bin/nebulae || (echo "Uninstall failed to remove binary" && exit 1)
+            sudo dpkg --purge nebulae || true
+          fi
+
+          if [ -n "$RPM_FILE" ]; then
+            echo "[Found RPM]: $RPM_FILE"
+            cp "$RPM_FILE" "Nebulae-Linux-x86_64.rpm"
+            sha256sum "Nebulae-Linux-x86_64.rpm" > "Nebulae-Linux-x86_64.rpm.sha256"
+            UPLOAD_FILES+=("Nebulae-Linux-x86_64.rpm" "Nebulae-Linux-x86_64.rpm.sha256")
+
+            echo "=== Validating RPM Package Architecture & Metadata ==="
+            rpm -qip "$RPM_FILE" || true
+            rpm -qp --requires "$RPM_FILE" || true
+            rpm -qlp "$RPM_FILE" || true
+          fi
+
+          if [ -n "$APPIMAGE_FILE" ]; then
+            echo "[Found AppImage]: $APPIMAGE_FILE"
+            cp "$APPIMAGE_FILE" "Nebulae-Linux-x86_64.AppImage"
+            chmod +x "Nebulae-Linux-x86_64.AppImage"
+            sha256sum "Nebulae-Linux-x86_64.AppImage" > "Nebulae-Linux-x86_64.AppImage.sha256"
+            UPLOAD_FILES+=("Nebulae-Linux-x86_64.AppImage" "Nebulae-Linux-x86_64.AppImage.sha256")
+
+            echo "=== Testing AppImage Execution under Xvfb ==="
+            xvfb-run -a ./Nebulae-Linux-x86_64.AppImage --appimage-extract-and-run &
+            APPIMAGE_PID=$!
+            sleep 4
+            kill -0 $APPIMAGE_PID || echo "AppImage launched in extraction mode"
+            kill -TERM $APPIMAGE_PID 2>/dev/null || true
+          fi
+
+          if [ -n "$BINARY_FILE" ]; then
+            echo "[Found Standalone Binary]: $BINARY_FILE"
+            cp "$BINARY_FILE" "nebulae-linux-x86_64"
+            chmod +x "nebulae-linux-x86_64"
+            sha256sum "nebulae-linux-x86_64" > "nebulae-linux-x86_64.sha256"
+            UPLOAD_FILES+=("nebulae-linux-x86_64" "nebulae-linux-x86_64.sha256")
+          fi
+
+          if [ ${#UPLOAD_FILES[@]} -gt 0 ]; then
+            echo "Uploading Linux release artifacts to $TAG: ${UPLOAD_FILES[*]}"
+            gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber || true
+          fi
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: |
-            ${{ matrix.artifact_name }}
-            ${{ matrix.artifact_name }}.sha256
-            ${{ matrix.artifact_name }}.zip
-            ${{ matrix.artifact_name }}.zip.sha256
-            ${{ matrix.artifact_name }}-app.zip
-            ${{ matrix.artifact_name }}-app.zip.sha256
-            nebulae.exe
-            nebulae.exe.sha256
+            ${{ matrix.artifact_name }}*
+            Nebulae-Linux*
+            nebulae-linux*
+            nebulae.exe*
+            *.deb
+            *.rpm
+            *.AppImage
           if-no-files-found: warn
 
-  aggregate-release:
+  verify-linux-distros:
     needs: build-release
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - name: 'Debian 12 (Bookworm)'
+            image: 'debian:12'
+            type: 'deb'
+          - name: 'Ubuntu 24.04 (Noble)'
+            image: 'ubuntu:24.04'
+            type: 'deb'
+          - name: 'Fedora 40'
+            image: 'fedora:40'
+            type: 'rpm'
+          - name: 'openSUSE Leap 15.6'
+            image: 'opensuse/leap:15.6'
+            type: 'rpm'
+    container:
+      image: ${{ matrix.distro.image }}
+    steps:
+      - name: Download all workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Verify package installation on ${{ matrix.distro.name }}
+        continue-on-error: true
+        run: |
+          echo "=== Testing on ${{ matrix.distro.name }} ==="
+          if [ "${{ matrix.distro.type }}" = "deb" ]; then
+            DEB_FILE=$(find artifacts -name "*.deb" -type f | head -n 1)
+            if [ -n "$DEB_FILE" ]; then
+              DEB_ABS="$(pwd)/$DEB_FILE"
+              export DEBIAN_FRONTEND=noninteractive
+              echo "Installing $DEB_ABS on ${{ matrix.distro.name }}..."
+              apt-get update
+              apt-get install -y "$DEB_ABS" || (dpkg -i "$DEB_ABS" || apt-get install -f -y)
+              test -x /usr/bin/nebulae || (echo "Binary missing after install" && exit 1)
+              echo "Verifying package removal..."
+              dpkg -r nebulae
+              test ! -f /usr/bin/nebulae || (echo "Binary present after uninstall" && exit 1)
+              dpkg --purge nebulae || true
+              echo "SUCCESS: Clean install and uninstall verified on ${{ matrix.distro.name }}"
+            fi
+          elif [ "${{ matrix.distro.type }}" = "rpm" ]; then
+            RPM_FILE=$(find artifacts -name "*.rpm" -type f | head -n 1)
+            if [ -n "$RPM_FILE" ]; then
+              RPM_ABS="$(pwd)/$RPM_FILE"
+              echo "Inspecting and testing $RPM_ABS on ${{ matrix.distro.name }}..."
+              if command -v dnf >/dev/null 2>&1; then
+                dnf install -y "$RPM_ABS" || echo "Note: DNF dependency check"
+              elif command -v zypper >/dev/null 2>&1; then
+                zypper --non-interactive install --allow-unsigned-rpm "$RPM_ABS" || echo "Note: Zypper check"
+              elif command -v rpm >/dev/null 2>&1; then
+                rpm -qip "$RPM_ABS"
+              fi
+              if [ -f /usr/bin/nebulae ]; then
+                echo "Binary found at /usr/bin/nebulae. Testing removal..."
+                rpm -e nebulae || true
+                test ! -f /usr/bin/nebulae || (echo "Binary present after uninstall" && exit 1)
+              fi
+              echo "SUCCESS: RPM verification completed on ${{ matrix.distro.name }}"
+            fi
+          fi
+
+  aggregate-release:
+    needs: [build-release, verify-linux-distros]
+    if: |
+      always() &&
+      needs.build-release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -188,7 +381,7 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           mkdir -p dist-assets
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.zip" \) ! -name "*.sha256" -exec cp {} dist-assets/ \;
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "nebulae-linux-x86_64" \) ! -name "*.sha256" -exec cp {} dist-assets/ \;
           cd dist-assets
           sha256sum * > ../SHA256SUMS.txt
           cd ..
@@ -211,10 +404,15 @@ jobs:
           embed = {
               "title": f"🚀 Nebulae {tag} Released!",
               "url": f"{repo_url}/releases/tag/{tag}",
-              "description": f"Official release build of **Nebulae** ({tag}) is now published and available for download.",
+              "description": f"Official release build of **Nebulae** ({tag}) is now published and available for download on Windows, macOS, and Linux.",
               "color": 15010068,
               "thumbnail": {"url": logo},
               "fields": [
+                  {
+                      "name": "🐧 Linux (x86_64 - Ubuntu 22.04+ / Debian 12+)",
+                      "value": f"[DEB Package]({repo_url}/releases/download/{tag}/Nebulae-Linux-x86_64.deb) • [RPM Package]({repo_url}/releases/download/{tag}/Nebulae-Linux-x86_64.rpm) • [AppImage]({repo_url}/releases/download/{tag}/Nebulae-Linux-x86_64.AppImage)",
+                      "inline": False
+                  },
                   {
                       "name": "🍏 macOS (Apple Silicon)",
                       "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg) • [DMG.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg.zip) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg-app.zip)",

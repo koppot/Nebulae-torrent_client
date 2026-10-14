@@ -46,6 +46,32 @@ pub fn open_logs_folder(paths: State<Arc<AppPaths>>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_external_link(url: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open link on macOS: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open link on Windows: {e}"))?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open link on Linux: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticSummary, String> {
     let logs_size = fs::metadata(paths.logs_dir.join("nebulae_session.log"))
         .map(|m| m.len())

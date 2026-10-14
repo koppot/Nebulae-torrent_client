@@ -10,6 +10,10 @@ dist-ssr/
 *.msi
 *.zip
 *.tar.gz
+*.deb
+*.rpm
+*.AppImage
+*.appimage
 *.app/
 
 # Rust / Cargo build artifacts
