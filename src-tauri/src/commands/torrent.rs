@@ -205,35 +205,52 @@ pub fn rename_torrent_file(
 }
 
 #[tauri::command]
-pub fn create_torrent_file(
+pub async fn create_torrent_file(
     params: CreateTorrentParams,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<'_, Arc<MockTorrentEngine>>,
 ) -> Result<String, String> {
-    if params.source_path.trim().is_empty() {
+    let source_path_str = params.source_path.trim().to_string();
+    if source_path_str.is_empty() {
         return Err("Source file or folder path is required".to_string());
     }
 
-    let file_name = std::path::Path::new(&params.source_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "created_torrent".to_string());
-
-    let out_dir = if params.output_path.trim().is_empty() {
-        dirs::download_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .to_string_lossy()
-            .to_string()
-    } else {
-        params.output_path.clone()
-    };
-
-    let target_file = format!("{}/{}.torrent", out_dir.trim_end_matches('/'), file_name);
-
-    if params.start_seeding {
-        let _ = engine.add_torrent(&target_file, Some(&out_dir));
+    let source = std::path::PathBuf::from(&source_path_str);
+    if !source.exists() {
+        return Err(format!("Source path '{}' does not exist on disk", source.display()));
     }
 
-    Ok(target_file)
+    let out_dir = if params.output_path.trim().is_empty() {
+        dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+    } else {
+        std::path::PathBuf::from(params.output_path.trim())
+    };
+
+    let params_clone = params.clone();
+    let source_clone = source.clone();
+    let out_dir_clone = out_dir.clone();
+
+    let target_file = tokio::task::spawn_blocking(move || {
+        crate::engine::metainfo::build_torrent_file(
+            &source_clone,
+            &out_dir_clone,
+            params_clone.piece_size_kib,
+            &params_clone.trackers,
+            params_clone.is_private,
+            &params_clone.comment,
+            &params_clone.created_by,
+        )
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {e}"))??;
+
+    let target_file_str = target_file.to_string_lossy().to_string();
+
+    if params.start_seeding {
+        let parent = source.parent().map(|p| p.to_string_lossy().to_string());
+        let _ = engine.add_torrent(&target_file_str, parent.as_deref());
+    }
+
+    Ok(target_file_str)
 }
 
 #[tauri::command]
@@ -268,90 +285,221 @@ pub fn reset_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Resul
 }
 
 #[tauri::command]
-pub fn select_torrent_file() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let output = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg("try\nPOSIX path of (choose file of type {\"torrent\", \"adc\", \"public.data\"} with prompt \"Select .torrent or .adc file\")\non error\n\"\"\nend try")
-            .output()
-            .map_err(|e| format!("Failed to open file picker: {e}"))?;
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
+pub async fn select_source_folder() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose folder with prompt "Select Folder for Torrent Creation")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open folder picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
         }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object System.Windows.Forms.OpenFileDialog
-$f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
-$f.Title = "Select .torrent or .adc file"
-if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $f.FileName
-}
-"#;
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", script])
-            .output()
-            .map_err(|e| format!("Failed to open file picker: {e}"))?;
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
+        #[cfg(target_os = "windows")]
+        {
+            let script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.FolderBrowserDialog
+            $f.Description = "Select Folder for Torrent Creation"
+            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $f.SelectedPath
+            }
+            "#;
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", script])
+                .output()
+                .map_err(|e| format!("Failed to open folder picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
         }
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Ok(None)
-    }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        { Ok(None) }
+    })
+    .await
+    .map_err(|e| format!("Picker task error: {e}"))?
 }
 
 #[tauri::command]
-pub fn select_download_directory() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let output = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg("try\nPOSIX path of (choose folder with prompt \"Select Download Directory\")\non error\n\"\"\nend try")
-            .output()
-            .map_err(|e| format!("Failed to open directory picker: {e}"))?;
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
+pub async fn select_source_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose file with prompt "Select File for Torrent Creation")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
         }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$f = New-Object System.Windows.Forms.FolderBrowserDialog
-$f.Description = "Select Download Directory"
-if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $f.SelectedPath
+        #[cfg(target_os = "windows")]
+        {
+            let script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.OpenFileDialog
+            $f.Title = "Select File for Torrent Creation"
+            $f.Filter = "All Files (*.*)|*.*"
+            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $f.FileName
+            }
+            "#;
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", script])
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        { Ok(None) }
+    })
+    .await
+    .map_err(|e| format!("Picker task error: {e}"))?
 }
-"#;
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", script])
-            .output()
-            .map_err(|e| format!("Failed to open directory picker: {e}"))?;
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
+
+#[tauri::command]
+pub async fn select_torrent_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose file of type {"torrent", "adc", "public.data"} with prompt "Select .torrent or .adc file")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
         }
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Ok(None)
-    }
+        #[cfg(target_os = "windows")]
+        {
+            let script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.OpenFileDialog
+            $f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
+            $f.Title = "Select .torrent or .adc file"
+            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $f.FileName
+            }
+            "#;
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", script])
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| format!("Picker task error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn select_download_directory() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose folder with prompt "Select Download Directory")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open directory picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $f = New-Object System.Windows.Forms.FolderBrowserDialog
+            $f.Description = "Select Download Directory"
+            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                $f.SelectedPath
+            }
+            "#;
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", script])
+                .output()
+                .map_err(|e| format!("Failed to open directory picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| format!("Directory picker task error: {e}"))?
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

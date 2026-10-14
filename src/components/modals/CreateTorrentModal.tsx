@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { X, Sparkles, Folder, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, Sparkles, Folder, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 const LAST_SAVED_TRACKERS_KEY = 'nebulae_last_created_trackers';
 
 export const CreateTorrentModal: React.FC = () => {
   const { showCreateTorrent, setShowCreateTorrent } = useUiStore();
-  const { createTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
+  const { createTorrent, selectSourceFolder, selectSourceFile, selectDownloadDirectory } =
+    useTorrentStore();
 
   const [sourcePath, setSourcePath] = useState('');
   const [outputPath, setOutputPath] = useState('');
@@ -30,9 +31,18 @@ export const CreateTorrentModal: React.FC = () => {
 
   if (!showCreateTorrent) return null;
 
-  const handleBrowseSource = async () => {
+  const handleBrowseFolder = async () => {
     try {
-      const path = await selectTorrentFile();
+      const path = await selectSourceFolder();
+      if (path) setSourcePath(path);
+    } catch {
+      //
+    }
+  };
+
+  const handleBrowseFile = async () => {
+    try {
+      const path = await selectSourceFile();
       if (path) setSourcePath(path);
     } catch {
       //
@@ -121,23 +131,33 @@ export const CreateTorrentModal: React.FC = () => {
           {/* Source Selection */}
           <div>
             <label className="block text-xs font-medium text-white mb-1.5">
-              Select Source File or Directory
+              Select Source Content (Folder or File)
             </label>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={sourcePath}
                 onChange={(e) => setSourcePath(e.target.value)}
-                placeholder="/path/to/content/movie.mkv or folder"
+                placeholder="/path/to/folder or /path/to/movie.mkv"
                 className="flex-1 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
               />
               <button
                 type="button"
-                onClick={handleBrowseSource}
-                className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition text-xs"
+                onClick={handleBrowseFolder}
+                className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition text-xs whitespace-nowrap"
+                title="Select a directory with multiple files or a complete release"
               >
                 <Folder className="w-3.5 h-3.5 text-[#e50914]" />
-                <span>Browse...</span>
+                <span>Select Folder...</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleBrowseFile}
+                className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition text-xs whitespace-nowrap"
+                title="Select a single media or data file"
+              >
+                <FileText className="w-3.5 h-3.5 text-blue-400" />
+                <span>Select File...</span>
               </button>
             </div>
           </div>
@@ -277,7 +297,14 @@ export const CreateTorrentModal: React.FC = () => {
               disabled={isSubmitting || !sourcePath.trim()}
               className="px-5 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#f40612] disabled:opacity-40 text-white font-semibold transition flex items-center gap-1.5 shadow"
             >
-              {isSubmitting ? 'Creating...' : 'Create .torrent'}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Hashing & Creating...</span>
+                </>
+              ) : (
+                <span>Create .torrent</span>
+              )}
             </button>
           </div>
         </form>

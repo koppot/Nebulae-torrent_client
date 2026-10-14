@@ -340,16 +340,50 @@ impl TorrentEngine for MockTorrentEngine {
                     || lower.ends_with(".vob")
             });
 
+        let content_path = std::path::Path::new(&save_path);
+        let already_complete = if content_path.is_file() {
+            std::fs::metadata(content_path)
+                .map(|m| m.len() >= total_bytes && total_bytes > 0)
+                .unwrap_or(false)
+        } else if content_path.is_dir() {
+            let existing_size: u64 = files
+                .iter()
+                .filter_map(|f| {
+                    let p = content_path.join(&f.name);
+                    std::fs::metadata(p).ok().map(|m| m.len())
+                })
+                .sum();
+            existing_size >= total_bytes && total_bytes > 0
+        } else {
+            false
+        };
+
+        let initial_status = if already_complete {
+            "Seeding".to_string()
+        } else {
+            "Downloading".to_string()
+        };
+        let initial_progress = if already_complete { 1.0f32 } else { 0.0f32 };
+        let initial_downloaded = if already_complete { total_bytes } else { 0 };
+        let completed_time = if already_complete { Some(now) } else { None };
+
+        let mut final_files = files;
+        if already_complete {
+            for f in &mut final_files {
+                f.progress = 1.0;
+            }
+        }
+
         list.push(TorrentItem {
             id: new_id.clone(),
             name,
             total_bytes,
-            downloaded_bytes: 0,
+            downloaded_bytes: initial_downloaded,
             uploaded_bytes: 0,
             download_rate: 0,
             upload_rate: 0,
-            progress: 0.0,
-            status: "Downloading".to_string(),
+            progress: initial_progress,
+            status: initial_status,
             eta_seconds: None,
             seeds: initial_seeds,
             peers: initial_peers,
@@ -360,7 +394,7 @@ impl TorrentEngine for MockTorrentEngine {
             info_hash,
             save_path,
             added_on: now,
-            completed_on: None,
+            completed_on: completed_time,
             comment,
             created_by,
             piece_size,
@@ -369,7 +403,7 @@ impl TorrentEngine for MockTorrentEngine {
             first_last_piece_prio: true,
             super_seeding: false,
             tags: vec!["Active".to_string()],
-            files,
+            files: final_files,
             trackers,
             download_limit_kib: 0,
             upload_limit_kib: 0,

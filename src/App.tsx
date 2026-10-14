@@ -132,10 +132,28 @@ export const App: React.FC = () => {
       useUiStore.getState().setShowHelp(true);
     } else if (modalParam === 'add') {
       useUiStore.getState().setShowAddTorrent(true);
+    } else if (modalParam === 'create') {
+      useUiStore.getState().setShowCreateTorrent(true);
     }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (isCmdOrCtrl && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        useUiStore.getState().setShowCreateTorrent(true);
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        useUiStore.getState().setShowAddTorrent(true);
+      } else if (isCmdOrCtrl && e.key === ',') {
+        e.preventDefault();
+        useUiStore.getState().setShowSettings(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
 
     return () => {
       clearInterval(torrentPollInterval);
+      window.removeEventListener('keydown', handleKeyDown);
       for (const un of unlistenFns) un();
     };
   }, [loadSettings, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);

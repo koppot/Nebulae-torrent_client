@@ -145,3 +145,41 @@ fn test_zero_leechers_zero_upload_rate() {
     }
 }
 
+#[test]
+fn test_torrent_creation_from_directory_and_file() {
+    let tmp_dir = std::env::temp_dir().join(format!("nebulae_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let source_dir = tmp_dir.join("TestReleaseFolder");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("disc1.iso"), vec![0x42; 65536]).unwrap();
+    std::fs::write(source_dir.join("disc2.iso"), vec![0x43; 32768]).unwrap();
+
+    let out_dir = tmp_dir.join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+
+    let torrent_file = nebulae_torrent_client_lib::engine::metainfo::build_torrent_file(
+        &source_dir,
+        &out_dir,
+        32,
+        &["https://asiandvdclub.org/announce".to_string()],
+        true,
+        "Created with Nebulae Test",
+        "Nebulae",
+    )
+    .expect("Torrent creation failed");
+
+    assert!(torrent_file.exists());
+    assert_eq!(torrent_file.file_name().unwrap(), "TestReleaseFolder.torrent");
+
+    // Parse the generated torrent file
+    let parsed = nebulae_torrent_client_lib::engine::metainfo::ParsedTorrent::parse_file(&torrent_file).unwrap();
+    assert_eq!(parsed.name, "TestReleaseFolder");
+    assert_eq!(parsed.total_bytes, 65536 + 32768);
+    assert_eq!(parsed.files.len(), 2);
+    assert!(parsed.is_private);
+    assert_eq!(parsed.comment, "Created with Nebulae Test");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+

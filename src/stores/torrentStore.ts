@@ -33,6 +33,8 @@ interface TorrentState {
   createTorrent: (params: CreateTorrentParams) => Promise<string>;
   exportTorrent: (id: string) => Promise<string>;
   selectTorrentFile: () => Promise<string | null>;
+  selectSourceFolder: () => Promise<string | null>;
+  selectSourceFile: () => Promise<string | null>;
   selectDownloadDirectory: () => Promise<string | null>;
   getSystemPathPresets: () => Promise<SystemPathPresets>;
 }
@@ -344,6 +346,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   selectTorrentFile: async () => {
     try {
       return await invoke<string | null>('select_torrent_file');
+    } catch {
+      return null;
+    }
+  },
+
+  selectSourceFolder: async () => {
+    try {
+      return await invoke<string | null>('select_source_folder');
+    } catch {
+      return null;
+    }
+  },
+
+  selectSourceFile: async () => {
+    try {
+      return await invoke<string | null>('select_source_file');
     } catch {
       return null;
     }

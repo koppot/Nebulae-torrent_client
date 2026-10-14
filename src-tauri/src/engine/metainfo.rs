@@ -277,3 +277,214 @@ pub fn ensure_torrent_storage(save_path: &Path, parsed: &ParsedTorrent) -> Resul
 
     Ok(content_dir)
 }
+
+/// Create a real .torrent file from a source file or directory.
+pub fn build_torrent_file(
+    source: &Path,
+    output_dir_or_file: &Path,
+    piece_size_kib: u32,
+    trackers: &[String],
+    is_private: bool,
+    comment: &str,
+    created_by: &str,
+) -> Result<PathBuf, String> {
+    if !source.exists() {
+        return Err(format!("Source path '{}' does not exist", source.display()));
+    }
+
+    let piece_length = (piece_size_kib.max(16) as usize) * 1024;
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "content".to_string());
+
+    let raw_info = if source.is_file() {
+        let file_len = std::fs::metadata(source)
+            .map_err(|e| format!("Failed to read metadata for '{}': {e}", source.display()))?
+            .len();
+
+        let mut f = std::fs::File::open(source)
+            .map_err(|e| format!("Failed to open file '{}': {e}", source.display()))?;
+
+        let mut pieces = Vec::new();
+        let mut buf = vec![0u8; piece_length];
+        use std::io::Read;
+        loop {
+            let mut read_in_piece = 0;
+            while read_in_piece < piece_length {
+                let n = f
+                    .read(&mut buf[read_in_piece..])
+                    .map_err(|e| format!("Error reading source file: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                read_in_piece += n;
+            }
+            if read_in_piece == 0 {
+                break;
+            }
+            let mut hasher = Sha1::new();
+            hasher.update(&buf[..read_in_piece]);
+            pieces.extend_from_slice(&hasher.finalize());
+            if read_in_piece < piece_length {
+                break;
+            }
+        }
+
+        RawInfo {
+            name: Some(name.clone()),
+            piece_length: Some(piece_length as u32),
+            pieces,
+            length: Some(file_len),
+            files: None,
+            private: Some(if is_private { 1 } else { 0 }),
+        }
+    } else if source.is_dir() {
+        fn collect_files(
+            root: &Path,
+            dir: &Path,
+            list: &mut Vec<(PathBuf, Vec<String>, u64)>,
+        ) -> Result<(), String> {
+            let entries = std::fs::read_dir(dir)
+                .map_err(|e| format!("Failed to read directory '{}': {e}", dir.display()))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Directory read error: {e}"))?;
+                let path = entry.path();
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.starts_with('.') {
+                    continue; // Skip hidden files like .DS_Store
+                }
+                if path.is_dir() {
+                    collect_files(root, &path, list)?;
+                } else if path.is_file() {
+                    let rel = path
+                        .strip_prefix(root)
+                        .map_err(|e| format!("Strip prefix error: {e}"))?;
+                    let comps: Vec<String> =
+                        rel.iter().map(|c| c.to_string_lossy().to_string()).collect();
+                    let len = entry
+                        .metadata()
+                        .map_err(|e| format!("File metadata error: {e}"))?
+                        .len();
+                    list.push((path, comps, len));
+                }
+            }
+            Ok(())
+        }
+
+        let mut file_list = Vec::new();
+        collect_files(source, source, &mut file_list)?;
+        if file_list.is_empty() {
+            return Err("Cannot create torrent from an empty directory".to_string());
+        }
+        file_list.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut pieces = Vec::new();
+        let mut buf = vec![0u8; piece_length];
+        let mut buf_pos = 0;
+
+        use std::io::Read;
+        for (fpath, _, _) in &file_list {
+            let mut file = std::fs::File::open(fpath)
+                .map_err(|e| format!("Failed to open '{}': {e}", fpath.display()))?;
+            loop {
+                let n = file
+                    .read(&mut buf[buf_pos..])
+                    .map_err(|e| format!("Read error on '{}': {e}", fpath.display()))?;
+                if n == 0 {
+                    break;
+                }
+                buf_pos += n;
+                if buf_pos == piece_length {
+                    let mut hasher = Sha1::new();
+                    hasher.update(&buf);
+                    pieces.extend_from_slice(&hasher.finalize());
+                    buf_pos = 0;
+                }
+            }
+        }
+        if buf_pos > 0 {
+            let mut hasher = Sha1::new();
+            hasher.update(&buf[..buf_pos]);
+            pieces.extend_from_slice(&hasher.finalize());
+        }
+
+        let raw_files: Vec<RawFile> = file_list
+            .into_iter()
+            .map(|(_, path, length)| RawFile { length, path })
+            .collect();
+
+        RawInfo {
+            name: Some(name.clone()),
+            piece_length: Some(piece_length as u32),
+            pieces,
+            length: None,
+            files: Some(raw_files),
+            private: Some(if is_private { 1 } else { 0 }),
+        }
+    } else {
+        return Err("Source path must be a regular file or directory".to_string());
+    };
+
+    let announce = trackers.first().cloned();
+    let announce_list = if trackers.len() > 1 {
+        Some(trackers.iter().map(|t| vec![t.clone()]).collect())
+    } else {
+        None
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let raw_meta = RawMetainfo {
+        announce,
+        announce_list,
+        comment: if comment.trim().is_empty() {
+            None
+        } else {
+            Some(comment.trim().to_string())
+        },
+        created_by: if created_by.trim().is_empty() {
+            None
+        } else {
+            Some(created_by.trim().to_string())
+        },
+        creation_date: Some(now),
+        info: raw_info,
+    };
+
+    let bencode_bytes = serde_bencode::to_bytes(&raw_meta)
+        .map_err(|e| format!("Failed to bencode metainfo: {e}"))?;
+
+    let target_file_path = if output_dir_or_file.is_dir()
+        || output_dir_or_file
+            .extension()
+            .map(|e| e != "torrent" && e != "adc")
+            .unwrap_or(true)
+    {
+        std::fs::create_dir_all(output_dir_or_file).map_err(|e| {
+            format!(
+                "Failed to create output directory '{}': {e}",
+                output_dir_or_file.display()
+            )
+        })?;
+        output_dir_or_file.join(format!("{}.torrent", name))
+    } else {
+        if let Some(parent) = output_dir_or_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        output_dir_or_file.to_path_buf()
+    };
+
+    std::fs::write(&target_file_path, &bencode_bytes).map_err(|e| {
+        format!(
+            "Failed to write .torrent file to '{}': {e}",
+            target_file_path.display()
+        )
+    })?;
+
+    Ok(target_file_path)
+}
+

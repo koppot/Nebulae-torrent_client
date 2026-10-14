@@ -102,6 +102,8 @@ pub fn run() {
             commands::torrent::trigger_kill_switch_command,
             commands::torrent::reset_kill_switch_command,
             commands::torrent::select_torrent_file,
+            commands::torrent::select_source_folder,
+            commands::torrent::select_source_file,
             commands::torrent::select_download_directory,
             commands::torrent::get_system_path_presets,
             // File & Protocol Associations
