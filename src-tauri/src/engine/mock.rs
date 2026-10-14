@@ -449,15 +449,6 @@ impl MockTorrentEngine {
 }
 
 impl TorrentEngine for MockTorrentEngine {
-    fn add_torrent_from_bytes(
-        &self,
-        bytes: &[u8],
-        download_dir: Option<&str>,
-    ) -> Result<String, String> {
-        let parsed = ParsedTorrent::parse_bytes(bytes)?;
-        self.add_parsed_torrent(parsed, download_dir)
-    }
-
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
         let mut list = self.torrents.lock().unwrap();
         for item in list.iter_mut() {
@@ -643,6 +634,15 @@ impl TorrentEngine for MockTorrentEngine {
             upload_limit_kib: 0,
         });
         Ok(new_id)
+    }
+
+    fn add_torrent_from_bytes(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let parsed = ParsedTorrent::parse_bytes(bytes)?;
+        self.add_parsed_torrent(parsed, download_dir)
     }
 
     fn pause_torrent(&self, id: &str) -> Result<(), String> {

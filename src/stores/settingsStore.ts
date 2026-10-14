@@ -25,6 +25,7 @@ export const defaultSettings: UserSettings = {
   confirm_exit_when_active: true,
   save_log_to_disk: true,
   max_log_size_mib: 10,
+  auto_update_enabled: true,
   enable_splash: true,
   splash_message: 'Consider joining our community\nasiandvdclub.org',
   splash_url: 'https://asiandvdclub.org',

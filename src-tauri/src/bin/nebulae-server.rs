@@ -134,6 +134,58 @@ async fn force_recheck(State(state): State<Arc<AppState>>, Path(id): Path<String
     run_engine(&state, move |engine| engine.force_recheck(&id)).await
 }
 
+async fn reannounce(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    run_engine(&state, move |engine| engine.reannounce(&id)).await
+}
+
+#[derive(Deserialize)]
+struct CategoryBody {
+    category: String,
+}
+
+async fn set_category(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<CategoryBody>>,
+) -> Response {
+    let Some(Json(body)) = body else {
+        return (StatusCode::BAD_REQUEST, "JSON body required").into_response();
+    };
+    run_engine(&state, move |engine| {
+        engine.set_category(&id, &body.category)
+    })
+    .await
+}
+
+async fn toggle_first_last(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    run_engine(&state, move |engine| {
+        engine
+            .toggle_first_last_piece_priority(&id)
+            .map(|new_state| json!({ "first_last_piece_prio": new_state }))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct FilePriorityBody {
+    file_index: u32,
+    priority: u8,
+}
+
+async fn set_file_priority(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Option<Json<FilePriorityBody>>,
+) -> Response {
+    let Some(Json(body)) = body else {
+        return (StatusCode::BAD_REQUEST, "JSON body required").into_response();
+    };
+    run_engine(&state, move |engine| {
+        engine.set_file_priority(&id, body.file_index, body.priority)
+    })
+    .await
+}
+
 async fn pause_all(State(state): State<Arc<AppState>>) -> Response {
     run_engine(&state, |engine| engine.pause_all()).await
 }
@@ -378,6 +430,13 @@ async fn main() {
         .route("/api/v1/torrents/{id}/pause", post(pause_torrent))
         .route("/api/v1/torrents/{id}/resume", post(resume_torrent))
         .route("/api/v1/torrents/{id}/recheck", post(force_recheck))
+        .route("/api/v1/torrents/{id}/reannounce", post(reannounce))
+        .route("/api/v1/torrents/{id}/category", post(set_category))
+        .route("/api/v1/torrents/{id}/firstlast", post(toggle_first_last))
+        .route(
+            "/api/v1/torrents/{id}/file-priority",
+            post(set_file_priority),
+        )
         .route("/api/v1/torrents/{id}/limits", post(set_limits))
         .route("/api/v1/torrents/{id}/location", post(set_location))
         .route("/api/v1/torrents/{id}", delete(remove_torrent))

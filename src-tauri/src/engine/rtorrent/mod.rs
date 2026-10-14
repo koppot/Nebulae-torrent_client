@@ -4,14 +4,21 @@
 //! a server (Unraid, TrueNAS, any Docker host) instead of locally. This
 //! implements the shared [`TorrentEngine`] trait against rtorrent's XML-RPC
 //! command set (`d.*` commands).
+//!
+//! RPC compatibility: rtorrent 0.16 removed the deprecated `get_`-prefixed
+//! command aliases and changed the `d.multicall2`/`f.multicall` signatures
+//! (they gained an extra leading target/filter argument). The engine probes
+//! `system.client_version` once and gates call shapes accordingly; the
+//! container image ships rtorrent 0.9.8.
 
 pub mod rpc;
 pub mod scgi;
 
-use crate::commands::torrent::{TorrentFileItem, TorrentItem};
+use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use scgi::{call, ScgiTarget};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 /// rtorrent reports ratios as per-mille (x1000).
 const RTORRENT_RATIO_SCALE: f32 = 1000.0;
@@ -19,6 +26,8 @@ const RTORRENT_RATIO_SCALE: f32 = 1000.0;
 pub struct RtorrentRemoteEngine {
     target: ScgiTarget,
     kill_switch: AtomicBool,
+    /// (major, minor) from `system.client_version`, probed on first use.
+    version: OnceLock<(u32, u32)>,
 }
 
 impl RtorrentRemoteEngine {
@@ -26,6 +35,7 @@ impl RtorrentRemoteEngine {
         Self {
             target,
             kill_switch: AtomicBool::new(false),
+            version: OnceLock::new(),
         }
     }
 
@@ -40,6 +50,29 @@ impl RtorrentRemoteEngine {
 
     fn torrent_hash(id: &str) -> rpc::RpcValue {
         rpc::RpcValue::Str(id.to_string())
+    }
+
+    /// Probed once; falls back to the 0.9.x call shapes (the container
+    /// default) when the version string cannot be read.
+    fn rtorrent_version(&self) -> (u32, u32) {
+        *self.version.get_or_init(|| {
+            let parsed = self
+                .rpc("system.client_version", &[])
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .and_then(|s| {
+                    let mut parts = s.split('.');
+                    let maj = parts.next()?.parse::<u32>().ok()?;
+                    let min = parts.next()?.parse::<u32>().ok()?;
+                    Some((maj, min))
+                });
+            parsed.unwrap_or((0, 9))
+        })
+    }
+
+    fn is_modern_rpc(&self) -> bool {
+        let (maj, min) = self.rtorrent_version();
+        maj > 0 || min >= 16
     }
 
     /// One row of `d.multicall2` -> a UI-facing TorrentItem.
@@ -80,11 +113,20 @@ impl RtorrentRemoteEngine {
             None
         };
 
-        let added_on = text(13).parse::<u64>().unwrap_or(0);
+        let id = text(0).to_lowercase();
+        let name = text(1);
+        let is_media = matches!(
+            std::path::Path::new(&name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .as_deref(),
+            Some("mkv" | "mp4" | "avi" | "mov" | "iso" | "wmv" | "flv" | "m2ts")
+        );
 
         Ok(TorrentItem {
-            id: text(0),
-            name: text(1),
+            id,
+            name: name.clone(),
             total_bytes,
             downloaded_bytes,
             uploaded_bytes: int(5).max(0) as u64,
@@ -96,32 +138,175 @@ impl RtorrentRemoteEngine {
             seeds: int(11).max(0) as u32,
             peers: int(12).max(0) as u32,
             ratio,
-            category: String::new(),
-            is_media: false,
+            // rtorrent's custom1 field is the de-facto label/category slot
+            // (same one ruTorrent uses).
+            category: text(13),
+            is_media,
             poster_url: None,
-            info_hash: text(0),
+            info_hash: text(0).to_lowercase(),
             save_path: text(2),
-            added_on,
+            added_on: int(14).max(0) as u64,
             completed_on: None,
             comment: String::new(),
             created_by: "rtorrent".to_string(),
-            piece_size: int(14).max(0) as u32,
-            total_pieces: int(15).max(0) as u32,
+            piece_size: int(15).max(0) as u32,
+            total_pieces: int(16).max(0) as u32,
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
             tags: Vec::new(),
-            files: Vec::<TorrentFileItem>::new(),
+            files: Vec::new(),
             trackers: Vec::new(),
             download_limit_kib: 0,
             upload_limit_kib: 0,
         })
     }
+
+    /// File rows for one torrent. 0.16 added a filter argument to
+    /// `f.multicall` (verified against 0.16.25; empty string selects all).
+    fn fetch_files(&self, hash: &str) -> Result<Vec<TorrentFileItem>, String> {
+        let columns: [&str; 5] = if self.is_modern_rpc() {
+            [
+                "f.path=",
+                "f.priority=",
+                "f.size_bytes=",
+                "f.completed_chunks=",
+                "f.size_chunks=",
+            ]
+        } else {
+            [
+                "f.get_path=",
+                "f.get_priority=",
+                "f.get_size_bytes=",
+                "f.get_completed_chunks=",
+                "f.get_size_chunks=",
+            ]
+        };
+        let mut params = vec![Self::torrent_hash(hash)];
+        if self.is_modern_rpc() {
+            params.push(rpc::RpcValue::Str(String::new()));
+        }
+        for column in columns {
+            params.push(rpc::RpcValue::Str(column.to_string()));
+        }
+        let rows = self
+            .rpc("f.multicall", &params)?
+            .as_array()
+            .ok_or_else(|| "rtorrent: malformed file multicall".to_string())?
+            .to_vec();
+
+        let files: Vec<TorrentFileItem> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let cells = row.as_array().ok_or("rtorrent: malformed file row")?;
+                let int = |i: usize| cells.get(i).and_then(|v| v.as_int()).unwrap_or(0);
+                let size_chunks = int(4).max(0);
+                let progress = if size_chunks > 0 {
+                    ((int(3).max(0) as f32) / (size_chunks as f32)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                Ok(TorrentFileItem {
+                    index: index as u32,
+                    name: cells
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    size_bytes: int(2).max(0) as u64,
+                    progress,
+                    priority: int(1).clamp(0, 3) as u8,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(files)
+    }
+
+    /// Tracker rows for one torrent. Command names differ per version
+    /// (0.9.x uses the `t.get_*` aliases).
+    fn fetch_trackers(&self, hash: &str) -> Result<Vec<TorrentTrackerItem>, String> {
+        let columns: [&str; 6] = if self.is_modern_rpc() {
+            [
+                "t.url=",
+                "t.group=",
+                "t.is_enabled=",
+                "t.scrape_complete=",
+                "t.scrape_incomplete=",
+                "t.scrape_downloaded=",
+            ]
+        } else {
+            [
+                "t.get_url=",
+                "t.get_group=",
+                "t.get_enabled=",
+                "t.get_scrape_complete=",
+                "t.get_scrape_incomplete=",
+                "t.get_scrape_downloaded=",
+            ]
+        };
+        let mut params = vec![Self::torrent_hash(hash)];
+        for column in columns {
+            params.push(rpc::RpcValue::Str(column.to_string()));
+        }
+        let rows = self
+            .rpc("t.multicall", &params)?
+            .as_array()
+            .ok_or_else(|| "rtorrent: malformed tracker multicall".to_string())?
+            .to_vec();
+
+        let trackers = rows
+            .iter()
+            .map(|row| {
+                let cells = row.as_array().ok_or("rtorrent: malformed tracker row")?;
+                let text = |i: usize| {
+                    cells
+                        .get(i)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+                let int = |i: usize| cells.get(i).and_then(|v| v.as_int()).unwrap_or(0);
+                Ok(TorrentTrackerItem {
+                    tier: int(1).max(0) as u32,
+                    url: text(0),
+                    status: if int(2) == 1 { "Enabled" } else { "Disabled" }.to_string(),
+                    seeds: int(3).max(0) as u32,
+                    peers: int(4).max(0) as u32,
+                    downloaded: int(5).max(0) as u64,
+                    message: String::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(trackers)
+    }
+
+    /// rtorrent only accepts a throttle change on an inactive download; stop,
+    /// assign, and restore the previous state.
+    fn assign_throttle(&self, id: &str, name: &str) -> Result<(), String> {
+        let was_active = self
+            .rpc("d.state", &[Self::torrent_hash(id)])?
+            .as_int()
+            .unwrap_or(0)
+            == 1;
+        if was_active {
+            self.rpc("d.stop", &[Self::torrent_hash(id)])?;
+        }
+        let result = self.rpc(
+            "d.throttle_name.set",
+            &[Self::torrent_hash(id), rpc::RpcValue::Str(name.to_string())],
+        );
+        if was_active {
+            self.rpc("d.start", &[Self::torrent_hash(id)])?;
+        }
+        result.map(|_| ())
+    }
 }
 
 /// Columns requested in every `d.multicall2` row. Order must match
-/// [`RtorrentRemoteEngine::map_torrent_row`].
-const LIST_COLUMNS: [&str; 16] = [
+/// [`RtorrentRemoteEngine::map_torrent_row`]. All names verified against
+/// rtorrent 0.16.25 and valid on 0.9.8.
+const LIST_COLUMNS: [&str; 17] = [
     "d.hash=",
     "d.name=",
     "d.base_path=",
@@ -133,34 +318,51 @@ const LIST_COLUMNS: [&str; 16] = [
     "d.ratio=",
     "d.state=",
     "d.complete=",
-    "d.seeds_connected=",
+    "d.peers_complete=",
     "d.peers_connected=",
-    "d.custom=addtime",
-    "d.piece_size=",
-    "d.size_pieces=",
+    "d.custom1=",
+    "d.timestamp.started=",
+    "d.chunk_size=",
+    "d.size_chunks=",
 ];
 
 impl TorrentEngine for RtorrentRemoteEngine {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
-        let params: Vec<rpc::RpcValue> = std::iter::once(rpc::RpcValue::Str(String::new()))
-            .chain(
-                LIST_COLUMNS
-                    .iter()
-                    .map(|c| rpc::RpcValue::Str(c.to_string())),
-            )
-            .collect();
+        // 0.16+ signature: (target, view, columns...); 0.9.x: (view, columns...).
+        let mut params = vec![rpc::RpcValue::Str(String::new())];
+        if self.is_modern_rpc() {
+            params.push(rpc::RpcValue::Str("main".to_string()));
+        }
+        for column in LIST_COLUMNS {
+            params.push(rpc::RpcValue::Str(column.to_string()));
+        }
         let response = self.rpc("d.multicall2", &params)?;
         let rows = response
             .as_array()
             .ok_or_else(|| "rtorrent: unexpected multicall response".to_string())?;
-        rows.iter()
+
+        let mut items: Vec<TorrentItem> = rows
+            .iter()
             .map(|row| {
                 let cells = row
                     .as_array()
                     .ok_or_else(|| "rtorrent: malformed multicall row".to_string())?;
                 Self::map_torrent_row(cells)
             })
-            .collect()
+            .collect::<Result<Vec<_>, String>>()?;
+
+        // Detail passes: one extra sub-millisecond call per torrent on the
+        // local SCGI socket. Best effort: a faulted detail call leaves the
+        // arrays empty instead of failing the whole list refresh.
+        for item in &mut items {
+            if let Ok(files) = self.fetch_files(&item.id) {
+                item.files = files;
+            }
+            if let Ok(trackers) = self.fetch_trackers(&item.id) {
+                item.trackers = trackers;
+            }
+        }
+        Ok(items)
     }
 
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
@@ -176,14 +378,18 @@ impl TorrentEngine for RtorrentRemoteEngine {
                 .map_err(|e| format!("rtorrent: cannot read torrent file: {e}"))?;
             ("load.raw_start", rpc::RpcValue::Bytes(bytes))
         };
-        self.rpc(method, &[rpc::RpcValue::Str(String::new()), param])?;
+        // Load commands accept appended keylines: per-add destination works
+        // without knowing the new item's hash (verified against 0.16.25).
+        let mut params = vec![rpc::RpcValue::Str(String::new()), param];
         if let Some(dir) = download_dir {
-            // New torrents land in the requested directory; existing ones keep theirs.
-            // (Directory is applied per-add via d.directory.set on the newly loaded item
-            // is not addressable here without its hash; rtorrent picks it up from the
-            // session config. Recorded as a known preview limitation.)
-            let _ = dir;
+            if !dir.trim().is_empty() {
+                params.push(rpc::RpcValue::Str(format!(
+                    "d.directory.set={}",
+                    dir.trim()
+                )));
+            }
         }
+        self.rpc(method, &params)?;
         // rtorrent does not return the new hash from load.*; the UI discovers it on the
         // next list refresh.
         Ok(String::new())
@@ -301,6 +507,24 @@ impl TorrentEngine for RtorrentRemoteEngine {
         .map(|_| ())
     }
 
+    fn reannounce(&self, id: &str) -> Result<(), String> {
+        // Verified present in rtorrent 0.16.25 and 0.9.x.
+        self.rpc("d.tracker_announce", &[Self::torrent_hash(id)])
+            .map(|_| ())
+    }
+
+    fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
+        // custom1 is rtorrent's label slot (ruTorrent-compatible).
+        self.rpc(
+            "d.custom1.set",
+            &[
+                Self::torrent_hash(id),
+                rpc::RpcValue::Str(category.to_string()),
+            ],
+        )
+        .map(|_| ())
+    }
+
     fn set_torrent_limits(
         &self,
         id: &str,
@@ -308,41 +532,87 @@ impl TorrentEngine for RtorrentRemoteEngine {
         ul_kib: u32,
         _ratio_limit: f32,
     ) -> Result<(), String> {
+        if dl_kib == 0 && ul_kib == 0 {
+            // Unassigning the throttle returns the torrent to the global limits.
+            return self.assign_throttle(id, "");
+        }
+        if self.is_modern_rpc() {
+            // rtorrent 0.16 removed the runtime throttle-group RPC commands
+            // (throttle.group.insert / throttle.*.max.set); per-torrent rate
+            // assignment is only possible on 0.9.x.
+            return Err(
+                "rtorrent 0.16+ no longer supports per-torrent rate limits over RPC; use the global limits in the container config or rtorrent 0.9.x".to_string(),
+            );
+        }
+        // 0.9.x: named throttle groups are created on demand.
+        let group = format!("nebulae_thr_{}_{}", dl_kib, ul_kib);
+        // Faults if the group already exists; safe to ignore, the rate-set
+        // calls below (re)apply the rates every time.
+        let _ = self.rpc(
+            "throttle.group.insert",
+            &[rpc::RpcValue::Str(group.clone())],
+        );
         self.rpc(
-            "d.throttle.down.set",
-            &[Self::torrent_hash(id), rpc::RpcValue::Int(dl_kib as i64)],
+            "throttle.down.max.set",
+            &[
+                rpc::RpcValue::Str(group.clone()),
+                rpc::RpcValue::Int(dl_kib as i64 * 1024),
+            ],
         )?;
         self.rpc(
-            "d.throttle.up.set",
-            &[Self::torrent_hash(id), rpc::RpcValue::Int(ul_kib as i64)],
-        )
-        .map(|_| ())
+            "throttle.up.max.set",
+            &[
+                rpc::RpcValue::Str(group.clone()),
+                rpc::RpcValue::Int(ul_kib as i64 * 1024),
+            ],
+        )?;
+        self.assign_throttle(id, &group)
     }
 
-    // Preview limitations: the commands below either have no rtorrent equivalent
-    // or need per-file RPC iteration scheduled for the next milestone.
-    fn reannounce(&self, _id: &str) -> Result<(), String> {
-        Err("rtorrent: reannounce is not wired in the nebulae-server preview".to_string())
+    fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String> {
+        // rtorrent's "prioritize table of contents" = first/last piece of
+        // every file (verified on 0.16.25; present since libtorrent 0.13).
+        let current = self
+            .rpc("file.prioritize_toc", &[Self::torrent_hash(id)])?
+            .as_int()
+            .unwrap_or(0)
+            == 1;
+        let new_state = if current { "0" } else { "1" };
+        self.rpc(
+            "file.prioritize_toc.set",
+            &[
+                Self::torrent_hash(id),
+                rpc::RpcValue::Str(new_state.to_string()),
+            ],
+        )?;
+        self.rpc("d.update_priorities", &[Self::torrent_hash(id)])?;
+        Ok(!current)
     }
 
-    fn set_category(&self, _id: &str, _category: &str) -> Result<(), String> {
-        Err("rtorrent: categories are not supported (no label mapping yet)".to_string())
+    fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {
+        // 0.9.x target form (hash, index, value) as used by ruTorrent.
+        // rtorrent 0.16.25 currently faults this shape upstream; that fault
+        // passes through honestly instead of being swallowed.
+        self.rpc(
+            "f.priority.set",
+            &[
+                Self::torrent_hash(id),
+                rpc::RpcValue::Str(file_index.to_string()),
+                rpc::RpcValue::Str(priority.to_string()),
+            ],
+        )?;
+        self.rpc("d.update_priorities", &[Self::torrent_hash(id)])
+            .map(|_| ())
     }
 
+    // rtorrent has no equivalent for the following; they fail loudly rather
+    // than pretend.
     fn toggle_sequential_download(&self, _id: &str) -> Result<bool, String> {
-        Err("rtorrent: sequential download is not wired in the preview".to_string())
-    }
-
-    fn toggle_first_last_piece_priority(&self, _id: &str) -> Result<bool, String> {
-        Err("rtorrent: first/last piece priority has no rtorrent equivalent".to_string())
+        Err("rtorrent: sequential download is not supported by rtorrent".to_string())
     }
 
     fn toggle_super_seeding(&self, _id: &str) -> Result<bool, String> {
         Err("rtorrent: super-seeding is not available".to_string())
-    }
-
-    fn set_file_priority(&self, _id: &str, _file_index: u32, _priority: u8) -> Result<(), String> {
-        Err("rtorrent: per-file priority is not wired in the preview".to_string())
     }
 
     fn rename_torrent(&self, _id: &str, _new_name: &str) -> Result<(), String> {
@@ -374,24 +644,27 @@ mod tests {
     use std::io::{Read, Write};
 
     /// A fake rtorrent SCGI endpoint: validates the request is well-formed and
-    /// replies with one canned multicall row.
+    /// answers by method name (version probe, list, file/tracker multicalls).
     fn spawn_fake_server() -> (ScgiTarget, std::sync::Arc<AtomicBool>) {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = std::sync::Arc::new(AtomicBool::new(false));
         let flag = std::sync::Arc::clone(&served);
 
-        std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = vec![0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                // Minimal SCGI validation: contains netstring colon+comma.
-                let request = &buf[..n];
-                if request.contains(&b':')
-                    && request.contains(&b',')
-                    && !flag.load(Ordering::SeqCst)
-                {
-                    let response = r#"<?xml version="1.0"?><methodResponse><params><param><value><array><data>
+        std::thread::spawn(move || loop {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut buf = vec![0u8; 8192];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            // Minimal SCGI validation: contains netstring colon+comma.
+            let request = &buf[..n];
+            let response = if request.contains(&b':') && request.contains(&b',') {
+                let text = String::from_utf8_lossy(request);
+                if text.contains("system.client_version") {
+                    "<?xml version=\"1.0\"?><methodResponse><params><param><value><string>0.9.8</string></value></param></params></methodResponse>".to_string()
+                } else if text.contains("d.multicall2") {
+                    r#"<?xml version="1.0"?><methodResponse><params><param><value><array><data>
                         <value><array><data>
                             <value><string>BF4A97C0</string></value>
                             <value><string>Tokyo Story (1953)</string></value>
@@ -406,15 +679,22 @@ mod tests {
                             <value><i8>1</i8></value>
                             <value><i8>42</i8></value>
                             <value><i8>8</i8></value>
-                            <value><string>1728800000</string></value>
+                            <value><string>movies</string></value>
+                            <value><i8>1728800000</i8></value>
                             <value><i8>4194304</i8></value>
                             <value><i8>8225</i8></value>
                         </data></array></value>
-                    </data></array></value></param></params></methodResponse>"#;
-                    let _ = stream.write_all(response.as_bytes());
+                    </data></array></value></param></params></methodResponse>"#
+                        .to_string()
+                } else {
+                    // f.multicall / t.multicall: empty detail arrays
+                    "<?xml version=\"1.0\"?><methodResponse><params><param><value><array><data></data></array></value></param></params></methodResponse>".to_string()
                 }
-                flag.store(true, Ordering::SeqCst);
-            }
+            } else {
+                String::new()
+            };
+            let _ = stream.write_all(response.as_bytes());
+            flag.store(true, Ordering::SeqCst);
         });
 
         (ScgiTarget::Tcp("127.0.0.1".into(), port), served)
@@ -428,12 +708,15 @@ mod tests {
         let torrents = engine.list_torrents().unwrap();
         assert_eq!(torrents.len(), 1);
         let t = &torrents[0];
-        assert_eq!(t.id, "BF4A97C0");
+        assert_eq!(t.id, "bf4a97c0"); // hashes normalized to lowercase
+        assert_eq!(t.info_hash, "bf4a97c0");
         assert_eq!(t.name, "Tokyo Story (1953)");
         assert_eq!(t.status, "Seeding"); // state=1, complete=1
         assert_eq!(t.ratio, 1.506); // rtorrent per-mille 1506
         assert_eq!(t.upload_rate, 1_200_000);
         assert_eq!(t.seeds, 42);
+        assert_eq!(t.category, "movies"); // d.custom1
+        assert_eq!(t.added_on, 1_728_800_000); // d.timestamp.started
         assert_eq!(t.total_pieces, 8225);
         assert_eq!(t.piece_size, 4_194_304);
     }
@@ -449,11 +732,11 @@ mod tests {
     }
 
     #[test]
-    fn test_preview_methods_report_honestly() {
+    fn test_unsupported_methods_fail_loudly() {
         let engine = RtorrentRemoteEngine::new(ScgiTarget::Tcp("127.0.0.1".into(), 1));
         assert!(engine.toggle_super_seeding("x").is_err());
-        assert!(engine.reannounce("x").is_err());
-        assert!(engine.set_file_priority("x", 0, 1).is_err());
+        assert!(engine.toggle_sequential_download("x").is_err());
+        assert!(engine.rename_torrent("x", "y").is_err());
         assert!(engine.supports_hook(EngineHook::PauseResumeKillSwitch));
         assert!(!engine.supports_hook(EngineHook::SocketInterfaceBinding));
     }

@@ -81,6 +81,7 @@ export interface UserSettings {
   confirm_exit_when_active: boolean;
   save_log_to_disk: boolean;
   max_log_size_mib: number;
+  auto_update_enabled: boolean;
 
   enable_splash: boolean;
   splash_message: string;

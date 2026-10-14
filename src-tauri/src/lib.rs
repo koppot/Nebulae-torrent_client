@@ -2,15 +2,19 @@ pub mod commands;
 pub mod db;
 pub mod engine;
 pub mod models;
+pub mod updater;
 pub mod utils;
 
 use db::Database;
-use engine::{MockTorrentEngine, TorrentEngine};
+use engine::{RemoteServerEngine, SharedEngine};
 use std::sync::Arc;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
 pub fn run() {
+    // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
+    SafeLogger::init_tracing();
+
     // 1. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
@@ -29,38 +33,65 @@ pub fn run() {
         }
     };
 
-    // 3. Initialize engine adapter based on the configured mode. The mock
-    // engine stays the default for offline and test isolation; the rtorrent
-    // server bridge takes over when configured (applies on app start).
-    let engine: Arc<dyn TorrentEngine> = {
-        let configured = db
-            .get_setting("user_settings_json")
-            .ok()
-            .flatten()
-            .and_then(|json| {
-                serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
-            });
-        match configured {
-            Some(settings)
-                if settings.rtorrent_server_enabled
-                    && !settings.rtorrent_server_url.trim().is_empty() =>
-            {
-                SafeLogger::log_to_file(
-                    &paths.logs_dir,
-                    "INFO",
-                    &format!(
-                        "Nebulae starting in rtorrent server mode: {}",
-                        settings.rtorrent_server_url.trim()
-                    ),
-                );
-                Arc::new(engine::remote::RemoteServerEngine::new(
-                    settings.rtorrent_server_url.clone(),
-                    settings.rtorrent_server_token.clone(),
-                ))
-            }
-            _ => Arc::new(MockTorrentEngine::new()),
-        }
+    // 3. Resolve user settings for engine session (listening_port & download_directory)
+    let settings = db
+        .get_setting("user_settings_json")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<commands::settings::UserSettings>(&json).ok())
+        .unwrap_or_default();
+
+    let download_dir = if !settings.download_directory.trim().is_empty() {
+        std::path::PathBuf::from(settings.download_directory.trim())
+    } else {
+        dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
     };
+
+    let listening_port = settings.listening_port;
+
+    // 4. Initialize the engine adapter. Priority: the rtorrent server bridge
+    // when configured; otherwise the local librqbit engine, falling back to
+    // the mock engine for offline/test isolation if librqbit cannot start.
+    // The choice applies on app start.
+    let engine: SharedEngine =
+        if settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty() {
+            SafeLogger::log_to_file(
+                &paths.logs_dir,
+                "INFO",
+                &format!(
+                    "Nebulae starting in rtorrent server mode: {}",
+                    settings.rtorrent_server_url.trim()
+                ),
+            );
+            Arc::new(RemoteServerEngine::new(
+                settings.rtorrent_server_url.clone(),
+                settings.rtorrent_server_token.clone(),
+            ))
+        } else {
+            match engine::RqbitTorrentEngine::new(
+                Arc::clone(&paths),
+                Arc::clone(&db),
+                download_dir,
+                listening_port,
+            ) {
+                Ok(real_engine) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "INFO",
+                        &format!("Initialized librqbit production engine on port {listening_port}"),
+                    );
+                    Arc::new(real_engine)
+                }
+                Err(e) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "WARN",
+                        &format!("Failed to initialize real engine, using mock engine: {e}"),
+                    );
+                    Arc::new(engine::MockTorrentEngine::new())
+                }
+            }
+        };
 
     SafeLogger::log_to_file(
         &paths.logs_dir,
@@ -85,13 +116,23 @@ pub fn run() {
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(paths)
-        .manage(db)
+        .manage(db.clone())
         .manage(engine)
         .manage(pending_payloads)
-        .setup(|app| {
+        .manage(updater::StagedUpdateState::default())
+        .setup(move |app| {
             use tauri::Manager;
+
+            #[cfg(desktop)]
+            {
+                let handle = app.handle().clone();
+                let db_handle = db.clone();
+                updater::spawn_silent_background_updater(&handle, db_handle);
+            }
 
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
@@ -105,6 +146,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
+                        updater::apply_staged_update_if_present(app);
                         app.exit(0);
                     }
                     "show" => {
@@ -171,6 +213,8 @@ pub fn run() {
                 if should_close_to_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    updater::apply_staged_update_if_present(window.app_handle());
                 }
             }
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -256,9 +300,12 @@ pub fn run() {
         .expect("Error while building Nebulae application");
 
     let _event_payloads = initial_payloads.clone();
-    app.run(move |_app_handle, _event| {
+    app.run(move |_app_handle, _event| match &_event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            updater::apply_staged_update_if_present(_app_handle);
+        }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let tauri::RunEvent::Opened { urls } = _event {
+        tauri::RunEvent::Opened { urls } => {
             use tauri::Emitter;
             for url in urls {
                 let payload = if url.scheme() == "file" {
@@ -275,5 +322,6 @@ pub fn run() {
                 let _ = _app_handle.emit("nebulae://open-uri", payload);
             }
         }
+        _ => {}
     });
 }

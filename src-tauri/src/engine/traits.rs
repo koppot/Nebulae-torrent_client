@@ -26,17 +26,12 @@ pub trait TorrentEngine: Send + Sync {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String>;
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String>;
     /// Add a torrent from raw .torrent bencode bytes (in-memory upload, e.g.
-    /// drag-and-drop without a file path). Engines that cannot ingest
-    /// in-memory data return an honest error; the default exists so newly
-    /// added engines compile unchanged until they opt in.
+    /// drag-and-drop without a file path).
     fn add_torrent_from_bytes(
         &self,
-        _bytes: &[u8],
-        _download_dir: Option<&str>,
-    ) -> Result<String, String> {
-        let _ = (_bytes, _download_dir);
-        Err("engine does not support in-memory torrent upload".to_string())
-    }
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String>;
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String>;
     fn pause_torrent(&self, id: &str) -> Result<(), String>;
     fn resume_torrent(&self, id: &str) -> Result<(), String>;

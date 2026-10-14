@@ -110,7 +110,23 @@ pub fn call(target: &ScgiTarget, body: &[u8]) -> Result<Vec<u8>, String> {
     stream
         .read_to_end(&mut response)
         .map_err(|e| format!("rtorrent: read failed: {e}"))?;
+    // rtorrent 0.16+ prefixes SCGI responses with HTTP-style headers
+    // ("Status: 200 OK\r\n...\r\n\r\n"); 0.9.x returns bare XML. Strip the
+    // header block when present.
+    if response.starts_with(b"Status:") || response.starts_with(b"HTTP/") {
+        for separator in [b"\r\n\r\n".as_slice(), b"\n\n".as_slice()] {
+            if let Some(pos) = find_subslice(&response, separator) {
+                return Ok(response[pos + separator.len()..].to_vec());
+            }
+        }
+    }
     Ok(response)
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 #[cfg(test)]

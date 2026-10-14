@@ -306,6 +306,21 @@ export const SettingsModal: React.FC = () => {
                       />
                       <span className="text-white">Inhibit system sleep when transfers are active</span>
                     </label>
+                    <label className="flex items-start gap-2 cursor-pointer pt-1">
+                      <input
+                        type="checkbox"
+                        checked={settings.auto_update_enabled}
+                        onChange={(e) => saveSettings({ auto_update_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium">Automatically keep Nebulae updated (recommended)</span>
+                        <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
+                          Checks for signed releases on startup, downloads silently in the background, and stages updates to apply on quit without interrupting active torrent transfers.
+                          On Linux Debian/RPM installations, updates are managed by your system package manager.
+                        </span>
+                      </div>
+                    </label>
                   </div>
                 </div>
 

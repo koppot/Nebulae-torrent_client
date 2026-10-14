@@ -304,6 +304,17 @@ jobs:
               UPLOAD_FILES+=("$APP_ZIP" "$APP_ZIP.sha256")
             fi
 
+            # Collect Tauri updater bundles
+            UPDATER_TAR=$(find src-tauri/target -name "*.app.tar.gz" -o -name "Nebulae.app.tar.gz" -o -name "*.tar.gz" | head -n 1)
+            UPDATER_SIG=$(find src-tauri/target -name "*.app.tar.gz.sig" -o -name "Nebulae.app.tar.gz.sig" -o -name "*.tar.gz.sig" | head -n 1)
+            if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+              TARGET_TAR="$DMG_NAME-app.tar.gz"
+              TARGET_SIG="$DMG_NAME-app.tar.gz.sig"
+              cp "$UPDATER_TAR" "$TARGET_TAR"
+              cp "$UPDATER_SIG" "$TARGET_SIG"
+              UPLOAD_FILES+=("$TARGET_TAR" "$TARGET_SIG")
+            fi
+
             gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber || true
           fi
 
@@ -337,6 +348,19 @@ jobs:
             } else {
               Write-Host "Skipping $name - not produced."
             }
+          }
+
+          # Stage or re-sign Tauri updater signature (.sig)
+          $sig = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*.sig" | Select-Object -First 1
+          if ($sig) {
+            Copy-Item $sig.FullName -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          }
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            Write-Host "Re-signing final Windows installer with Tauri minisign..."
+            pnpm tauri signer sign -k "$env:TAURI_SIGNING_PRIVATE_KEY" Nebulae-Setup-x64.exe
+          }
+          if (Test-Path 'Nebulae-Setup-x64.exe.sig') {
+            gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
           }
 
       - name: Prepare, test, and upload Linux packages (Ubuntu 22.04 baseline)
@@ -427,6 +451,15 @@ jobs:
             UPLOAD_FILES+=("nebulae-linux-x86_64" "nebulae-linux-x86_64.sha256")
           fi
 
+          # Collect Tauri updater bundles for AppImage
+          APPIMAGE_TAR=$(find src-tauri/target -name "*.AppImage.tar.gz" -o -name "*appimage*.tar.gz" | head -n 1)
+          APPIMAGE_SIG=$(find src-tauri/target -name "*.AppImage.tar.gz.sig" -o -name "*appimage*.tar.gz.sig" | head -n 1)
+          if [ -n "$APPIMAGE_TAR" ] && [ -n "$APPIMAGE_SIG" ]; then
+            cp "$APPIMAGE_TAR" "Nebulae-Linux-x86_64.AppImage.tar.gz"
+            cp "$APPIMAGE_SIG" "Nebulae-Linux-x86_64.AppImage.tar.gz.sig"
+            UPLOAD_FILES+=("Nebulae-Linux-x86_64.AppImage.tar.gz" "Nebulae-Linux-x86_64.AppImage.tar.gz.sig")
+          fi
+
           if [ ${#UPLOAD_FILES[@]} -gt 0 ]; then
             echo "Uploading Linux release artifacts to $TAG: ${UPLOAD_FILES[*]}"
             gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber || true
@@ -443,7 +476,9 @@ jobs:
             nebulae.exe*
             *.deb
             *.rpm
-            *.AppImage
+            *.AppImage*
+            *.tar.gz*
+            *.sig
           if-no-files-found: warn
 
   verify-linux-distros:
@@ -542,6 +577,68 @@ jobs:
           cd ..
           cat SHA256SUMS.txt
           gh release upload "$TAG" SHA256SUMS.txt --clobber || true
+
+      - name: Generate latest.json updater manifest and attach to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          python3 -c '
+          import json, os, glob, datetime
+
+          tag = os.environ.get("TAG", "v0.1.0-beta.1").strip()
+          repo_url = "https://github.com/koppot/Nebulae-torrent_client"
+          base_url = f"{repo_url}/releases/download/{tag}"
+
+          def read_sig(pattern):
+              matches = glob.glob(pattern, recursive=True)
+              if matches:
+                  with open(matches[0], "r", encoding="utf-8") as f:
+                      return f.read().strip()
+              return ""
+
+          manifest = {
+              "version": tag,
+              "notes": f"Nebulae {tag} release with silent background auto-updates.",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": {}
+          }
+
+          sig_mac_arm = read_sig("artifacts/**/Nebulae-macOS-arm64*tar.gz.sig") or read_sig("artifacts/**/*arm64*.sig")
+          if sig_mac_arm:
+              manifest["platforms"]["darwin-aarch64"] = {
+                  "signature": sig_mac_arm,
+                  "url": f"{base_url}/Nebulae-macOS-arm64.dmg-app.tar.gz"
+              }
+
+          sig_mac_x64 = read_sig("artifacts/**/Nebulae-macOS-x64*tar.gz.sig") or read_sig("artifacts/**/*x64*darwin*.sig")
+          if sig_mac_x64:
+              manifest["platforms"]["darwin-x86_64"] = {
+                  "signature": sig_mac_x64,
+                  "url": f"{base_url}/Nebulae-macOS-x64.dmg-app.tar.gz"
+              }
+
+          sig_linux = read_sig("artifacts/**/Nebulae-Linux*AppImage.tar.gz.sig") or read_sig("artifacts/**/*linux*.sig")
+          if sig_linux:
+              manifest["platforms"]["linux-x86_64"] = {
+                  "signature": sig_linux,
+                  "url": f"{base_url}/Nebulae-Linux-x86_64.AppImage.tar.gz"
+              }
+
+          sig_win = read_sig("artifacts/**/Nebulae-Setup-x64.exe.sig") or read_sig("artifacts/**/*setup*.sig")
+          if sig_win:
+              manifest["platforms"]["windows-x86_64"] = {
+                  "signature": sig_win,
+                  "url": f"{base_url}/Nebulae-Setup-x64.exe"
+              }
+
+          with open("latest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+
+          print("Generated latest.json:")
+          print(json.dumps(manifest, indent=2))
+          '
+          gh release upload "$TAG" latest.json --clobber || true
 
       - name: Broadcast release announcement on Discord
         env:

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tauri v2 + React 19 + TypeScript + Tailwind CSS application foundation.
   - Rust backend with SQLite database persistence under isolated platform directory (`ADC/internal/`).
   - Cross-platform packaging configurations for macOS (Apple Silicon & Intel DMG) and Windows (NSIS 64-bit installer).
+- **Silent Background Auto-Updater (SignPath Foundation Compliant)**:
+  - Cryptographically verified background update subsystem powered by `tauri-plugin-updater` with Minisign (`.sig`) signature verification against hardcoded public key.
+  - Zero-telemetry opt-out model: Single "Automatically keep Nebulae updated (recommended)" toggle (ON by default, visible on first run and in Settings -> Behavior). When disabled, immediate early-return blocks all network requests and DNS lookups.
+  - Quiet staged update delivery: Updates download silently in the background without dialogs, toasts, or progress popups, and stage to install strictly on natural application exit (preventing any disruption to active torrent transfers).
+  - NSIS installer disclosure: Upfront notification in Windows installer notifying users that updates occur silently with opt-out available in Settings.
+  - Automated release pipeline: Matrix CI builds bundle and sign update artifacts, with `aggregate-release` automatically generating the unified `latest.json` manifest.
 - **User Interface & Visual Identity**:
   - Full-screen cinematic splash screen with hardware-accelerated starfield animations and fast startup fade.
   - Three distinct interface perspectives:

@@ -59,20 +59,32 @@ Bearer-token authenticated (401 otherwise). Plain HTTP in this beta — keep it 
 | Method & path | Purpose |
 |---|---|
 | `GET /api/v1/status` | name, version, engine, torrent counts, kill-switch state |
-| `GET /api/v1/torrents` | full torrent list (same `TorrentItem` JSON as the desktop app) |
-| `POST /api/v1/torrents` | add — body `{"source": "magnet:…"}` or `{"source_b64": "…"}` for uploaded `.torrent` bytes, optional `download_dir` |
+| `GET /api/v1/torrents` | full torrent list incl. per-torrent files + trackers (same `TorrentItem` JSON as the desktop app) |
+| `POST /api/v1/torrents` | add — body `{"source": "magnet:…"}` or `{"source_b64": "…"}` for uploaded `.torrent` bytes, optional `download_dir` (applied at load time via rtorrent keylines) |
 | `DELETE /api/v1/torrents/{id}?delete_files=` | remove (erase only; data deletion is refused honestly) |
-| `POST /api/v1/torrents/{id}/pause` / `…/resume` / `…/recheck` | per-torrent control |
+| `POST /api/v1/torrents/{id}/pause` / `…/resume` / `…/recheck` / `…/reannounce` | per-torrent control |
 | `POST /api/v1/torrents/pause-all` / `…/resume-all` | bulk control |
-| `POST /api/v1/torrents/{id}/limits` | `{"dl_kib":0,"ul_kib":0,"ratio_limit":-1}` |
+| `POST /api/v1/torrents/{id}/limits` | `{"dl_kib":0,"ul_kib":0,"ratio_limit":-1}` — named throttle groups (rtorrent 0.9.x; honest error on 0.16+) |
 | `POST /api/v1/torrents/{id}/location` | `{"path": "/data/downloads/…"}` |
+| `POST /api/v1/torrents/{id}/category` | `{"category": "…"}` — rtorrent `custom1` label (ruTorrent-compatible) |
+| `POST /api/v1/torrents/{id}/firstlast` | toggle first/last-piece priority (rtorrent `file.prioritize_toc`) |
+| `POST /api/v1/torrents/{id}/file-priority` | `{"file_index":0,"priority":2}` (rtorrent 0.9.x; 0.16.25 currently faults upstream) |
 | `POST /api/v1/kill-switch` · `GET /api/v1/kill-switch` | `{"enable":true|false}` / current state |
 
-## What works / what reports a preview error
+## RPC compatibility (verified against a live rtorrent 0.16.25)
 
-Implemented over SCGI: list (`d.multicall2`, ratio per-mille conversion, state mapping), add (magnet/URL `load.start`, `.torrent` bytes `load.raw_start` as XML-RPC `<base64>`), erase, pause/resume (single + all), Nebulae-owned kill switch with stop-all enforcement, recheck, directory change, per-torrent throttles.
+The engine probes `system.client_version` once and gates call shapes:
+- **rtorrent 0.16+**: `d.multicall2` takes `(target, view, columns…)`; `f.multicall` takes a filter argument; bare `t.*`/`f.*` command names; SCGI responses carry HTTP-style headers (stripped by the transport).
+- **rtorrent 0.9.x** (the container image ships 0.9.8): classic `(view, columns…)` / `t.get_*` forms.
 
-Not wired yet — these return explicit preview errors instead of pretending: reannounce, categories, sequential download, first/last piece priority, super-seeding (rtorrent has none), per-file priority, renames. Per-torrent `files`/`trackers` detail multicalls are the next milestone.
+Verified working end-to-end over the bridge: list with live categories + file + tracker details, add via magnet (with per-add `download_dir`), `.torrent` upload as XML-RPC `<base64>`, erase, pause/resume (single + all), kill switch, recheck, reannounce, category, first/last-piece priority, location change.
+
+Known limitations (each fails loudly, never silently):
+- per-torrent rate limits: rtorrent 0.16 removed the throttle-group RPC commands — works on 0.9.x (container default), honest error on 0.16+
+- per-file priority: rtorrent 0.16.25 faults the `(hash, index, value)` target shape upstream — works on 0.9.x, fault passes through on 0.16+
+- `ratio_limit` is accepted but not applied over rtorrent yet (view-based ratio scheduling is future work)
+- sequential download and super-seeding have no rtorrent equivalent
+- renames require server-side filesystem access and are unavailable in remote mode
 
 ## Building from source
 

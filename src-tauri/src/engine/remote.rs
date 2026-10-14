@@ -4,8 +4,14 @@
 
 use crate::commands::torrent::TorrentItem;
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+#[derive(Deserialize)]
+struct FirstLastResponse {
+    first_last_piece_prio: bool,
+}
 
 pub struct RemoteServerEngine {
     base_url: String,
@@ -251,43 +257,58 @@ impl TorrentEngine for RemoteServerEngine {
         )
     }
 
-    // The following have no wire format yet in the server bridge; they fail
-    // loudly instead of pretending.
-    fn reannounce(&self, _id: &str) -> Result<(), String> {
-        Err("nebulae-server (preview): reannounce is not available in remote mode yet".to_string())
+    fn reannounce(&self, id: &str) -> Result<(), String> {
+        self.unit(
+            reqwest::Method::POST,
+            &format!("/api/v1/torrents/{id}/reannounce"),
+            None,
+        )
     }
 
-    fn set_category(&self, _id: &str, _category: &str) -> Result<(), String> {
-        Err("nebulae-server (preview): categories are not available in remote mode yet".to_string())
+    fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
+        let payload = serde_json::json!({ "category": category });
+        self.unit(
+            reqwest::Method::POST,
+            &format!("/api/v1/torrents/{id}/category"),
+            Some(payload.to_string()),
+        )
     }
 
     fn toggle_sequential_download(&self, _id: &str) -> Result<bool, String> {
-        Err(
-            "nebulae-server (preview): sequential download is not available in remote mode yet"
-                .to_string(),
-        )
+        // rtorrent has no sequential-download support; the bridge reports the
+        // same honest error.
+        Err("sequential download is not supported by the rtorrent engine".to_string())
     }
 
-    fn toggle_first_last_piece_priority(&self, _id: &str) -> Result<bool, String> {
-        Err("nebulae-server (preview): first/last piece priority is not available in remote mode yet".to_string())
+    fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String> {
+        let response = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/api/v1/torrents/{id}/firstlast"),
+            )?
+            .json::<FirstLastResponse>()
+            .map_err(|e| format!("nebulae-server: bad response: {e}"))?;
+        Ok(response.first_last_piece_prio)
     }
 
     fn toggle_super_seeding(&self, _id: &str) -> Result<bool, String> {
-        Err(
-            "nebulae-server (preview): super-seeding is not available in remote mode yet"
-                .to_string(),
-        )
+        Err("super-seeding is not supported by the rtorrent engine".to_string())
     }
 
-    fn set_file_priority(&self, _id: &str, _file_index: u32, _priority: u8) -> Result<(), String> {
-        Err(
-            "nebulae-server (preview): per-file priority is not available in remote mode yet"
-                .to_string(),
+    fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {
+        let payload = serde_json::json!({ "file_index": file_index, "priority": priority });
+        self.unit(
+            reqwest::Method::POST,
+            &format!("/api/v1/torrents/{id}/file-priority"),
+            Some(payload.to_string()),
         )
     }
 
     fn rename_torrent(&self, _id: &str, _new_name: &str) -> Result<(), String> {
-        Err("nebulae-server (preview): renaming is not available in remote mode yet".to_string())
+        Err(
+            "renaming requires server-side filesystem access and is not available in remote mode"
+                .to_string(),
+        )
     }
 
     fn rename_torrent_file(
@@ -297,7 +318,7 @@ impl TorrentEngine for RemoteServerEngine {
         _new_file_name: &str,
     ) -> Result<(), String> {
         Err(
-            "nebulae-server (preview): file renaming is not available in remote mode yet"
+            "file renaming requires server-side filesystem access and is not available in remote mode"
                 .to_string(),
         )
     }
@@ -309,7 +330,7 @@ impl TorrentEngine for RemoteServerEngine {
         _new_folder_name: &str,
     ) -> Result<(), String> {
         Err(
-            "nebulae-server (preview): folder renaming is not available in remote mode yet"
+            "folder renaming requires server-side filesystem access and is not available in remote mode"
                 .to_string(),
         )
     }
