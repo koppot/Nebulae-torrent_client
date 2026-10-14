@@ -45,7 +45,12 @@ impl RtorrentRemoteEngine {
     /// One row of `d.multicall2` -> a UI-facing TorrentItem.
     fn map_torrent_row(row: &[rpc::RpcValue]) -> Result<TorrentItem, String> {
         // Column order must match LIST_COLUMNS below.
-        let text = |i: usize| row.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let text = |i: usize| {
+            row.get(i)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
         let int = |i: usize| row.get(i).and_then(|v| v.as_int()).unwrap_or(0);
 
         let total_bytes = int(3).max(0) as u64;
@@ -159,18 +164,18 @@ impl TorrentEngine for RtorrentRemoteEngine {
     }
 
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
-        // Magnets and URLs are loaded directly; local files are sent as raw bytes.
-        let (method, param) =
-            if source.starts_with("magnet:") || source.starts_with("http://") || source.starts_with("https://") {
-                ("load.start", rpc::RpcValue::Str(source.to_string()))
-            } else {
-                let bytes = std::fs::read(source)
-                    .map_err(|e| format!("rtorrent: cannot read torrent file: {e}"))?;
-                (
-                    "load.raw_start",
-                    rpc::RpcValue::Str(String::from_utf8_lossy(&bytes).to_string()),
-                )
-            };
+        // Magnets and URLs are loaded directly; local files are sent as raw
+        // bencode bytes via XML-RPC <base64> (never a lossy UTF-8 string).
+        let (method, param) = if source.starts_with("magnet:")
+            || source.starts_with("http://")
+            || source.starts_with("https://")
+        {
+            ("load.start", rpc::RpcValue::Str(source.to_string()))
+        } else {
+            let bytes = std::fs::read(source)
+                .map_err(|e| format!("rtorrent: cannot read torrent file: {e}"))?;
+            ("load.raw_start", rpc::RpcValue::Bytes(bytes))
+        };
         self.rpc(method, &[rpc::RpcValue::Str(String::new()), param])?;
         if let Some(dir) = download_dir {
             // New torrents land in the requested directory; existing ones keep theirs.
@@ -184,11 +189,32 @@ impl TorrentEngine for RtorrentRemoteEngine {
         Ok(String::new())
     }
 
+    fn add_torrent_from_bytes(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        // Stage the bencode to a temp file and reuse the file path path
+        // (load.raw_start with <base64> bytes).
+        let staging = std::env::temp_dir().join(format!(
+            "nebulae-upload-{}.torrent",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&staging, bytes)
+            .map_err(|e| format!("rtorrent: cannot stage uploaded torrent: {e}"))?;
+        let result = self.add_torrent(&staging.to_string_lossy(), download_dir);
+        let _ = std::fs::remove_file(&staging);
+        result
+    }
+
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
         if delete_files {
             // Deleting downloaded data is not exposed over rtorrent's RPC; the container
             // is expected to manage data retention. Removing the torrent only.
-            return Err("rtorrent: deleting downloaded data over RPC is not supported; erase only".to_string());
+            return Err(
+                "rtorrent: deleting downloaded data over RPC is not supported; erase only"
+                    .to_string(),
+            );
         }
         self.rpc("d.erase", &[Self::torrent_hash(id)])?;
         Ok(())
@@ -260,13 +286,17 @@ impl TorrentEngine for RtorrentRemoteEngine {
     }
 
     fn force_recheck(&self, id: &str) -> Result<(), String> {
-        self.rpc("d.check_hash", &[Self::torrent_hash(id)]).map(|_| ())
+        self.rpc("d.check_hash", &[Self::torrent_hash(id)])
+            .map(|_| ())
     }
 
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String> {
         self.rpc(
             "d.directory.set",
-            &[Self::torrent_hash(id), rpc::RpcValue::Str(new_path.to_string())],
+            &[
+                Self::torrent_hash(id),
+                rpc::RpcValue::Str(new_path.to_string()),
+            ],
         )
         .map(|_| ())
     }
@@ -357,7 +387,10 @@ mod tests {
                 let n = stream.read(&mut buf).unwrap_or(0);
                 // Minimal SCGI validation: contains netstring colon+comma.
                 let request = &buf[..n];
-                if request.contains(&b':') && request.contains(&b',') && flag.load(Ordering::SeqCst) == false {
+                if request.contains(&b':')
+                    && request.contains(&b',')
+                    && !flag.load(Ordering::SeqCst)
+                {
                     let response = r#"<?xml version="1.0"?><methodResponse><params><param><value><array><data>
                         <value><array><data>
                             <value><string>BF4A97C0</string></value>

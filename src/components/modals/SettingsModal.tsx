@@ -13,6 +13,7 @@ import {
   Radio,
   Rss,
   Globe,
+  Server,
   Cpu,
   FolderOpen,
   Copy,
@@ -31,13 +32,15 @@ export const SettingsModal: React.FC = () => {
   const { selectDownloadDirectory } = useTorrentStore();
 
   const [activeTab, setActiveTab] = useState<
-    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'advanced'
+    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'rtorrent' | 'advanced'
   >('behavior');
 
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [associationStatus, setAssociationStatus] = useState<AssociationStatus | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [serverTestResult, setServerTestResult] = useState<string | null>(null);
+  const [isTestingServer, setIsTestingServer] = useState(false);
 
   useEffect(() => {
     invoke<AssociationStatus>('check_associations_status')
@@ -50,6 +53,27 @@ export const SettingsModal: React.FC = () => {
   const showStatus = (msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(null), 3500);
+  };
+
+  const handleTestServerConnection = async () => {
+    setIsTestingServer(true);
+    setServerTestResult(null);
+    try {
+      const status = await invoke<{ name: string; version: string; engine: string }>(
+        'test_rtorrent_server_connection',
+        {
+          url: settings.rtorrent_server_url,
+          token: settings.rtorrent_server_token,
+        }
+      );
+      setServerTestResult(
+        `Connected: ${status.name} v${status.version} (engine: ${status.engine})`
+      );
+    } catch (e) {
+      setServerTestResult(`Failed: ${String(e)}`);
+    } finally {
+      setIsTestingServer(false);
+    }
   };
 
   const handleOpenLogs = async () => {
@@ -166,6 +190,7 @@ export const SettingsModal: React.FC = () => {
               { id: 'bittorrent', label: 'BitTorrent', icon: Radio },
               { id: 'rss', label: 'RSS', icon: Rss },
               { id: 'webui', label: 'Web UI', icon: Globe },
+              { id: 'rtorrent', label: 'Server', icon: Server },
               { id: 'advanced', label: 'Advanced', icon: Cpu },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -1177,6 +1202,87 @@ export const SettingsModal: React.FC = () => {
                       <span className="text-white">Bypass authentication for clients on localhost</span>
                     </label>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* 8.5 rTORRENT SERVER */}
+            {activeTab === 'rtorrent' && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    rTorrent Server (Nebulae Server Bridge)
+                  </h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-3">
+                    <input
+                      type="checkbox"
+                      checked={settings.rtorrent_server_enabled}
+                      onChange={(e) => saveSettings({ rtorrent_server_enabled: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                    />
+                    <span className="text-white font-medium">
+                      Drive torrents on a Nebulae Server (rtorrent) instead of locally
+                    </span>
+                  </label>
+                  <p className="text-[11px] text-[#a3a3a3] mb-3">
+                    Connects this desktop app to a headless <span className="font-mono">nebulae-server</span> bridge
+                    running next to rtorrent on your server (Unraid, TrueNAS, Docker). The engine choice applies the
+                    next time Nebulae starts.
+                  </p>
+
+                  <div className="space-y-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Server address</label>
+                      <input
+                        type="text"
+                        placeholder="http://tower.local:9174"
+                        disabled={!settings.rtorrent_server_enabled}
+                        value={settings.rtorrent_server_url}
+                        onChange={(e) => saveSettings({ rtorrent_server_url: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">API token</label>
+                      <input
+                        type="password"
+                        placeholder="NEBULAE_SERVER_TOKEN"
+                        disabled={!settings.rtorrent_server_enabled}
+                        value={settings.rtorrent_server_token}
+                        onChange={(e) => saveSettings({ rtorrent_server_token: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      onClick={handleTestServerConnection}
+                      disabled={!settings.rtorrent_server_enabled || isTestingServer}
+                      className="px-3 py-1.5 rounded bg-[#e50914] hover:bg-[#c40812] text-white text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isTestingServer ? 'Testing…' : 'Test connection'}
+                    </button>
+                    {serverTestResult && (
+                      <span
+                        className={
+                          serverTestResult.startsWith('Connected')
+                            ? 'text-green-400 text-[11px]'
+                            : 'text-red-400 text-[11px]'
+                        }
+                      >
+                        {serverTestResult}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <p className="text-[11px] text-[#a3a3a3]">
+                    Note: the server beta serves plain HTTP on your LAN. Keep it inside a trusted network or put a
+                    reverse proxy with TLS in front. Some preview features (per-file priority, renaming, categories,
+                    super-seeding) are unavailable in remote mode and will say so when used.
+                  </p>
                 </div>
               </div>
             )}

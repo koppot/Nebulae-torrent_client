@@ -1,4 +1,4 @@
-use crate::engine::{EngineStatus, MockTorrentEngine, TorrentEngine};
+use crate::engine::{EngineStatus, TorrentEngine};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -121,7 +121,11 @@ pub fn inspect_torrent_file(
             trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
         } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
             Some(stripped)
-        } else if !trimmed.starts_with("magnet:") && !trimmed.contains('/') && !trimmed.contains('\\') && trimmed.len() > 100 {
+        } else if !trimmed.starts_with("magnet:")
+            && !trimmed.contains('/')
+            && !trimmed.contains('\\')
+            && trimmed.len() > 100
+        {
             Some(trimmed)
         } else {
             None
@@ -218,7 +222,7 @@ pub fn inspect_torrent_file(
 }
 
 #[tauri::command]
-pub fn list_torrents(engine: State<Arc<MockTorrentEngine>>) -> Result<Vec<TorrentItem>, String> {
+pub fn list_torrents(engine: State<Arc<dyn TorrentEngine>>) -> Result<Vec<TorrentItem>, String> {
     engine.list_torrents()
 }
 
@@ -227,7 +231,7 @@ pub fn add_torrent_stub(
     source: String,
     download_dir: Option<String>,
     bytes: Option<Vec<u8>>,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<String, String> {
     if let Some(raw) = bytes {
         if !raw.is_empty() {
@@ -241,7 +245,7 @@ pub fn add_torrent_stub(
 pub fn add_torrent_bytes(
     bytes: Vec<u8>,
     download_dir: Option<String>,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<String, String> {
     engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
 }
@@ -250,20 +254,20 @@ pub fn add_torrent_bytes(
 pub fn remove_torrent_stub(
     id: String,
     delete_files: Option<bool>,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.remove_torrent(&id, delete_files.unwrap_or(false))
 }
 
 #[tauri::command]
-pub fn pause_torrent_stub(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn pause_torrent_stub(id: String, engine: State<Arc<dyn TorrentEngine>>) -> Result<(), String> {
     engine.pause_torrent(&id)
 }
 
 #[tauri::command]
 pub fn resume_torrent_stub(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.resume_torrent(&id)
 }
@@ -271,13 +275,13 @@ pub fn resume_torrent_stub(
 #[tauri::command]
 pub fn force_recheck_torrent(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.force_recheck(&id)
 }
 
 #[tauri::command]
-pub fn reannounce_torrent(id: String, engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn reannounce_torrent(id: String, engine: State<Arc<dyn TorrentEngine>>) -> Result<(), String> {
     engine.reannounce(&id)
 }
 
@@ -285,7 +289,7 @@ pub fn reannounce_torrent(id: String, engine: State<Arc<MockTorrentEngine>>) -> 
 pub fn set_torrent_location(
     id: String,
     new_path: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.set_location(&id, &new_path)
 }
@@ -294,7 +298,7 @@ pub fn set_torrent_location(
 pub fn set_torrent_category(
     id: String,
     category: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.set_category(&id, &category)
 }
@@ -305,7 +309,7 @@ pub fn set_torrent_speed_limits(
     dl_kib: u32,
     ul_kib: u32,
     ratio_limit: f32,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.set_torrent_limits(&id, dl_kib, ul_kib, ratio_limit)
 }
@@ -313,7 +317,7 @@ pub fn set_torrent_speed_limits(
 #[tauri::command]
 pub fn toggle_torrent_sequential(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<bool, String> {
     engine.toggle_sequential_download(&id)
 }
@@ -321,7 +325,7 @@ pub fn toggle_torrent_sequential(
 #[tauri::command]
 pub fn toggle_torrent_first_last(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<bool, String> {
     engine.toggle_first_last_piece_priority(&id)
 }
@@ -329,7 +333,7 @@ pub fn toggle_torrent_first_last(
 #[tauri::command]
 pub fn toggle_torrent_super_seeding(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<bool, String> {
     engine.toggle_super_seeding(&id)
 }
@@ -339,7 +343,7 @@ pub fn set_file_priority(
     id: String,
     file_index: u32,
     priority: u8,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.set_file_priority(&id, file_index, priority)
 }
@@ -348,7 +352,7 @@ pub fn set_file_priority(
 pub fn rename_torrent(
     id: String,
     new_name: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.rename_torrent(&id, &new_name)
 }
@@ -358,7 +362,7 @@ pub fn rename_torrent_file(
     id: String,
     file_index: u32,
     new_file_name: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.rename_torrent_file(&id, file_index, &new_file_name)
 }
@@ -368,7 +372,7 @@ pub fn rename_torrent_folder(
     id: String,
     old_folder_path: String,
     new_folder_name: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<(), String> {
     engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
 }
@@ -376,7 +380,7 @@ pub fn rename_torrent_folder(
 #[tauri::command]
 pub async fn create_torrent_file(
     params: CreateTorrentParams,
-    engine: State<'_, Arc<MockTorrentEngine>>,
+    engine: State<'_, Arc<dyn TorrentEngine>>,
 ) -> Result<String, String> {
     let source_path_str = params.source_path.trim().to_string();
     if source_path_str.is_empty() {
@@ -428,7 +432,7 @@ pub async fn create_torrent_file(
 #[tauri::command]
 pub fn export_torrent_file(
     id: String,
-    engine: State<Arc<MockTorrentEngine>>,
+    engine: State<Arc<dyn TorrentEngine>>,
 ) -> Result<String, String> {
     let torrents = engine.list_torrents()?;
     let item = torrents
@@ -442,17 +446,17 @@ pub fn export_torrent_file(
 }
 
 #[tauri::command]
-pub fn get_engine_status(engine: State<Arc<MockTorrentEngine>>) -> Result<EngineStatus, String> {
+pub fn get_engine_status(engine: State<Arc<dyn TorrentEngine>>) -> Result<EngineStatus, String> {
     Ok(engine.engine_status())
 }
 
 #[tauri::command]
-pub fn trigger_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn trigger_kill_switch_command(engine: State<Arc<dyn TorrentEngine>>) -> Result<(), String> {
     engine.trigger_kill_switch()
 }
 
 #[tauri::command]
-pub fn reset_kill_switch_command(engine: State<Arc<MockTorrentEngine>>) -> Result<(), String> {
+pub fn reset_kill_switch_command(engine: State<Arc<dyn TorrentEngine>>) -> Result<(), String> {
     engine.reset_kill_switch()
 }
 

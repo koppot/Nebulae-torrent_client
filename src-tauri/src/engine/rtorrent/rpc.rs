@@ -1,13 +1,19 @@
 //! Minimal XML-RPC layer for rtorrent's SCGI endpoint.
 //!
-//! Only what rtorrent needs: method calls with string/integer/array params
-//! and parsing of `methodResponse` values (including nested arrays) plus
-//! `<fault>` detection. Deliberately not a general XML-RPC implementation.
+//! Only what rtorrent needs: method calls with string/integer/array/base64
+//! params and parsing of `methodResponse` values (including nested arrays)
+//! plus `<fault>` detection. Deliberately not a general XML-RPC
+//! implementation.
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 
 /// A parsed XML-RPC value (the subset rtorrent uses).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RpcValue {
     Str(String),
+    /// Raw bytes, transported as XML-RPC `<base64>` (torrent files, keys).
+    Bytes(Vec<u8>),
     Int(i64),
     Array(Vec<RpcValue>),
 }
@@ -51,6 +57,11 @@ fn encode_value(value: &RpcValue, out: &mut String) {
         RpcValue::Int(i) => {
             out.push_str(&format!("<value><i8>{i}</i8></value>"));
         }
+        RpcValue::Bytes(b) => {
+            out.push_str("<value><base64>");
+            out.push_str(&STANDARD.encode(b));
+            out.push_str("</base64></value>");
+        }
         RpcValue::Array(items) => {
             out.push_str("<value><array><data>");
             for item in items {
@@ -63,9 +74,8 @@ fn encode_value(value: &RpcValue, out: &mut String) {
 
 /// Build a complete XML-RPC `methodCall` document.
 pub fn build_call(method: &str, params: &[RpcValue]) -> String {
-    let mut out = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><methodCall><methodName>",
-    );
+    let mut out =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><methodCall><methodName>");
     out.push_str(&escape_xml(method));
     out.push_str("</methodName><params>");
     for param in params {
@@ -96,16 +106,28 @@ fn parse_value(node: roxmltree::Node) -> Result<RpcValue, String> {
             .parse::<f64>()
             .map(|f| RpcValue::Int(f as i64))
             .map_err(|e| format!("rtorrent: bad double value '{text}': {e}")),
+        "base64" => STANDARD
+            .decode(text.trim())
+            .map(RpcValue::Bytes)
+            .map_err(|e| format!("rtorrent: bad base64 value: {e}")),
         "array" => {
             let mut items = Vec::new();
-            for data in typed.children().filter(|c| c.is_element() && c.tag_name().name() == "data") {
-                for value in data.children().filter(|c| c.is_element() && c.tag_name().name() == "value") {
+            for data in typed
+                .children()
+                .filter(|c| c.is_element() && c.tag_name().name() == "data")
+            {
+                for value in data
+                    .children()
+                    .filter(|c| c.is_element() && c.tag_name().name() == "value")
+                {
                     items.push(parse_value(value)?);
                 }
             }
             Ok(RpcValue::Array(items))
         }
-        other => Err(format!("rtorrent: unsupported XML-RPC value type '{other}'")),
+        other => Err(format!(
+            "rtorrent: unsupported XML-RPC value type '{other}'"
+        )),
     }
 }
 
@@ -126,8 +148,9 @@ pub fn parse_response(xml: &str) -> Result<RpcValue, String> {
                 .descendants()
                 .find(|n| {
                     n.tag_name().name() == "member"
-                        && n.children()
-                            .any(|c| c.tag_name().name() == "name" && c.text() == Some("faultString"))
+                        && n.children().any(|c| {
+                            c.tag_name().name() == "name" && c.text() == Some("faultString")
+                        })
                 })
                 .and_then(|member| {
                     member

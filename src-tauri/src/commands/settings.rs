@@ -125,6 +125,11 @@ pub struct UserSettings {
     pub coalesce_reads_writes: bool,
     pub embedded_tracker_enabled: bool,
     pub embedded_tracker_port: u16,
+
+    // 9. rTorrent Server (Nebulae Server bridge) — applies on app restart
+    pub rtorrent_server_enabled: bool,
+    pub rtorrent_server_url: String,
+    pub rtorrent_server_token: String,
 }
 
 impl Default for UserSettings {
@@ -252,6 +257,11 @@ impl Default for UserSettings {
             coalesce_reads_writes: true,
             embedded_tracker_enabled: false,
             embedded_tracker_port: 9000,
+
+            // 9. rTorrent Server
+            rtorrent_server_enabled: false,
+            rtorrent_server_url: String::new(),
+            rtorrent_server_token: String::new(),
         }
     }
 }
@@ -278,6 +288,50 @@ pub fn save_user_settings(settings: UserSettings, db: State<Arc<Database>>) -> R
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ServerStatusResponse {
+    pub name: String,
+    pub version: String,
+    pub engine: String,
+    pub kill_switch_engaged: bool,
+}
+
+/// Probe a Nebulae Server instance from the settings screen. Returns the
+/// server's status payload so the UI can show what it actually reached.
+#[tauri::command]
+pub fn test_rtorrent_server_connection(
+    url: String,
+    token: String,
+) -> Result<ServerStatusResponse, String> {
+    let base = url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Server address is empty".to_string());
+    }
+    if !base.starts_with("http://") && !base.starts_with("https://") {
+        return Err("Server address must start with http:// or https://".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let response = client
+        .get(format!("{base}/api/v1/status"))
+        .bearer_auth(token.trim())
+        .send()
+        .map_err(|e| format!("Connection failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err("Unauthorized: the API token does not match".to_string());
+        }
+        return Err(format!("Server returned HTTP {status}"));
+    }
+    response
+        .json::<ServerStatusResponse>()
+        .map_err(|e| format!("Unexpected server response: {e}"))
 }
 
 #[cfg(test)]

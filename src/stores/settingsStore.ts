@@ -128,6 +128,11 @@ export const defaultSettings: UserSettings = {
   coalesce_reads_writes: true,
   embedded_tracker_enabled: false,
   embedded_tracker_port: 9000,
+
+  // 9. rTorrent Server (Nebulae Server bridge)
+  rtorrent_server_enabled: false,
+  rtorrent_server_url: '',
+  rtorrent_server_token: '',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

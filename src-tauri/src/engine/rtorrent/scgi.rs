@@ -134,6 +134,8 @@ mod tests {
         assert!(decoded
             .headers
             .contains(&("CONTENT_LENGTH".to_string(), "4".to_string())));
-        assert!(decoded.headers.contains(&("SCGI".to_string(), "1".to_string())));
+        assert!(decoded
+            .headers
+            .contains(&("SCGI".to_string(), "1".to_string())));
     }
 }
