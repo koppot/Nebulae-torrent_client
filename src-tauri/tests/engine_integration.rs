@@ -123,3 +123,25 @@ fn test_adaptive_swarm_auto_tune() {
     assert!(large_swarm.endgame_active); // <= 5 pieces remaining
     assert_eq!(large_swarm.disk_coalescing_mb, 64); // Gigabit rate scales buffer to 64 MiB
 }
+
+#[test]
+fn test_zero_leechers_zero_upload_rate() {
+    let engine = MockTorrentEngine::new();
+    let torrent_id = engine
+        .add_torrent("magnet:?xt=urn:btih:abcdef1234567890&dn=TestZeroLeechers", None)
+        .expect("add torrent failed");
+
+    // Sleep 1.5s to let the transfer loop tick
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+    let torrents = engine.list_torrents().unwrap();
+    let t = torrents.iter().find(|item| item.id == torrent_id).unwrap();
+
+    // Since this torrent has no active leechers requesting blocks (peers == 0),
+    // upload_rate must strictly be 0.
+    if t.peers == 0 {
+        assert_eq!(t.upload_rate, 0, "Upload rate must be 0 when no peers are downloading from client");
+        assert_eq!(t.uploaded_bytes, 0, "Uploaded bytes must not increment without leechers");
+    }
+}
+

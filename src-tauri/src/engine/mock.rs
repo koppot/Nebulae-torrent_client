@@ -711,9 +711,25 @@ fn start_engine_transfer_loop(
                     }
 
                     item.download_rate = rate;
-                    item.upload_rate = (rate / 14).clamp(65_000, 750_000);
+
+                    // Real BitTorrent upload logic: A client can only upload if there are active
+                    // leechers (incomplete peers) in the swarm who request missing blocks.
+                    // If peers == 0 (no one downloading) or the client hasn't downloaded enough pieces,
+                    // upload rate MUST be 0 B/s.
+                    let leecher_count = item.peers as u64;
+                    if leecher_count > 0 && item.progress > 0.05 {
+                        let mut ul_rate = (leecher_count * 120_000) + ((now % 5) * 25_000);
+                        if item.upload_limit_kib > 0 {
+                            let max_ul = (item.upload_limit_kib as u64) * 1024;
+                            ul_rate = ul_rate.min(max_ul);
+                        }
+                        item.upload_rate = ul_rate;
+                        item.uploaded_bytes += ul_rate;
+                    } else {
+                        item.upload_rate = 0;
+                    }
+
                     item.downloaded_bytes = (item.downloaded_bytes + rate).min(item.total_bytes);
-                    item.uploaded_bytes += item.upload_rate;
 
                     if item.total_bytes > 0 {
                         item.progress = ((item.downloaded_bytes as f64 / item.total_bytes as f64)
@@ -727,6 +743,7 @@ fn start_engine_transfer_loop(
                         item.progress = 1.0;
                         item.status = "Seeding".to_string();
                         item.download_rate = 0;
+                        item.upload_rate = 0;
                         item.eta_seconds = None;
                         if item.completed_on.is_none() {
                             item.completed_on = Some(now);
@@ -745,13 +762,18 @@ fn start_engine_transfer_loop(
                 } else if item.status == "Seeding" {
                     item.download_rate = 0;
                     item.eta_seconds = None;
-                    let mut ul_rate = 380_000 + ((now % 5) * 45_000);
-                    if item.upload_limit_kib > 0 {
-                        let max_ul = (item.upload_limit_kib as u64) * 1024;
-                        ul_rate = ul_rate.min(max_ul);
+                    let leecher_count = item.peers as u64;
+                    if leecher_count > 0 {
+                        let mut ul_rate = (leecher_count * 250_000) + ((now % 5) * 45_000);
+                        if item.upload_limit_kib > 0 {
+                            let max_ul = (item.upload_limit_kib as u64) * 1024;
+                            ul_rate = ul_rate.min(max_ul);
+                        }
+                        item.upload_rate = ul_rate;
+                        item.uploaded_bytes += ul_rate;
+                    } else {
+                        item.upload_rate = 0;
                     }
-                    item.upload_rate = ul_rate;
-                    item.uploaded_bytes += ul_rate;
                     if item.downloaded_bytes > 0 {
                         item.ratio =
                             (item.uploaded_bytes as f64 / item.downloaded_bytes as f64) as f32;
