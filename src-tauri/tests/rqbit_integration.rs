@@ -166,3 +166,92 @@ fn test_rqbit_engine_kill_switch_fail_closed() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_rqbit_engine_bep27_private_torrent_isolation() {
+    let (engine, tmp) = setup_test_engine("bep27");
+
+    // 1. Build a BEP 27 private torrent (ADC tracker)
+    let private_payload_dir = tmp.join("private_release");
+    std::fs::create_dir_all(&private_payload_dir).unwrap();
+    std::fs::write(
+        private_payload_dir.join("exclusive_dvd.iso"),
+        vec![0xEE; 16384],
+    )
+    .unwrap();
+
+    let out_dir = tmp.join("torrents_out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+
+    let private_torrent = nebulae_torrent_client_lib::engine::metainfo::build_torrent_file(
+        &private_payload_dir,
+        &out_dir,
+        16,
+        &["https://tracker.asiandvdclub.org:2710/passkey1234567890/announce".to_string()],
+        true, // is_private = true (BEP 27)
+        "Asian DVD Club Exclusive",
+        "Nebulae",
+    )
+    .expect("build private torrent failed");
+
+    // 2. Build a public torrent
+    let public_payload_dir = tmp.join("public_release");
+    std::fs::create_dir_all(&public_payload_dir).unwrap();
+    std::fs::write(
+        public_payload_dir.join("public_data.bin"),
+        vec![0xAA; 16384],
+    )
+    .unwrap();
+
+    let public_torrent = nebulae_torrent_client_lib::engine::metainfo::build_torrent_file(
+        &public_payload_dir,
+        &out_dir,
+        16,
+        &["udp://tracker.opentrackr.org:1337/announce".to_string()],
+        false, // is_private = false
+        "Public Open Torrent",
+        "Nebulae",
+    )
+    .expect("build public torrent failed");
+
+    // 3. Verify parsed metainfo adheres to BEP 27 flags
+    let parsed_priv =
+        nebulae_torrent_client_lib::engine::metainfo::ParsedTorrent::parse_file(&private_torrent)
+            .expect("parse private torrent failed");
+    assert!(
+        parsed_priv.is_private,
+        "Private torrent must have is_private = true"
+    );
+
+    let parsed_pub =
+        nebulae_torrent_client_lib::engine::metainfo::ParsedTorrent::parse_file(&public_torrent)
+            .expect("parse public torrent failed");
+    assert!(
+        !parsed_pub.is_private,
+        "Public torrent must have is_private = false"
+    );
+
+    // 4. Verify engine reports PrivateTorrentRestrictions support
+    assert!(engine.supports_hook(EngineHook::PrivateTorrentRestrictions));
+
+    // 5. Add both to rqbit engine
+    let priv_bytes = std::fs::read(&private_torrent).unwrap();
+    let priv_hash = engine
+        .add_torrent_from_bytes(&priv_bytes, None)
+        .expect("add private torrent failed");
+    assert!(!priv_hash.is_empty());
+
+    let pub_bytes = std::fs::read(&public_torrent).unwrap();
+    let pub_hash = engine
+        .add_torrent_from_bytes(&pub_bytes, None)
+        .expect("add public torrent failed");
+    assert!(!pub_hash.is_empty());
+
+    let torrents = engine.list_torrents().expect("list failed");
+    assert_eq!(torrents.len(), 2);
+    assert!(torrents.iter().any(|t| t.info_hash == priv_hash));
+    assert!(torrents.iter().any(|t| t.info_hash == pub_hash));
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&tmp);
+}

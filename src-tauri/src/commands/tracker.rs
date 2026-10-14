@@ -1,5 +1,6 @@
 use crate::db::Database;
 use crate::models::tracker::{AdcTrackerProfile, SeedTimeRecord};
+use crate::utils::keyring::{delete_secret, passkey_secret_target, store_secret};
 use chrono::Utc;
 use std::sync::Arc;
 use tauri::State;
@@ -115,6 +116,12 @@ pub fn link_adc_account(
 
     let masked = AdcTrackerProfile::mask_passkey(&passkey);
 
+    // Securely route passkey to OS Keychain (macOS Keychain / Windows Credential Manager)
+    let secret_target = passkey_secret_target();
+    if let Err(e) = store_secret(&secret_target, &passkey) {
+        tracing::warn!("Failed to store passkey in OS keychain: {e}");
+    }
+
     db.set_setting("adc_linked", "true")
         .map_err(|e| e.to_string())?;
     db.set_setting("adc_username", &username)
@@ -137,6 +144,11 @@ pub fn link_adc_account(
 
 #[tauri::command]
 pub fn unlink_adc_account(db: State<Arc<Database>>) -> Result<(), String> {
+    let secret_target = passkey_secret_target();
+    if let Err(e) = delete_secret(&secret_target) {
+        tracing::warn!("Failed to delete passkey from OS keychain: {e}");
+    }
+
     db.set_setting("adc_linked", "false")
         .map_err(|e| e.to_string())?;
     db.set_setting("adc_username", "")

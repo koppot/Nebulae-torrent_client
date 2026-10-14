@@ -83,4 +83,52 @@ mod tests {
         assert!(!sanitized_param.contains("abcdef123"));
         assert_eq!(sanitized_param, "[REDACTED_TRACKER_URL]");
     }
+
+    #[test]
+    fn test_sanitize_tokens_and_auth_parameters() {
+        let token_log = "tracker announce returned error token=secret_token_9999";
+        let sanitized_token = SafeLogger::sanitize(token_log);
+        assert!(!sanitized_token.contains("secret_token_9999"));
+        assert_eq!(sanitized_token, "[REDACTED_TRACKER_URL]");
+
+        let auth_log = "connecting to tracker https://adc.org/announce?auth=supersecretauth";
+        let sanitized_auth = SafeLogger::sanitize(auth_log);
+        assert!(!sanitized_auth.contains("supersecretauth"));
+        assert_eq!(sanitized_auth, "[REDACTED_TRACKER_URL]");
+
+        let non_secret_log = "Engine listening on port 51413";
+        let normal = SafeLogger::sanitize(non_secret_log);
+        assert_eq!(normal, "Engine listening on port 51413");
+    }
+
+    #[test]
+    fn test_safe_logger_file_output_redaction() {
+        let tmp = std::env::temp_dir().join(format!(
+            "nebulae_log_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        SafeLogger::log_to_file(
+            &tmp,
+            "INFO",
+            "Announce to https://tracker.asiandvdclub.org:2710/mysecretpasskey/announce succeeded",
+        );
+        SafeLogger::log_to_file(
+            &tmp,
+            "INFO",
+            "Loaded magnet:?xt=urn:btih:0123456789abcdef from CLI",
+        );
+
+        let content = std::fs::read_to_string(tmp.join("nebulae_session.log")).unwrap();
+        assert!(!content.contains("mysecretpasskey"));
+        assert!(!content.contains("urn:btih:0123456789abcdef"));
+        assert!(content.contains("[REDACTED_TRACKER_URL]"));
+        assert!(content.contains("[REDACTED_MAGNET_LINK]"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
