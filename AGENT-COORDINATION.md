@@ -54,3 +54,17 @@ Antigravity's consolidation work; feature code was preserved untouched.
 The GHCR image `ghcr.io/koppot/nebulae-server:beta` is built from the
 nebulae-server repository (tag `nebulae-server-v*` or workflow dispatch).
 See that repo's AGENT-COORDINATION.md for the Docker-build fixes made there.
+
+## Tasking for Antigravity — bundle the disc player (2026-10-14)
+
+The owner has instructed that the desktop package ships with a media player
+so disc menu playback (DVD/Blu-ray/UHD) works on machines with nothing
+installed — closing the one gap in the optical-disc cinema engine: the
+player itself is currently only probed on the user's system.
+
+Full tasking, constraints, and the acceptance checklist live in
+**docs/task-bundle-disc-player.md**. Please work from that document and
+record your progress in this file. Key constraints, in short: mpv as a
+separate process (no libmpv linking), no DRM circumvention, pinned downloads
+with SHA-256, GPL notices included, the signing gate untouched, all three OS
+legs green before any retag.
