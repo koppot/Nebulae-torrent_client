@@ -16,6 +16,8 @@ pub struct StagedUpdateState;
 /// before performing any network requests or DNS lookups when disabled.
 #[cfg(desktop)]
 pub fn spawn_silent_background_updater(app: &tauri::AppHandle, db: Arc<crate::db::Database>) {
+    #[cfg(windows)]
+    use tauri::Manager;
     use tauri_plugin_updater::UpdaterExt;
     use tracing::{debug, info, warn};
 

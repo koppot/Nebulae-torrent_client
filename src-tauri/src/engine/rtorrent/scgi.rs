@@ -84,9 +84,17 @@ pub fn decode_request_headers(raw: &[u8]) -> Result<DecodedRequest<'_>, String> 
 fn connect(target: &ScgiTarget) -> Result<Box<dyn ReadWrite>, String> {
     match target {
         ScgiTarget::UnixSocket(path) => {
-            let socket = std::os::unix::net::UnixStream::connect(path)
-                .map_err(|e| format!("rtorrent: cannot connect to unix socket: {e}"))?;
-            Ok(Box::new(socket))
+            #[cfg(unix)]
+            {
+                let socket = std::os::unix::net::UnixStream::connect(path)
+                    .map_err(|e| format!("rtorrent: cannot connect to unix socket: {e}"))?;
+                Ok(Box::new(socket))
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                Err("rtorrent: unix domain sockets are not supported on this platform".to_string())
+            }
         }
         ScgiTarget::Tcp(host, port) => {
             let stream = std::net::TcpStream::connect((host.as_str(), *port))
