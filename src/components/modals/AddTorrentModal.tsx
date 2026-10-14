@@ -34,7 +34,6 @@ export const AddTorrentModal: React.FC = () => {
   const [category, setCategory] = useState('General');
   const [startImmediately, setStartImmediately] = useState(!settings.do_not_start_automatically);
   const [sequentialDownload, setSequentialDownload] = useState(false);
-  const [firstLastPiecePrio, setFirstLastPiecePrio] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -543,15 +542,6 @@ export const AddTorrentModal: React.FC = () => {
                 className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
               />
               <span className="text-white">Download in sequential order (media stream preview)</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={firstLastPiecePrio}
-                onChange={(e) => setFirstLastPiecePrio(e.target.checked)}
-                className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-              />
-              <span className="text-white">Download first and last pieces first</span>
             </label>
           </div>
 

@@ -137,7 +137,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
             piece_size: 1048576,
             total_pieces: 1430,
             sequential_download: false,
-            first_last_piece_prio: true,
+            first_last_piece_prio: false,
             super_seeding: false,
             tags: ['New'],
             files: [
