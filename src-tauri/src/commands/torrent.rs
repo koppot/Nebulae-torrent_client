@@ -59,6 +59,7 @@ pub struct TorrentItem {
     pub download_limit_kib: u32,
     pub upload_limit_kib: u32,
     pub ratio_limit: f32,
+    pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -115,9 +115,35 @@ export const SimpleMediaView: React.FC = () => {
 
         {/* Card Content & Metadata */}
         <div className="p-3.5 space-y-2">
-          <h4 className="text-xs font-semibold text-white truncate" title={item.name}>
-            {item.name}
-          </h4>
+          <div>
+            <h4 className="text-xs font-semibold text-white truncate" title={item.name}>
+              {item.media_meta?.clean_title || item.name}
+            </h4>
+            {item.media_meta && (item.media_meta.year || item.media_meta.resolution || item.media_meta.source || item.media_meta.edition) && (
+              <div className="flex flex-wrap items-center gap-1 mt-1">
+                {item.media_meta.year && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-cardBorderDark text-adc-gold font-mono font-medium">
+                    {item.media_meta.year}
+                  </span>
+                )}
+                {item.media_meta.resolution && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-cardBorderDark text-adc-cyan font-mono font-medium">
+                    {item.media_meta.resolution}
+                  </span>
+                )}
+                {item.media_meta.source && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-cardBorderDark text-slate-300 font-mono">
+                    {item.media_meta.source}
+                  </span>
+                )}
+                {item.media_meta.edition && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-accent/20 text-adc-accent font-medium">
+                    {item.media_meta.edition}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
             <span>{formatBytes(item.total_bytes)}</span>

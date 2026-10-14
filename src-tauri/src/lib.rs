@@ -356,6 +356,7 @@ pub fn run() {
             commands::vpn::get_network_interfaces,
             // Media Station
             commands::media::launch_media_player,
+            commands::media::parse_media_title,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
             commands::tracker::link_adc_account,

@@ -1,4 +1,10 @@
+use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
 use std::path::Path;
+
+#[tauri::command]
+pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
+    Ok(MediaTitleParser::parse(&raw_title))
+}
 
 #[tauri::command]
 pub fn launch_media_player(file_path: String) -> Result<(), String> {
@@ -56,5 +62,19 @@ mod tests {
         let res = launch_media_player("/nonexistent/movie/file.mkv".to_string());
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_parse_media_title_command() {
+        let meta =
+            parse_media_title("Ikiru.1952.Remastered.1080p.BluRay.x264.FLAC-ADC".to_string())
+                .expect("parsing failed");
+        assert_eq!(meta.clean_title, "Ikiru");
+        assert_eq!(meta.year, Some(1952));
+        assert_eq!(meta.resolution, Some("1080p".to_string()));
+        assert_eq!(meta.source, Some("BluRay".to_string()));
+        assert_eq!(meta.codec, Some("x264".to_string()));
+        assert_eq!(meta.audio, Some("FLAC".to_string()));
+        assert_eq!(meta.release_group, Some("ADC".to_string()));
     }
 }

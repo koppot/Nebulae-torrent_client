@@ -218,6 +218,9 @@ impl MockTorrentEngine {
                 download_limit_kib: 0,
                 upload_limit_kib: 0,
                 ratio_limit: 0.0,
+                media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
+                    "Tokyo Story (1953) [4K Restoration]",
+                )),
             },
             TorrentItem {
                 id: "swarm-test-2".to_string(),
@@ -276,6 +279,9 @@ impl MockTorrentEngine {
                 download_limit_kib: 0,
                 upload_limit_kib: 0,
                 ratio_limit: 0.0,
+                media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
+                    "Seven Samurai (1954) [Criterion Remaster]",
+                )),
             },
         ];
 
@@ -411,6 +417,10 @@ impl MockTorrentEngine {
             });
         }
 
+        let media_meta = Some(crate::utils::media_parser::MediaTitleParser::parse(
+            &parsed.name,
+        ));
+
         list.push(TorrentItem {
             id: new_id.clone(),
             name: parsed.name,
@@ -445,6 +455,7 @@ impl MockTorrentEngine {
             download_limit_kib: 0,
             upload_limit_kib: 0,
             ratio_limit: 0.0,
+            media_meta,
         });
 
         Ok(new_id)
@@ -603,6 +614,8 @@ impl TorrentEngine for MockTorrentEngine {
             priority: 1,
         }];
 
+        let media_meta = Some(crate::utils::media_parser::MediaTitleParser::parse(&name));
+
         list.push(TorrentItem {
             id: new_id.clone(),
             name,
@@ -645,6 +658,7 @@ impl TorrentEngine for MockTorrentEngine {
             download_limit_kib: 0,
             upload_limit_kib: 0,
             ratio_limit: 0.0,
+            media_meta,
         });
         Ok(new_id)
     }

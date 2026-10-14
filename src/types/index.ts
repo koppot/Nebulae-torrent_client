@@ -31,6 +31,20 @@ export interface InspectTorrentResult {
   trackers: TorrentTrackerItem[];
 }
 
+export interface ParsedMediaMetadata {
+  raw_title: string;
+  clean_title: string;
+  year?: number;
+  resolution?: string;
+  source?: string;
+  codec?: string;
+  audio?: string;
+  season?: number;
+  episode?: number;
+  edition?: string;
+  release_group?: string;
+}
+
 export interface TorrentItem {
   id: string;
   name: string;
@@ -65,6 +79,7 @@ export interface TorrentItem {
   download_limit_kib: number;
   upload_limit_kib: number;
   ratio_limit: number;
+  media_meta?: ParsedMediaMetadata;
 }
 
 export interface UserSettings {

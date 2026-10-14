@@ -264,6 +264,12 @@ impl TorrentEngine for RqbitTorrentEngine {
                     })
                     .unwrap_or_else(|| vec!["Active".to_string()]);
 
+                let media_meta = if is_media || category == "Movies" {
+                    Some(crate::utils::media_parser::MediaTitleParser::parse(&name))
+                } else {
+                    None
+                };
+
                 result.push(TorrentItem {
                     id: info_hash.clone(),
                     name,
@@ -298,6 +304,7 @@ impl TorrentEngine for RqbitTorrentEngine {
                     download_limit_kib: dl_limit,
                     upload_limit_kib: ul_limit,
                     ratio_limit,
+                    media_meta,
                 });
             }
 
