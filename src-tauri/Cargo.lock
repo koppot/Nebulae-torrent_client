@@ -3004,6 +3004,7 @@ dependencies = [
  "dirs 5.0.1",
  "keyring",
  "librqbit",
+ "network-interface",
  "reqwest",
  "rusqlite",
  "serde",

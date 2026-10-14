@@ -9,8 +9,10 @@ export const VpnManagerModal: React.FC = () => {
   const {
     status,
     profiles,
+    interfaces,
     fetchStatus,
     fetchProfiles,
+    fetchInterfaces,
     setVpnMode,
     toggleKillSwitch,
     importWireguard,
@@ -28,8 +30,9 @@ export const VpnManagerModal: React.FC = () => {
     if (showVpnManager) {
       fetchStatus();
       fetchProfiles();
+      fetchInterfaces();
     }
-  }, [showVpnManager, fetchStatus, fetchProfiles]);
+  }, [showVpnManager, fetchStatus, fetchProfiles, fetchInterfaces]);
 
   if (!showVpnManager) return null;
 
@@ -169,8 +172,20 @@ PersistentKeepalive = 25`);
                   </span>
                 </div>
                 <div className="text-[11px] text-[#a3a3a3]">
-                  Interface: {status?.interface_name || 'None'} · IP: {status?.assigned_ip || 'None'}
+                  {status?.connected ? (
+                    <>Interface: {status?.interface_name} · IP: {status?.assigned_ip || 'DHCP'}</>
+                  ) : (
+                    <>No active VPN interface detected (e.g. WireGuard, OpenVPN, utun)</>
+                  )}
                 </div>
+                <div className="text-[10px] text-[#737373] truncate">
+                  System Adapters: {interfaces.map((i) => `${i.name}${i.is_vpn ? ' [VPN]' : ''}`).join(', ') || 'Scanning…'}
+                </div>
+                {status?.kill_switch_triggered && (
+                  <div className="text-[11px] text-[#e50914] font-semibold">
+                    Kill switch triggered: transfers paused because VPN interface dropped.
+                  </div>
+                )}
               </div>
 
               {/* Kill Switch Panel */}

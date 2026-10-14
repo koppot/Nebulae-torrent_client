@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Parallel asynchronous Connectivity Doctor probes: implemented real non-blocking network verification via UPnP SSDP M-SEARCH multicast (`239.255.255.250:1900`), NAT-PMP gateway probes (`5351`), dual-stack IPv4/IPv6 socket tests, DNS resolution latency probes (`1.1.1.1:53`), and tracker reachability checks (`tracker.asiandvdclub.org`).
   - Honest ADC Tracker profile statistics: removed fabricated 185.4 GB, 68.2 GB, 3420 BP placeholders; derived ratio and passkey status honestly from SQLite persistence and real torrent stats.
   - Seeding Rules & Seed Time Shield background loop: implemented `spawn_seeding_rules_loop` running periodic 5s evaluations to record active seed time in SQLite and auto-pause torrents exceeding target ratio limits.
+- **Real VPN Subsystem, OS Keychain Secrets & Kill Switch (P2)**:
+  - OS Keychain credential storage via `keyring` crate: WireGuard private keys and OpenVPN credentials are saved into the OS Credential Store (macOS Keychain, Windows Credential Manager, Linux Secret Service) rather than plaintext SQLite.
+  - OpenVPN `.ovpn` configuration parser: implemented `ParsedOpenVpnProfile::parse_ovpn` parsing remote host/port/proto, tun/tap device, DNS options, and inline `<ca>`, `<cert>`, `<key>`, and `<tls-auth>` cryptographic blocks.
+  - Real system network interface enumeration: integrated `network-interface` crate to discover real network adapters (`get_network_interfaces`), distinguishing VPN tunnel adapters from physical interfaces.
+  - Honest VPN status: eliminated hardcoded `utun3`/`10.64.0.2`/`198.51.100.10:51820` values in `get_vpn_status`; surfaces genuine connected state, actual tunnel interface IP, and actual transferred data volumes.
+  - 500ms fail-closed kill-switch watcher: implemented `spawn_kill_switch_watcher` background loop checking interface availability every 500ms when armed in `AdcOnlyVpn` or `SystemVpn` mode, automatically pausing all transfers upon tunnel loss.
 - **Core Architecture**:
   - Tauri v2 + React 19 + TypeScript + Tailwind CSS application foundation.
   - Rust backend with SQLite database persistence under isolated platform directory (`ADC/internal/`).

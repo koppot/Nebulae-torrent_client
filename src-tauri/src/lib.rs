@@ -162,6 +162,8 @@ pub fn run() {
 
     let engine_for_seeding = Arc::clone(&engine);
     let db_for_seeding = Arc::clone(&db);
+    let engine_for_killswitch = Arc::clone(&engine);
+    let db_for_killswitch = Arc::clone(&db);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -177,6 +179,7 @@ pub fn run() {
             use tauri::Manager;
 
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
+            engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
 
             #[cfg(desktop)]
             {
@@ -340,6 +343,7 @@ pub fn run() {
             commands::vpn::import_openvpn_profile,
             commands::vpn::list_vpn_profiles,
             commands::vpn::delete_vpn_profile,
+            commands::vpn::get_network_interfaces,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
             commands::tracker::link_adc_account,

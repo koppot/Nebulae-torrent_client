@@ -1,13 +1,15 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { VpnMode, VpnProfile, VpnStatus } from '../types';
+import { VpnMode, VpnProfile, VpnStatus, NetworkInterfaceInfo } from '../types';
 
 interface VpnState {
   status: VpnStatus | null;
   profiles: VpnProfile[];
+  interfaces: NetworkInterfaceInfo[];
   isLoading: boolean;
   fetchStatus: () => Promise<void>;
   fetchProfiles: () => Promise<void>;
+  fetchInterfaces: () => Promise<void>;
   setVpnMode: (mode: VpnMode) => Promise<void>;
   toggleKillSwitch: (enabled: boolean) => Promise<void>;
   importWireguard: (content: string, name: string) => Promise<VpnProfile>;
@@ -18,7 +20,17 @@ interface VpnState {
 export const useVpnStore = create<VpnState>((set, get) => ({
   status: null,
   profiles: [],
+  interfaces: [],
   isLoading: false,
+
+  fetchInterfaces: async () => {
+    try {
+      const res = await invoke<NetworkInterfaceInfo[]>('get_network_interfaces');
+      set({ interfaces: res });
+    } catch {
+      set({ interfaces: [] });
+    }
+  },
 
   fetchStatus: async () => {
     try {

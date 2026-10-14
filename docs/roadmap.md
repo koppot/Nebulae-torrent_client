@@ -28,6 +28,7 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 - [x] Wire live peer telemetry from engine into Smart Peering algorithm (`get_peer_telemetry`).
 - [x] Real parallel Connectivity Doctor probes (UPnP SSDP, NAT-PMP, IPv4/IPv6, DNS latency, ADC tracker).
 - [x] Honest ADC Tracker profile statistics & Seed Time Shield background loop (`spawn_seeding_rules_loop`).
+- [x] Real VPN subsystem: OS Keychain credential storage via `keyring`, OpenVPN `.ovpn` parser, system interface discovery, and 500ms fail-closed kill-switch watcher loop (`spawn_kill_switch_watcher`).
 - [ ] Implement magnet link resolver (`ut_metadata` BEP 9).
 - [ ] Implement file priority tree (allow selective file downloading and skipping).
 - [ ] Implement throttled 500ms telemetry IPC stream from Rust to React frontend.

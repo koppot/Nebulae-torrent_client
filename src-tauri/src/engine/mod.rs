@@ -1,4 +1,5 @@
 pub mod failed;
+pub mod killswitch;
 pub mod metainfo;
 pub mod mock;
 pub mod rqbit;

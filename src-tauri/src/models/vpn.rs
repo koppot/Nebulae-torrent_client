@@ -120,6 +120,130 @@ impl ParsedWireGuardProfile {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedOpenVpnProfile {
+    pub endpoint: String,
+    pub protocol: String,
+    pub port: u16,
+    pub dev: String,
+    pub ca_cert: Option<String>,
+    pub client_cert: Option<String>,
+    pub client_key: Option<String>,
+    pub tls_auth: Option<String>,
+    pub dns_servers: Vec<String>,
+}
+
+impl ParsedOpenVpnProfile {
+    pub fn parse_ovpn(content: &str) -> Result<Self, String> {
+        let mut endpoint_host = String::new();
+        let mut port_opt: Option<u16> = None;
+        let mut protocol = "udp".to_string();
+        let mut dev = "tun".to_string();
+        let mut dns_servers = Vec::new();
+
+        let extract_block = |tag: &str| -> Option<String> {
+            let open_tag = format!("<{tag}>");
+            let close_tag = format!("</{tag}>");
+            if let Some(start) = content.find(&open_tag) {
+                if let Some(end) = content.find(&close_tag) {
+                    if end > start + open_tag.len() {
+                        let inner = &content[start + open_tag.len()..end];
+                        return Some(inner.trim().to_string());
+                    }
+                }
+            }
+            None
+        };
+
+        let ca_cert = extract_block("ca");
+        let client_cert = extract_block("cert");
+        let client_key = extract_block("key");
+        let tls_auth = extract_block("tls-auth");
+
+        let mut in_block = false;
+
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+
+            if line.starts_with('<') && !line.starts_with("</") {
+                in_block = true;
+                continue;
+            }
+            if line.starts_with("</") {
+                in_block = false;
+                continue;
+            }
+            if in_block {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            match parts[0].to_lowercase().as_str() {
+                "remote" => {
+                    if parts.len() > 1 && endpoint_host.is_empty() {
+                        endpoint_host = parts[1].to_string();
+                    }
+                    if parts.len() > 2 {
+                        if let Ok(p) = parts[2].parse::<u16>() {
+                            port_opt = Some(p);
+                        }
+                    }
+                    if parts.len() > 3 {
+                        protocol = parts[3].to_lowercase();
+                    }
+                }
+                "port" => {
+                    if parts.len() > 1 && port_opt.is_none() {
+                        if let Ok(p) = parts[1].parse::<u16>() {
+                            port_opt = Some(p);
+                        }
+                    }
+                }
+                "proto" => {
+                    if parts.len() > 1 {
+                        protocol = parts[1].to_lowercase();
+                    }
+                }
+                "dev" => {
+                    if parts.len() > 1 {
+                        dev = parts[1].to_string();
+                    }
+                }
+                "dhcp-option" if parts.len() > 2 && parts[1].eq_ignore_ascii_case("DNS") => {
+                    dns_servers.push(parts[2].to_string());
+                }
+                _ => {}
+            }
+        }
+
+        if endpoint_host.is_empty() {
+            return Err("Missing 'remote' directive in OpenVPN profile".to_string());
+        }
+
+        let port = port_opt.unwrap_or(1194);
+        let endpoint = format!("{}:{}", endpoint_host, port);
+
+        Ok(Self {
+            endpoint,
+            protocol,
+            port,
+            dev,
+            ca_cert,
+            client_cert,
+            client_key,
+            tls_auth,
+            dns_servers,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +270,52 @@ mod tests {
         assert_eq!(parsed.address, "10.2.0.2/32");
         assert_eq!(parsed.endpoint, "198.51.100.1:51820");
         assert_eq!(parsed.dns.len(), 2);
+    }
+
+    #[test]
+    fn test_openvpn_conf_parser() {
+        let ovpn = r#"
+        client
+        dev tun
+        proto udp
+        remote vpn.asiandvdclub.org 1194
+        resolv-retry infinite
+        nobind
+        dhcp-option DNS 1.1.1.1
+        dhcp-option DNS 8.8.8.8
+
+        <ca>
+        -----BEGIN CERTIFICATE-----
+        MIIFakeCertificateAuthorityData==
+        -----END CERTIFICATE-----
+        </ca>
+
+        <cert>
+        -----BEGIN CERTIFICATE-----
+        MIIFakeClientCertificateData==
+        -----END CERTIFICATE-----
+        </cert>
+
+        <key>
+        -----BEGIN PRIVATE KEY-----
+        MIIFakeClientPrivateKeyData==
+        -----END PRIVATE KEY-----
+        </key>
+        "#;
+
+        let parsed = ParsedOpenVpnProfile::parse_ovpn(ovpn).expect("OpenVPN parsing failed");
+        assert_eq!(parsed.endpoint, "vpn.asiandvdclub.org:1194");
+        assert_eq!(parsed.port, 1194);
+        assert_eq!(parsed.protocol, "udp");
+        assert_eq!(parsed.dev, "tun");
+        assert_eq!(parsed.dns_servers.len(), 2);
+        assert_eq!(parsed.dns_servers[0], "1.1.1.1");
+        assert!(parsed.ca_cert.is_some());
+        assert!(parsed.client_cert.is_some());
+        assert!(parsed.client_key.is_some());
+        assert_eq!(
+            parsed.client_key.as_deref(),
+            Some("-----BEGIN PRIVATE KEY-----\n        MIIFakeClientPrivateKeyData==\n        -----END PRIVATE KEY-----")
+        );
     }
 }

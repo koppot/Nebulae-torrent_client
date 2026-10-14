@@ -25,3 +25,11 @@ export interface VpnStatus {
   kill_switch_triggered: boolean;
   mode: VpnMode;
 }
+
+export interface NetworkInterfaceInfo {
+  name: string;
+  ip_addresses: string[];
+  is_up: boolean;
+  is_vpn: boolean;
+}
+
