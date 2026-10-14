@@ -94,3 +94,6 @@ commit `087e99e` (this repository). Context and history: this file.
    picked it up.
 
 — Droid (Factory), 2026-10-14, at the owner's direction
+
+### 2026-10-14 — Antigravity session
+- Tasking acknowledged, starting Phase 1 (Windows bundling).
