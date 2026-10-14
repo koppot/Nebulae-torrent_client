@@ -9,6 +9,8 @@ import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
 import { StatusBar } from './components/layout/StatusBar';
 import { TorrentManagerView } from './components/manager/TorrentManagerView';
+import { SimpleMediaView } from './components/media/SimpleMediaView';
+import { CompactBarView } from './components/compact/CompactBarView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
@@ -23,7 +25,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
-  const { splashDismissed, openAddTorrentWithSource } = useUiStore();
+  const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
   const { loadSettings } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
@@ -133,8 +135,8 @@ export const App: React.FC = () => {
       useUiStore.getState().setSplashDismissed(true);
     }
 
-    if (viewParam === 'manager') {
-      useUiStore.getState().setViewMode('manager');
+    if (viewParam === 'manager' || viewParam === 'media' || viewParam === 'compact') {
+      useUiStore.getState().setViewMode(viewParam);
     }
 
     if (tabParam === 'peers' || tabParam === 'files' || tabParam === 'trackers' || tabParam === 'general') {
@@ -218,7 +220,9 @@ export const App: React.FC = () => {
 
       {/* 3. Main View Mode Area */}
       <main className="flex-1 flex overflow-hidden">
-        <TorrentManagerView />
+        {viewMode === 'media' && <SimpleMediaView />}
+        {viewMode === 'compact' && <CompactBarView />}
+        {viewMode === 'manager' && <TorrentManagerView />}
       </main>
 
       {/* 4. Bottom Desktop Application Status Bar */}

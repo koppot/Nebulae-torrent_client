@@ -37,8 +37,18 @@ interface UiState {
   openAddTorrentWithSource: (source: string) => void;
 }
 
+const getSavedViewMode = (): ViewMode => {
+  try {
+    const saved = localStorage.getItem('nebulae_view_mode');
+    if (saved === 'media' || saved === 'manager' || saved === 'compact') {
+      return saved;
+    }
+  } catch {}
+  return 'manager';
+};
+
 export const useUiStore = create<UiState>((set) => ({
-  viewMode: 'manager',
+  viewMode: getSavedViewMode(),
   theme: 'dark',
   showSettings: false,
   showHelp: false,
@@ -54,7 +64,12 @@ export const useUiStore = create<UiState>((set) => ({
   initialAddTorrentSource: null,
   deleteModalTarget: null,
 
-  setViewMode: (viewMode) => set({ viewMode }),
+  setViewMode: (viewMode) => {
+    try {
+      localStorage.setItem('nebulae_view_mode', viewMode);
+    } catch {}
+    set({ viewMode });
+  },
   setTheme: (theme) => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     set({ theme });

@@ -270,6 +270,16 @@ pub fn resume_torrent(id: String, engine: State<SharedEngine>) -> Result<(), Str
 }
 
 #[tauri::command]
+pub fn pause_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
+    engine.pause_all()
+}
+
+#[tauri::command]
+pub fn resume_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
+    engine.resume_all()
+}
+
+#[tauri::command]
 pub fn force_recheck_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
     engine.force_recheck(&id)
 }

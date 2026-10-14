@@ -17,6 +17,8 @@ interface TorrentState {
   setSelectedId: (id: string | null) => void;
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
+  pauseAll: () => Promise<void>;
+  resumeAll: () => Promise<void>;
   removeTorrent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addTorrent: (source: string, downloadDir?: string, bytes?: number[]) => Promise<void>;
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
@@ -83,6 +85,31 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       torrents: get().torrents.map((t) =>
         t.id === id ? { ...t, status: t.progress >= 1.0 ? 'Seeding' : 'Downloading' } : t
       ),
+    });
+  },
+
+  pauseAll: async () => {
+    try {
+      await invoke('pause_all_torrents');
+    } catch {
+      //
+    }
+    set({
+      torrents: get().torrents.map((t) => ({ ...t, status: 'Paused', download_rate: 0, upload_rate: 0 })),
+    });
+  },
+
+  resumeAll: async () => {
+    try {
+      await invoke('resume_all_torrents');
+    } catch {
+      //
+    }
+    set({
+      torrents: get().torrents.map((t) => ({
+        ...t,
+        status: t.progress >= 1.0 ? 'Seeding' : 'Downloading',
+      })),
     });
   },
 

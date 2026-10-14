@@ -1,4 +1,4 @@
-export type ViewMode = 'media' | 'manager';
+export type ViewMode = 'media' | 'manager' | 'compact';
 
 export interface TorrentFileItem {
   index: number;

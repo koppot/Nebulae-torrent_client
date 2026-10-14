@@ -307,6 +307,8 @@ pub fn run() {
             commands::torrent::remove_torrent,
             commands::torrent::pause_torrent,
             commands::torrent::resume_torrent,
+            commands::torrent::pause_all_torrents,
+            commands::torrent::resume_all_torrents,
             commands::torrent::force_recheck_torrent,
             commands::torrent::reannounce_torrent,
             commands::torrent::set_torrent_location,

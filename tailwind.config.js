@@ -21,31 +21,46 @@ export default {
           textMuted: '#a3a3a3',
           textDim: '#737373',
         },
+        // docs/ui-design.md official color tokens
+        'adc-dark': '#0B0F19',
+        'adc-cardDark': '#131B2E',
+        'adc-cardBorderDark': '#1E293B',
+        'adc-accent': '#EC4899',
+        'adc-gold': '#F59E0B',
+        'adc-cyan': '#06B6D4',
+        'adc-emerald': '#10B981',
+        'adc-violet': '#8B5CF6',
         adc: {
-          // Netflix Charcoal & Red Design System
-          bg: '#141414',
-          surface: '#1f1f1f',
-          panel: '#262626',
+          dark: '#0B0F19',
+          cardDark: '#131B2E',
+          cardBorderDark: '#1E293B',
+          accent: '#EC4899',
+          gold: '#F59E0B',
+          cyan: '#06B6D4',
+          emerald: '#10B981',
+          violet: '#8B5CF6',
+
+          // Backgrounds and structural surfaces
+          bg: '#0B0F19',
+          surface: '#131B2E',
+          panel: '#1E293B',
           glass: 'rgba(255, 255, 255, 0.06)',
           glassHover: 'rgba(255, 255, 255, 0.12)',
-          border: '#333333',
-          borderSubtle: '#262626',
+          border: '#1E293B',
+          borderSubtle: '#131B2E',
 
-          // Netflix Signature Crimson
-          crimson: '#e50914',
-          crimsonHover: '#f40612',
-          crimsonBright: '#e50914',
-          crimsonGlow: '#e50914',
+          // Brand Magenta & Crimson highlights
+          crimson: '#EC4899',
+          crimsonHover: '#db2777',
+          crimsonBright: '#EC4899',
+          crimsonGlow: '#EC4899',
 
           // Typography
           ivory: '#ffffff',
-          textMuted: '#a3a3a3',
+          textMuted: '#94a3b8',
 
-          // Remapped to 3-color constraint (No rainbow)
-          ice: '#ffffff',
-          gold: '#e50914',
-          emerald: '#ffffff',
-          violet: '#e50914',
+          // Semantic accents
+          ice: '#06B6D4',
         }
       },
       fontFamily: {

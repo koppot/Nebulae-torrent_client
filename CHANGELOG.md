@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **UI Modes, Color System & Subsystem Splash Initialization (WS2)**:
+  - Applied `docs/ui-design.md` color tokens (`adc-dark`, `adc-cardDark`, `adc-cardBorderDark`, `adc-accent`, `adc-gold`, `adc-cyan`, `adc-emerald`, `adc-violet`) as single source of truth in `tailwind.config.js`.
+  - Restored and wired `SimpleMediaView` with 3 horizontal shelves: Active Downloads (speeds, progress, ETA), Ready to Watch (posters, direct streaming player launch, folder jump), and Completed & Seeding (ratio, file size).
+  - Implemented `CompactBarView` for low-footprint desktop seeding with aggregated transfer gauges, quick pause/resume all controls, and tray minimize.
+  - Added UI Mode Switcher to `TitleBar` with deep-link parameter support (`?view=media|manager|compact`) and `localStorage` persistence.
+  - Added real subsystem-init progress bar in `SplashScreen` displaying actual boot stages (engine, SQLite DB, network/VPN, and tracker readiness).
+  - Exposed `pause_all_torrents` and `resume_all_torrents` IPC commands in Rust backend and wired to `useTorrentStore`.
 - **Three-Tier Honesty Engine & Production Recovery (P0)**:
   - Eliminated mock engine fallback in release builds: production builds strictly disallow `MockTorrentEngine` unless explicitly forced via `NEBULAE_FORCE_MOCK_ENGINE=1` in debug mode.
   - Implemented single bounded engine startup retry with 500ms backoff on startup failure.

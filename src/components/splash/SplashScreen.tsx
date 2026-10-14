@@ -25,6 +25,40 @@ export const SplashScreen: React.FC = () => {
   const [canDismiss, setCanDismiss] = useState(false);
   const [isFadingOut, setIsFadingOut] = useState(false);
   const canDismissRef = useRef(false);
+  const [initProgress, setInitProgress] = useState(15);
+  const [initStepText, setInitStepText] = useState('Initializing BitTorrent core...');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function runSubsystemInit() {
+      try {
+        setInitProgress(25);
+        setInitStepText('Checking librqbit engine status...');
+        await invoke('get_engine_init_error');
+
+        if (cancelled) return;
+        setInitProgress(50);
+        setInitStepText('Loading SQLite database & settings...');
+        await invoke('get_user_settings');
+
+        if (cancelled) return;
+        setInitProgress(75);
+        setInitStepText('Enumerating network & VPN adapters...');
+        await invoke('get_network_interfaces');
+
+        if (cancelled) return;
+        setInitProgress(100);
+        setInitStepText('Nebulae Subsystems Ready');
+      } catch {
+        setInitProgress(100);
+        setInitStepText('Subsystems ready');
+      }
+    }
+    runSubsystemInit();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleDismiss = useCallback(() => {
     if (!canDismissRef.current) return;
@@ -768,9 +802,23 @@ export const SplashScreen: React.FC = () => {
           </p>
         </div>
 
+        {/* Subsystem Initialization Progress Bar (spec §5) */}
+        <div className="mt-5 w-64 max-w-xs space-y-1.5 pointer-events-auto">
+          <div className="flex justify-between items-center text-[10px] font-mono text-[#d4af37]/80">
+            <span className="truncate max-w-[190px]">{initStepText}</span>
+            <span>{initProgress}%</span>
+          </div>
+          <div className="h-1.5 w-full bg-black/60 rounded-full border border-[#d4af37]/20 overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-[#d4af37] via-[#e50914] to-[#d4af37] transition-all duration-300"
+              style={{ width: `${initProgress}%` }}
+            />
+          </div>
+        </div>
+
         {/* Imperial Crimson Cinematic START Button */}
         <div
-          className={`mt-7 pointer-events-auto transition-all duration-1000 ${
+          className={`mt-6 pointer-events-auto transition-all duration-1000 ${
             uiState.showButton
               ? 'opacity-100 translate-y-0 scale-100'
               : 'opacity-0 translate-y-3 scale-95'

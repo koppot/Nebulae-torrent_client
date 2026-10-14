@@ -18,10 +18,15 @@ import {
   Minus,
   Square,
   Copy,
+  LayoutGrid,
+  Film,
+  Minimize2,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
   const {
+    viewMode,
+    setViewMode,
     setShowSettings,
     setShowHelp,
     setShowAddTorrent,
@@ -293,8 +298,53 @@ export const TitleBar: React.FC = () => {
         className="flex-1 h-full min-w-4 cursor-default"
       />
 
-      {/* Right: Quick Search Filter & Desktop Window Controls */}
+      {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
       <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+        {/* UI Mode Switcher (Media / Manager / Compact) */}
+        <div className="flex items-center p-0.5 rounded-lg bg-[#1f1f1f] border border-[#333333] text-xs">
+          <button
+            type="button"
+            onClick={() => setViewMode('media')}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
+              viewMode === 'media'
+                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
+                : 'text-[#a3a3a3] hover:text-white'
+            }`}
+            title="Simple Media Mode (Asian Cinema Gallery)"
+          >
+            <Film className="w-3 h-3" />
+            <span className="hidden xl:inline">Media</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('manager')}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
+              viewMode === 'manager'
+                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
+                : 'text-[#a3a3a3] hover:text-white'
+            }`}
+            title="Torrent Manager Mode (Detailed Swarm Grid)"
+          >
+            <LayoutGrid className="w-3 h-3" />
+            <span className="hidden xl:inline">Manager</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('compact')}
+            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
+              viewMode === 'compact'
+                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
+                : 'text-[#a3a3a3] hover:text-white'
+            }`}
+            title="Compact Mini-Bar Mode"
+          >
+            <Minimize2 className="w-3 h-3" />
+            <span className="hidden xl:inline">Compact</span>
+          </button>
+        </div>
+
         {/* Compact Quick Filter */}
         <div className="relative w-44">
           <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
