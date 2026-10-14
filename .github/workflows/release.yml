@@ -126,35 +126,53 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
-          DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
           APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
-          if [ -n "$DMG_FILE" ]; then
-            cp "$DMG_FILE" "${{ matrix.artifact_name }}"
-          elif [ -n "$APP_DIR" ]; then
-            hdiutil create -volname "Nebulae" -srcfolder "$APP_DIR" -ov -format UDZO "${{ matrix.artifact_name }}"
+          DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          ICON_PATH="$(pwd)/src-tauri/icons/icon.icns"
+          DMG_NAME="${{ matrix.artifact_name }}"
+          DMG_ABS="$(pwd)/$DMG_NAME"
+
+          echo "=== Building DMG with Embedded Volume Icon ==="
+          if [ -n "$APP_DIR" ]; then
+            STAGING_DIR=$(mktemp -d)
+            cp -R "$APP_DIR" "$STAGING_DIR/Nebulae.app"
+            ln -s /Applications "$STAGING_DIR/Applications"
+            cp "$ICON_PATH" "$STAGING_DIR/.VolumeIcon.icns"
+            SetFile -c icnC "$STAGING_DIR/.VolumeIcon.icns" || true
+            SetFile -a C "$STAGING_DIR" || true
+            rm -f "$DMG_NAME"
+            hdiutil create -volname "Nebulae" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_NAME"
+            rm -rf "$STAGING_DIR"
+          elif [ -n "$DMG_FILE" ]; then
+            cp "$DMG_FILE" "$DMG_NAME"
           fi
 
-          if [ -f "${{ matrix.artifact_name }}" ]; then
-            # Apply custom icon to the local DMG file
+          if [ -f "$DMG_NAME" ]; then
+            echo "=== Applying Custom Icon to DMG File ==="
             osascript -l JavaScript -e "
               ObjC.import('AppKit');
-              var img = $.NSImage.alloc.initWithContentsOfFile('src-tauri/icons/icon.icns');
+              var img = $.NSImage.alloc.initWithContentsOfFile('$ICON_PATH');
               if (img) {
-                $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '${{ matrix.artifact_name }}', 0);
+                var res = $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$DMG_ABS', 0);
+                console.log('Applied icon to DMG file:', res);
+              } else {
+                console.log('Failed to load icon from:', '$ICON_PATH');
               }
             " || true
-            shasum -a 256 "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256"
+            SetFile -a C "$DMG_ABS" || true
+
+            shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
 
             # Create AppleDouble-sequestered ZIP of the DMG to preserve custom Finder icon across HTTP downloads
-            DMG_ZIP="${{ matrix.artifact_name }}.zip"
-            ditto -c -k --sequesterRsrc "${{ matrix.artifact_name }}" "$DMG_ZIP"
+            DMG_ZIP="$DMG_NAME.zip"
+            ditto -c -k --sequesterRsrc "$DMG_NAME" "$DMG_ZIP"
             shasum -a 256 "$DMG_ZIP" > "$DMG_ZIP.sha256"
 
-            UPLOAD_FILES=("${{ matrix.artifact_name }}" "${{ matrix.artifact_name }}.sha256" "$DMG_ZIP" "$DMG_ZIP.sha256")
+            UPLOAD_FILES=("$DMG_NAME" "$DMG_NAME.sha256" "$DMG_ZIP" "$DMG_ZIP.sha256")
 
             # Create standalone zip of Nebulae.app with full icon and bundle metadata
             if [ -n "$APP_DIR" ]; then
-              APP_ZIP="${{ matrix.artifact_name }}-app.zip"
+              APP_ZIP="$DMG_NAME-app.zip"
               ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ZIP"
               shasum -a 256 "$APP_ZIP" > "$APP_ZIP.sha256"
               UPLOAD_FILES+=("$APP_ZIP" "$APP_ZIP.sha256")
@@ -214,8 +232,9 @@ jobs:
 
             echo "=== Verifying Binary and Desktop Launcher ==="
             test -x /usr/bin/nebulae || (echo "Binary not found at /usr/bin/nebulae" && exit 1)
-            test -f /usr/share/applications/nebulae.desktop || (echo "Desktop file not found" && exit 1)
-            desktop-file-validate /usr/share/applications/nebulae.desktop || true
+            test -f /usr/share/applications/Nebulae.desktop || test -f /usr/share/applications/nebulae.desktop || (echo "Desktop file not found" && exit 1)
+            DESKTOP_FILE=$(find /usr/share/applications -iname "*nebulae*.desktop" | head -n 1)
+            desktop-file-validate "$DESKTOP_FILE" || true
 
             echo "=== Testing Installed Application Launch & Runtime-Data Init under Xvfb ==="
             xvfb-run -a /usr/bin/nebulae &
@@ -396,7 +415,7 @@ jobs:
           python3 -c '
           import os, json, urllib.request
 
-          tag = os.environ.get("TAG", "v0.1.0-beta.4")
+          tag = os.environ.get("TAG", "").strip() or "v0.1.0-beta.7"
           webhook = os.environ.get("ANNOUNCEMENT_WEBHOOK")
           repo_url = "https://github.com/koppot/Nebulae-torrent_client"
           logo = "https://asiandvdclub.org/images/logo.png"
