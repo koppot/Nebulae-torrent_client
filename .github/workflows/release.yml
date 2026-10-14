@@ -112,7 +112,7 @@ jobs:
               - Standalone Binary: `nebulae-linux-x86_64`
             - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
             - **Windows x64 Executable**: `nebulae.exe`
-            - **macOS Apple Silicon (M1/M2/M3/M4)**:
+            - **macOS Apple Silicon (M1/M2/M3/M4/M5)**:
               - `Nebulae-macOS-arm64.dmg` (standard disk image)
               - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
               - `Nebulae-macOS-arm64.dmg-app.zip` (direct application bundle)

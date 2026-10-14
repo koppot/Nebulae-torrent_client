@@ -10,7 +10,7 @@ Nebulae is a modern, general-purpose peer-to-peer file-transfer client built for
 
 ### Official Shipped Packages:
 - **Windows 10 / 11 (64-bit)**: `Nebulae-Setup-x64.exe` (NSIS Installer)
-- **macOS Apple Silicon (M1/M2/M3/M4)**: `Nebulae-macOS-arm64.dmg` (Disk Image)
+- **macOS Apple Silicon (M1/M2/M3/M4/M5)**: `Nebulae-macOS-arm64.dmg` (Disk Image)
 - **macOS Intel (x86_64)**: `Nebulae-macOS-x64.dmg` (Disk Image)
 
 ### What's New in this Release:

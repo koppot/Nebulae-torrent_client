@@ -62,7 +62,7 @@ All published binaries, installers, and packages use the approved naming convent
 | Platform | Target Architecture | Package / Executable |
 | :--- | :--- | :--- |
 | **Windows x64** | `x86_64-pc-windows-msvc` | `Nebulae-Setup-x64.exe` (installs `nebulae.exe`) |
-| **macOS Apple Silicon** | `aarch64-apple-darwin` | `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`) |
+| **macOS Apple Silicon (M1/M2/M3/M4/M5)** | `aarch64-apple-darwin` | `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`) |
 | **macOS Intel** | `x86_64-apple-darwin` | `Nebulae-macOS-x64.dmg` (mounts `Nebulae.app`) |
 | **Protocol Handler** | Cross-platform | `adc://` and `magnet:?` |
 

@@ -17,7 +17,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
    - [Updating Nebulae on Windows](#updating-nebulae-on-windows)
    - [Uninstalling Nebulae on Windows](#uninstalling-nebulae-on-windows)
    - [Windows Troubleshooting & Log Locations](#windows-troubleshooting)
-3. [macOS Apple Silicon Installation (M1, M2, M3, M4)](#2-macos-apple-silicon-installation)
+3. [macOS Apple Silicon Installation (M1, M2, M3, M4, M5)](#2-macos-apple-silicon-installation)
    - [Confirming Apple Silicon](#confirming-apple-silicon)
    - [Downloading Nebulae-macOS-arm64.dmg](#downloading-nebulae-macos-arm64dmg)
    - [Step-by-Step Installation Walkthrough](#step-by-step-macos-installation)
@@ -158,7 +158,7 @@ When Nebulae launches for the first time, Windows Defender Firewall will prompt 
 1. Click the **Apple logo ()** in the top-left corner of your menu bar.
 2. Select **About This Mac**.
 3. In the summary window, find the line labeled **Chip**.
-4. If it says **Apple M1, Apple M2, Apple M3, Apple M4** (or Pro / Max / Ultra), your Mac has Apple Silicon.
+4. If it says **Apple M1, Apple M2, Apple M3, Apple M4, Apple M5** (or Pro / Max / Ultra), your Mac has Apple Silicon.
 
 ### Downloading Nebulae-macOS-arm64.dmg
 

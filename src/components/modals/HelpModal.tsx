@@ -79,7 +79,7 @@ export const HelpModal: React.FC = () => {
               <section className="bg-[#1f1f1f] p-3.5 rounded-lg border border-[#333333]">
                 <h3 className="font-semibold text-white text-xs mb-1 flex items-center gap-1.5">
                   <Apple className="w-3.5 h-3.5 text-[#e50914]" />
-                  <span>1. Apple Silicon Macs (M1/M2/M3/M4)</span>
+                  <span>1. Apple Silicon Macs (M1/M2/M3/M4/M5)</span>
                 </h3>
                 <p>
                   Download: <code className="text-white font-mono">Nebulae-macOS-arm64.dmg</code>.
