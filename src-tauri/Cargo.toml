@@ -3,6 +3,7 @@ name = "nebulae_torrent_client"
 version = "0.1.0"
 description = "Nebulae — Torrent Client by Asian DVD Club"
 edition = "2021"
+default-run = "nebulae"
 
 [lib]
 name = "nebulae_torrent_client_lib"
