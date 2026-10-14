@@ -292,6 +292,17 @@ pub fn save_user_settings(settings: UserSettings, db: State<Arc<Database>>) -> R
     Ok(())
 }
 
+/// Active engine mode for this session, set once at startup and exposed to
+/// the GUI so it can hide options the active engine cannot fulfill.
+#[derive(Debug, Clone)]
+pub struct EngineMode(pub String);
+
+/// `"local"` (librqbit or mock) or `"rtorrent_server"`.
+#[tauri::command]
+pub fn get_engine_mode(mode: State<EngineMode>) -> String {
+    mode.0.clone()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerStatusResponse {
     pub name: String,

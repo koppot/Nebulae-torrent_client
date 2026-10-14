@@ -53,45 +53,46 @@ pub fn run() {
     // when configured; otherwise the local librqbit engine, falling back to
     // the mock engine for offline/test isolation if librqbit cannot start.
     // The choice applies on app start.
-    let engine: SharedEngine =
-        if settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty() {
-            SafeLogger::log_to_file(
-                &paths.logs_dir,
-                "INFO",
-                &format!(
-                    "Nebulae starting in rtorrent server mode: {}",
-                    settings.rtorrent_server_url.trim()
-                ),
-            );
-            Arc::new(RemoteServerEngine::new(
-                settings.rtorrent_server_url.clone(),
-                settings.rtorrent_server_token.clone(),
-            ))
-        } else {
-            match engine::RqbitTorrentEngine::new(
-                Arc::clone(&paths),
-                Arc::clone(&db),
-                download_dir,
-                listening_port,
-            ) {
-                Ok(real_engine) => {
-                    SafeLogger::log_to_file(
-                        &paths.logs_dir,
-                        "INFO",
-                        &format!("Initialized librqbit production engine on port {listening_port}"),
-                    );
-                    Arc::new(real_engine)
-                }
-                Err(e) => {
-                    SafeLogger::log_to_file(
-                        &paths.logs_dir,
-                        "WARN",
-                        &format!("Failed to initialize real engine, using mock engine: {e}"),
-                    );
-                    Arc::new(engine::MockTorrentEngine::new())
-                }
+    let rtorrent_server_mode =
+        settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty();
+    let engine: SharedEngine = if rtorrent_server_mode {
+        SafeLogger::log_to_file(
+            &paths.logs_dir,
+            "INFO",
+            &format!(
+                "Nebulae starting in rtorrent server mode: {}",
+                settings.rtorrent_server_url.trim()
+            ),
+        );
+        Arc::new(RemoteServerEngine::new(
+            settings.rtorrent_server_url.clone(),
+            settings.rtorrent_server_token.clone(),
+        ))
+    } else {
+        match engine::RqbitTorrentEngine::new(
+            Arc::clone(&paths),
+            Arc::clone(&db),
+            download_dir,
+            listening_port,
+        ) {
+            Ok(real_engine) => {
+                SafeLogger::log_to_file(
+                    &paths.logs_dir,
+                    "INFO",
+                    &format!("Initialized librqbit production engine on port {listening_port}"),
+                );
+                Arc::new(real_engine)
             }
-        };
+            Err(e) => {
+                SafeLogger::log_to_file(
+                    &paths.logs_dir,
+                    "WARN",
+                    &format!("Failed to initialize real engine, using mock engine: {e}"),
+                );
+                Arc::new(engine::MockTorrentEngine::new())
+            }
+        }
+    };
 
     SafeLogger::log_to_file(
         &paths.logs_dir,
@@ -114,6 +115,13 @@ pub fn run() {
         }
     }
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
+    // The GUI hides options the active engine cannot fulfill (e.g. features
+    // rtorrent does not have) based on this session-wide mode.
+    let engine_mode = commands::settings::EngineMode(if rtorrent_server_mode {
+        "rtorrent_server".to_string()
+    } else {
+        "local".to_string()
+    });
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -122,6 +130,7 @@ pub fn run() {
         .manage(paths)
         .manage(db.clone())
         .manage(engine)
+        .manage(engine_mode)
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
         .setup(move |app| {
@@ -238,6 +247,7 @@ pub fn run() {
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
+            commands::settings::get_engine_mode,
             commands::settings::test_rtorrent_server_connection,
             // Torrent & Engine
             commands::torrent::list_torrents,
