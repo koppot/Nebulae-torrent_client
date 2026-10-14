@@ -1,6 +1,6 @@
-# SignPath Foundation application — Nebulae (DRAFT, not yet submitted)
+# SignPath Foundation application — Nebulae (SUBMITTED 2026-10-14)
 
-> **Status: draft prepared for the owner.** The official application channel is the web form at <https://signpath.org/apply>. This document is preparation material only; submitting the form is an action for the repository owner. Nothing has been submitted yet, and no acceptance exists.
+> **Status: submitted via the official form at <https://signpath.org/apply> on 2026-10-14 ("Form submitted - Thank you, we'll be in touch soon."). Awaiting SignPath Foundation response to admin@dimateploff.com. No acceptance exists yet, and no signing is enabled.**
 
 ## Application data (mapped to the official form fields)
 

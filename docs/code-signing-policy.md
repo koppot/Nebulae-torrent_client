@@ -1,8 +1,8 @@
 # Code signing policy — Nebulae
 
-> **Status: SignPath Foundation application pending; signing is not yet enabled.**
+> **Status: SignPath Foundation application submitted on 2026-10-14 and under review; signing is not yet enabled.**
 >
-> All Windows artifacts currently published in [Releases](https://github.com/koppot/Nebulae-torrent_client/releases) are **unsigned** beta builds. This page describes the policy that will govern signed releases once the SignPath Foundation application is accepted. It does not imply that SignPath or SignPath Foundation currently sponsors, endorses, or signs this project.
+> All Windows artifacts currently published in [Releases](https://github.com/koppot/Nebulae-torrent_client/releases) are **unsigned** beta builds. This page describes the policy that will govern signed releases once the SignPath Foundation application is accepted. It does not imply that SignPath or SignPath Foundation currently sponsors, endorses, or signs this project. This status will be updated when the application is accepted.
 
 ## Project identity
 
