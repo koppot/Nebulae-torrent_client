@@ -20,6 +20,7 @@ pub struct UserSettings {
     pub confirm_exit_when_active: bool,
     pub save_log_to_disk: bool,
     pub max_log_size_mib: u32,
+    pub auto_update_enabled: bool,
 
     // Splash Community Branding
     pub enable_splash: bool,
@@ -149,6 +150,7 @@ impl Default for UserSettings {
             confirm_exit_when_active: true,
             save_log_to_disk: true,
             max_log_size_mib: 10,
+            auto_update_enabled: true,
             enable_splash: true,
             splash_message: "Consider joining our community\nasiandvdclub.org".to_string(),
             splash_url: "https://asiandvdclub.org".to_string(),
@@ -299,6 +301,7 @@ mod tests {
         );
         assert_eq!(defaults.encryption_mode, deserialized.encryption_mode);
         assert_eq!(defaults.webui_port, deserialized.webui_port);
+        assert!(deserialized.auto_update_enabled);
     }
 
     #[test]
@@ -312,5 +315,6 @@ mod tests {
         assert_eq!(deserialized.listening_port, 6889);
         assert_eq!(deserialized.encryption_mode, "Prefer");
         assert_eq!(deserialized.max_global_connections, 500);
+        assert!(deserialized.auto_update_enabled);
     }
 }

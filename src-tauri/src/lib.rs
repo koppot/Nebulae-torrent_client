@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod engine;
 pub mod models;
+pub mod updater;
 pub mod utils;
 
 use db::Database;
@@ -96,13 +97,23 @@ pub fn run() {
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(paths)
-        .manage(db)
+        .manage(db.clone())
         .manage(engine)
         .manage(pending_payloads)
-        .setup(|app| {
+        .manage(updater::StagedUpdateState::default())
+        .setup(move |app| {
             use tauri::Manager;
+
+            #[cfg(desktop)]
+            {
+                let handle = app.handle().clone();
+                let db_handle = db.clone();
+                updater::spawn_silent_background_updater(&handle, db_handle);
+            }
 
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
@@ -116,6 +127,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
+                        updater::apply_staged_update_if_present(app);
                         app.exit(0);
                     }
                     "show" => {
@@ -182,6 +194,8 @@ pub fn run() {
                 if should_close_to_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    updater::apply_staged_update_if_present(window.app_handle());
                 }
             }
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -266,9 +280,12 @@ pub fn run() {
         .expect("Error while building Nebulae application");
 
     let _event_payloads = initial_payloads.clone();
-    app.run(move |_app_handle, _event| {
+    app.run(move |_app_handle, _event| match &_event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            updater::apply_staged_update_if_present(_app_handle);
+        }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let tauri::RunEvent::Opened { urls } = _event {
+        tauri::RunEvent::Opened { urls } => {
             use tauri::Emitter;
             for url in urls {
                 let payload = if url.scheme() == "file" {
@@ -285,5 +302,6 @@ pub fn run() {
                 let _ = _app_handle.emit("nebulae://open-uri", payload);
             }
         }
+        _ => {}
     });
 }

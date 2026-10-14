@@ -127,8 +127,11 @@ When Nebulae launches for the first time, Windows Defender Firewall will prompt 
 
 ### Updating Nebulae on Windows
 
-1. Download the latest **`Nebulae-Setup-x64.exe`** from GitHub Releases.
-2. Run the installer. It will automatically detect your existing installation, update the application files, and preserve your database, settings, and active torrent transfers.
+Nebulae includes an integrated, silent background updater compliant with SignPath Foundation guidelines:
+
+- **Automatic Silent Updates (Recommended & Default)**: When *"Automatically keep Nebulae updated (recommended)"* is enabled, Nebulae checks for signed releases on startup, downloads updates quietly in the background without any popups, and stages them to apply automatically when you naturally quit the application. Active torrent downloads and seeding swarms are never interrupted.
+- **Disabling Automatic Updates**: You can disable auto-updates at any time in **Settings → Options (Behavior)**. When disabled, Nebulae makes zero network requests or DNS queries to the update server.
+- **Manual Update**: You can also download the latest **`Nebulae-Setup-x64.exe`** directly from GitHub Releases and run it. The installer automatically detects your existing installation and preserves your database, settings, and active torrent transfers.
 
 ---
 
@@ -214,9 +217,9 @@ Press Enter. Nebulae will open immediately.
 
 ### Updating Nebulae on macOS
 
-1. Download the new `Nebulae-macOS-arm64.dmg`.
-2. Drag `Nebulae.app` into Applications and click **Replace**.
-3. All preferences and torrent history remain safe in `~/Library/Application Support/ADC/`.
+- **Automatic Silent Updates**: When *"Automatically keep Nebulae updated (recommended)"* is enabled, Nebulae checks for signed releases on startup, downloads verified packages quietly in the background, and replaces the application bundle in `/Applications/` non-destructively. The new version takes effect the next time Nebulae launches.
+- **Disabling Automatic Updates**: Toggle the option off at any time in **Settings → Options (Behavior)**. When toggled off, no network requests or DNS queries are made.
+- **Manual Update**: Download `Nebulae-macOS-arm64.dmg` (or `Nebulae-macOS-x64.dmg` for Intel), drag `Nebulae.app` into Applications, and click **Replace**. All preferences and torrent history remain safe in `~/Library/Application Support/ADC/`.
 
 ---
 
@@ -331,6 +334,19 @@ For in-depth architectural notes, dependency trees, and display server troublesh
    ./Nebulae-Linux-x86_64.AppImage
    ```
 *Note on FUSE*: If your distribution (e.g. minimal Ubuntu 24.04) does not have FUSE installed, run `./Nebulae-Linux-x86_64.AppImage --appimage-extract-and-run` or install `libfuse2t64` / `libfuse2`.
+
+### Updating Nebulae on Linux
+
+- **Portable AppImage**: When running the portable AppImage with auto-updates enabled, Nebulae silently downloads the updated AppImage in the background and replaces the executable in-place. The update takes effect upon restarting the application.
+- **Debian, Ubuntu & Linux Mint (.deb)**: Native package installations are managed directly by your system package manager (`apt`). Update by downloading the new `.deb` or updating through your local repository:
+  ```bash
+  sudo apt install ./Nebulae-Linux-x86_64.deb
+  ```
+- **Fedora, RHEL & openSUSE (.rpm)**: Native RPM installations are managed by `dnf` or `zypper`:
+  ```bash
+  sudo dnf upgrade ./Nebulae-Linux-x86_64.rpm
+  ```
+- **Disabling Updates**: The auto-update check can be turned off in **Settings → Options (Behavior)**.
 
 ---
 

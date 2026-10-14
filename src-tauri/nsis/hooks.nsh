@@ -28,6 +28,12 @@
 
   ; Refresh shell icon cache
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+
+  ; SignPath Foundation auto-update disclosure:
+  ; "Applications that update themselves silently must allow users to disable this behavior.
+  ; A notification must be displayed to the user that an update will be applied, e.g. in the installer."
+  DetailPrint "Automatic Updates: Nebulae keeps itself updated silently in the background."
+  DetailPrint "To disable this, turn off 'Automatically keep Nebulae updated' in Settings -> Behavior."
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

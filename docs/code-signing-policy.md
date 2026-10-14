@@ -46,7 +46,17 @@ All release history and commit history are visible in the public repository: <ht
 
 Nebulae is local-first and does not include analytics or telemetry: [Privacy & Security Architecture](privacy.md).
 
-This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (for example: connecting to a tracker, downloading a torrent, or fetching a poster image the user added).
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it (for example: connecting to a tracker, downloading a torrent, fetching a poster image the user added, or checking for signed updates when enabled).
+
+## Software updates & SignPath Foundation conditions
+
+In compliance with the SignPath Foundation requirements for silent updates (*"Applications that update themselves silently must allow users to disable this behavior. A notification must be displayed to the user that an update will be applied, e.g. in the installer"*):
+
+1. **Installer Notification**: The Windows NSIS installer displays a visible disclosure during setup notifying users that Nebulae applies signed updates silently in the background, and states where this behavior can be adjusted.
+2. **User Control & One-Time Consent**: A clear toggle labeled *"Automatically keep Nebulae updated (recommended)"* is provided in **Settings → Options (Behavior)**. Users can disable auto-updates at any time with a single click.
+3. **Zero Phone-Home When Disabled**: When disabled, the update subsystem executes an immediate return before creating any network socket or issuing any DNS lookup. Zero network requests or telemetry packets are transmitted.
+4. **Staged Quiet Installation**: Updates download in the background without popups or transfer interruptions, and stage to apply strictly upon natural application quit.
+5. **Cryptographic Signatures**: All updater bundles are cryptographically signed with Minisign (`.sig`) covering final artifact bytes and verified prior to extraction.
 
 ## Uninstallation
 

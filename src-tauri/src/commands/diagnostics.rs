@@ -147,6 +147,7 @@ pub fn export_logs(paths: State<Arc<AppPaths>>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn quit_app(app: tauri::AppHandle) {
+    crate::updater::apply_staged_update_if_present(&app);
     app.exit(0);
 }
 

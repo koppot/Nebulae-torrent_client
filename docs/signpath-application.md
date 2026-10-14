@@ -81,6 +81,15 @@ No feature in the codebase scans systems for exploitable vulnerabilities; the Si
 
 `docs/privacy.md`: local-first, zero telemetry; data leaves the machine only when the user adds a tracker/torrent/poster fetch. Signed packages contain no secrets or runtime data.
 
+### Automatic Updates and User Consent (SignPath condition compliance)
+
+Nebulae implements silent background auto-updates compliant with SignPath Foundation conditions:
+- **Installer Notification**: The Windows NSIS installer displays a visible disclosure during setup notifying users that signed updates are applied automatically in the background.
+- **User Opt-Out**: Users can disable automatic updates at any time with a single toggle in **Settings → Options (Behavior)**.
+- **Zero Telemetry When Disabled**: Turning off the toggle performs an immediate early-return before making any network socket connection or DNS request.
+- **Staged Application**: Updates download quietly without popups or transfer interruptions, and stage to apply strictly upon natural application quit.
+- **Minisign Verification**: Update payloads are verified against the hardcoded Minisign public key before execution.
+
 ### Honest beta status and unresolved questions
 
 - The application state is **early beta**: the BitTorrent engine currently runs a simulated mock (`src-tauri/src/engine/mock.rs`); transfer, connectivity, and VPN status values are placeholders. The UI, persistence, torrent metadata parsing, and packaging are real and functional.
