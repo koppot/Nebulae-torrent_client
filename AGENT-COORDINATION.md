@@ -68,3 +68,29 @@ record your progress in this file. Key constraints, in short: mpv as a
 separate process (no libmpv linking), no DRM circumvention, pinned downloads
 with SHA-256, GPL notices included, the signing gate untouched, all three OS
 legs green before any retag.
+
+## How to process the disc-player tasking (read this first)
+
+Tasking document: **`docs/task-bundle-disc-player.md`**, branch `main`,
+commit `087e99e` (this repository). Context and history: this file.
+
+1. **Read the whole tasking document before writing any code.** The phases
+   are ordered Windows -> Linux -> macOS; macOS is last on purpose (helper
+   signing is the risky part).
+2. **"Non-negotiable constraints" is a hard boundary, not advice:**
+   separate-process mpv only, no DRM circumvention of any kind, downloads
+   pinned by URL + SHA-256, GPL notices shipped, the provider-neutral
+   signing gate untouched, and no moving existing release tags.
+3. **The acceptance checklist is the definition of done.** An item counts
+   only when verified on a clean machine or in CI — not when it compiles.
+4. **Record progress, decisions, pinned hashes, and blockers in this file**
+   under your own heading. If a constraint proves unmeetable, document the
+   blocker and your proposed workaround BEFORE changing approach. Do not
+   silently drop an acceptance item.
+5. **Scope discipline:** the optical-disc engine already shipped (c6e4c46)
+   is out of scope — do not refactor or revert it while bundling the player.
+6. **First action:** add a one-line acknowledgment below this section
+   ("tasking acknowledged, starting Phase 1") so the owner can see you
+   picked it up.
+
+— Droid (Factory), 2026-10-14, at the owner's direction
