@@ -50,8 +50,19 @@ head -c 4 "$WORK/runtime" | grep -q $'\x7fELF' || {
 rm -rf squashfs-root
 "$APPIMAGE" --appimage-extract > /dev/null
 mkdir -p squashfs-root/usr/share/nebulae/resources
-cp -a "$STAGING" squashfs-root/usr/share/nebulae/resources/player
+# Remove any stale destination first so `cp -a SRC/.` cannot nest the tree
+# one level deeper (a pre-existing destination dir would reproduce it).
+rm -rf squashfs-root/usr/share/nebulae/resources/player
+mkdir -p squashfs-root/usr/share/nebulae/resources/player
+cp -a "$STAGING"/. squashfs-root/usr/share/nebulae/resources/player/
 rm -rf squashfs-root/usr/lib/nebulae/resources/player
+# Fail fast, with a clear message, if the bundled binary is not where the
+# runtime probe expects it (staging layout problem, not an AppImage problem).
+if [ ! -f squashfs-root/usr/share/nebulae/resources/player/mpv ]; then
+    echo "ERROR: mpv binary not produced at resources/player/mpv by staging:"
+    find "$STAGING" -maxdepth 2 | head -n 20
+    exit 1
+fi
 mksquashfs squashfs-root "$WORK/payload.squashfs" -root-owned -noappend
 cat "$WORK/runtime" "$WORK/payload.squashfs" > "$APPIMAGE.new"
 chmod +x "$APPIMAGE.new"
@@ -68,7 +79,8 @@ rm -rf squashfs-root
 # capture both so the check works on either runner image generation.
 LISTING="$(unsquashfs -l "$WORK/payload.squashfs" 2>&1 || true)"
 printf '%s\n' "$LISTING" | grep -q "usr/share/nebulae/resources/player/mpv" || {
-    echo "ERROR: player missing from repacked payload"
+    echo "ERROR: player missing from repacked payload; payload resources tree:"
+    printf '%s\n' "$LISTING" | grep -E "resources" | head -n 20 || true
     exit 1
 }
 echo "SUCCESS: player injected into $APPIMAGE (runtime preserved)"
