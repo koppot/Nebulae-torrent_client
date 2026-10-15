@@ -314,7 +314,7 @@ pub fn launch_disc_player_impl(
                         ));
                     }
                 }
-                Ok(())
+                return Ok(());
             }
             Err(e) => {
                 return Err(format!(
