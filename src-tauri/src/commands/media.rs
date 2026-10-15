@@ -141,27 +141,60 @@ pub fn launch_disc_player_impl(
     let use_menu = prefer_menu.unwrap_or(true);
 
     // A torrent's save_path is frequently a plain folder (multi-disc torrents
-    // store loose disc images, e.g. DISC_1.ISO / DISC_2.ISO). Handing a bare
-    // directory to the player makes it exit silently. Resolve the actual disc
-    // image inside the folder instead: a single image plays automatically,
-    // and multiple images play the first by name (DISC_1 < DISC_2 < ...).
+    // store loose disc images, e.g. DISC_1.ISO / DISC_2.ISO) or a download
+    // root that contains a titled subfolder with the actual images. Handing
+    // a bare directory to the player makes it exit silently. Resolve the
+    // actual disc image instead: search the folder and one level of
+    // subfolders, preferring "disc 1" style names so an unrelated image in
+    // the download root (e.g. an OS installer ISO) never wins.
     let disc_info = disc_info.or_else(|| {
         if !path.is_dir() {
             return None;
         }
-        let mut images: Vec<PathBuf> = std::fs::read_dir(path)
-            .ok()?
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|p| {
-                p.is_file()
-                    && matches!(
-                        p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
-                        Some(ext) if ext == "iso" || ext == "img"
-                    )
-            })
-            .collect();
-        images.sort();
+        let mut images: Vec<PathBuf> = Vec::new();
+        let mut scan = |dir: &Path| {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file()
+                        && matches!(
+                            p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
+                            Some(ext) if ext == "iso" || ext == "img"
+                        )
+                    {
+                        images.push(p);
+                    }
+                }
+            }
+        };
+        scan(path);
+        if let Ok(subdirs) = std::fs::read_dir(path) {
+            for entry in subdirs.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    scan(&p);
+                }
+            }
+        }
+        if images.is_empty() {
+            return None;
+        }
+        // Rank: DISC 1 first, then other disc-N images, then anything else.
+        let disc_rank = |p: &Path| {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if name.contains("disc") && (name.contains('1') || name.contains("one")) {
+                0
+            } else if name.contains("disc") {
+                1
+            } else {
+                2
+            }
+        };
+        images.sort_by(|a, b| disc_rank(a).cmp(&disc_rank(b)).then(a.cmp(b)));
         let image = images.first()?;
         tracing::info!(
             "Save destination is a folder; resolved disc image '{}' for playback",
@@ -267,7 +300,22 @@ pub fn launch_disc_player_impl(
         }
 
         match cmd.spawn() {
-            Ok(_) => return Ok(()),
+            Ok(mut child) => {
+                // A player that dies immediately (missing libraries, dyld
+                // abort, damaged disc image) used to look like a dead
+                // button: the spawn succeeded and the process vanished.
+                // Give it a moment and surface an immediate non-zero exit
+                // as an error so the UI banner explains the failure.
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if let Some(status) = child.try_wait().ok().flatten() {
+                    if !status.success() {
+                        return Err(format!(
+                            "The bundled player exited immediately ({status}). The disc image may be damaged, or the installation is incomplete - reinstall Nebulae or check Settings > Media."
+                        ));
+                    }
+                }
+                Ok(())
+            }
             Err(e) => {
                 return Err(format!(
                     "Failed to launch the bundled Nebulae player ({engine:?}): {e}. The bundled player requires no external software; if it is missing the installation may be incomplete - reinstall Nebulae or check Settings > Media."

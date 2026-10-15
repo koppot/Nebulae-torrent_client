@@ -437,6 +437,7 @@ pub fn run() {
             commands::settings::test_rtorrent_server_connection,
             // Torrent & Engine
             commands::torrent::list_torrents,
+            commands::torrent::open_torrent_folder,
             commands::torrent::add_torrent,
             commands::torrent::remove_torrent,
             commands::torrent::pause_torrent,

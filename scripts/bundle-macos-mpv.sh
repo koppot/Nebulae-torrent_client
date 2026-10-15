@@ -83,7 +83,12 @@ def get_direct_deps(binary_path):
         if dep.startswith('/System/') or dep.startswith('/usr/lib/') or dep.startswith('@'):
             continue
         if os.path.exists(dep):
-            deps.append(os.path.realpath(dep))
+            # Keep the RAW load-command path. realpath() would resolve
+            # Homebrew symlink layers (opt/... -> Cellar/...), and the
+            # realpath never matches the string inside the Mach-O load
+            # command, so every install_name_tool -change silently no-ops
+            # and the bundle ships with absolute Homebrew references.
+            deps.append(dep)
     return deps
 
 # Recursively crawl non-system dependencies
@@ -122,7 +127,14 @@ for b in all_binaries:
     for dep in deps:
         if dep in path_map:
             target_base = path_map[dep]
-            subprocess.run(['install_name_tool', '-change', dep, f'@rpath/{target_base}', b], check=False)
+            subprocess.run(['install_name_tool', '-change', dep, f'@rpath/{target_base}', b], check=True)
+
+# HARD GATE: no absolute Homebrew paths may survive in the bundle.
+for b in all_binaries:
+    listing = subprocess.check_output(['otool', '-L', b]).decode('utf-8')
+    if '/opt/homebrew/' in listing or '/usr/local/' in listing:
+        sys.exit(f"FATAL: {b} still references absolute Homebrew paths:\n{listing}")
+print("All load commands rewritten to @rpath (no absolute Homebrew references remain).")
 
 # Add rpaths to mpv
 subprocess.run(['install_name_tool', '-add_rpath', '@executable_path/lib', mpv_path], stderr=subprocess.DEVNULL)
@@ -177,6 +189,13 @@ if [ "${NEB_SKIP_JRE:-0}" != "1" ]; then
 fi
 
 echo "==> Running smoke test on bundled macOS mpv binary..."
+if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/'; then
+    echo "ERROR: bundled mpv still references absolute Homebrew paths;"
+    echo "the dylib rewrite failed and the binary would die at dyld on"
+    echo "any machine without this exact Homebrew layout."
+    otool -L "$TARGET_DIR/mpv" | grep -E '/opt/homebrew/|/usr/local/' | head -5
+    exit 1
+fi
 SMOKE_OUT=$("$TARGET_DIR/mpv" --version)
 echo "$SMOKE_OUT" | head -n 6
 OPTIONS_OUT=$("$TARGET_DIR/mpv" --list-options)

@@ -1202,6 +1202,30 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
     })
 }
 
+/// Open a torrent's on-disk folder in the OS file manager. The frontend
+/// invokes this for the media view's folder button and the manager's
+/// "Show in Finder" context action; before this command existed every call
+/// rejected with "command not found" and was swallowed by the UI, so the
+/// buttons appeared completely dead.
+#[tauri::command]
+pub fn open_torrent_folder(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("Folder does not exist: {path}"));
+    }
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("open").arg(&p).status();
+    #[cfg(target_os = "windows")]
+    let opened = std::process::Command::new("explorer").arg(&p).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opened = std::process::Command::new("xdg-open").arg(&p).status();
+    match opened {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("File manager exited with {s}")),
+        Err(e) => Err(format!("Failed to open folder: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
