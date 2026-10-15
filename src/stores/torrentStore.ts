@@ -93,6 +93,17 @@ export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
     const finalDown = snap ? 0 : avgDown;
     const finalUp = snap ? 0 : avgUp;
 
+    // ETA from the SAME smoothed speed the UI displays (what the established
+    // clients do: remaining bytes / windowed rate). Computing it from the raw
+    // engine rate made it jump between 0, infinity and hours; deriving it
+    // from the displayed average keeps it consistent and slowly-moving. A
+    // genuinely stalled download shows infinity only after the idle snap.
+    const remaining = Math.max(0, t.total_bytes * (1 - t.progress));
+    const etaSeconds =
+      t.status !== 'Downloading' || finalDown <= 0
+        ? undefined
+        : Math.round(remaining / finalDown);
+
     speedCounters.set(t.id, {
       lastDownBytes: t.downloaded_bytes,
       lastUpBytes: t.uploaded_bytes,
@@ -101,7 +112,7 @@ export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
       avgUp: finalUp,
       idleTicks,
     });
-    return { ...t, download_rate: finalDown, upload_rate: finalUp };
+    return { ...t, download_rate: finalDown, upload_rate: finalUp, eta_seconds: etaSeconds };
   });
   for (const id of [...speedCounters.keys()]) {
     if (!seen.has(id)) speedCounters.delete(id);

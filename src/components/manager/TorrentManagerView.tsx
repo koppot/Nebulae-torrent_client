@@ -714,6 +714,11 @@ export const TorrentManagerView: React.FC = () => {
               {filteredTorrents.map((t) => {
                 const isSelected = selectedId === t.id;
                 const progressPct = Math.round(t.progress * 100);
+                // While downloading the bar carries the downloaded volume;
+                // once complete it switches to the uploaded volume (seeders
+                // read contribution, not progress).
+                const isComplete =
+                  t.status === 'Seeding' || t.status === 'Completed' || t.progress >= 1;
                 return (
                   <tr
                     key={t.id}
@@ -731,15 +736,22 @@ export const TorrentManagerView: React.FC = () => {
                     </td>
                     <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
                     <td className="py-2 px-2.5">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
-                          <div
-                            className="h-full bg-[#e50914] rounded-full transition-all"
-                            style={{ width: `${progressPct}%` }}
-                          />
+                      <div className="flex flex-col gap-0.5 min-w-[150px]">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
+                            <div
+                              className="h-full bg-[#e50914] rounded-full transition-all"
+                              style={{ width: `${progressPct}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] w-8 text-right font-mono text-white">
+                            {progressPct}%
+                          </span>
                         </div>
-                        <span className="text-[10px] w-8 text-right font-mono text-white">
-                          {progressPct}%
+                        <span className="text-[9px] font-mono text-[#737373] text-right leading-tight">
+                          {isComplete
+                            ? `${formatBytes(t.uploaded_bytes)} uploaded`
+                            : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)}`}
                         </span>
                       </div>
                     </td>
@@ -750,7 +762,13 @@ export const TorrentManagerView: React.FC = () => {
                     <td className="py-2 px-2.5">{formatSpeed(t.upload_rate)}</td>
                     <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
                     <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
-                    <td className="py-2 px-2.5">{t.seeds}</td>
+                    <td className="py-2 px-2.5 text-white">
+                      {/* librqbit (local mode) cannot count connected seeds -
+                          the peer API exposes no seed flag (Transmission shows
+                          "?" for unknown; we show a dash). rtorrent/remote
+                          report real values. */}
+                      {isRemoteServer ? t.seeds : '—'}
+                    </td>
                     <td className="py-2 px-2.5">{t.peers}</td>
                   </tr>
                 );

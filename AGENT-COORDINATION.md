@@ -355,3 +355,23 @@ aggregate success; stray draft from the cancelled first attempt deleted.
    SetFile -a C on the MOUNTED volume root, convert to UDZO, verify the
    flag in CI. Also REMOVED the old dmg-in-zip (AppleDouble sequester)
    runaround from the workflow, release body, and Discord embed.
+7. PROGRESS VOLUMES (owner request): manager table progress bar gained a
+   small bytes line - "downloaded of total" while downloading, switching
+   to "uploaded" when complete (compact view: same switch). formatBytes.
+8. SEEDS COLUMN (owner: "seeds zero is incorrect"): rqbit engine mapped a
+   placeholder (1 if finished else 0). librqbit 9.0.1 CANNOT report
+   connected seeds (no is_seed in PeerStats; LivePeerState::has_full_
+   torrent exists but peer enumeration is pub(crate)). UI now shows a
+   dash in local mode (Transmission marks unknown counts the same way);
+   rtorrent/remote modes keep real values. If real counts are wanted,
+   librqbit needs a patch upstream (expose per-peer seed flag).
+9. ETA (owner: jumps 0/infinity/hours): engine computed eta from raw
+   dl_rate spikes. Display layer now derives eta = remaining / smoothed
+   speed (same 3s window as the speed display), infinity only when
+   genuinely stalled. Engine field left as fallback for non-list paths.
+NOTE: commit batching (owner feedback "running out of numbers"): all UI
+fixes land in v0.9.1 in ONE release; validation gate = pnpm build
+(lint+tsc+vite). Release runs were cancelled/re-tagged repeatedly today
+(pwsh brace, squashfs listing stream, rust-cache staging nesting); the
+DMG icon root cause (APFS + flag on srcfolder no-op) is fixed with CI
+verification. Next version AFTER 0.9.1 ships = 0.9.1.1 (owner).
