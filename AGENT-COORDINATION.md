@@ -776,6 +776,36 @@ order), then Linux, then macOS.
 Sign-off recorded above verbatim. Addenda 1–4 incorporated into implementation
 plan. Beginning Phase A1 — Windows leg first.
 
+### 2026-10-15 — Antigravity: Phase A1 sidecar bundling completed
+
+- **Pinned Artifacts & SHA-256 Checksums (Transmission 4.1.3, released 2026-06-30)**:
+  - Windows x64 MSI:
+    - URL: `https://github.com/transmission/transmission/releases/download/4.1.3/transmission-4.1.3-x64.msi`
+    - SHA-256: `c8ea492d8f46fadac26e0c05b244cabba556201d5fe348dfcf1cf036621741f8`
+  - Linux x86_64 source build tarball:
+    - URL: `https://github.com/transmission/transmission/releases/download/4.1.3/transmission-4.1.3.tar.xz`
+    - SHA-256: `ce7d2d8b101f7eb54bc3cf0bc55f52f7ebd4a25fa48e00bdca9a7e0fc02617da`
+  - macOS DMG / formula:
+    - Bottled Homebrew `transmission-cli 4.1.3_1` / source tarball fallback with identical SHA-256 (`ce7d2d8b101f7eb54bc3cf0bc55f52f7ebd4a25fa48e00bdca9a7e0fc02617da`)
+  - Resulting client peer-id prefix: **`-TR4130-`** (to feed into Phase B3 whitelist verification).
+- **Scripts Created**:
+  - `scripts/bundle-windows-transmission.ps1`: Windows Defender exclusion on staging dir, SHA-256 verification, MSI administrative extraction via `msiexec /a`, copies `transmission-daemon.exe` and non-system DLLs to `src-tauri/resources/engine/transmission`, executes smoke test (ephemeral port 19091, minimal config, HTTP 409 CSRF handshake check).
+  - `scripts/bundle-linux-transmission.sh`: Downloads and validates pinned tarball SHA-256, compiles daemon with CMake/Ninja (`-DENABLE_DAEMON=ON -DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_UTILS=OFF -DENABLE_MAC=OFF`), walks `ldd` and copies non-glibc libraries into `resources/engine/transmission/lib/`, rewrites RPATHs with `patchelf`, verifies self-containment, and executes smoke test.
+  - `scripts/bundle-macos-transmission.sh`: Obtains `transmission-daemon` via formula or builds from pinned source, crawls non-system dependencies using `otool -L`, copies dylibs into `resources/engine/transmission/lib/`, rewrites install IDs and load paths to `@rpath/<base>`, adds `@executable_path/lib` and `@loader_path/lib` RPATHs, code-signs with identity or ad-hoc, and executes smoke test.
+  - **Empirical verification on macOS host**: Smoke test verified live: `transmission-daemon 4.1.3 (838877323f)` launched on ephemeral port 19092, received expected HTTP 409 + `X-Transmission-Session-Id` header, and shut down cleanly.
+- **Addendum 2 Verified Against Bundled 4.1.3 Binary**:
+  - Tested JSON-RPC capabilities against running daemon: RPC version reported is **19** (min 14).
+  - Calling `torrent-set` with `sequential-download: true` succeeds: `{'arguments': {}, 'result': 'success'}`. Native sequential download exists and works in this build.
+- **Release Workflow Wiring**:
+  - `.github/workflows/release.yml` updated:
+    - Windows, Linux, and macOS bundle steps added.
+    - Linux split-build stages both player and engine outside `target/` before `appimage` build, and injects both into the squashfs payload with integrity verification for both `resources/player/mpv` and `resources/engine/transmission/transmission-daemon`.
+    - Signing gate `WINDOWS_SIGN_PROVIDER` and Tauri updater signing secrets left untouched.
+- **Documentation & Legal**:
+  - `THIRD-PARTY-NOTICES.md` updated with full GPLv2 notice for Transmission, pinned hashes, `-TR4130-` peer-id prefix, private-tracker compliance notice, and dynamic library attribution table.
+  - `.gitignore` updated with `src-tauri/transmission-staging/`, `src-tauri/transmission-staging-appimage/`, and `src-tauri/resources/engine/transmission/`.
+
+
 ## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
 1. LIVE-VERIFIED the scrape layer against a real user torrent: tracker
    status surfaced a genuine failure - tracker.asiandvdclub.org has NO
