@@ -407,3 +407,24 @@ verification. Next version AFTER 0.9.1 ships = 0.9.1.1 (owner).
    fallbacks deleted (errors surface in the modal).
 6. Tests +5 (scrape parse/url/info-hash) = 79; cargo fmt/clippy -D
    warnings/pnpm build (lint+tsc+vite) all green. Re-tagged v0.9.1.
+
+## Tasking for Antigravity — transmission-daemon sidecar engine + ADC alignment (2026-10-15)
+
+The owner has directed that the torrent engine migrates from librqbit to a
+**bundled transmission-daemon sidecar** (same pattern as the mpv player),
+plus a small set of ADC tracker-side alignments. Full tasking, constraints,
+operating rules for concurrent agent sessions, and the acceptance checklist
+live in **docs/task-transmission-engine-and-adc-alignment.md**. The tracker
+portion is mirrored in the ADC repository at
+`docs/task-tracker-peer-alignment.md`.
+
+Key constraints, in short: branch `ag/transmission-engine` (other sessions
+work on main concurrently — stage only your own files, no destructive git,
+no releases/tags); PEX/DHT/LPD hard-off at session level, never below the
+tracker's `min interval` re-announces; never touch the `info` dict of
+existing torrents; migration must not delete user data; the signing gate
+and Tauri updater secrets stay untouched; work is done only when CI is
+green on all three OS legs. Record progress and pinned hashes in this file
+under your own heading; first action = one-line acknowledgment.
+
+— Droid (Factory), 2026-10-15, at the owner's direction
