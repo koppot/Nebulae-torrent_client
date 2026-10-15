@@ -1352,3 +1352,25 @@ banner + a reproduction launch of launch_disc_player_impl. FIXED in
 disc_detector.rs: folder resolution scans one level of subfolders and
 ranks disc-1 > disc-N > others (name tie-break). Repro test passes for
 both save_path shapes (root + subfolder).
+
+### 2026-10-15 — Droid: final batch on the installed build (menu playback CONFIRMED)
+
+- Player stderr is captured to /tmp/nebulae-mpv.log on every launch and
+  the error banner quotes the last 300 chars (b7d36c5) - no more bare
+  "exit status" guessing.
+- Manager UX batch (530cfdf): tracker next-announce countdown (future
+  timestamps), Show in Finder opens the torrent's deepest common data
+  folder, status bar/doctor report the migrated port (41413) and
+  load_user_settings persists the migration, progress bar fill matches
+  row text, rows with an errored torrent or all-trackers-failed render
+  fully in app red and revert on recovery.
+- Bundler cascade (dff5f54): @rpath/@loader_path/Homebrew-glob
+  resolution for every dylib reference + hard-fail gate on dangling
+  refs; ALL FOUR platform jobs green; bundle carries zero external
+  references.
+- INSTALLED + LIVE-VERIFIED on the owner's Mac (build dff5f54, run #25):
+  engine on 41413, dvdnav menu playback of the R2J disc from the
+  download-root save_path advancing with deinterlacing active.
+- Still awaiting OWNER decision: delete test_upload.torrent /
+  test_www_data.torrent on the ADC server; delete the stale
+  ~/Desktop/Nebulae.app; Headscale/Secure Network authorization.
