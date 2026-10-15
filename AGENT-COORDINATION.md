@@ -1209,3 +1209,27 @@ Effective commit `f23f5ba` (build-test.yml):
   Draft releases/assets are collaborator-only. NEVER publish that draft,
   and never create non-draft releases (owner directive stands).
 - Runs failing the draft upload count as failed.
+
+### 2026-10-15 — Droid: v0.9.2 first-launch engine failure root-caused and fixed
+
+Owner hit the "Engine Initialization Required" recovery screen on first
+launch of the 0.9.2 DMG. Session log evidence (not a port conflict):
+
+    Failed to create default download directory '~/Downloads':
+    Read-only file system (os error 30)
+
+Cause: front-end default `~/Downloads` reached transmission-daemon
+unexpanded and resolved against the process CWD, which is the read-only
+DMG volume when the app is launched without copying it to /Applications.
+Fixed in `ad36af0`:
+- `expand_tilde_path` helper; engine init and per-torrent normalization
+  both expand `~` against the home directory.
+- Daemon spawn pins `current_dir` to the writable engine dir.
+- Peer port default 51413 -> **41413** (owner directive: members may run a
+  standalone Transmission client whose stock default 51413 would conflict).
+  41413 is outside the OS ephemeral range and not in the tracker's
+  BLACK_PORTS. Stored settings on 51413 migrate on load.
+- Frontend port references updated (settings store, recovery screen,
+  status bar, connectivity doctor).
+
+Do not revert the port default or reintroduce unexpanded `~` paths.
