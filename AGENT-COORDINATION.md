@@ -1302,3 +1302,27 @@ launch_disc_player_impl resolves a disc image (iso/img) inside the folder -
 single image auto-plays, multiple play the first by name - and the media
 view surfaces launch errors in the existing error banner instead of
 swallowing them. Multi-image disc PICKER UI is a possible follow-up.
+
+### 2026-10-15 — Droid: BUNDLED MPV WAS DEAD OFF-CI + missing open-folder command (owner hit "no functionality at all")
+
+Owner report: Play does nothing, folder doesn't open, "none of it". Two
+independent defects:
+1. bundle-macos-mpv.sh COPIED Homebrew dylibs but NEVER rewrote load
+   commands: get_direct_deps realpath()'d Homebrew symlink layers, so
+   install_name_tool -change never matched the strings inside the
+   binaries and check=False swallowed every failure. The smoke test
+   passed only because the CI runner HAS the referenced /opt/homebrew
+   paths. mpv died at dyld instantly on any other machine. FIXED:
+   raw load-command paths + hard otool gate + smoke-test check
+   (f446070). Locally repaired the owner's installed bundle the same
+   way (rewrite + ad-hoc re-sign) - verified mpv v0.41.0 runs and a
+   dvdnav probe against the owner's real DISC_1.ISO decodes with CSS.
+2. open_torrent_folder was invoked by the frontend (folder button +
+   Show in Finder) but NEVER DEFINED in the backend - every call
+   rejected "command not found" and the UI swallowed it. Command added
+   and registered (f446070), launch errors now surface in the media
+   error banner, and folder-based disc resolution searches one level of
+   subfolders preferring disc-1 names (a stray Windows ISO in
+   ~/Downloads would otherwise be picked for the R2J torrent).
+NOTE for anyone touching the bundler: NEVER resolve otool deps through
+realpath(); Homebrew opt/ paths are symlinks - match the RAW strings.
