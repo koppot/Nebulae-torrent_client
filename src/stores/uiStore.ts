@@ -35,6 +35,8 @@ interface UiState {
   setInitialAddTorrentSource: (source: string | null) => void;
   setDeleteModalTarget: (target: { id: string; name: string } | null) => void;
   openAddTorrentWithSource: (source: string) => void;
+  addTorrentRejection: string | null;
+  setAddTorrentRejection: (message: string | null) => void;
 }
 
 const getSavedViewMode = (): ViewMode => {
@@ -63,6 +65,7 @@ export const useUiStore = create<UiState>((set) => ({
   searchQuery: '',
   initialAddTorrentSource: null,
   deleteModalTarget: null,
+  addTorrentRejection: null,
 
   setViewMode: (viewMode) => {
     try {
@@ -93,9 +96,30 @@ export const useUiStore = create<UiState>((set) => ({
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
   setDeleteModalTarget: (deleteModalTarget) => set({ deleteModalTarget }),
-  openAddTorrentWithSource: (source: string) =>
+  setAddTorrentRejection: (addTorrentRejection) => set({ addTorrentRejection }),
+  // Single choke point for every "open this as a torrent" path (Finder open,
+  // drag & drop, deep links). Only .torrent / .adc files and URL sources are
+  // accepted; anything else opens the Add window with a clear rejection.
+  openAddTorrentWithSource: (source: string) => {
+    const trimmed = source.trim();
+    const isUrlSource =
+      trimmed.startsWith('magnet:') ||
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://') ||
+      trimmed.startsWith('base64:') ||
+      trimmed.startsWith('data:');
+    const fileName = trimmed.split('/').pop()?.split('\\').pop() || trimmed;
+    if (!isUrlSource && !/\.(torrent|adc)$/i.test(fileName)) {
+      set({
+        addTorrentRejection: `only .torrent or .adc files are accepted ('${fileName}' was ignored).`,
+        showAddTorrent: true,
+      });
+      return;
+    }
     set({
-      initialAddTorrentSource: source,
+      addTorrentRejection: null,
+      initialAddTorrentSource: trimmed,
       showAddTorrent: true,
-    }),
+    });
+  },
 }));

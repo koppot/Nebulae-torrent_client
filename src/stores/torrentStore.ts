@@ -2,6 +2,58 @@ import { create } from 'zustand';
 import { TorrentItem, CreateTorrentParams, InspectTorrentResult, TorrentContentMatch, TorrentRenameEntry } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
+// Display-side speed smoothing: librqbit reports raw per-second rates that
+// swing between a burst rate and 0 on small swarms, which made the UI
+// flicker (e.g. 4 MB/s -> 0 B/s every second). An exponential moving
+// average keeps the display readable while staying honest: values decay
+// quickly to zero and stop smoothing entirely when a torrent is inactive.
+const SPEED_EMA_ALPHA = 0.5;
+interface SpeedEmaState {
+  down: number;
+  up: number;
+  downZeroStreak: number;
+  upZeroStreak: number;
+}
+const speedEma = new Map<string, SpeedEmaState>();
+
+export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
+  const seen = new Set<string>();
+  const out = torrents.map((t) => {
+    seen.add(t.id);
+    const active = t.status === 'Downloading' || t.status === 'Seeding';
+    if (!active) {
+      speedEma.delete(t.id);
+      return t;
+    }
+    const prev = speedEma.get(t.id);
+    const smooth = (raw: number, prevValue: number | undefined, streak: number) => {
+      if (raw === 0) {
+        const nextStreak = streak + 1;
+        if (prevValue === undefined || nextStreak >= 2) {
+          return { value: 0, streak: nextStreak };
+        }
+        return { value: prevValue * 0.5, streak: nextStreak };
+      }
+      const value =
+        prevValue === undefined ? raw : prevValue + SPEED_EMA_ALPHA * (raw - prevValue);
+      return { value, streak: 0 };
+    };
+    const down = smooth(t.download_rate, prev?.down, prev?.downZeroStreak ?? 0);
+    const up = smooth(t.upload_rate, prev?.up, prev?.upZeroStreak ?? 0);
+    speedEma.set(t.id, {
+      down: down.value,
+      up: up.value,
+      downZeroStreak: down.streak,
+      upZeroStreak: up.streak,
+    });
+    return { ...t, download_rate: down.value, upload_rate: up.value };
+  });
+  for (const id of [...speedEma.keys()]) {
+    if (!seen.has(id)) speedEma.delete(id);
+  }
+  return out;
+}
+
 export interface SystemPathPresets {
   downloads?: string | null;
   movies?: string | null;
@@ -56,7 +108,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      set({ torrents: data, isLoading: false });
+      set({ torrents: smoothTelemetrySpeeds(data), isLoading: false });
     } catch {
       set({ isLoading: false });
     }

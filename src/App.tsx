@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useUiStore } from './stores/uiStore';
 import { useSettingsStore } from './stores/settingsStore';
-import { useTorrentStore } from './stores/torrentStore';
+import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
@@ -53,10 +53,14 @@ export const App: React.FC = () => {
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
 
-    // Real-time 500ms push telemetry from Rust engine
+    // Real-time 500ms push telemetry from Rust engine (speeds are
+    // display-smoothed; raw engine rates burst between full speed and 0)
     listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
       if (event.payload) {
-        useTorrentStore.setState({ torrents: event.payload, isLoading: false });
+        useTorrentStore.setState({
+          torrents: smoothTelemetrySpeeds(event.payload),
+          isLoading: false,
+        });
       }
     })
       .then((unlisten) => unlistenFns.push(unlisten))
@@ -79,6 +83,17 @@ export const App: React.FC = () => {
     listen<string>('nebulae://open-uri', (event) => {
       if (event.payload) {
         openAddTorrentWithSource(event.payload);
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    // Tray menu actions that open specific windows
+    listen<string>('nebulae://tray-action', (event) => {
+      if (event.payload === 'add-torrent') {
+        useUiStore.getState().setShowAddTorrent(true);
+      } else if (event.payload === 'create-torrent') {
+        useUiStore.getState().setShowCreateTorrent(true);
       }
     })
       .then((unlisten) => unlistenFns.push(unlisten))

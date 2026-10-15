@@ -20,7 +20,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 
 export const AddTorrentModal: React.FC = () => {
-  const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource } =
+  const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource, addTorrentRejection, setAddTorrentRejection } =
     useUiStore();
   const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
@@ -55,6 +55,12 @@ export const AddTorrentModal: React.FC = () => {
     if (!showAddTorrent) return;
 
     const unlistenList: Array<() => void> = [];
+
+    // Surface rejections raised outside the modal (global drop, Finder open).
+    if (addTorrentRejection) {
+      setErrorMessage(addTorrentRejection);
+      setAddTorrentRejection(null);
+    }
 
     listen<{ paths?: string[] }>('tauri://drag-drop', (event) => {
       const paths = event.payload?.paths;
@@ -104,7 +110,7 @@ export const AddTorrentModal: React.FC = () => {
     return () => {
       for (const un of unlistenList) un();
     };
-  }, [showAddTorrent, inspectTorrent]);
+  }, [showAddTorrent, inspectTorrent, addTorrentRejection, setAddTorrentRejection]);
 
   useEffect(() => {
     if (initialAddTorrentSource) {

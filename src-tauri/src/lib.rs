@@ -226,6 +226,20 @@ pub fn run() {
 
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
+            let add_torrent_i = tauri::menu::MenuItem::with_id(
+                app,
+                "add-torrent",
+                "Add Torrent",
+                true,
+                None::<&str>,
+            )?;
+            let create_torrent_i = tauri::menu::MenuItem::with_id(
+                app,
+                "create-torrent",
+                "Create New Torrent",
+                true,
+                None::<&str>,
+            )?;
             let pause_all_i = tauri::menu::MenuItem::with_id(
                 app,
                 "pause-all",
@@ -245,7 +259,15 @@ pub fn run() {
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let menu = tauri::menu::Menu::with_items(
                 app,
-                &[&show_i, &pause_all_i, &resume_all_i, &separator, &quit_i],
+                &[
+                    &show_i,
+                    &add_torrent_i,
+                    &create_torrent_i,
+                    &pause_all_i,
+                    &resume_all_i,
+                    &separator,
+                    &quit_i,
+                ],
             )?;
 
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("nebulae-tray")
@@ -265,6 +287,23 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "add-torrent" | "create-torrent" => {
+                        use tauri::Emitter;
+                        if let Some(window) = app
+                            .get_webview_window("main")
+                            .or_else(|| app.webview_windows().into_values().next())
+                        {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                            let action = if event.id.as_ref() == "add-torrent" {
+                                "add-torrent"
+                            } else {
+                                "create-torrent"
+                            };
+                            let _ = window.emit("nebulae://tray-action", action);
                         }
                     }
                     "pause-all" => {
