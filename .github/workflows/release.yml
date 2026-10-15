@@ -157,7 +157,7 @@ jobs:
           # Regenerate the updater payload from the INJECTED AppImage so
           # auto-updates ship the bundled player too, then re-sign it.
           tar -czf "$NAME.tar.gz" "$NAME"
-          pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$NAME.tar.gz"
+          pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$(pwd)/$NAME.tar.gz"
 
       - name: Build Tauri Application
         if: runner.os != 'Linux'
