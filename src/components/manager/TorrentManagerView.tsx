@@ -47,6 +47,29 @@ export const formatAnnounceDelta = (ts: number): string => {
   return `${Math.floor(d / 86400)}d ${Math.floor((d % 86400) / 3600)}h`;
 };
 
+// Next announce is a FUTURE timestamp; a plain now-minus-ts delta clamps to
+// "0s". Compute the countdown instead.
+export const formatAnnounceUntil = (ts: number): string => {
+  const d = Math.max(0, Math.floor(ts - Date.now() / 1000));
+  if (d < 60) return `${d}s`;
+  if (d < 3600) return `${Math.floor(d / 60)}m ${d % 60}s`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m`;
+  return `${Math.floor(d / 86400)}d ${Math.floor((d % 86400) / 3600)}h`;
+};
+
+// A torrent's data usually lands inside a top-level folder named by the
+// torrent itself; Finder should open THAT folder, not the download root.
+export const resolveTorrentDataDir = (t: {
+  save_path: string;
+  files?: { name: string }[];
+}): string => {
+  const roots = (t.files ?? []).map((f) => f.name.split('/')[0]).filter(Boolean);
+  if (roots.length > 0 && roots.every((r) => r === roots[0])) {
+    return `${t.save_path}/${roots[0]}`;
+  }
+  return t.save_path;
+};
+
 interface ContextMenuState {
   visible: boolean;
   x: number;
@@ -820,6 +843,18 @@ export const TorrentManagerView: React.FC = () => {
               {filteredTorrents.map((t) => {
                 const isSelected = selectedId === t.id;
                 const progressPct = Math.round(t.progress * 100);
+                // Not connected: the torrent itself errored, or every one of
+                // its trackers reports failure/error. The whole row turns
+                // the app red and reverts once connectivity returns.
+                const trackersAllFailing =
+                  (t.trackers?.length ?? 0) > 0 &&
+                  t.trackers.every((tr) =>
+                    ['fail', 'error', 'not working', 'unreachable'].some((k) =>
+                      tr.status.toLowerCase().includes(k),
+                    ),
+                  );
+                const rowError = t.status === 'Error' || trackersAllFailing;
+                const rowErrorClass = rowError ? 'text-[#e50914] hover:text-[#e50914]' : '';
                 // While downloading the bar carries the downloaded volume;
                 // once complete it switches to the uploaded volume (seeders
                 // read contribution, not progress).
@@ -833,11 +868,13 @@ export const TorrentManagerView: React.FC = () => {
                     onDoubleClick={isRemoteServer ? undefined : openRenameTorrentModal}
                     className={`cursor-pointer transition select-none ${
                       isSelected
-                        ? 'bg-[#1f1f1f] border-l-2 border-[#e50914] text-white'
-                        : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
+                        ? `bg-[#1f1f1f] border-l-2 border-[#e50914] text-white ${rowErrorClass}`
+                        : rowError
+                          ? 'hover:bg-[#1a1a1a] text-[#e50914]'
+                          : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
                     }`}
                   >
-                    <td className="py-2 px-3 font-sans font-medium truncate max-w-xs text-white">
+                    <td className={`py-2 px-3 font-sans font-medium truncate max-w-xs ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
                       {t.name}
                     </td>
                     <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
@@ -846,11 +883,11 @@ export const TorrentManagerView: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
                             <div
-                              className="h-full bg-[#e50914] rounded-full transition-all"
+                              className="h-full bg-white rounded-full transition-all"
                               style={{ width: `${progressPct}%` }}
                             />
                           </div>
-                          <span className="text-[10px] w-8 text-right font-mono text-white">
+                          <span className={`text-[10px] w-8 text-right font-mono ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
                             {progressPct}%
                           </span>
                         </div>
@@ -1289,8 +1326,8 @@ export const TorrentManagerView: React.FC = () => {
                           <span className="text-[#a3a3a3] truncate block max-w-lg">{tr.url}</span>
                           <span className="text-[10px] text-slate-500">
                             Tier {tr.tier} • Seeds: {tr.seeds ?? '—'} • Peers: {tr.peers ?? '—'}
-                            {tr.next_announce
-                              ? ` • Next announce: in ${formatAnnounceDelta(tr.next_announce)}`
+                            {tr.next_announce && tr.next_announce > 0
+                              ? ` • Next announce: in ${formatAnnounceUntil(tr.next_announce)}`
                               : ''}
                             {tr.last_announce
                               ? ` • Last: ${formatAnnounceDelta(tr.last_announce)} ago`
@@ -1515,7 +1552,7 @@ export const TorrentManagerView: React.FC = () => {
             onClick={() => {
               const t = torrents.find((item) => item.id === contextMenu.torrentId);
               if (t && t.save_path) {
-                invoke('open_torrent_folder', { path: t.save_path }).catch(() => {});
+                invoke('open_torrent_folder', { path: resolveTorrentDataDir(t) }).catch(() => {});
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}

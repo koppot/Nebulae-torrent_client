@@ -293,14 +293,25 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 
     if let Ok(Some(val)) = db.get_setting("user_settings_json") {
         if let Ok(mut parsed) = serde_json::from_str::<UserSettings>(&val) {
+            let mut migrated = false;
             if parsed.engine.trim() == "librqbit" {
                 parsed.engine = "transmission".to_string();
+                migrated = true;
             }
             // Migrate the stock Transmission default port to the Nebulae-
             // specific default so existing installs move off a port a
             // standalone Transmission client on the same machine may claim.
             if parsed.listening_port == 51413 {
                 parsed.listening_port = 41413;
+                migrated = true;
+            }
+            // Persist the migration so every reader of the raw stored
+            // settings (connectivity doctor, status bar) sees the same
+            // values without each one re-deriving it.
+            if migrated {
+                if let Ok(json) = serde_json::to_string(&parsed) {
+                    let _ = db.set_setting("user_settings_json", &json);
+                }
             }
             settings = parsed;
         }

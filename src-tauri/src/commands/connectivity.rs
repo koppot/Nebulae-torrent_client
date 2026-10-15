@@ -107,6 +107,13 @@ pub async fn run_connectivity_doctor_test(
         .and_then(|s| serde_json::from_str::<crate::commands::settings::UserSettings>(&s).ok())
         .map(|s| s.listening_port)
         .unwrap_or(41413);
+    // The stored settings may predate the 41413 port migration; probe and
+    // report the port the engine actually uses, never the stale stock one.
+    let listening_port = if listening_port == 51413 {
+        41413
+    } else {
+        listening_port
+    };
 
     // Run probes concurrently
     let (upnp, nat_pmp, ipv4, ipv6, dns_ms, tracker_ok) = tokio::join!(

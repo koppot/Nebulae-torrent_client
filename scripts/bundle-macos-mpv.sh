@@ -80,7 +80,17 @@ def get_direct_deps(binary_path):
         if not line:
             continue
         dep = line.split(' (compatibility')[0].strip()
-        if dep.startswith('/System/') or dep.startswith('/usr/lib/') or dep.startswith('@'):
+        if dep.startswith('/System/') or dep.startswith('/usr/lib/'):
+            continue
+        if dep.startswith('@'):
+            # Homebrew dylibs reference siblings via @loader_path/../lib/...
+            # Resolve against this binary's directory so the walk can see
+            # and bundle them; keep the RAW string for -change matching.
+            if dep.startswith('@loader_path/') or dep.startswith('@executable_path/'):
+                suffix = dep.split('/', 1)[1]
+                cand = os.path.normpath(os.path.join(os.path.dirname(binary_path), suffix))
+                if os.path.exists(cand):
+                    deps.append(dep)
             continue
         if os.path.exists(dep):
             # Keep the RAW load-command path. realpath() would resolve
@@ -91,20 +101,30 @@ def get_direct_deps(binary_path):
             deps.append(dep)
     return deps
 
+def resolve_ref(ref, referencing_binary):
+    """Map a load-command reference to a real source path for copying."""
+    if ref.startswith('@loader_path/') or ref.startswith('@executable_path/'):
+        suffix = ref.split('/', 1)[1]
+        return os.path.normpath(os.path.join(os.path.dirname(referencing_binary), suffix))
+    return ref
+
 # Recursively crawl non-system dependencies
-queue = get_direct_deps(mpv_path)
+queue = [resolve_ref(d, mpv_path) for d in get_direct_deps(mpv_path)]
 visited = set(queue)
+raw_refs = {}   # resolved source path -> set of raw load-command strings
 
 while queue:
     curr = queue.pop(0)
-    for d in get_direct_deps(curr):
-        if d not in visited:
-            visited.add(d)
-            queue.append(d)
+    for ref in get_direct_deps(curr):
+        resolved = resolve_ref(ref, curr)
+        raw_refs.setdefault(resolved, set()).add(ref)
+        if resolved not in visited:
+            visited.add(resolved)
+            queue.append(resolved)
 
 print(f"Discovered {len(visited)} non-system dynamic libraries to bundle.")
 
-# Map original paths and realpaths to bundle destination
+# Map original paths and raw references to bundle destination
 path_map = {}
 for orig in visited:
     base = os.path.basename(orig)
@@ -112,6 +132,8 @@ for orig in visited:
     shutil.copy2(orig, dest)
     os.chmod(dest, 0o755)
     path_map[orig] = base
+    for ref in raw_refs.get(orig, ()):
+        path_map[ref] = base
     path_map[os.path.realpath(orig)] = base
 
 # Set install id for each dylib
@@ -129,12 +151,14 @@ for b in all_binaries:
             target_base = path_map[dep]
             subprocess.run(['install_name_tool', '-change', dep, f'@rpath/{target_base}', b], check=True)
 
-# HARD GATE: no absolute Homebrew paths may survive in the bundle.
+# HARD GATE: no absolute Homebrew paths or un-bundled @loader_path
+# references may survive in the bundle.
 for b in all_binaries:
     listing = subprocess.check_output(['otool', '-L', b]).decode('utf-8')
-    if '/opt/homebrew/' in listing or '/usr/local/' in listing:
-        sys.exit(f"FATAL: {b} still references absolute Homebrew paths:\n{listing}")
-print("All load commands rewritten to @rpath (no absolute Homebrew references remain).")
+    if ('/opt/homebrew/' in listing or '/usr/local/' in listing
+            or '@loader_path/' in listing or '@executable_path/' in listing):
+        sys.exit(f"FATAL: {b} still references libraries outside the bundle:\n{listing}")
+print("All load commands rewritten to @rpath (no external references remain).")
 
 # Add rpaths to mpv
 subprocess.run(['install_name_tool', '-add_rpath', '@executable_path/lib', mpv_path], stderr=subprocess.DEVNULL)
@@ -189,11 +213,11 @@ if [ "${NEB_SKIP_JRE:-0}" != "1" ]; then
 fi
 
 echo "==> Running smoke test on bundled macOS mpv binary..."
-if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/'; then
-    echo "ERROR: bundled mpv still references absolute Homebrew paths;"
+if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/|@loader_path|@executable_path'; then
+    echo "ERROR: bundled mpv still references libraries outside the bundle;"
     echo "the dylib rewrite failed and the binary would die at dyld on"
     echo "any machine without this exact Homebrew layout."
-    otool -L "$TARGET_DIR/mpv" | grep -E '/opt/homebrew/|/usr/local/' | head -5
+    otool -L "$TARGET_DIR/mpv" | grep -E '/opt/homebrew/|/usr/local/|@loader_path|@executable_path' | head -5
     exit 1
 fi
 SMOKE_OUT=$("$TARGET_DIR/mpv" --version)
