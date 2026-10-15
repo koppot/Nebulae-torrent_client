@@ -16,12 +16,17 @@
 
 set -euo pipefail
 
-STAGING="${STAGING:-src-tauri/target/player-staging}"
+STAGING="${STAGING:-src-tauri/player-staging}"
 
 if [ ! -d "$STAGING" ]; then
     echo "ERROR: player staging directory not found: $STAGING"
     echo "This script expects the player to have been moved out of"
     echo "src-tauri/resources before the AppImage build."
+    exit 1
+fi
+if [ ! -f "$STAGING/mpv" ]; then
+    echo "ERROR: staging has no top-level mpv binary (stale or nested staging):"
+    find "$STAGING" -maxdepth 2 | head -n 20
     exit 1
 fi
 

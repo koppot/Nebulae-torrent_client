@@ -199,7 +199,11 @@ jobs:
       - name: Build Linux AppImage without player resources
         if: runner.os == 'Linux'
         run: |
-          mv src-tauri/resources/player src-tauri/target/player-staging
+          # Stage OUTSIDE target/: rust-cache restores target/ between runs and
+          # strips the non-cargo mpv blob, which would nest the move and break
+          # the injection probe.
+          rm -rf src-tauri/player-staging
+          mv src-tauri/resources/player src-tauri/player-staging
           pnpm tauri build --bundles appimage
 
       - name: Inject bundled player into AppImage (and refresh updater bundle)
