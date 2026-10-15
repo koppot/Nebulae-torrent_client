@@ -9,7 +9,7 @@ on:
 jobs:
   build-test:
     permissions:
-      contents: read
+      contents: write
     env:
       WINDOWS_SIGN_PROVIDER: 'none'
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -229,15 +229,6 @@ jobs:
           mkdir -p artifacts/
           cp "$DMG_NAME" "$DMG_NAME.sha256" "$APP_ZIP" "$APP_ZIP.sha256" artifacts/
 
-      - name: Upload macOS Artifacts
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nebulae-${{ matrix.target }}
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
-
       # --- Prepare Artifacts (Windows) --------------------------------------
       - name: Prepare Named Artifacts (Windows)
         if: runner.os == 'Windows'
@@ -258,15 +249,6 @@ jobs:
               Copy-Item "$name.sha256" "artifacts/$name.sha256"
             }
           }
-
-      - name: Upload Windows Artifacts
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nebulae-windows-x64
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
 
       # --- Prepare Artifacts (Linux) ----------------------------------------
       - name: Prepare Named Artifacts (Linux)
@@ -305,11 +287,39 @@ jobs:
             cp "nebulae-linux-x86_64" "nebulae-linux-x86_64.sha256" artifacts/
           fi
 
-      - name: Upload Linux Artifacts
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nebulae-linux-x86_64
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
+      # --- Private distribution ---------------------------------------------
+      # Build outputs are attached to a standing DRAFT release ("test-builds").
+      # Draft releases and their assets are visible only to collaborators,
+      # so nothing built here is publicly downloadable. Each successful run
+      # replaces the previous good build set (assets are clobbered by name).
+      - name: Attach build to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "commit: ${{ github.sha }}"
+            echo "run: ${{ github.run_id }} (#${{ github.run_number }})"
+            echo "date: $(date -u '+%Y-%m-%d %H:%M:%SZ')"
+          } > artifacts/BUILD_INFO.txt
+          gh release view test-builds >/dev/null 2>&1 || \
+            gh release create test-builds --draft \
+              --title "Test builds (private)" \
+              --notes "Owner-only test builds. NEVER publish this draft." \
+              --target "${{ github.sha }}"
+          uploaded=false
+          for attempt in 1 2 3; do
+            if gh release upload test-builds artifacts/* --clobber; then
+              uploaded=true
+              break
+            fi
+            echo "upload attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          if [ "$uploaded" != true ]; then
+            echo "ERROR: could not attach assets to draft release"
+            exit 1
+          fi
+          gh release view test-builds --json isDraft,name,assets \
+            --jq '{isDraft, name, assets: [.assets[].name]}'
