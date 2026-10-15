@@ -64,7 +64,10 @@ rm -rf squashfs-root
 
 # 3. Verify the injection: the player must be present inside the payload.
 "$APPIMAGE" --appimage-offset > /dev/null
-unsquashfs -l "$WORK/payload.squashfs" 2>/dev/null | grep -q "usr/share/nebulae/resources/player/mpv" || {
+# squashfs-tools >= 4.6 writes the -l listing to stderr, 4.4/4.5 to stdout;
+# capture both so the check works on either runner image generation.
+LISTING="$(unsquashfs -l "$WORK/payload.squashfs" 2>&1 || true)"
+printf '%s\n' "$LISTING" | grep -q "usr/share/nebulae/resources/player/mpv" || {
     echo "ERROR: player missing from repacked payload"
     exit 1
 }
