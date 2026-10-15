@@ -463,6 +463,7 @@ pub fn run() {
             commands::connectivity::run_connectivity_doctor_test,
             commands::connectivity::retest_listening_port,
             commands::connectivity::get_connectivity_certificate,
+            commands::connectivity::get_tailscale_status,
             // VPN
             commands::vpn::get_vpn_status,
             commands::vpn::set_vpn_mode,

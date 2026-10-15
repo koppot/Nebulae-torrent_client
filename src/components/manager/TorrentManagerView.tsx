@@ -38,6 +38,15 @@ import {
   Zap,
 } from 'lucide-react';
 
+// Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
+export const formatAnnounceDelta = (ts: number): string => {
+  const d = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+  if (d < 60) return `${d}s`;
+  if (d < 3600) return `${Math.floor(d / 60)}m ${d % 60}s`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m`;
+  return `${Math.floor(d / 86400)}d ${Math.floor((d % 86400) / 3600)}h`;
+};
+
 interface ContextMenuState {
   visible: boolean;
   x: number;
@@ -171,6 +180,31 @@ export const TorrentManagerView: React.FC = () => {
   const isRemoteServer = engineMode === 'rtorrent_server';
   const isTransmission = !isRemoteServer && (settings.engine || 'transmission') === 'transmission';
 
+  // Bottom inspector height, user-resizable by dragging the divider.
+  const [inspectorHeight, setInspectorHeight] = useState<number>(() => {
+    const stored = Number(localStorage.getItem('nebulae.inspectorHeight'));
+    return stored >= 120 && stored <= 640 ? stored : 224;
+  });
+  const startInspectorDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = inspectorHeight;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging up grows the inspector.
+      const next = Math.min(640, Math.max(120, startH - (ev.clientY - startY)));
+      setInspectorHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setInspectorHeight((h) => {
+        localStorage.setItem('nebulae.inspectorHeight', String(h));
+        return h;
+      });
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -316,6 +350,28 @@ export const TorrentManagerView: React.FC = () => {
     const failing = trackers.find((tr) => tr.status !== 'Working');
     const pick = failing ?? trackers[0];
     return pick.message || 'No announce info';
+  })();
+  // Announce telemetry aggregated across the selected torrent's trackers:
+  // most recent successful announce + soonest scheduled one. Recomputed on
+  // each render; the manager re-renders on every telemetry poll.
+  const announceTimes = (() => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const trackers = selectedTorrent?.trackers ?? [];
+    const lastTimes = trackers.map((tr) => tr.last_announce).filter((v): v is number => v != null && v > 0);
+    const nextTimes = trackers.map((tr) => tr.next_announce).filter((v): v is number => v != null && v > 0);
+    const last = lastTimes.length ? Math.max(...lastTimes) : null;
+    const next = nextTimes.length ? Math.min(...nextTimes) : null;
+    const fmtRel = (ts: number, suffix: 'ago' | 'left') => {
+      const d = Math.abs(nowSec - ts);
+      const unit = d < 60 ? `${d}s` : d < 3600 ? `${Math.floor(d / 60)}m ${d % 60}s` : d < 86400 ? `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m` : `${Math.floor(d / 86400)}d ${Math.floor((d % 86400) / 3600)}h`;
+      return suffix === 'ago' ? `${unit} ago` : `in ${unit}`;
+    };
+    return {
+      lastRel: last ? fmtRel(last, 'ago') : 'No successful announce yet',
+      lastAbs: last ? new Date(last * 1000).toLocaleString() : '',
+      nextRel: next ? fmtRel(next, 'left') : 'Not scheduled',
+      nextAbs: next ? new Date(next * 1000).toLocaleString() : '',
+    };
   })();
 
   // Sample the selected torrent's rates on a fixed 1s cadence. Triggering on
@@ -504,6 +560,12 @@ export const TorrentManagerView: React.FC = () => {
           <div
             className="group flex items-center justify-between p-1.5 rounded hover:bg-[#222222] border border-transparent hover:border-[#333333] transition text-xs"
             style={{ paddingLeft: `${depth * 18 + 8}px` }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (isTransmission && !isRemoteServer && node.path) {
+                openRenameFolderModal(node.path, node.name);
+              }
+            }}
           >
             <div className="flex items-center gap-2 min-w-0">
               <button
@@ -575,6 +637,12 @@ export const TorrentManagerView: React.FC = () => {
         key={file.index}
         className="group flex items-center justify-between p-1.5 rounded hover:bg-[#1f1f1f] border border-transparent hover:border-[#2a2a2a] transition text-xs font-mono"
         style={{ paddingLeft: `${depth * 18 + 14}px` }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (node.file && isTransmission && !isRemoteServer) {
+            openRenameFileModal(node.file.index, node.name);
+          }
+        }}
       >
         <div className="flex items-center gap-2 min-w-0">
           {getFileIcon(node.name)}
@@ -814,8 +882,22 @@ export const TorrentManagerView: React.FC = () => {
           </table>
         </div>
 
+        {/* Divider: drag up/down to resize the bottom inspector */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          onMouseDown={startInspectorDrag}
+          className="h-1.5 cursor-row-resize hover:bg-[#e50914]/30 transition-colors flex items-center justify-center flex-shrink-0 bg-[#141414]"
+          title="Drag to resize the details panel"
+        >
+          <div className="w-16 h-0.5 rounded-full bg-[#333333]" />
+        </div>
+
         {/* 3. Bottom Inspector: Tabs */}
-        <div className="h-56 bg-[#1a1a1a] border-t border-[#262626] flex flex-col">
+        <div
+          className="bg-[#1a1a1a] border-t border-[#262626] flex flex-col flex-shrink-0"
+          style={{ height: inspectorHeight }}
+        >
           {/* Tab Headers */}
           <div className="flex border-b border-[#262626] px-3 pt-1.5 gap-1 text-xs bg-[#1f1f1f]">
             {[
@@ -914,6 +996,22 @@ export const TorrentManagerView: React.FC = () => {
                         title={announceStatus}
                       >
                         {announceStatus}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Last Announce
+                      </span>
+                      <span className="text-white text-[11px]" title={announceTimes.lastAbs || ''}>
+                        {announceTimes.lastRel}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Next Announce
+                      </span>
+                      <span className="text-white text-[11px]" title={announceTimes.nextAbs || ''}>
+                        {announceTimes.nextRel}
                       </span>
                     </div>
                     {!isRemoteServer && (
@@ -1104,6 +1202,12 @@ export const TorrentManagerView: React.FC = () => {
                           <div
                             key={file.index}
                             className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between items-center hover:border-[#333333]"
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              if (isTransmission && !isRemoteServer) {
+                                openRenameFileModal(file.index, file.name);
+                              }
+                            }}
                           >
                             <div className="min-w-0 flex items-center gap-2">
                               {getFileIcon(file.name)}
@@ -1183,7 +1287,15 @@ export const TorrentManagerView: React.FC = () => {
                       >
                         <div className="min-w-0 pr-3">
                           <span className="text-[#a3a3a3] truncate block max-w-lg">{tr.url}</span>
-                          <span className="text-[10px] text-slate-500">Tier {tr.tier} • Seeds: {tr.seeds ?? '—'} • Peers: {tr.peers ?? '—'}</span>
+                          <span className="text-[10px] text-slate-500">
+                            Tier {tr.tier} • Seeds: {tr.seeds ?? '—'} • Peers: {tr.peers ?? '—'}
+                            {tr.next_announce
+                              ? ` • Next announce: in ${formatAnnounceDelta(tr.next_announce)}`
+                              : ''}
+                            {tr.last_announce
+                              ? ` • Last: ${formatAnnounceDelta(tr.last_announce)} ago`
+                              : ''}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <span className="text-white font-semibold px-1.5 py-0.5 rounded bg-[#141414] border border-[#262626]">
@@ -1398,6 +1510,19 @@ export const TorrentManagerView: React.FC = () => {
           >
             <Copy className="w-3.5 h-3.5" />
             <span>Copy Info Hash</span>
+          </button>
+          <button
+            onClick={() => {
+              const t = torrents.find((item) => item.id === contextMenu.torrentId);
+              if (t && t.save_path) {
+                invoke('open_torrent_folder', { path: t.save_path }).catch(() => {});
+              }
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            <span>Show in Finder</span>
           </button>
           <div className="h-[1px] bg-[#333333] my-1" />
           <button

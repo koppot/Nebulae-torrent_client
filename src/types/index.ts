@@ -21,6 +21,9 @@ export interface TorrentTrackerItem {
   peers: number | null;
   downloaded: number;
   message: string;
+  // Unix timestamps (seconds). null = never announced / not yet scheduled.
+  last_announce: number | null;
+  next_announce: number | null;
 }
 
 export interface InspectTorrentResult {

@@ -281,6 +281,8 @@ impl RtorrentRemoteEngine {
                     peers: Some(int(4).max(0) as u32),
                     downloaded: int(5).max(0) as u64,
                     message: String::new(),
+                    last_announce: None,
+                    next_announce: None,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

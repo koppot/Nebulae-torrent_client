@@ -142,6 +142,8 @@ impl ParsedTorrent {
                 peers: None,
                 downloaded: 0,
                 message: "Awaiting announce".to_string(),
+                last_announce: None,
+                next_announce: None,
             })
             .collect();
 

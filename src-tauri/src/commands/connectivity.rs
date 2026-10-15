@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::engine::SharedEngine;
 use crate::models::connectivity::{ConnectivityReport, NatType, PortStatus};
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
@@ -252,4 +253,29 @@ pub async fn get_connectivity_certificate(
 ) -> Result<String, String> {
     let report = run_connectivity_doctor_test(db, engine).await?;
     Ok(report.certificate_text)
+}
+
+/// Live Tailscale (Secure Network) detection for the status bar: reports the
+/// tailnet interface and member IP when the VPN data plane is up.
+#[derive(Debug, Clone, Serialize)]
+pub struct TailscaleStatus {
+    pub connected: bool,
+    pub interface: Option<String>,
+    pub tailnet_ip: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_tailscale_status() -> Result<TailscaleStatus, String> {
+    Ok(match crate::utils::network::detect_tailscale() {
+        Some((interface, tailnet_ip)) => TailscaleStatus {
+            connected: true,
+            interface: Some(interface),
+            tailnet_ip: Some(tailnet_ip),
+        },
+        None => TailscaleStatus {
+            connected: false,
+            interface: None,
+            tailnet_ip: None,
+        },
+    })
 }

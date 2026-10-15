@@ -22,6 +22,11 @@ pub struct TorrentTrackerItem {
     pub peers: Option<u32>,
     pub downloaded: u64,
     pub message: String,
+    // Unix timestamps (seconds). None = never announced / not yet scheduled.
+    #[serde(default)]
+    pub last_announce: Option<i64>,
+    #[serde(default)]
+    pub next_announce: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

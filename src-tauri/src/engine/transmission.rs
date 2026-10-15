@@ -1151,6 +1151,15 @@ impl TorrentEngine for TransmissionTorrentEngine {
                         max_peers = max_peers.max(l);
                     }
 
+                    let last_announce_time = tr
+                        .get("lastAnnounceTime")
+                        .and_then(|v| v.as_i64())
+                        .filter(|&s| s > 0);
+                    let next_announce_time = tr
+                        .get("nextAnnounceTime")
+                        .and_then(|v| v.as_i64())
+                        .filter(|&s| s > 0);
+
                     trackers.push(TorrentTrackerItem {
                         tier: tier as u32,
                         url,
@@ -1167,6 +1176,8 @@ impl TorrentEngine for TransmissionTorrentEngine {
                         } else {
                             "Waiting for announce...".to_string()
                         },
+                        last_announce: last_announce_time,
+                        next_announce: next_announce_time,
                     });
                 }
             }
@@ -1192,7 +1203,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
             items.push(TorrentItem {
                 id,
-                name: meta.and_then(|m| m.display_title.clone()).unwrap_or(name),
+                name: meta
+                    .and_then(|m| m.display_title.clone())
+                    .unwrap_or(name.clone()),
                 total_bytes,
                 downloaded_bytes: downloaded_ever,
                 uploaded_bytes: uploaded_ever,
@@ -1226,7 +1239,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),
                 upload_limit_kib: meta.map(|m| m.upload_limit_kib).unwrap_or(0),
                 ratio_limit: meta.map(|m| m.ratio_limit).unwrap_or(-1.0),
-                media_meta: None,
+                media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
+                    &name.clone(),
+                )),
             });
         }
 
