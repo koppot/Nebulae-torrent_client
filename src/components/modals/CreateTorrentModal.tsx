@@ -23,7 +23,7 @@ export const CreateTorrentModal: React.FC = () => {
   const [isPrivate, setIsPrivate] = useState(true); // Private by default
   const [comment, setComment] = useState('Created with Nebulae');
   const [createdBy, setCreatedBy] = useState('Nebulae Torrent Client 1.0');
-  const [startSeeding, setStartSeeding] = useState(true);
+  const [startSeeding, setStartSeeding] = useState(false); // Opt-in: do not seed unless asked
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
@@ -72,6 +72,13 @@ export const CreateTorrentModal: React.FC = () => {
       .split('\n')
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
+
+    // A torrent without at least one tracker URL is rejected: no .torrent
+    // file is generated until the user enters one.
+    if (trackerList.length === 0) {
+      setStatusMessage({ type: 'err', text: 'Please enter torrent tracker URL' });
+      return;
+    }
 
     // Save tracker URLs so subsequent creations offer the same tracker URLs
     if (trackers.trim()) {

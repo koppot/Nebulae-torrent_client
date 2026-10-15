@@ -402,6 +402,18 @@ pub async fn create_torrent_file(
         ));
     }
 
+    // A torrent without at least one tracker URL is rejected: no .torrent
+    // file is generated until the user enters one (owner requirement).
+    let trackers_clean: Vec<String> = params
+        .trackers
+        .iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if trackers_clean.is_empty() {
+        return Err("Please enter torrent tracker URL".to_string());
+    }
+
     let out_dir = if params.output_path.trim().is_empty() {
         dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
     } else {
@@ -411,13 +423,14 @@ pub async fn create_torrent_file(
     let params_clone = params.clone();
     let source_clone = source.clone();
     let out_dir_clone = out_dir.clone();
+    let trackers_for_build = trackers_clean.clone();
 
     let target_file = tokio::task::spawn_blocking(move || {
         crate::engine::metainfo::build_torrent_file(
             &source_clone,
             &out_dir_clone,
             params_clone.piece_size_kib,
-            &params_clone.trackers,
+            &trackers_for_build,
             params_clone.is_private,
             &params_clone.comment,
             &params_clone.created_by,
