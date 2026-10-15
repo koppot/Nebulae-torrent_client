@@ -266,6 +266,16 @@ if [ "${NEB_SKIP_JRE:-0}" != "1" ]; then
 fi
 
 echo "==> Running smoke test on bundled macOS mpv binary..."
+# BD-J = interactive Blu-ray/UHD menus (owner requirement). libbluray ships
+# from the host brew; assert the copied one actually has BD-J/JVM support,
+# otherwise the bundled JRE has nothing to drive.
+if [ -f "$TARGET_DIR/lib/libbluray.4.dylib" ]; then
+    strings "$TARGET_DIR/lib/libbluray.4.dylib" 2>/dev/null | grep -qi "bd-j" || {
+        echo "ERROR: bundled libbluray lacks BD-J support - interactive Blu-ray/UHD menus would be dead!"
+        exit 1
+    }
+    echo "BD-J support verified in bundled libbluray."
+fi
 if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/|@loader_path|@executable_path'; then
     echo "ERROR: bundled mpv still references libraries outside the bundle;"
     echo "the dylib rewrite failed and the binary would die at dyld on"
