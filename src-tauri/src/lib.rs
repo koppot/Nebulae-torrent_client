@@ -50,6 +50,27 @@ pub fn run() {
 
     let listening_port = settings.listening_port;
 
+    // Stamp the running version into the settings. When a new install takes
+    // over from an older instance, this re-persists the settings with the
+    // new version and any newly introduced defaults applied.
+    let settings = {
+        let mut s = settings;
+        let current = env!("CARGO_PKG_VERSION");
+        if s.app_version.as_deref() != Some(current) {
+            s.app_version = Some(current.to_string());
+            if let Ok(json) = serde_json::to_string(&s) {
+                if db.set_setting("user_settings_json", &json).is_ok() {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "INFO",
+                        &format!("Settings updated for Nebulae v{current}"),
+                    );
+                }
+            }
+        }
+        s
+    };
+
     let rtorrent_server_mode =
         settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty();
 

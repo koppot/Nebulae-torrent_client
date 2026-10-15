@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { AlertTriangle, RefreshCw, Copy, Check, Power } from 'lucide-react';
@@ -7,9 +7,24 @@ interface RecoveryScreenProps {
   error?: string | null;
 }
 
-export const RecoveryScreen: React.FC<RecoveryScreenProps> = () => {
+export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp }) => {
   const [isRestarting, setIsRestarting] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(errorProp ?? null);
+  const [showTechnical, setShowTechnical] = useState(false);
+
+  // Surface the real underlying failure instead of only the generic copy.
+  useEffect(() => {
+    invoke<string | null>('get_engine_init_error')
+      .then((err) => {
+        if (err) setEngineError(err);
+      })
+      .catch(() => {});
+  }, []);
+
+  const isPortConflict =
+    !!engineError &&
+    /(address already in use|addrinuse|os error (48|98|10048))/i.test(engineError);
 
   const handleRestart = async () => {
     setIsRestarting(true);
@@ -76,16 +91,52 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = () => {
 
         {/* Friendly explanation */}
         <div className="p-4 rounded-xl bg-[#141414] border border-[#2e2e2e] text-xs text-[#a3a3a3] leading-relaxed mb-6 text-left space-y-2">
-          <p>
-            The BitTorrent transfer engine could not be initialized on your system. This typically occurs
-            if port 51413 is currently in use by another torrent client, or if file permissions prevent
-            access to the configured download directory.
-          </p>
-          <p>
-            Please verify that other BitTorrent applications are closed, or restart Nebulae to allow the engine
-            to re-bind to its network interface.
-          </p>
+          {isPortConflict ? (
+            <>
+              <p>
+                The engine could not start because its listening port (51413) is already
+                in use. This is almost always another Nebulae instance still running in
+                the menu bar / system tray &mdash; closing the window does not quit
+                Nebulae. It can also be another torrent client on the same port.
+              </p>
+              <p>
+                Quit the other Nebulae instance (tray icon &rarr; Quit Nebulae) or the
+                other torrent client, or pick a different port in Settings, then restart
+                Nebulae.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                The BitTorrent transfer engine could not be initialized on your system. This typically
+                occurs if port 51413 is currently in use by another torrent client, or if file
+                permissions prevent access to the configured download directory.
+              </p>
+              <p>
+                Please verify that other BitTorrent applications are closed, or restart Nebulae to
+                allow the engine to re-bind to its network interface.
+              </p>
+            </>
+          )}
         </div>
+
+        {/* Real underlying error */}
+        {engineError && (
+          <div className="mb-6 text-left">
+            <button
+              type="button"
+              onClick={() => setShowTechnical(!showTechnical)}
+              className="text-[11px] text-[#737373] hover:text-[#a3a3a3] transition"
+            >
+              {showTechnical ? 'Hide technical details' : 'Show technical details'}
+            </button>
+            {showTechnical && (
+              <pre className="mt-2 p-3 rounded-lg bg-[#141414] border border-[#2e2e2e] text-[10px] leading-relaxed text-[#c8a2a2] whitespace-pre-wrap break-words max-h-32 overflow-y-auto font-mono">
+                {engineError}
+              </pre>
+            )}
+          </div>
+        )}
 
         {/* Primary and Secondary Actions */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full">

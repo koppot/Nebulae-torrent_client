@@ -132,6 +132,12 @@ pub struct UserSettings {
     pub rtorrent_server_enabled: bool,
     pub rtorrent_server_url: String,
     pub rtorrent_server_token: String,
+
+    // 10. Internal bookkeeping
+    /// Version of Nebulae that last persisted these settings. When a new
+    /// install takes over, settings are re-persisted with the new version
+    /// and any newly applied defaults.
+    pub app_version: Option<String>,
 }
 
 impl Default for UserSettings {
@@ -266,6 +272,9 @@ impl Default for UserSettings {
             rtorrent_server_enabled: false,
             rtorrent_server_url: String::new(),
             rtorrent_server_token: String::new(),
+
+            // 10. Internal bookkeeping
+            app_version: None,
         }
     }
 }

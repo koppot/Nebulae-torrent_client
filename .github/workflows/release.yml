@@ -12,7 +12,60 @@ on:
         default: 'v0.9.0'
 
 jobs:
+  # Create the release FIRST with exactly one canonical body. The per-platform
+  # jobs then upload only their renamed, deduplicated artifacts - tauri-action
+  # no longer creates releases or uploads raw duplicate bundles, which had
+  # made the asset list confusing (two copies of every bundle).
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
+        run: |
+          cat > release-body.md <<'BODY'
+          ## Nebulae — Torrent Client by Asian DVD Club (@TAG@)
+
+          Native cross-platform torrent client for reliable, high-scale seeding on Windows, macOS, and Linux.
+
+          ### Shipped Packages & Executables
+          - **Linux x86_64 (Ubuntu 22.04+ / Debian 12+ era, glibc >= 2.35)**:
+            - Debian Package: `Nebulae-Linux-x86_64.deb` (`.deb`)
+            - RPM Package: `Nebulae-Linux-x86_64.rpm` (`.rpm`)
+            - Portable AppImage: `Nebulae-Linux-x86_64.AppImage` (`.AppImage`)
+            - Standalone Binary: `nebulae-linux-x86_64`
+          - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
+          - **Windows x64 Executable**: `nebulae.exe`
+          - **macOS Apple Silicon (M1/M2/M3/M4/M5)**:
+            - `Nebulae-macOS-arm64.dmg` (standard disk image)
+            - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-arm64.dmg-app.tar.gz` (silent auto-update payload)
+          - **macOS Intel (x86_64)**:
+            - `Nebulae-macOS-x64.dmg` (standard disk image)
+            - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-x64.dmg-app.tar.gz` (silent auto-update payload)
+
+          ### Embedded Optical Disc Cinema Engine
+          - Bundled self-contained media player (`mpv` + `libbluray` + `libdvdnav` + bundled JRE) with native DVD, Blu-ray, and 4K UHD interactive menu playback.
+          - Zero third-party player dependencies required on a clean OS; Nebulae uses only its bundled engine.
+          - Commercial encrypted discs (AACS/BD+) require prior decryption; raw image dumps and unprotected disc structures are fully supported.
+
+          ### Windows code signing status
+          Windows artifacts (`Nebulae-Setup-x64.exe`, `nebulae.exe`) in this release are **unsigned builds**: the SignPath Foundation application was declined (insufficient project history) and no other signing provider is configured. SmartScreen will warn on first run — see the [installation guide](docs/installation.md). Per-release status: `WINDOWS-SIGNING-STATUS.txt`; verify downloads against `SHA256SUMS.txt`.
+
+          ### Verification
+          All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
+
+          Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
+          BODY
+          sed -i "s/@TAG@/$TAG/g" release-body.md
+          gh release create "$TAG" --title "Nebulae $TAG" --notes-file release-body.md --latest
+
   build-release:
+    needs: create-release
     permissions:
       contents: write
     env:
@@ -159,55 +212,14 @@ jobs:
           tar -czf "$NAME.tar.gz" "$NAME"
           pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$(pwd)/$NAME.tar.gz"
 
+      # Direct build (replaces tauri-action, which also created the release
+      # and uploaded raw, unrenamed bundles alongside the canonical renamed
+      # artifacts - the duplicate asset list confusion). The release itself
+      # is created by the create-release job; canonical assets are uploaded
+      # by the platform prepare steps below.
       - name: Build Tauri Application
         if: runner.os != 'Linux'
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event.inputs.tag_name || github.ref_name }}
-          releaseName: 'Nebulae ${{ github.event.inputs.tag_name || github.ref_name }}'
-          args: ${{ matrix.args }}
-          releaseBody: |
-            ## Nebulae — Torrent Client by Asian DVD Club (${{ github.event.inputs.tag_name || github.ref_name }})
-            
-            Native cross-platform torrent client for reliable, high-scale seeding on Windows, macOS, and Linux.
-            
-            ### Shipped Packages & Executables
-            - **Linux x86_64 (Ubuntu 22.04+ / Debian 12+)**:
-              - Debian Package: `Nebulae-Linux-x86_64.deb` (`.deb`)
-              - RPM Package: `Nebulae-Linux-x86_64.rpm` (`.rpm`)
-              - Portable AppImage: `Nebulae-Linux-x86_64.AppImage` (`.AppImage`)
-              - Standalone Binary: `nebulae-linux-x86_64`
-            - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
-            - **Windows x64 Executable**: `nebulae.exe`
-            - **macOS Apple Silicon (M1/M2/M3/M4/M5)**:
-              - `Nebulae-macOS-arm64.dmg` (standard disk image)
-              - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
-              - `Nebulae-macOS-arm64.dmg-app.zip` (direct application bundle)
-            - **macOS Intel (x86_64)**:
-              - `Nebulae-macOS-x64.dmg` (standard disk image)
-              - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
-              - `Nebulae-macOS-x64.dmg-app.zip` (direct application bundle)
-            
-            ### Embedded Optical Disc Cinema Engine
-            - Bundled standalone media player (`mpv` + `libbluray` + `libdvdnav`) with native DVD, Blu-ray, and 4K UHD interactive menu playback.
-            - Zero third-party player dependencies required on a clean OS.
-            - Full BD-J Java menu support when a system JRE (`JAVA_HOME`) is present.
-            - Commercial encrypted discs (AACS/BD+) require prior decryption; raw image dumps and unprotected disc structures are fully supported.
-            
-            ### Windows code signing status
-            Windows artifacts (`Nebulae-Setup-x64.exe`, `nebulae.exe`) in this release are **unsigned beta builds**: the SignPath Foundation application was declined (insufficient project history) and no other signing provider is configured. SmartScreen will warn on first run — see the [installation guide](docs/installation.md). Per-release status: `WINDOWS-SIGNING-STATUS.txt`; verify downloads against `SHA256SUMS.txt`.
-
-            ### Verification
-            All packages are cataloged in `SHA256SUMS.txt` with individual `.sha256` checksums.
-            
-            Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
-          releaseDraft: false
-          # Must NOT be a prerelease: the in-app updater endpoint is GitHub's
-          # /releases/latest/download/latest.json, which never resolves
-          # prereleases or drafts.
-          prerelease: false
+        run: pnpm tauri build ${{ matrix.args }}
 
       # --- Windows code signing (provider-neutral gate) --------------------------
       # WINDOWS_SIGN_PROVIDER selects the provider. Unset/'none'/'unsigned' skips
@@ -448,6 +460,19 @@ jobs:
             } else {
               Write-Host "Skipping $name - not produced."
             }
+          }
+
+          # Updater signature for the FINAL installer bytes (previously provided
+          # incidentally by tauri-action's raw asset upload; the manifest reads
+          # the canonical name). Signing is deterministic for the same key.
+          if (Test-Path 'Nebulae-Setup-x64.exe') {
+            pnpm tauri signer sign -k $env:TAURI_SIGNING_PRIVATE_KEY -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD 'Nebulae-Setup-x64.exe'
+            if (Test-Path 'Nebulae-Setup-x64.exe.sig') {
+              gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
+            } else {
+              Write-Host 'WARNING: Nebulae-Setup-x64.exe.sig was not produced - windows updater entry will be missing.'
+            }
+          }
           }
 
           # Machine-readable signing status for this release.

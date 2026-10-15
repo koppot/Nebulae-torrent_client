@@ -89,6 +89,117 @@ fn resolve_output_folder(
     Ok(Some(joined.to_string_lossy().to_string()))
 }
 
+/// Instance lock: identifies the process currently owning the engine
+/// (listening port + persistence files) and the app version that wrote it.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct InstanceLock {
+    pid: u32,
+    version: String,
+}
+
+fn instance_lock_file(engine_dir: &std::path::Path) -> PathBuf {
+    engine_dir.join("engine.lock")
+}
+
+/// Returns the process name for a pid, or None if the process does not exist.
+fn process_name(pid: u32) -> Option<String> {
+    if cfg!(windows) {
+        let out = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let first = stdout.trim().lines().next()?.trim();
+        if first.is_empty() || first.to_lowercase().contains("info:") {
+            return None;
+        }
+        let name = first.trim_matches('"').split("\",\"").next()?.to_string();
+        (!name.is_empty()).then_some(name)
+    } else {
+        let out = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!stdout.is_empty()).then_some(stdout)
+    }
+}
+
+fn name_looks_like_nebulae(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let base = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+    base.contains("nebulae")
+}
+
+/// Terminates a previous Nebulae instance that is still alive (closing the
+/// window only hides it to the tray). When a new version is installed and
+/// launched, the old daemon must not keep holding the listening port and
+/// persistence files - the new instance takes over automatically.
+///
+/// PIDs can be recycled after a crash, so the kill only happens when the
+/// recorded process actually looks like Nebulae; stale locks are discarded.
+fn take_over_previous_instance(engine_dir: &std::path::Path) {
+    let lock_path = instance_lock_file(engine_dir);
+    let Ok(content) = std::fs::read_to_string(&lock_path) else {
+        return;
+    };
+    let Ok(lock) = serde_json::from_str::<InstanceLock>(&content) else {
+        let _ = std::fs::remove_file(&lock_path);
+        return;
+    };
+    let current = std::process::id();
+    if lock.pid == current || lock.pid == 0 {
+        return;
+    }
+
+    let Some(name) = process_name(lock.pid) else {
+        // Previous instance already exited; refresh the lock below.
+        return;
+    };
+    if !name_looks_like_nebulae(&name) {
+        // Pid was recycled by an unrelated process; drop the stale lock.
+        let _ = std::fs::remove_file(&lock_path);
+        return;
+    }
+
+    let kill = if cfg!(windows) {
+        std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &lock.pid.to_string()])
+            .status()
+    } else {
+        std::process::Command::new("kill")
+            .args(["-TERM", &lock.pid.to_string()])
+            .status()
+    };
+
+    if kill.map(|s| s.success()).unwrap_or(false) {
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if process_name(lock.pid).is_none() {
+                break;
+            }
+        }
+        tracing::info!(
+            "Automatically terminated the previously active Nebulae instance (pid {}, version {}) so this install can take over the engine",
+            lock.pid,
+            lock.version
+        );
+    }
+}
+
+fn write_instance_lock(engine_dir: &std::path::Path) {
+    let lock = InstanceLock {
+        pid: std::process::id(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&lock) {
+        let _ = std::fs::write(instance_lock_file(engine_dir), json);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingMagnet {
     pub raw_url: String,
@@ -118,6 +229,12 @@ impl RqbitTorrentEngine {
         let _ = std::fs::create_dir_all(&paths.engine_dir);
         let _ = std::fs::create_dir_all(&default_download_dir);
 
+        // A previous instance may still be alive in the tray/menu bar (closing
+        // the window does not quit Nebulae), for example after installing an
+        // update. Terminate it so this instance owns the listening port
+        // (DHT UDP socket) and the persistence files, then take over.
+        take_over_previous_instance(&paths.engine_dir);
+
         let mut session_opts = SessionOptions {
             persistence: Some(SessionPersistenceConfig::Json {
                 folder: Some(paths.engine_dir.clone()),
@@ -142,6 +259,11 @@ impl RqbitTorrentEngine {
             Session::new_with_opts(default_download_dir, session_opts).await
         })
         .map_err(|e| format!("Failed to initialize librqbit session: {e:#}"))?;
+
+        // Record this instance's lock only after the session bound
+        // successfully; stale locks from crashed processes are replaced on
+        // the next start.
+        write_instance_lock(&paths.engine_dir);
 
         let cached_meta = db.list_all_torrent_metadata().unwrap_or_default();
 

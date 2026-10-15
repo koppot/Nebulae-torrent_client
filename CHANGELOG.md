@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-15
+
+### Fixed
+- **Second Instance Fought Over the Listening Port (Recovery Screen)**:
+  - Closing the window only hides Nebulae to the tray, so launching it again (for example right after installing an update) started a second process whose engine could not bind port 51413 (`Address already in use`), landing in the recovery screen. A new instance now automatically terminates the previously active Nebulae daemon (identified via an instance lock file, with PID-recycle protection) and takes over the engine port and persistence files.
+  - When the takeover happens across versions, the persisted settings are re-stamped with the new version (and any newly introduced defaults), so settings are updated by the new install.
+
+### Added
+- **Honest Recovery Screen**: the recovery screen now fetches and displays the actual engine initialization error (collapsible technical details) and, for port conflicts, explains precisely that a Nebulae instance is likely still alive in the menu bar/tray or another client holds the port - instead of generic static advice only.
+
+### Changed
+- **Release Page Deduplicated**: the release workflow no longer uploads raw, unrenamed bundles through tauri-action alongside the canonical renamed artifacts (which made the release page show two copies of nearly every file). The release is created by a dedicated job with the canonical body, and only the canonical asset set is uploaded (Windows installer + standalone + updater signature, two macOS disk images + updater payloads, Linux deb/rpm/AppImage/standalone, latest.json, checksums, signing status).
+
 ## [0.9.0] - 2026-10-14
 
 Release consolidation: all earlier `v0.1.0-beta.*` releases were removed from
