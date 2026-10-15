@@ -38,7 +38,13 @@ trap 'rm -rf "$WORK"' EXIT
 
 # 1. Preserve the original AppImage runtime prefix.
 OFFSET="$("$APPIMAGE" --appimage-offset)"
-dd if="$APPIMAGE" of="$WORK/runtime" bs="$OFFSET" skip=1 status=none
+# count=1 copies the FIRST block (the runtime ELF); skip=1 would copy the
+# payload instead and corrupt the repacked image.
+dd if="$APPIMAGE" of="$WORK/runtime" bs="$OFFSET" count=1 status=none
+head -c 4 "$WORK/runtime" | grep -q $'\x7fELF' || {
+    echo "ERROR: runtime extraction failed (no ELF magic at offset 0)"
+    exit 1
+}
 
 # 2. Extract the payload, add the player, and repack with the same runtime.
 rm -rf squashfs-root
@@ -49,6 +55,10 @@ rm -rf squashfs-root/usr/lib/nebulae/resources/player
 mksquashfs squashfs-root "$WORK/payload.squashfs" -root-owned -noappend
 cat "$WORK/runtime" "$WORK/payload.squashfs" > "$APPIMAGE.new"
 chmod +x "$APPIMAGE.new"
+head -c 4 "$APPIMAGE.new" | grep -q $'\x7fELF' || {
+    echo "ERROR: repacked AppImage has no ELF magic at offset 0"
+    exit 1
+}
 mv "$APPIMAGE.new" "$APPIMAGE"
 rm -rf squashfs-root
 
