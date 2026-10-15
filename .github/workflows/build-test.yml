@@ -1,0 +1,315 @@
+name: Build Test Artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'ag/transmission-engine'
+
+jobs:
+  build-test:
+    permissions:
+      contents: read
+    env:
+      WINDOWS_SIGN_PROVIDER: 'none'
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'ubuntu-22.04'
+            target: 'x86_64-unknown-linux-gnu'
+            args: ''
+            artifact_name: 'Nebulae-Linux-x86_64'
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-arm64.dmg'
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            args: '--target x86_64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-x64.dmg'
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            args: ''
+            artifact_name: 'Nebulae-Setup-x64.exe'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js & pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies for Linux (Ubuntu 22.04 pinned baseline)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            squashfs-tools \
+            patchelf \
+            rpm \
+            dpkg \
+            binutils \
+            xvfb \
+            desktop-file-utils \
+            mpv \
+            libdvdnav4 \
+            libbluray2
+
+      - name: Cache cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Temurin JDK 21 (bundled JRE for BD-J/UHD menus)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Bundle optical disc player (Windows x64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/bundle-windows-mpv.ps1
+
+      - name: Bundle optical disc player (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/bundle-linux-mpv.sh
+
+      - name: Install mpv on macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv || brew upgrade mpv || true
+
+      - name: Bundle optical disc player (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/bundle-macos-mpv.sh
+
+      - name: Bundle transmission-daemon engine (Windows x64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/bundle-windows-transmission.ps1
+
+      - name: Bundle transmission-daemon engine (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/bundle-linux-transmission.sh
+
+      - name: Install transmission-cli on macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          brew install transmission-cli || brew upgrade transmission-cli || true
+
+      - name: Bundle transmission-daemon engine (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/bundle-macos-transmission.sh
+
+      # --- Linux split build ------------------------------------------------
+      - name: Build Linux packages with bundled player (deb, rpm)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build --bundles deb,rpm
+
+      - name: Build Linux AppImage without player/engine resources
+        if: runner.os == 'Linux'
+        run: |
+          rm -rf src-tauri/player-staging
+          mv src-tauri/resources/player src-tauri/player-staging
+          rm -rf src-tauri/transmission-staging-appimage
+          mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          pnpm tauri build --bundles appimage
+
+      - name: Inject bundled player + engine into AppImage
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/appimage-inject-player.sh
+          APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
+          OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
+          dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
+          "$APPIMAGE_PATH" --appimage-extract > /dev/null
+          mkdir -p squashfs-root/usr/share/nebulae/resources/engine
+          rm -rf squashfs-root/usr/share/nebulae/resources/engine
+          cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
+            echo "ERROR: transmission-daemon missing from AppImage engine staging"
+            find squashfs-root/usr/share/nebulae/resources/ -maxdepth 3 | head -30
+            exit 1
+          fi
+          mksquashfs squashfs-root /tmp/appimage-payload.squashfs -root-owned -noappend
+          cat /tmp/appimage-runtime /tmp/appimage-payload.squashfs > "$APPIMAGE_PATH.new"
+          chmod +x "$APPIMAGE_PATH.new"
+          mv "$APPIMAGE_PATH.new" "$APPIMAGE_PATH"
+          rm -rf squashfs-root
+          LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
+          printf '%s\n' "$LISTING" | grep -q "resources/player/mpv" || { echo "ERROR: mpv missing from repacked AppImage"; exit 1; }
+          printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
+          echo "SUCCESS: player + engine injected into $APPIMAGE_PATH"
+
+      # --- macOS / Windows Build --------------------------------------------
+      - name: Build Tauri Application
+        if: runner.os != 'Linux'
+        run: pnpm tauri build ${{ matrix.args }}
+
+      # --- Prepare Artifacts (macOS) ----------------------------------------
+      - name: Prepare Named Artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
+          DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          ICON_PATH="$(pwd)/src-tauri/icons/icon.icns"
+          DMG_NAME="${{ matrix.artifact_name }}"
+          DMG_ABS="$(pwd)/$DMG_NAME"
+
+          echo "=== Building DMG with Embedded Volume Icon ==="
+          if [ -n "$APP_DIR" ]; then
+            STAGING_DIR=$(mktemp -d)
+            cp -R "$APP_DIR" "$STAGING_DIR/Nebulae.app"
+            ln -s /Applications "$STAGING_DIR/Applications"
+            cp "$ICON_PATH" "$STAGING_DIR/.VolumeIcon.icns"
+            SetFile -c icnC "$STAGING_DIR/.VolumeIcon.icns" || true
+            rm -f "$DMG_NAME" "$DMG_NAME.rw.dmg"
+            hdiutil create -volname "Nebulae" -srcfolder "$STAGING_DIR" -fs HFS+ -ov -format UDRW "$DMG_NAME.rw.dmg"
+            DMG_MNT="$(mktemp -d)/volume"
+            hdiutil attach "$DMG_NAME.rw.dmg" -mountpoint "$DMG_MNT" -nobrowse -noautoopen
+            SetFile -a C "$DMG_MNT"
+            hdiutil detach "$DMG_MNT"
+            hdiutil convert "$DMG_NAME.rw.dmg" -format UDZO -o "$DMG_NAME" -ov
+            rm -rf "$STAGING_DIR" "$DMG_NAME.rw.dmg"
+            DMG_VERIFY_MNT="$(mktemp -d)/volume"
+            hdiutil attach "$DMG_NAME" -mountpoint "$DMG_VERIFY_MNT" -nobrowse -readonly
+            xattr -l "$DMG_VERIFY_MNT" 2>/dev/null | grep -q "com.apple.FinderInfo" || {
+              echo "ERROR: custom icon flag missing from DMG volume"
+              hdiutil detach "$DMG_VERIFY_MNT" || true
+              exit 1
+            }
+            hdiutil detach "$DMG_VERIFY_MNT"
+            echo "DMG volume icon verified."
+          elif [ -n "$DMG_FILE" ]; then
+            cp "$DMG_FILE" "$DMG_NAME"
+          fi
+
+          if [ -f "$DMG_NAME" ]; then
+            shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
+          fi
+
+          if [ -n "$APP_DIR" ]; then
+            APP_ZIP="$DMG_NAME-app.zip"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ZIP"
+            shasum -a 256 "$APP_ZIP" > "$APP_ZIP.sha256"
+          fi
+
+          mkdir -p artifacts/
+          cp "$DMG_NAME" "$DMG_NAME.sha256" "$APP_ZIP" "$APP_ZIP.sha256" artifacts/
+
+      - name: Upload macOS Artifacts
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulae-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+      # --- Prepare Artifacts (Windows) --------------------------------------
+      - name: Prepare Named Artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
+          $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
+          if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
+
+          New-Item -ItemType Directory -Force -Path artifacts
+
+          foreach ($name in @('Nebulae-Setup-x64.exe', 'nebulae.exe')) {
+            if (Test-Path $name) {
+              $hash = (Get-FileHash -Path $name -Algorithm SHA256).Hash.ToLower()
+              "$hash  $name" | Out-File -FilePath "$name.sha256" -Encoding utf8
+              Copy-Item $name "artifacts/$name"
+              Copy-Item "$name.sha256" "artifacts/$name.sha256"
+            }
+          }
+
+      - name: Upload Windows Artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulae-windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+      # --- Prepare Artifacts (Linux) ----------------------------------------
+      - name: Prepare Named Artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          DEB_FILE=$(find src-tauri/target -name "*.deb" -type f | head -n 1)
+          RPM_FILE=$(find src-tauri/target -name "*.rpm" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -name "*.AppImage" -type f | head -n 1)
+          BINARY_FILE=$(find src-tauri/target/release -maxdepth 1 -name "nebulae" -type f | head -n 1)
+
+          mkdir -p artifacts
+
+          if [ -n "$DEB_FILE" ]; then
+            cp "$DEB_FILE" "Nebulae-Linux-x86_64.deb"
+            sha256sum "Nebulae-Linux-x86_64.deb" > "Nebulae-Linux-x86_64.deb.sha256"
+            cp "Nebulae-Linux-x86_64.deb" "Nebulae-Linux-x86_64.deb.sha256" artifacts/
+          fi
+
+          if [ -n "$RPM_FILE" ]; then
+            cp "$RPM_FILE" "Nebulae-Linux-x86_64.rpm"
+            sha256sum "Nebulae-Linux-x86_64.rpm" > "Nebulae-Linux-x86_64.rpm.sha256"
+            cp "Nebulae-Linux-x86_64.rpm" "Nebulae-Linux-x86_64.rpm.sha256" artifacts/
+          fi
+
+          if [ -n "$APPIMAGE_FILE" ]; then
+            cp "$APPIMAGE_FILE" "Nebulae-Linux-x86_64.AppImage"
+            chmod +x "Nebulae-Linux-x86_64.AppImage"
+            sha256sum "Nebulae-Linux-x86_64.AppImage" > "Nebulae-Linux-x86_64.AppImage.sha256"
+            cp "Nebulae-Linux-x86_64.AppImage" "Nebulae-Linux-x86_64.AppImage.sha256" artifacts/
+          fi
+
+          if [ -n "$BINARY_FILE" ]; then
+            cp "$BINARY_FILE" "nebulae-linux-x86_64"
+            chmod +x "nebulae-linux-x86_64"
+            sha256sum "nebulae-linux-x86_64" > "nebulae-linux-x86_64.sha256"
+            cp "nebulae-linux-x86_64" "nebulae-linux-x86_64.sha256" artifacts/
+          fi
+
+      - name: Upload Linux Artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nebulae-linux-x86_64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
