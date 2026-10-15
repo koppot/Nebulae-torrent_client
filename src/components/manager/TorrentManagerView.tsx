@@ -306,6 +306,17 @@ export const TorrentManagerView: React.FC = () => {
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || filteredTorrents[0];
 
+  // Announce/scrape status for the General tab: prefer a tracker that is not
+  // working (its failure message is what the user needs to see), otherwise
+  // the first tracker's live message from the engine's scrape loop.
+  const announceStatus = (() => {
+    const trackers = selectedTorrent?.trackers ?? [];
+    if (trackers.length === 0) return 'No trackers';
+    const failing = trackers.find((tr) => tr.status !== 'Working');
+    const pick = failing ?? trackers[0];
+    return pick.message || 'No announce info';
+  })();
+
   // Sample the selected torrent's rates on a fixed 1s cadence. Triggering on
   // value CHANGE froze the timeline during quiet periods (smoothed rates sit
   // at exactly 0 between bursts, so deps never changed and the graph stopped
@@ -366,22 +377,6 @@ export const TorrentManagerView: React.FC = () => {
       folderPath,
       currentName: folderName,
       newName: folderName,
-      savePath: selectedTorrent.save_path,
-    });
-  };
-
-  const openRenameFileModal = (fileIndex: number, currentFilePath: string) => {
-    if (!selectedTorrent) return;
-    setRenameError(null);
-    const parts = currentFilePath.replace(/\\/g, '/').split('/');
-    const baseName = parts[parts.length - 1] || currentFilePath;
-    setRenameModal({
-      isOpen: true,
-      type: 'file',
-      id: selectedTorrent.id,
-      fileIndex,
-      currentName: baseName,
-      newName: baseName,
       savePath: selectedTorrent.save_path,
     });
   };
@@ -523,15 +518,25 @@ export const TorrentManagerView: React.FC = () => {
 
             <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
               {!isRemoteServer && (
-                <button
-                  type="button"
-                  onClick={() => openRenameFolderModal(node.path, node.name)}
-                  className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                  title={`Rename Folder "${node.name}" on disk`}
-                >
-                  <Edit2 className="w-3 h-3 text-[#e50914]" />
-                  <span>Rename Folder</span>
-                </button>
+                node.path.includes('/') ? (
+                  <span
+                    className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                    title="Nested folders cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
+                  >
+                    <Edit2 className="w-3 h-3 text-[#525252]" />
+                    <span>Rename Folder</span>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openRenameFolderModal(node.path, node.name)}
+                    className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                    title={`Rename the torrent folder "${node.name}" on disk (detaches, renames, re-verifies data)`}
+                  >
+                    <Edit2 className="w-3 h-3 text-[#e50914]" />
+                    <span>Rename Folder</span>
+                  </button>
+                )
               )}
             </div>
           </div>
@@ -592,15 +597,13 @@ export const TorrentManagerView: React.FC = () => {
             </button>
           )}
           {!isRemoteServer && (
-            <button
-              type="button"
-              onClick={() => openRenameFileModal(file.index, file.name)}
-              className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-              title={`Rename File "${node.name}" on disk`}
+            <span
+              className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+              title="Individual files cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
             >
-              <Edit2 className="w-3 h-3 text-[#e50914]" />
+              <Edit2 className="w-3 h-3 text-[#525252]" />
               <span>Rename File</span>
-            </button>
+            </span>
           )}
         </div>
       </div>
@@ -771,11 +774,10 @@ export const TorrentManagerView: React.FC = () => {
                     <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
                     <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
                     <td className="py-2 px-2.5 text-white">
-                      {/* librqbit (local mode) cannot count connected seeds -
-                          the peer API exposes no seed flag (Transmission shows
-                          "?" for unknown; we show a dash). rtorrent/remote
-                          report real values. */}
-                      {isRemoteServer ? t.seeds : '—'}
+                      {/* Seed counts come from the engine's tracker scrape
+                          (librqbit exposes no connected-seed API). Falls back
+                          to 1 when finished/0 while the first scrape lands. */}
+                      {t.seeds}
                     </td>
                     <td className="py-2 px-2.5">{t.peers}</td>
                   </tr>
@@ -874,6 +876,17 @@ export const TorrentManagerView: React.FC = () => {
                       </span>
                       <span className="text-white truncate block max-w-xs font-mono text-[10px]">
                         {selectedTorrent.info_hash}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                        Tracker Status
+                      </span>
+                      <span
+                        className="text-white text-[11px] truncate block max-w-xs"
+                        title={announceStatus}
+                      >
+                        {announceStatus}
                       </span>
                     </div>
                     {!isRemoteServer && (
@@ -1102,15 +1115,13 @@ export const TorrentManagerView: React.FC = () => {
                                 </button>
                               )}
                               {!isRemoteServer && (
-                                <button
-                                  type="button"
-                                  onClick={() => openRenameFileModal(file.index, file.name)}
-                                  className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                                  title="Rename File on Disk"
+                                <span
+                                  className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                                  title="Individual files cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
                                 >
-                                  <Edit2 className="w-3 h-3 text-[#e50914]" />
+                                  <Edit2 className="w-3 h-3 text-[#525252]" />
                                   <span>Rename</span>
-                                </button>
+                                </span>
                               )}
                             </div>
                           </div>

@@ -98,6 +98,7 @@ pub fn run() {
             Arc::clone(&db),
             download_dir.clone(),
             listening_port,
+            settings.enable_upnp,
         ) {
             Ok(real_engine) => {
                 SafeLogger::log_to_file(
@@ -121,6 +122,7 @@ pub fn run() {
                     Arc::clone(&db),
                     download_dir,
                     listening_port,
+                    settings.enable_upnp,
                 ) {
                     Ok(real_engine) => {
                         SafeLogger::log_to_file(

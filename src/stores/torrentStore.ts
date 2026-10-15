@@ -413,49 +413,16 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     });
   },
 
+  // Renames must surface engine errors (unsupported renames, name clashes,
+  // disk failures) in the modal - no optimistic UI faking.
   renameTorrentFile: async (id: string, fileIndex: number, newFileName: string) => {
-    try {
-      await invoke('rename_torrent_file', { id, fileIndex, newFileName });
-      await get().fetchTorrents();
-    } catch {
-      //
-      set({
-        torrents: get().torrents.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                files: t.files.map((f) => (f.index === fileIndex ? { ...f, name: newFileName } : f)),
-              }
-            : t
-        ),
-      });
-    }
+    await invoke('rename_torrent_file', { id, fileIndex, newFileName });
+    await get().fetchTorrents();
   },
 
   renameTorrentFolder: async (id: string, oldFolderPath: string, newFolderName: string) => {
-    try {
-      await invoke('rename_torrent_folder', { id, oldFolderPath, newFolderName });
-      await get().fetchTorrents();
-    } catch {
-      // Offline fallback
-      const oldNorm = oldFolderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-      const oldPrefix = `${oldNorm}/`;
-      set({
-        torrents: get().torrents.map((t) => {
-          if (t.id !== id) return t;
-          return {
-            ...t,
-            files: t.files.map((f) => {
-              const norm = f.name.replace(/\\/g, '/');
-              if (norm.startsWith(oldPrefix)) {
-                return { ...f, name: `${newFolderName}/${norm.slice(oldPrefix.length)}` };
-              }
-              return f;
-            }),
-          };
-        }),
-      });
-    }
+    await invoke('rename_torrent_folder', { id, oldFolderPath, newFolderName });
+    await get().fetchTorrents();
   },
 
   createTorrent: async (params: CreateTorrentParams) => {

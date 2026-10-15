@@ -375,3 +375,35 @@ fixes land in v0.9.1 in ONE release; validation gate = pnpm build
 (pwsh brace, squashfs listing stream, rust-cache staging nesting); the
 DMG icon root cause (APFS + flag on srcfolder no-op) is fixed with CI
 verification. Next version AFTER 0.9.1 ships = 0.9.1.1 (owner).
+
+## 2026-10-15 (Droid) — v0.9.1 wave 2: scrape seeds/messages, UPnP, honest rename
+1. INDEPENDENT ANALYSIS CONFIRMED (owner-supplied librqbit findings): (a)
+   tracker-comms marks complete/incomplete dead_code and discards announce
+   swarm counts; (b) engine had enable_upnp_port_forwarding: false with a
+   comment deferring to a nonexistent "Phase 4"; (c) peer count ignored
+   connecting/seen queues.
+2. TRACKER SCRAPE LAYER (engine): per-torrent spawned task scrapes every
+   tracker (announce->scrape mapping, hand-rolled bencode parser because
+   serde_bencode rejects BINARY info-hash keys in scrape dicts - real
+   scrape responses are keyed by raw 20-byte hashes), 120s cadence, 600s
+   error backoff, results merged into list_torrents tracker items (real
+   seeds/peers + status message incl. failure reasons) and the seeds
+   column (max across trackers). General tab gained a Tracker Status
+   cell. Replaces the interim dash and the hardcoded "Announce OK".
+3. UPnP: RqbitTorrentEngine::new takes enable_upnp (UserSettings
+   .enable_upnp, default on) and passes it to ListenerOptions. The
+   connectivity screen's "UPnP active" wording now corresponds to an
+   actual mapping request. Applies on restart like the listen port.
+4. PEER COUNT: live + connecting (AggregatePeerStats) so queued connect
+   attempts are visible.
+5. RENAME (owner: no-op stubs unacceptable): librqbit 9.0.1 has NO path
+   remap API; bare disk rename + recheck would re-download. Top-level
+   folder rename = real: export metainfo bytes -> session.delete(id,
+   false) -> fs::rename -> re-add pinned at the new dir
+   (add_torrent_bytes_at; must NOT re-derive <base>/<old-name>) ->
+   force_recheck -> restore display title/save_path. Files + nested
+   folders: removed from UI (tooltip explains librqbit limitation) and
+   engine returns loud errors as backstop. Store optimistic-fake rename
+   fallbacks deleted (errors surface in the modal).
+6. Tests +5 (scrape parse/url/info-hash) = 79; cargo fmt/clippy -D
+   warnings/pnpm build (lint+tsc+vite) all green. Re-tagged v0.9.1.

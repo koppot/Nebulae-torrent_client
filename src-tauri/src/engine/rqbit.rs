@@ -217,14 +217,45 @@ pub struct RqbitTorrentEngine {
     bound_interface: Arc<Mutex<Option<String>>>,
     metadata_cache: Arc<Mutex<HashMap<String, TorrentDbMetadata>>>,
     pending_magnets: Arc<Mutex<HashMap<String, PendingMagnet>>>,
+    /// Live tracker-scrape results per torrent id (real swarm seed/peer
+    /// counts and per-tracker status messages for the UI).
+    tracker_scrapes: Arc<Mutex<HashMap<String, Vec<TrackerScrapeInfo>>>>,
+    /// Torrent ids whose scrape loop has already been spawned.
+    scrape_tasks_spawned: Arc<Mutex<HashSet<String>>>,
 }
 
 impl RqbitTorrentEngine {
+    /// Adds metainfo bytes to the session pinned to an explicit output
+    /// folder (used by the folder-rename flow, which must not re-derive
+    /// `<base>/<name>` from the metadata's OLD root name).
+    fn add_torrent_bytes_at(&self, bytes: &[u8], output_folder: &str) -> Result<String, String> {
+        let opts = AddTorrentOptions {
+            output_folder: Some(output_folder.to_string()),
+            overwrite: true,
+            ..Default::default()
+        };
+        let add = AddTorrent::TorrentFileBytes(bytes.to_vec().into());
+        let res = tauri::async_runtime::block_on(async {
+            self.session.add_torrent(add, Some(opts)).await
+        })
+        .map_err(|e| format!("Failed to attach torrent to librqbit session: {e:#}"))?;
+        let handle = res
+            .into_handle()
+            .ok_or_else(|| "Torrent attached but handle was not created".to_string())?;
+        let info_hash = handle.info_hash().as_string();
+        if let Some(meta) = self.metadata_cache.lock().unwrap().get_mut(&info_hash) {
+            meta.save_path = Some(output_folder.to_string());
+            let _ = self.db.upsert_torrent_metadata(meta);
+        }
+        Ok(info_hash)
+    }
+
     pub fn new(
         paths: Arc<AppPaths>,
         db: Arc<Database>,
         default_download_dir: PathBuf,
         listening_port: u16,
+        enable_upnp: bool,
     ) -> Result<Self, String> {
         let _ = std::fs::create_dir_all(&paths.engine_dir);
         let _ = std::fs::create_dir_all(&default_download_dir);
@@ -250,7 +281,11 @@ impl RqbitTorrentEngine {
             } else {
                 None
             },
-            enable_upnp_port_forwarding: false, // Phase 4 handles UPnP explicitly
+            // Honor the Connection setting. Without a mapped inbound port the
+            // client is passive: NAT'd residential peers cannot connect back,
+            // which starves swarms down to the few firewalled-peers that
+            // accept outbound connections.
+            enable_upnp_port_forwarding: enable_upnp,
             ..Default::default()
         };
         session_opts.listen = Some(listen_opts);
@@ -275,6 +310,8 @@ impl RqbitTorrentEngine {
             bound_interface: Arc::new(Mutex::new(None)),
             metadata_cache: Arc::new(Mutex::new(cached_meta)),
             pending_magnets: Arc::new(Mutex::new(HashMap::new())),
+            tracker_scrapes: Arc::new(Mutex::new(HashMap::new())),
+            scrape_tasks_spawned: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -309,6 +346,306 @@ impl RqbitTorrentEngine {
             || lower.ends_with(".iso")
             || lower.ends_with(".vob")
     }
+
+    /// Spawns the per-torrent tracker-scrape loop if not already running.
+    /// Called opportunistically from list_torrents so every path (direct
+    /// add, magnet resolution, session restore) is covered uniformly.
+    fn ensure_tracker_scrape_task(&self, torrent_id: String, trackers: Vec<String>) {
+        if trackers.is_empty() {
+            return;
+        }
+        let already_spawned = match self.scrape_tasks_spawned.lock() {
+            Ok(mut set) => !set.insert(torrent_id.clone()),
+            Err(_) => return,
+        };
+        if already_spawned {
+            return;
+        }
+
+        let Some(info_hash) = info_hash_bytes_from_hex(&torrent_id) else {
+            // Do not poison the spawned set on an unparsable id.
+            if let Ok(mut set) = self.scrape_tasks_spawned.lock() {
+                set.remove(&torrent_id);
+            }
+            return;
+        };
+
+        let scrapes = Arc::clone(&self.tracker_scrapes);
+        let session = Arc::clone(&self.session);
+        tauri::async_runtime::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .danger_accept_invalid_certs(true)
+                .user_agent("Nebulae/0.9")
+                .build();
+
+            let mut error_backoff = false;
+            loop {
+                // Stop when the torrent leaves the session (removed).
+                let still_present = session.with_torrents(|torrents| {
+                    for (_, h) in torrents {
+                        if h.info_hash().as_string() == torrent_id {
+                            return true;
+                        }
+                    }
+                    false
+                });
+                if !still_present {
+                    if let Ok(mut map) = scrapes.lock() {
+                        map.remove(&torrent_id);
+                    }
+                    break;
+                }
+
+                let mut results: Vec<TrackerScrapeInfo> = Vec::new();
+                if let Ok(client) = &client {
+                    let mut encoded_hash = String::with_capacity(60);
+                    for byte in info_hash {
+                        encoded_hash.push_str(&format!("%{:02x}", byte));
+                    }
+                    for url in trackers.iter().take(SCRAPE_MAX_TRACKERS) {
+                        let Some(scrape_url) = scrape_url_for(url) else {
+                            continue;
+                        };
+                        let separator = if scrape_url.contains('?') { "&" } else { "?" };
+                        let full = format!("{scrape_url}{separator}info_hash={encoded_hash}");
+                        let now_unix = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let entry = match client.get(&full).send().await {
+                            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                                Ok(body) => match parse_scrape_response(&body) {
+                                    Ok((complete, incomplete)) => TrackerScrapeInfo {
+                                        url: url.clone(),
+                                        seeds: Some(complete),
+                                        peers: Some(incomplete),
+                                        message: format!(
+                                            "Scrape OK: {complete} seeds, {incomplete} peers"
+                                        ),
+                                        ok: true,
+                                        updated_unix: now_unix,
+                                    },
+                                    Err(e) => TrackerScrapeInfo {
+                                        url: url.clone(),
+                                        seeds: None,
+                                        peers: None,
+                                        message: format!("Scrape failed: {e}"),
+                                        ok: false,
+                                        updated_unix: now_unix,
+                                    },
+                                },
+                                Err(e) => TrackerScrapeInfo {
+                                    url: url.clone(),
+                                    seeds: None,
+                                    peers: None,
+                                    message: format!("Scrape read error: {e}"),
+                                    ok: false,
+                                    updated_unix: now_unix,
+                                },
+                            },
+                            Ok(resp) => TrackerScrapeInfo {
+                                url: url.clone(),
+                                seeds: None,
+                                peers: None,
+                                message: format!("Scrape unavailable (HTTP {})", resp.status()),
+                                ok: false,
+                                updated_unix: now_unix,
+                            },
+                            Err(e) => TrackerScrapeInfo {
+                                url: url.clone(),
+                                seeds: None,
+                                peers: None,
+                                message: format!("Scrape connection error: {e}"),
+                                ok: false,
+                                updated_unix: now_unix,
+                            },
+                        };
+                        results.push(entry);
+                    }
+                }
+
+                let any_ok = results.iter().any(|r| r.ok);
+                if let Ok(mut map) = scrapes.lock() {
+                    map.insert(torrent_id.clone(), results);
+                }
+
+                // Respectful cadence: normal interval on success, long backoff
+                // when the tracker rejects scrapes.
+                let wait = if any_ok || !error_backoff {
+                    error_backoff = !any_ok;
+                    SCRAPE_INTERVAL_SECS
+                } else {
+                    SCRAPE_ERROR_INTERVAL_SECS
+                };
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            }
+        });
+    }
+}
+
+/// Last known scrape result for one tracker of one torrent. Surfaced in the
+/// UI: real swarm seed/peer counts and a per-tracker status message for
+/// troubleshooting (librqbit consumes announce responses internally and
+/// exposes none of this).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrackerScrapeInfo {
+    pub url: String,
+    pub seeds: Option<u32>,
+    pub peers: Option<u32>,
+    pub message: String,
+    pub ok: bool,
+    pub updated_unix: u64,
+}
+
+/// The scrape loop refresh cadence. Scrapes are read-only queries (unlike
+/// announces they do not register client state), but private trackers are
+/// sensitive to request volume: keep the interval respectful and back off
+/// hard when a tracker rejects scrapes.
+const SCRAPE_INTERVAL_SECS: u64 = 120;
+const SCRAPE_ERROR_INTERVAL_SECS: u64 = 600;
+const SCRAPE_MAX_TRACKERS: usize = 5;
+
+/// Maps an announce URL to its scrape endpoint using the standard convention.
+/// Returns None for UDP trackers and non-standard announce paths.
+fn scrape_url_for(announce: &str) -> Option<String> {
+    if !announce.starts_with("http://") && !announce.starts_with("https://") {
+        return None;
+    }
+    if !announce.contains("/announce") {
+        return None;
+    }
+    Some(announce.replacen("/announce", "/scrape", 1))
+}
+
+/// Parses a bencoded scrape response into (seeds, peers), ignoring the
+/// failure-reason path by returning it as an error. Uses a minimal hand
+/// scanner: scrape responses key the `files` map by the BINARY info-hash,
+/// which serde_bencode's UTF-8-assuming value parser rejects.
+fn parse_scrape_response(body: &[u8]) -> Result<(u32, u32), String> {
+    fn read_int(body: &[u8], pos: &mut usize) -> Option<i64> {
+        if body.get(*pos) != Some(&b'i') {
+            return None;
+        }
+        *pos += 1;
+        let start = *pos;
+        while *pos < body.len() && body[*pos] != b'e' {
+            *pos += 1;
+        }
+        let n: i64 = std::str::from_utf8(body.get(start..*pos)?)
+            .ok()?
+            .parse()
+            .ok()?;
+        *pos += 1;
+        Some(n)
+    }
+
+    fn read_bytes<'a>(body: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
+        let start = *pos;
+        while *pos < body.len() && body[*pos].is_ascii_digit() {
+            *pos += 1;
+        }
+        let len: usize = std::str::from_utf8(body.get(start..*pos)?)
+            .ok()?
+            .parse()
+            .ok()?;
+        if body.get(*pos) != Some(&b':') {
+            return None;
+        }
+        *pos += 1;
+        let slice = body.get(*pos..*pos + len)?;
+        *pos += len;
+        Some(slice)
+    }
+
+    let mut pos = 0usize;
+    let mut failure: Option<String> = None;
+    let mut result: Option<(u32, u32)> = None;
+
+    // Top-level dict.
+    if body.first() != Some(&b'd') {
+        return Err("scrape response is not a bencode dict".to_string());
+    }
+    pos += 1;
+    while pos < body.len() && body[pos] != b'e' {
+        let Some(key) = read_bytes(body, &mut pos) else {
+            return Err("malformed scrape dict key".to_string());
+        };
+        match key {
+            b"failure reason" => {
+                let Some(reason) = read_bytes(body, &mut pos) else {
+                    return Err("malformed failure reason".to_string());
+                };
+                failure = Some(String::from_utf8_lossy(reason).to_string());
+            }
+            b"files" => {
+                if body.get(pos) != Some(&b'd') {
+                    return Err("malformed files dict".to_string());
+                }
+                pos += 1;
+                while pos < body.len() && body[pos] != b'e' {
+                    // Key: the 20-byte info-hash (binary, ignored - the
+                    // response usually contains only the requested one).
+                    if read_bytes(body, &mut pos).is_none() {
+                        return Err("malformed files entry key".to_string());
+                    }
+                    if body.get(pos) != Some(&b'd') {
+                        return Err("malformed files entry dict".to_string());
+                    }
+                    pos += 1;
+                    let mut complete = None;
+                    let mut incomplete = None;
+                    while pos < body.len() && body[pos] != b'e' {
+                        let Some(field) = read_bytes(body, &mut pos) else {
+                            return Err("malformed files entry field".to_string());
+                        };
+                        let Some(value) = read_int(body, &mut pos) else {
+                            return Err("malformed files entry value".to_string());
+                        };
+                        match field {
+                            b"complete" => complete = Some(value.max(0) as u32),
+                            b"incomplete" => incomplete = Some(value.max(0) as u32),
+                            _ => {}
+                        }
+                    }
+                    pos += 1; // close the entry dict
+                    result = Some((complete.unwrap_or(0), incomplete.unwrap_or(0)));
+                }
+                pos += 1; // close the files dict
+            }
+            _ => {
+                // Unknown top-level value: skip it (int or string).
+                if body.get(pos) == Some(&b'i') {
+                    if read_int(body, &mut pos).is_none() {
+                        return Err("malformed int".to_string());
+                    }
+                } else if read_bytes(body, &mut pos).is_none() {
+                    return Err("malformed value".to_string());
+                }
+            }
+        }
+    }
+
+    if let Some(reason) = failure {
+        return Err(reason);
+    }
+    result.ok_or_else(|| "scrape response contained no file entry".to_string())
+}
+
+/// Decodes the engine's info-hash id string into the 20 raw bytes the
+/// tracker wire protocol needs.
+fn info_hash_bytes_from_hex(id: &str) -> Option<[u8; 20]> {
+    let bytes = id.as_bytes();
+    if bytes.len() < 40 {
+        return None;
+    }
+    let mut out = [0u8; 20];
+    for i in 0..20 {
+        let hi = (bytes[i * 2] as char).to_digit(16)?;
+        let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
+        out[i] = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
 }
 
 impl TorrentEngine for RqbitTorrentEngine {
@@ -323,6 +660,22 @@ impl TorrentEngine for RqbitTorrentEngine {
                 let info_hash = handle.info_hash().as_string();
                 let stats = handle.stats();
                 let meta = cached.get(&info_hash);
+
+                // Ensure the tracker-scrape loop is running for this torrent:
+                // one integration point covers direct adds, magnet resolution
+                // and session-restored torrents alike.
+                let tracker_urls: Vec<String> = handle
+                    .shared()
+                    .trackers
+                    .iter()
+                    .map(|u| u.to_string())
+                    .collect();
+                self.ensure_tracker_scrape_task(info_hash.clone(), tracker_urls);
+                let scrape_state = self
+                    .tracker_scrapes
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(&info_hash).cloned());
 
                 let default_name = format!("Torrent {tid}");
                 let name = handle
@@ -370,20 +723,37 @@ impl TorrentEngine for RqbitTorrentEngine {
                     }
                 });
 
-                // Extract trackers from handle.shared().trackers
+                // Extract trackers from handle.shared().trackers, overlaying
+                // live scrape results (real swarm counts + status messages).
                 for (tier, tr_url) in handle.shared().trackers.iter().enumerate() {
+                    let url = tr_url.to_string();
+                    let scrape = scrape_state
+                        .as_ref()
+                        .and_then(|scrapes| scrapes.iter().find(|s| s.url == url).cloned());
+                    let (scrape_seeds, scrape_peers, message, status) = scrape
+                        .map(|s| {
+                            (
+                                s.seeds,
+                                s.peers,
+                                s.message,
+                                if s.ok { "Working" } else { "Not working" },
+                            )
+                        })
+                        .unwrap_or((None, None, "Waiting for scrape...".to_string(), "Working"));
                     trackers.push(TorrentTrackerItem {
                         tier: tier as u32,
-                        url: tr_url.to_string(),
-                        status: "Working".to_string(),
-                        seeds: 0,
-                        peers: stats
-                            .live
-                            .as_ref()
-                            .map(|l| l.snapshot.peer_stats.live)
-                            .unwrap_or(0),
+                        url,
+                        status: status.to_string(),
+                        seeds: scrape_seeds.unwrap_or(0),
+                        peers: scrape_peers.unwrap_or(
+                            stats
+                                .live
+                                .as_ref()
+                                .map(|l| l.snapshot.peer_stats.live)
+                                .unwrap_or(0),
+                        ),
                         downloaded: 0,
-                        message: "Announce OK".to_string(),
+                        message,
                     });
                 }
 
@@ -444,11 +814,23 @@ impl TorrentEngine for RqbitTorrentEngine {
                     None
                 };
 
-                let seeds = if stats.finished { 1 } else { 0 };
+                // Real swarm seed count from the tracker scrape (the highest
+                // reported by any tracker); librqbit itself has no API for
+                // connected-seed counts.
+                let seeds = scrape_state
+                    .as_ref()
+                    .and_then(|scrapes| scrapes.iter().filter_map(|s| s.seeds).max())
+                    .unwrap_or(if stats.finished { 1 } else { 0 });
+                // Peers actively engaged: established connections plus
+                // outbound attempts in progress. Showing only `live`
+                // underreports swarms where peers are queued to connect.
                 let peers = stats
                     .live
                     .as_ref()
-                    .map(|l| l.snapshot.peer_stats.live)
+                    .map(|l| {
+                        let ps = &l.snapshot.peer_stats;
+                        ps.live + ps.connecting
+                    })
                     .unwrap_or(0);
 
                 let category = meta
@@ -539,6 +921,9 @@ impl TorrentEngine for RqbitTorrentEngine {
                             message: "Resolving metadata via peer exchange (BEP 9)...".to_string(),
                         });
                     }
+                    // Magnets carry tracker announce URLs too - scrape them
+                    // for swarm counts and status messages.
+                    self.ensure_tracker_scrape_task(p_hash.clone(), p_info.trackers.to_vec());
 
                     items.push(TorrentItem {
                         id: p_hash.clone(),
@@ -1183,21 +1568,124 @@ impl TorrentEngine for RqbitTorrentEngine {
 
     fn rename_torrent_file(
         &self,
-        id: &str,
+        _id: &str,
         _file_index: u32,
         _new_file_name: &str,
     ) -> Result<(), String> {
-        let _handle = self.get_handle(id)?;
-        Ok(())
+        // librqbit 9.0.1 has no path-remap API: its piece mapping points at
+        // the metadata file names, and a bare disk rename + recheck would
+        // treat the data as missing and re-download it. Fail loudly instead
+        // of silently accepting (the UI hides these actions).
+        Err(
+            "Renaming individual files inside a torrent is not supported by the engine (librqbit cannot remap in-torrent paths). Rename the torrent's top-level folder instead."
+                .to_string(),
+        )
     }
 
     fn rename_torrent_folder(
         &self,
         id: &str,
-        _old_folder_path: &str,
-        _new_folder_name: &str,
+        old_folder_path: &str,
+        new_folder_name: &str,
     ) -> Result<(), String> {
-        let _handle = self.get_handle(id)?;
+        let trimmed = new_folder_name.trim();
+        if trimmed.is_empty() {
+            return Err("Folder name cannot be empty".to_string());
+        }
+        if trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
+            return Err(format!("Invalid folder name: '{trimmed}'"));
+        }
+        // Nested folders live inside the torrent's mapped layout and cannot
+        // be remapped by librqbit. Only the torrent's own root directory
+        // (the output folder) can be renamed.
+        if old_folder_path.contains('/') || old_folder_path.contains('\\') {
+            return Err(
+                "Renaming nested folders is not supported by the engine (librqbit cannot remap in-torrent paths). Rename the torrent's top-level folder instead."
+                    .to_string(),
+            );
+        }
+
+        let handle = self.get_handle(id)?;
+        let output_folder = handle.output_folder().to_path_buf();
+        let parent = output_folder.parent().ok_or_else(|| {
+            format!(
+                "Cannot determine the parent directory of '{}'",
+                output_folder.display()
+            )
+        })?;
+        let current_name = output_folder
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if current_name != old_folder_path {
+            return Err(format!(
+                "Folder mismatch: this torrent's directory is '{}', not '{old_folder_path}'",
+                if current_name.is_empty() {
+                    output_folder.to_string_lossy().to_string()
+                } else {
+                    current_name
+                }
+            ));
+        }
+        let new_dir = parent.join(trimmed);
+        if new_dir.exists() {
+            return Err(format!(
+                "Cannot rename: '{}' already exists",
+                new_dir.display()
+            ));
+        }
+
+        // Preserve the user's display title across the detach/re-attach
+        // (the metainfo name is the old folder name).
+        let saved_title = self
+            .metadata_cache
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|m| m.display_title.clone());
+
+        // Snapshot the metainfo: re-attaching requires the exact bytes.
+        let bytes = self.export_torrent_bytes(id)?;
+
+        // 1. Detach from the session WITHOUT deleting files.
+        let tid = TorrentIdOrHash::parse(id)
+            .map_err(|e| format!("Invalid torrent identifier '{id}': {e}"))?;
+        tauri::async_runtime::block_on(async { self.session.delete(tid, false).await })
+            .map_err(|e| format!("Failed to detach torrent for rename: {e:#}"))?;
+
+        // 2. Rename the directory on disk. On failure, re-attach at the old
+        //    location so the torrent stays usable.
+        if let Err(e) = std::fs::rename(&output_folder, &new_dir) {
+            let restore = self.add_torrent_bytes_at(&bytes, &output_folder.to_string_lossy());
+            return Err(format!(
+                "Failed to rename '{}': {e}{}",
+                output_folder.display(),
+                restore
+                    .err()
+                    .map(|r| format!(" (torrent re-attach also failed: {r})"))
+                    .unwrap_or_default()
+            ));
+        }
+
+        // 3. Re-attach at the new location and re-verify the files.
+        let readd = self.add_torrent_bytes_at(&bytes, &new_dir.to_string_lossy());
+        let readded_id = match readd {
+            Ok(h) => h,
+            Err(e) => {
+                // The data sits at the new location; surface how to recover.
+                return Err(format!(
+                    "Folder renamed to '{}', but the torrent could not be re-attached: {e}. Re-add the torrent pointing at the new folder.",
+                    new_dir.display()
+                ));
+            }
+        };
+        self.force_recheck(&readded_id)?;
+
+        // 4. Restore the display title / metadata save path.
+        if let Some(title) = saved_title.flatten() {
+            self.rename_torrent(&readded_id, &title)?;
+        }
+
         Ok(())
     }
 
@@ -1314,7 +1802,10 @@ impl TorrentEngine for RqbitTorrentEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_download_dir, resolve_output_folder};
+    use super::{
+        info_hash_bytes_from_hex, normalize_download_dir, parse_scrape_response,
+        resolve_output_folder, scrape_url_for,
+    };
 
     #[test]
     fn normalize_download_dir_accepts_absolute() {
@@ -1373,5 +1864,49 @@ mod tests {
             assert_eq!(out, base.to_string_lossy());
         }
         let _ = std::fs::remove_dir(&base);
+    }
+
+    #[test]
+    fn scrape_url_maps_announce_to_scrape() {
+        assert_eq!(
+            scrape_url_for("https://tracker.asiandvdclub.org/announce?passkey=abc"),
+            Some("https://tracker.asiandvdclub.org/scrape?passkey=abc".to_string())
+        );
+        assert_eq!(scrape_url_for("udp://tracker.example.org:1337"), None);
+        assert_eq!(scrape_url_for("https://example.org/other/path"), None);
+    }
+
+    #[test]
+    fn parse_scrape_response_reads_complete_and_incomplete() {
+        // d5:filesd20:<binary info-hash>d8:completei12e10:incompletei3eee
+        let mut body = b"d5:filesd20:".to_vec();
+        body.extend_from_slice(&[0xa1u8; 20]);
+        body.extend_from_slice(b"d8:completei12e10:incompletei3eee");
+        let (seeds, peers) = parse_scrape_response(&body).unwrap();
+        assert_eq!(seeds, 12);
+        assert_eq!(peers, 3);
+    }
+
+    #[test]
+    fn parse_scrape_response_surfaces_failure_reason() {
+        let body = b"d14:failure reason20:unregistered torrente";
+        let err = parse_scrape_response(body).unwrap_err();
+        assert_eq!(err, "unregistered torrent");
+    }
+
+    #[test]
+    fn parse_scrape_response_rejects_empty() {
+        let body = b"de";
+        assert!(parse_scrape_response(body).is_err());
+    }
+
+    #[test]
+    fn info_hash_hex_decodes_to_twenty_bytes() {
+        let hex = "A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4";
+        let bytes = info_hash_bytes_from_hex(hex).unwrap();
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(bytes[0], 0xa1);
+        assert_eq!(bytes[19], 0xb4);
+        assert!(info_hash_bytes_from_hex("tooshort").is_none());
     }
 }
