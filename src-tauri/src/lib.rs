@@ -201,26 +201,8 @@ pub fn run() {
             }
         }
 
-        let allow_mock = {
-            #[cfg(debug_assertions)]
-            {
-                std::env::var("NEBULAE_FORCE_MOCK_ENGINE").as_deref() == Ok("1")
-            }
-            #[cfg(not(debug_assertions))]
-            {
-                false
-            }
-        };
-
         if let Some(real_engine) = real_engine_opt {
             real_engine
-        } else if allow_mock {
-            SafeLogger::log_to_file(
-                &paths.logs_dir,
-                "WARN",
-                "NEBULAE_FORCE_MOCK_ENGINE=1 enabled: using MockTorrentEngine in debug environment",
-            );
-            Arc::new(engine::MockTorrentEngine::new())
         } else {
             let err_msg = init_error
                 .clone()
@@ -229,7 +211,7 @@ pub fn run() {
                 &paths.logs_dir,
                 "ERROR",
                 &format!(
-                    "Mock engine disallowed in production/release. Entering recovery state: {err_msg}"
+                    "Engine initialization failed. Entering recovery state: {err_msg}"
                 ),
             );
             Arc::new(engine::FailedTorrentEngine::new(err_msg))
