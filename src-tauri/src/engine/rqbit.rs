@@ -14,6 +14,44 @@ use crate::db::{Database, TorrentDbMetadata};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::utils::paths::AppPaths;
 
+/// Normalizes a user-provided download directory before it reaches librqbit.
+///
+/// Expands a leading `~`, anchors relative paths to the user's home directory
+/// (the process CWD is `/` for bundled GUI apps, which is a read-only system
+/// volume on macOS and used to surface as EROFS deep inside librqbit), and
+/// pre-creates the directory so permission problems fail here with a clear
+/// message instead of `Read-only file system (os error 30)`.
+fn normalize_download_dir(download_dir: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = download_dir.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(None);
+    };
+
+    let home = || dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string());
+
+    let expanded = if raw == "~" {
+        home()?
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home()?.join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
+
+    let absolute = if expanded.is_absolute() {
+        expanded
+    } else {
+        home()?.join(expanded)
+    };
+
+    std::fs::create_dir_all(&absolute).map_err(|e| {
+        format!(
+            "Cannot use save destination '{}': {e}. Pick another folder under Save Destination.",
+            absolute.display()
+        )
+    })?;
+
+    Ok(Some(absolute.to_string_lossy().to_string()))
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingMagnet {
     pub raw_url: String,
@@ -414,8 +452,10 @@ impl TorrentEngine for RqbitTorrentEngine {
             }
         }
 
+        let output_folder = normalize_download_dir(download_dir)?;
+
         let opts = AddTorrentOptions {
-            output_folder: download_dir.map(|d| d.to_string()),
+            output_folder,
             overwrite: true,
             ..Default::default()
         };
@@ -593,8 +633,10 @@ impl TorrentEngine for RqbitTorrentEngine {
             return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
         }
 
+        let output_folder = normalize_download_dir(download_dir)?;
+
         let opts = AddTorrentOptions {
-            output_folder: download_dir.map(|d| d.to_string()),
+            output_folder,
             overwrite: true,
             ..Default::default()
         };
@@ -1085,5 +1127,35 @@ impl TorrentEngine for RqbitTorrentEngine {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_download_dir;
+
+    #[test]
+    fn normalize_download_dir_accepts_absolute() {
+        let dir = std::env::temp_dir().join("nebulae-normalize-test");
+        let out = normalize_download_dir(Some(dir.to_str().unwrap())).unwrap();
+        assert_eq!(out.as_deref(), dir.to_str());
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn normalize_download_dir_expands_tilde() {
+        let home = dirs::home_dir().unwrap();
+        let out = normalize_download_dir(Some("~/nebulae-tilde-test"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, home.join("nebulae-tilde-test").to_string_lossy());
+        let _ = std::fs::remove_dir(home.join("nebulae-tilde-test"));
+    }
+
+    #[test]
+    fn normalize_download_dir_none_and_empty() {
+        assert!(normalize_download_dir(None).unwrap().is_none());
+        assert!(normalize_download_dir(Some("")).unwrap().is_none());
+        assert!(normalize_download_dir(Some("   ")).unwrap().is_none());
     }
 }
