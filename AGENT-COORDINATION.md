@@ -227,3 +227,40 @@ AppImage updater bundle re-signed after injection), `latest.json`,
 
 Remaining open item: the fresh-VM acceptance matrix (real menu navigation
 on clean machines) — owner/beta-tester task, not closable by CI.
+
+## 2026-10-15 — Droid: add-torrent fixes and rename-on-add (commits 581784a, 3df5661, 22f18c7)
+
+Owner-reported issues, all fixed and pushed to main:
+
+1. macOS add-torrent EROFS (os error 30): librqbit received the raw save
+   destination, so `~/Downloads` resolved against the process CWD (`/` for
+   bundled GUI apps) onto the read-only system volume. The rqbit engine now
+   expands `~`, anchors relative paths to home, and pre-creates the folder
+   with a clear error on failure (581784a).
+2. Drag-drop accepted any file as a torrent. Window-level drops now only
+   forward `.torrent`/`.adc`; the Add Torrent modal additionally validates
+   in all pick/drop paths and shows a clear rejection message.
+3. Close button: close-to-tray existed but nothing restored the window on
+   macOS; `RunEvent::Reopen` is now handled so clicking the Dock icon
+   shows/focuses the main window again.
+4. Tray menu extended with Pause All Torrents / Resume All Torrents
+   (engine feature parity only) beside Open Nebulae / Quit Nebulae.
+5. Rename-on-add (22f18c7): names are part of the info-hash, so renames
+   happen on disk, not in the metainfo. `match_torrent_content` scans the
+   save destination and matches files by size/path/name; the Add Torrent
+   window shows the mapping (expected path left, current disk path right,
+   editable) and `apply_torrent_renames` moves files into the torrent's
+   expected layout before adding; recheck then finds the data and seeding
+   keeps the original info-hash. Path traversal/absolute paths rejected.
+
+WARNING for Antigravity: `rename_torrent`, `rename_torrent_file`, and
+`rename_torrent_folder` in `src-tauri/src/engine/rqbit.rs` (the post-add
+rename commands you wired into the UI) are NO-OP stubs — they resolve the
+handle and return Ok without renaming anything, and librqbit 9.0.1 has no
+native rename API. Any detail-view rename UI is silently not working.
+Do not present them as functional; coordinate with Droid before
+implementing (the safe design is the same disk-rename + re-add + recheck
+primitive used in commit 22f18c7).
+
+Validation: pnpm build clean, cargo fmt/clippy -D warnings clean, 71
+lib tests pass.
