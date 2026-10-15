@@ -38,8 +38,8 @@ echo "Source mpv binary: $MPV_BIN"
 # (they are Homebrew mpv's own dependencies).
 if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     echo "==> Host mpv lacks libdvdnav (Homebrew dropped it from the formula)."
-    echo "==> Building mpv v0.41.0 from source with DVD + Blu-ray menu support..."
-    brew install -q libdvdnav libdvdread meson ninja pkg-config
+    echo "==> Building mpv v0.40.0 from source with DVD + Blu-ray menu support..."
+    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d x264 x265 libvpx libass libplacebo vulkan-header
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
     # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
@@ -47,8 +47,27 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     # current brew ffmpeg. Pin 0.40 (still has dvdnav menus, newer API
     # surface) and FAIL THE BUILD if the menu removal marker appears -
     # the owner requires DVD menus, always.
+    # mpv 0.39/0.40 do not compile against brew's bleeding-edge ffmpeg 9
+    # (AVCodec/FF_PROFILE API churn), so build a period-matched ffmpeg 7.1
+    # from source first and compile mpv against it. The dylib walk below
+    # bundles the built ffmpeg libraries like any other dependency.
+    echo "==> Building ffmpeg n7.1.1 (period-matched for mpv 0.40)..."
+    git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg "$BUILD_ROOT/ffmpeg"
+    ( cd "$BUILD_ROOT/ffmpeg" &&
+      ./configure --prefix="$BUILD_ROOT/ffmpeg-install" \
+          --disable-doc --disable-debug --disable-static --enable-shared \
+          --disable-programs --disable-ffplay \
+          --enable-gpl --enable-libdav1d --enable-libx264 --enable-libx265 \
+          --enable-libvpx --enable-libass \
+          --extra-cflags="-Wno-deprecated-declarations" &&
+      make -j"$(sysctl -n hw.ncpu)" &&
+      make install ) || {
+        echo "ERROR: source build of ffmpeg 7.1 failed."
+        exit 1
+    }
     git clone --depth 1 --branch v0.40.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
+      export PKG_CONFIG_PATH="$BUILD_ROOT/ffmpeg-install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" &&
       meson setup build -Dgpl=true \
           -Ddvdnav=enabled -Dlibbluray=enabled \
           -Dtests=false --prefix "$BUILD_ROOT/install" --buildtype release &&
