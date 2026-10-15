@@ -110,12 +110,16 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($VersionInfo)) {
 
 # mpv 0.41+ no longer prints a feature list in --version output; verify
 # compiled-in disc support via the presence of the device options instead.
+# Capture both streams: list-options output routing differs between builds,
+# and a silent empty capture must be distinguishable from a real miss.
 Write-Host "Verifying optical disc support in bundled mpv.exe..."
-$ListOptions = & $MpvDest --list-options
-if (-not ($ListOptions -match "--dvd-device")) {
-    throw "Validation failed: DVD menu support (--dvd-device) missing from bundled mpv.exe!"
+$ListOptions = & $MpvDest --list-options 2>&1 | Out-String
+Write-Host "list-options captured chars: $($ListOptions.Length), exit code: $LASTEXITCODE"
+Write-Host ($ListOptions -split "`n" | Select-String -Pattern "dvd|bluray" | Select-Object -First 12 | Out-String)
+if ($ListOptions -notmatch [regex]::Escape("--dvd-device")) {
+    throw "Validation failed: DVD menu support (--dvd-device) missing from bundled mpv.exe! (captured $($ListOptions.Length) chars of --list-options output, exit $LASTEXITCODE)"
 }
-if (-not ($ListOptions -match "--bluray-device")) {
+if ($ListOptions -notmatch [regex]::Escape("--bluray-device")) {
     throw "Validation failed: Blu-ray menu support (--bluray-device) missing from bundled mpv.exe!"
 }
 
