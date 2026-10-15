@@ -1256,3 +1256,39 @@ Owner UX requests implemented in `69cbf18` (branch AND main, fast-forwarded):
 Owner's installed Desktop build predates d505c88 - explains the empty Media
 tab; resolved by installing a fresh draft build. DO NOT run the app from the
 mounted DMG; copy to /Applications.
+
+### 2026-10-15 — Antigravity: Final Phase Test Executables Generated & Verified Across All Platforms
+
+All matrix legs in workflow `build-test.yml` have completed successfully. Per security policy, all build outputs are attached exclusively to the private collaborator-only draft release tagged `test-builds` (`gh release upload --clobber`), preventing public exposure while enabling direct owner testing without public tags, releases, or updater publication.
+
+#### 1. Workflow Runs Verified Green
+- **Workflow Run**: [38786767792](https://github.com/koppot/Nebulae-torrent_client/actions/runs/38786767792) (and [38785600476](https://github.com/koppot/Nebulae-torrent_client/actions/runs/38785600476))
+- **Status**: 100% SUCCESS across all matrix legs:
+  - Linux `ubuntu-22.04` (x86_64-unknown-linux-gnu): SUCCESS (11m 1s)
+  - Windows `windows-latest` (x86_64-pc-windows-msvc): SUCCESS (9m 5s)
+  - macOS `macos-latest` (aarch64-apple-darwin / Apple Silicon): SUCCESS (6m 38s)
+  - macOS `macos-latest` (x86_64-apple-darwin / Intel): SUCCESS (10m 29s)
+
+#### 2. Verified Test Executables & SHA-256 Checksums
+
+| Platform | Artifact | SHA-256 Checksum |
+| :--- | :--- | :--- |
+| **Linux (AppImage)** | `Nebulae-Linux-x86_64.AppImage` | `6f5d4eefef5585b1d548b132a6a0060de6e9139b18ff89942d6485ff407e1e8f` |
+| **Linux (Debian/Ubuntu)** | `Nebulae-Linux-x86_64.deb` | `b8c6bf334176a5e530b6b8d8ded6710ee83aeba7ccd7b613d1b7ab3a61129145` |
+| **Linux (RPM/Fedora)** | `Nebulae-Linux-x86_64.rpm` | `e11870e2e10731a4344bd252c11550d3c43cdbcdf7bdeaca88597ab344593647` |
+| **Linux (Standalone Binary)** | `nebulae-linux-x86_64` | `204d231b97b24ab4b96cb1388e4b2ceb4d4670b30cc4dd14fceb4fb0d88c2746` |
+| **Windows (Installer)** | `Nebulae-Setup-x64.exe` | `1da0585bb8cdab48dbb779e9bb90231a4d5908574335e981f41f0a4a1298c1c2` |
+| **Windows (Standalone Exe)** | `nebulae.exe` | `00e757f2b1d5cac6a3552addc046935135b0f94d9a41f3affeb00c5498314cfa` |
+| **macOS (Apple Silicon DMG)** | `Nebulae-macOS-arm64.dmg` | `ae94f91a44805ad3d1d01de3f583d4a5cedf7608d324ac1c35f2b695b210a9a8` |
+| **macOS (Apple Silicon App Zip)** | `Nebulae-macOS-arm64.dmg-app.zip` | `424f881f76aa8fec35e8235eeb93a647559957d6e46f335e6cf7f7f551136f59` |
+| **macOS (Intel DMG)** | `Nebulae-macOS-x64.dmg` | `4e8b1880123b0d7b3495330322819358b25c9301e872ab5ba97e61d788c5db54` |
+| **macOS (Intel App Zip)** | `Nebulae-macOS-x64.dmg-app.zip` | `a8166e0c676301dcac106a37a59f49e0f1f64a9e488478bfa3898883999b8b6e` |
+
+#### 3. Download Location for Owner Testing
+- **Draft Release Web Interface**: [Test builds (private draft)](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0) (accessible to repo collaborators).
+- **CLI Download**:
+  ```bash
+  gh release download test-builds --repo koppot/Nebulae-torrent_client --dir /path/to/download
+  ```
+- **Policy Adherence**: Releases v0.9.0 and v0.9.1 remain hidden drafts. No new releases, tags, or updater assets were published. Engine is permanently transmission-daemon 4.1.3 (`-TR4130-`), librqbit is completely excised, and tracker interactions are fully aligned with the default-allow blacklist.
+
