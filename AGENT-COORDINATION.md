@@ -1233,3 +1233,26 @@ Fixed in `ad36af0`:
   status bar, connectivity doctor).
 
 Do not revert the port default or reintroduce unexpanded `~` paths.
+
+### 2026-10-15 — Droid: owner-driven UX batch + main propagated to 0.9.2
+
+Owner UX requests implemented in `69cbf18` (branch AND main, fast-forwarded):
+- Announce telemetry: TorrentTrackerItem gains last_announce/next_announce
+  (Transmission trackerStats); General tab shows Last/Next Announce;
+  Trackers tab shows per-tracker next/last. NOTE: all TorrentTrackerItem
+  literal constructions MUST carry the two new fields (struct literals).
+- Bottom inspector resizable (drag divider, 120-640px, persisted in
+  localStorage key `nebulae.inspectorHeight`). The old `h-56` is gone.
+- Torrent context menu: "Show in Finder" (open_torrent_folder on save_path).
+- Files/Content rows: right-click opens the existing rename modals
+  (cross-seeding); flat + tree rows, guarded to Transmission + local mode.
+- StatusBar truthfulness: hardcoded "DHT: 342 nodes" and "Disk: 142.8 GB"
+  removed; DHT shown honestly as Off (private); live disk free; connectivity
+  dot falls back to live swarm activity (fresh doctor report overrides);
+  new get_tailscale_status command + chip (tailnet = VPN iface with
+  100.64.0.0/10 address).
+- Transmission adapter populates media_meta via MediaTitleParser (parity).
+
+Owner's installed Desktop build predates d505c88 - explains the empty Media
+tab; resolved by installing a fresh draft build. DO NOT run the app from the
+mounted DMG; copy to /Applications.
