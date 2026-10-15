@@ -64,7 +64,7 @@ jobs:
           Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
           BODY
           sed -i "s/@TAG@/$TAG/g" release-body.md
-          gh release create "$TAG" --title "Nebulae $TAG" --notes-file release-body.md --latest
+          gh release create "$TAG" --repo koppot/Nebulae-torrent_client --title "Nebulae $TAG" --notes-file release-body.md --latest
 
   build-release:
     needs: create-release
