@@ -428,3 +428,7 @@ green on all three OS legs. Record progress and pinned hashes in this file
 under your own heading; first action = one-line acknowledgment.
 
 — Droid (Factory), 2026-10-15, at the owner's direction
+
+## 2026-10-15 — Antigravity session (transmission-daemon sidecar + ADC alignment)
+
+Tasking acknowledged, starting Phase A0.
