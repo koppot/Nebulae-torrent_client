@@ -140,6 +140,36 @@ pub fn launch_disc_player_impl(
     let disc_info = DiscDetector::inspect(path);
     let use_menu = prefer_menu.unwrap_or(true);
 
+    // A torrent's save_path is frequently a plain folder (multi-disc torrents
+    // store loose disc images, e.g. DISC_1.ISO / DISC_2.ISO). Handing a bare
+    // directory to the player makes it exit silently. Resolve the actual disc
+    // image inside the folder instead: a single image plays automatically,
+    // and multiple images play the first by name (DISC_1 < DISC_2 < ...).
+    let disc_info = disc_info.or_else(|| {
+        if !path.is_dir() {
+            return None;
+        }
+        let mut images: Vec<PathBuf> = std::fs::read_dir(path)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.is_file()
+                    && matches!(
+                        p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
+                        Some(ext) if ext == "iso" || ext == "img"
+                    )
+            })
+            .collect();
+        images.sort();
+        let image = images.first()?;
+        tracing::info!(
+            "Save destination is a folder; resolved disc image '{}' for playback",
+            image.display()
+        );
+        DiscDetector::inspect(image)
+    });
+
     // Locate preferred disc player (bundled mpv -> system mpv -> VLC -> IINA -> system default)
     if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
         let mut cmd = Command::new(&player_bin);

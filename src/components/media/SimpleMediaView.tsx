@@ -98,9 +98,10 @@ export const SimpleMediaView: React.FC = () => {
         filePath: torrent.save_path,
         preferMenu,
       });
-    } catch {
-      // Fallback: reveal in enclosing folder
-      invoke('open_torrent_folder', { path: torrent.save_path }).catch(() => {});
+      setExternalDiscError(null);
+    } catch (err: unknown) {
+      // Surface the failure - a silently swallowed error looks like a dead button.
+      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
     }
   };
 
