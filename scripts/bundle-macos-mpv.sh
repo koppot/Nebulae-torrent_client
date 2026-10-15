@@ -39,7 +39,7 @@ echo "Source mpv binary: $MPV_BIN"
 if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     echo "==> Host mpv lacks libdvdnav (Homebrew dropped it from the formula)."
     echo "==> Building mpv v0.40.0 from source with DVD + Blu-ray menu support..."
-    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d x264 x265 libvpx libass libplacebo vulkan-headers
+    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d libass libplacebo vulkan-headers
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
     # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
@@ -56,9 +56,11 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     ( cd "$BUILD_ROOT/ffmpeg" &&
       ./configure --prefix="$BUILD_ROOT/ffmpeg-install" \
           --disable-doc --disable-debug --disable-static --enable-shared \
-          --disable-programs --disable-ffplay \
-          --enable-gpl --enable-libdav1d --enable-libx264 --enable-libx265 \
-          --enable-libvpx --enable-libass \
+          --disable-programs --disable-ffplay --disable-autodetect \
+          --disable-network --disable-encoders --disable-muxers \
+          --enable-gpl --enable-libdav1d \
+          --enable-encoder=png,mjpeg,pam,targa,xbm,xwd,bmp,gif \
+          --enable-muxer=image2 \
           --extra-cflags="-Wno-deprecated-declarations" &&
       make -j"$(sysctl -n hw.ncpu)" &&
       make install ) || {
