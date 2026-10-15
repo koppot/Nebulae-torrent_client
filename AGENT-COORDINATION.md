@@ -703,6 +703,79 @@ B3. **Whitelist coverage**: Transmission 4.0.6 peer-id prefix is `-TR4060-`.
 window); confirm proceed-to-Phase-A1 for bundling. Record sign-off as a
 reply in this file. Phase A1 code will not begin until sign-off is recorded.
 
+### 2026-10-15 — Owner sign-off on Phase A0 design note
+
+==== OWNER DECISIONS ON YOUR OPEN QUESTIONS ====
+
+1. Killswitch gap (your item 5): ACCEPTED as analyzed. The sub-second
+   window between tunnel drop and RPC stop is equivalent to the current
+   librqbit worst case, and bind-address-ipv4 gives a better steady
+   state. Kernel-level firewall (pf/nftables/Windows Firewall) stays
+   deferred unless the owner explicitly requests it later.
+
+2. Speed window (your item 8): CONFIRMED. 3.0 → 5.0 in
+   src/stores/torrentStore.ts was the owner's original instruction
+   ("5-second rolling moving average"). Land it in Phase A3 as planned.
+
+3. Proceed to Phase A1: APPROVED on all three OS legs.
+
+==== DROID REVIEW ADDENDA (adopted; none block A1) ====
+
+Addendum 1 — Orphan daemon cleanup (design note section 2):
+--foreground does NOT kill the daemon if the parent is SIGKILLed; the
+Child handle is gone. Add a startup cleanup step to
+TransmissionTorrentEngine::new(): before spawning, detect a stale
+transmission-daemon running with OUR config-dir (process scan on the
+config-dir path, and/or probe the previously written rpc-port) and
+terminate it before writing fresh settings.json and spawning. Handle all
+three OSes. This prevents double-daemon and port conflicts after a crash.
+
+Addendum 2 — Verify RPC fields against the pinned build (section 1):
+During the Phase A1 smoke test, verify torrent-set sequential-download
+actually exists in the pinned daemon's RPC; if absent, keep the loud
+stub-with-log fallback instead of a failing call. Cosmetic note: your
+status table maps Transmission "queued" states (1/3/5) onto active
+states — acceptable only if the UI has no queued concept; if it doesn't,
+document the choice in the mapping table.
+
+Addendum 3 — Version pinning (section 6):
+Do not hardcode 4.0.6. At bundle time, pick the newest STABLE official
+Transmission release line available for each platform, record the pinned
+download URL + SHA-256 per artifact in AGENT-COORDINATION.md, and derive
+the resulting peer-id prefix (-TRxxxx-) from the chosen version. Feed
+that exact prefix/version into work item B3: check agent_allowed_family
+coverage; if a row change is needed, STOP and present it to the owner
+for separate authorization — never insert data rows yourself.
+
+Addendum 4 — Bind-at-spawn hardening (section 5):
+When vpn_mode is AdcOnlyVpn or SystemVpn (same condition the killswitch
+watcher uses), also set session bind-address-ipv4 to the tunnel IP at
+engine spawn — not only on trigger — so the daemon never starts
+off-tunnel. Keep the existing trigger/reset path unchanged for runtime
+transitions.
+
+==== STANDING CONSTRAINTS (unchanged) ====
+
+- Bundle per the mpv precedent: pinned URL + SHA-256 verified at build
+  time, staging dir outside target/, GPL notices in
+  THIRD-PARTY-NOTICES.md, per-leg smoke test (spawn, session-get, kill).
+- No releases, tags, or version bumps. Signing gate and updater secrets
+  untouched. git status before staging; stage only your own files.
+- A phase counts as done only when CI is green on all three OS legs —
+  record the run links and pinned hashes in AGENT-COORDINATION.md.
+- If a constraint proves unmeetable, document the blocker and proposed
+  workaround here BEFORE changing approach.
+
+Begin Phase A1 with the Windows leg first (matches the mpv tasking
+order), then Linux, then macOS.
+
+— Owner (koppot) / Droid (Factory), 2026-10-15
+
+### 2026-10-15 — Antigravity: Phase A0 sign-off recorded; starting Phase A1
+
+Sign-off recorded above verbatim. Addenda 1–4 incorporated into implementation
+plan. Beginning Phase A1 — Windows leg first.
+
 ## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
 1. LIVE-VERIFIED the scrape layer against a real user torrent: tracker
    status surfaced a genuine failure - tracker.asiandvdclub.org has NO
