@@ -456,7 +456,7 @@ impl RqbitTorrentEngine {
                                 url: url.clone(),
                                 seeds: None,
                                 peers: None,
-                                message: format!("Scrape connection error: {e}"),
+                                message: format!("Scrape connection error: {}", error_chain(&e)),
                                 ok: false,
                                 updated_unix: now_unix,
                             },
@@ -648,6 +648,23 @@ fn info_hash_bytes_from_hex(id: &str) -> Option<[u8; 20]> {
     Some(out)
 }
 
+/// Formats an error WITH its source chain. reqwest's top-level Display is
+/// just "error sending request for url (...)"; the actionable cause (dns
+/// failure, refused, timeout) lives in the sources below it.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut chain = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !chain.contains(&cause_text) {
+            chain.push_str(": ");
+            chain.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    chain
+}
+
 impl TorrentEngine for RqbitTorrentEngine {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
         let cached = self.metadata_cache.lock().unwrap().clone();
@@ -744,14 +761,8 @@ impl TorrentEngine for RqbitTorrentEngine {
                         tier: tier as u32,
                         url,
                         status: status.to_string(),
-                        seeds: scrape_seeds.unwrap_or(0),
-                        peers: scrape_peers.unwrap_or(
-                            stats
-                                .live
-                                .as_ref()
-                                .map(|l| l.snapshot.peer_stats.live)
-                                .unwrap_or(0),
-                        ),
+                        seeds: scrape_seeds,
+                        peers: scrape_peers,
                         downloaded: 0,
                         message,
                     });
@@ -816,11 +827,11 @@ impl TorrentEngine for RqbitTorrentEngine {
 
                 // Real swarm seed count from the tracker scrape (the highest
                 // reported by any tracker); librqbit itself has no API for
-                // connected-seed counts.
+                // connected-seed counts. No successful scrape yet -> None and
+                // the UI shows a dash instead of a lying zero.
                 let seeds = scrape_state
                     .as_ref()
-                    .and_then(|scrapes| scrapes.iter().filter_map(|s| s.seeds).max())
-                    .unwrap_or(if stats.finished { 1 } else { 0 });
+                    .and_then(|scrapes| scrapes.iter().filter_map(|s| s.seeds).max());
                 // Peers actively engaged: established connections plus
                 // outbound attempts in progress. Showing only `live`
                 // underreports swarms where peers are queued to connect.
@@ -915,8 +926,8 @@ impl TorrentEngine for RqbitTorrentEngine {
                             tier: tier as u32,
                             url: tr_url.clone(),
                             status: "Connecting".to_string(),
-                            seeds: 0,
-                            peers: 0,
+                            seeds: None,
+                            peers: None,
                             downloaded: 0,
                             message: "Resolving metadata via peer exchange (BEP 9)...".to_string(),
                         });
@@ -936,7 +947,7 @@ impl TorrentEngine for RqbitTorrentEngine {
                         progress: 0.0,
                         status: "Downloading Metadata".to_string(),
                         eta_seconds: None,
-                        seeds: 0,
+                        seeds: None,
                         peers: 0,
                         ratio: 0.0,
                         category: "General".to_string(),

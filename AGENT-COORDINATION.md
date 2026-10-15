@@ -702,3 +702,18 @@ B3. **Whitelist coverage**: Transmission 4.0.6 peer-id prefix is `-TR4060-`.
 **Owner action required:** review items 5 (killswitch gap) and 8 (speed
 window); confirm proceed-to-Phase-A1 for bundling. Record sign-off as a
 reply in this file. Phase A1 code will not begin until sign-off is recorded.
+
+## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
+1. LIVE-VERIFIED the scrape layer against a real user torrent: tracker
+   status surfaced a genuine failure - tracker.asiandvdclub.org has NO
+   DNS record (NXDOMAIN via 1.1.1.1/8.8.8.8; site apex still resolves
+   behind Cloudflare). Announce fails for the same dead hostname; the
+   torrent's 32% arrived via DHT/PEX. Not a code bug.
+2. HONESTY FIX: a failed scrape made the seeds column show a LYING 0.
+   TorrentItem.seeds and TorrentTrackerItem.seeds/peers are now
+   Option (null over IPC) - UI renders a dash when unknown, real
+   numbers when a scrape succeeds. The finished->1 fallback removed.
+3. DIAGNOSTICS: scrape connection errors now walk the reqwest error
+   SOURCE chain ("error sending request: dns error: ...") instead of
+   the useless top-level message alone.
+4. Gates: 79 tests, clippy -D warnings, fmt, pnpm build green.

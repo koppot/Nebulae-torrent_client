@@ -16,8 +16,10 @@ pub struct TorrentTrackerItem {
     pub tier: u32,
     pub url: String,
     pub status: String,
-    pub seeds: u32,
-    pub peers: u32,
+    // None = swarm counts unknown (scrape not available/failed) - the UI
+    // shows a dash instead of a lying zero.
+    pub seeds: Option<u32>,
+    pub peers: Option<u32>,
     pub downloaded: u64,
     pub message: String,
 }
@@ -34,7 +36,9 @@ pub struct TorrentItem {
     pub progress: f32,
     pub status: String,
     pub eta_seconds: Option<u64>,
-    pub seeds: u32,
+    // None = swarm seed count unknown (no successful tracker scrape yet).
+    // The UI shows a dash rather than a misleading zero.
+    pub seeds: Option<u32>,
     pub peers: u32,
     pub ratio: f32,
     pub category: String,

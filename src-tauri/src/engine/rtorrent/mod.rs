@@ -135,7 +135,7 @@ impl RtorrentRemoteEngine {
             progress,
             status,
             eta_seconds,
-            seeds: int(11).max(0) as u32,
+            seeds: Some(int(11).max(0) as u32),
             peers: int(12).max(0) as u32,
             ratio,
             // rtorrent's custom1 field is the de-facto label/category slot
@@ -277,8 +277,8 @@ impl RtorrentRemoteEngine {
                     tier: int(1).max(0) as u32,
                     url: text(0),
                     status: if int(2) == 1 { "Enabled" } else { "Disabled" }.to_string(),
-                    seeds: int(3).max(0) as u32,
-                    peers: int(4).max(0) as u32,
+                    seeds: Some(int(3).max(0) as u32),
+                    peers: Some(int(4).max(0) as u32),
                     downloaded: int(5).max(0) as u64,
                     message: String::new(),
                 })
@@ -731,7 +731,7 @@ mod tests {
         assert_eq!(t.status, "Seeding"); // state=1, complete=1
         assert_eq!(t.ratio, 1.506); // rtorrent per-mille 1506
         assert_eq!(t.upload_rate, 1_200_000);
-        assert_eq!(t.seeds, 42);
+        assert_eq!(t.seeds, Some(42));
         assert_eq!(t.category, "movies"); // d.custom1
         assert_eq!(t.added_on, 1_728_800_000); // d.timestamp.started
         assert_eq!(t.total_pieces, 8225);

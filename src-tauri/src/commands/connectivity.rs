@@ -125,7 +125,7 @@ pub async fn run_connectivity_doctor_test(
 
     let active_torrents = engine.list_torrents().unwrap_or_default();
     let total_inbound_peers: u32 = active_torrents.iter().map(|t| t.peers).sum();
-    let total_outbound_peers: u32 = active_torrents.iter().map(|t| t.seeds).sum();
+    let total_outbound_peers: u32 = active_torrents.iter().filter_map(|t| t.seeds).sum();
 
     let port_status = if port_listening || total_inbound_peers > 0 {
         PortStatus::Open

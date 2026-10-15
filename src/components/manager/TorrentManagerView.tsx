@@ -774,10 +774,10 @@ export const TorrentManagerView: React.FC = () => {
                     <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
                     <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
                     <td className="py-2 px-2.5 text-white">
-                      {/* Seed counts come from the engine's tracker scrape
-                          (librqbit exposes no connected-seed API). Falls back
-                          to 1 when finished/0 while the first scrape lands. */}
-                      {t.seeds}
+                      {/* Swarm seed count from the engine's tracker scrape.
+                          A dash means no successful scrape yet - never fake
+                          a zero. */}
+                      {t.seeds ?? '—'}
                     </td>
                     <td className="py-2 px-2.5">{t.peers}</td>
                   </tr>
@@ -1144,7 +1144,7 @@ export const TorrentManagerView: React.FC = () => {
                       >
                         <div className="min-w-0 pr-3">
                           <span className="text-[#a3a3a3] truncate block max-w-lg">{tr.url}</span>
-                          <span className="text-[10px] text-slate-500">Tier {tr.tier} • Seeds: {tr.seeds} • Peers: {tr.peers}</span>
+                          <span className="text-[10px] text-slate-500">Tier {tr.tier} • Seeds: {tr.seeds ?? '—'} • Peers: {tr.peers ?? '—'}</span>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <span className="text-white font-semibold px-1.5 py-0.5 rounded bg-[#141414] border border-[#262626]">
