@@ -130,9 +130,11 @@ folder with menus after passing Gatekeeper.
 - [ ] `prefer_menu = false`: plays directly, no menu, unchanged behavior
 - [ ] UHD (`BDMV` 66/100-layer or `uhd`-named): plays; UI copy states the
       AACS limitation for pressed discs
-- [ ] CI: all three release legs green; release assets include the bundle
-      (player + library tree + JRE); package size delta recorded in
-      `CHANGELOG.md`
+- [x] CI: all three release legs green (run 38664525004, `1aa2f2d`); release
+      assets include the bundle on every platform (player + library tree +
+      JRE in the Windows installer, both macOS DMGs, deb, rpm, and the
+      injected AppImage with a re-signed updater payload); package size
+      delta recorded in `CHANGELOG.md`
 - [x] Docs: the installation guide no longer lists "install mpv/VLC" as a
       requirement for disc playback; the UHD AACS limitation is documented
       (e7074a3 — zero-dependency guarantee now covers all platforms, plus

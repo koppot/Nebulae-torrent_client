@@ -198,3 +198,32 @@ do not revert them:
 
 The fresh-VM acceptance items in docs/task-bundle-disc-player.md remain
 open until verified on real clean machines with real disc structures.
+
+## RELEASE IS GREEN: v0.1.0-beta.9 ships the self-contained player (2026-10-15)
+
+Release run 38664525004 succeeded on `1aa2f2d` after fixing three
+CI-only-visible issues found across the release iterations:
+
+- mpv 0.41 dropped the `--version` feature list — disc support is verified
+  via `--list-options` (`--dvd-device` / `--bluray-device`) in all bundle
+  scripts.
+- Homebrew dropped libdvdnav from its mpv formula, so macOS builds mpv
+  v0.41.0 from the pinned source tag with `-Ddvdnav=enabled` inside the
+  bundle script (both macOS legs verified DVD + Blu-ray menu options).
+- Windows hosted runners quarantine the unsigned mpv.exe (it ran producing
+  no output); the bundle script excludes its staging dir from Defender and
+  the shinchiro build's disc options verified present.
+- Linux: tauri-bundler's linuxdeploy chokes on the player library tree +
+  JRE inside AppDir/usr/lib, so the AppImage builds without them and the
+  player is injected into the squashfs payload post-build (original
+  runtime preserved via `--appimage-offset`; updater payload regenerated
+  from the injected image and re-signed). deb/rpm keep the player as
+  regular resources.
+
+v0.1.0-beta.9 assets: Windows installer + exe (+ sig), both macOS DMGs
+(+ zips + updater sigs), Linux deb/rpm/AppImage/standalone binary (+ the
+AppImage updater bundle re-signed after injection), `latest.json`,
+`SHA256SUMS.txt`, `WINDOWS-SIGNING-STATUS.txt`.
+
+Remaining open item: the fresh-VM acceptance matrix (real menu navigation
+on clean machines) — owner/beta-tester task, not closable by CI.
