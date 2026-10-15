@@ -31,6 +31,25 @@ export interface InspectTorrentResult {
   trackers: TorrentTrackerItem[];
 }
 
+export interface TorrentContentFileMatch {
+  index: number;
+  expected_rel_path: string;
+  size_bytes: number;
+  matched_rel_path: string | null;
+}
+
+export interface TorrentContentMatch {
+  torrent_name: string;
+  is_multi_file: boolean;
+  files: TorrentContentFileMatch[];
+  matched_count: number;
+}
+
+export interface TorrentRenameEntry {
+  from_rel: string;
+  to_rel: string;
+}
+
 export interface ParsedMediaMetadata {
   raw_title: string;
   clean_title: string;

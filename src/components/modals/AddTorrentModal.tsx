@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { InspectTorrentResult } from '../../types';
+import { InspectTorrentResult, TorrentContentMatch } from '../../types';
 import {
   X,
   Plus,
@@ -22,7 +22,7 @@ import { listen } from '@tauri-apps/api/event';
 export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource } =
     useUiStore();
-  const { addTorrent, inspectTorrent, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
+  const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
 
   const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
@@ -40,6 +40,13 @@ export const AddTorrentModal: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [contentMatch, setContentMatch] = useState<TorrentContentMatch | null>(null);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [renameInputs, setRenameInputs] = useState<Record<number, string>>({});
+
+  // Only .torrent and .adc metainfo files may be added; everything else is
+  // rejected instead of being accepted as if it were a torrent.
+  const isAllowedMetainfoName = (name: string) => /\.(torrent|adc)$/i.test(name.trim());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -54,6 +61,10 @@ export const AddTorrentModal: React.FC = () => {
       if (paths && paths.length > 0) {
         const filePath = paths[0];
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
+        if (!isAllowedMetainfoName(name)) {
+          setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          return;
+        }
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
@@ -72,6 +83,10 @@ export const AddTorrentModal: React.FC = () => {
       if (event.payload) {
         const filePath = event.payload;
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
+        if (!isAllowedMetainfoName(name)) {
+          setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          return;
+        }
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
@@ -115,6 +130,47 @@ export const AddTorrentModal: React.FC = () => {
     }
   }, [initialAddTorrentSource, setInitialAddTorrentSource, inspectTorrent]);
 
+  // Shared submit path used by both the form button and the Enter key, so the
+  // rename mapping is always applied before the torrent is added.
+  const submitAdd = async () => {
+    const source = (torrentSource || selectedFileName || '').trim();
+    if (!source || isSubmitting) return;
+    const targetDir = (downloadDir || settings.download_directory || '').trim();
+    try {
+      setIsSubmitting(true);
+      setErrorMessage(null);
+      // Apply any rename mapping first: move the user's existing files into
+      // the torrent's expected layout so the initial recheck finds the data
+      // and seeding keeps working with the original info-hash.
+      if (contentMatch) {
+        const renames = contentMatch.files
+          .map((f) => ({ from: (renameInputs[f.index] ?? '').trim(), to: f.expected_rel_path }))
+          .filter((r) => r.from && r.from !== r.to)
+          .map((r) => ({ from_rel: r.from, to_rel: r.to }));
+        if (renames.length > 0) {
+          await applyTorrentRenames(targetDir, renames);
+        }
+      }
+      await addTorrent(source, targetDir, selectedFileBytes || undefined);
+      if (targetDir) {
+        await addRecentDirectory(targetDir);
+      }
+      setTorrentSource('');
+      setSelectedFileName(null);
+      setSelectedFileSize(null);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
+      setContentMatch(null);
+      setRenameInputs({});
+      setShowAddTorrent(false);
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : err?.message || 'Failed to add torrent';
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     if (!showAddTorrent) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -122,18 +178,7 @@ export const AddTorrentModal: React.FC = () => {
         const source = (torrentSource || selectedFileName || '').trim();
         if (source && !isSubmitting) {
           e.preventDefault();
-          const targetDir = downloadDir || settings.download_directory || '~/Downloads';
-          setIsSubmitting(true);
-          addTorrent(source, targetDir, selectedFileBytes || undefined).then(() => {
-            if (targetDir) addRecentDirectory(targetDir);
-            setIsSubmitting(false);
-            setTorrentSource('');
-            setSelectedFileName(null);
-            setSelectedFileSize(null);
-            setSelectedFileBytes(null);
-            setInspectPreview(null);
-            setShowAddTorrent(false);
-          });
+          submitAdd();
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -142,6 +187,7 @@ export const AddTorrentModal: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     showAddTorrent,
     torrentSource,
@@ -150,7 +196,10 @@ export const AddTorrentModal: React.FC = () => {
     isSubmitting,
     downloadDir,
     settings.download_directory,
+    contentMatch,
+    renameInputs,
     addTorrent,
+    applyTorrentRenames,
     addRecentDirectory,
     setShowAddTorrent,
   ]);
@@ -193,6 +242,13 @@ export const AddTorrentModal: React.FC = () => {
     const files = e.target.files;
     if (files && files.length > 0) {
       const file = files[0];
+      if (!isAllowedMetainfoName(file.name)) {
+        setErrorMessage(
+          `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
+        );
+        e.target.value = '';
+        return;
+      }
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
       setTorrentSource(file.name);
@@ -222,6 +278,12 @@ export const AddTorrentModal: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
+      if (!isAllowedMetainfoName(file.name)) {
+        setErrorMessage(
+          `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
+        );
+        return;
+      }
       const source = (file as any).path || file.name;
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
@@ -278,35 +340,47 @@ export const AddTorrentModal: React.FC = () => {
     setSelectedFileBytes(null);
     setInspectPreview(null);
     setTorrentSource('');
+    setContentMatch(null);
+    setRenameInputs({});
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
+  // A different torrent or save destination invalidates any previous match.
+  useEffect(() => {
+    setContentMatch(null);
+    setRenameInputs({});
+  }, [torrentSource, downloadDir]);
+
+  const handleFindContent = async () => {
+    const source = (torrentSource || selectedFileName || '').trim();
+    const targetDir = (downloadDir || settings.download_directory || '').trim();
+    if (!source || !targetDir || matchLoading) return;
+    setMatchLoading(true);
+    try {
+      const match = await matchTorrentContent(source, targetDir);
+      setContentMatch(match);
+      const inputs: Record<number, string> = {};
+      for (const f of match.files) {
+        inputs[f.index] = f.matched_rel_path ?? '';
+      }
+      setRenameInputs(inputs);
+      setErrorMessage(null);
+    } catch (err: any) {
+      setContentMatch(null);
+      setRenameInputs({});
+      setErrorMessage(
+        typeof err === 'string' ? err : err?.message || 'Could not scan the save destination'
+      );
+    } finally {
+      setMatchLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const source = (torrentSource || selectedFileName || '').trim();
-    if (!source) return;
-
-    try {
-      setIsSubmitting(true);
-      setErrorMessage(null);
-      await addTorrent(source, downloadDir, selectedFileBytes || undefined);
-      if (downloadDir) {
-        await addRecentDirectory(downloadDir);
-      }
-      setTorrentSource('');
-      setSelectedFileName(null);
-      setSelectedFileSize(null);
-      setSelectedFileBytes(null);
-      setInspectPreview(null);
-      setShowAddTorrent(false);
-    } catch (err: any) {
-      const msg = typeof err === 'string' ? err : err?.message || 'Failed to add torrent';
-      setErrorMessage(msg);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await submitAdd();
   };
 
   return (
@@ -533,6 +607,67 @@ export const AddTorrentModal: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Rename Existing Content — match files on disk to the torrent's
+              expected layout so seeding keeps working (names are part of the
+              info-hash and cannot be edited in the metainfo itself). */}
+          {inspectPreview &&
+            !inspectLoading &&
+            inputMode === 'file' &&
+            inspectPreview.files.length > 0 && (
+              <div className="p-3 rounded-lg bg-[#1a1a1a] border border-[#262626] space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Folder className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
+                    <span className="font-semibold text-white">Rename Existing Content to Seed</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleFindContent}
+                    disabled={matchLoading || !(downloadDir || settings.download_directory)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#262626] hover:bg-[#333333] text-[11px] text-white disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    {matchLoading ? (
+                      <div className="w-3 h-3 border-2 border-[#e50914] border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <span>{contentMatch ? 'Rescan' : 'Find My Files'}</span>
+                    )}
+                  </button>
+                </div>
+                {contentMatch && (
+                  <>
+                    <p className="text-[10px] text-[#a3a3a3]">
+                      Matched {contentMatch.matched_count} of {contentMatch.files.length} files by
+                      size and name. Right side = where the file is on disk now; Nebulae renames it
+                      to the torrent's expected path (left) before adding, so the original swarm
+                      and info-hash stay intact.
+                    </p>
+                    <div className="max-h-44 overflow-y-auto space-y-1.5 border-t border-[#2a2a2a] pt-1.5 pr-1">
+                      {contentMatch.files.map((f) => (
+                        <div key={f.index} className="flex items-center gap-1.5">
+                          <span
+                            className="flex-1 truncate text-[10px] font-mono text-[#cccccc]"
+                            title={f.expected_rel_path}
+                          >
+                            {f.expected_rel_path}
+                          </span>
+                          <span className="text-[#737373] text-[10px] flex-shrink-0">←</span>
+                          <input
+                            type="text"
+                            value={renameInputs[f.index] ?? ''}
+                            onChange={(e) =>
+                              setRenameInputs((prev) => ({ ...prev, [f.index]: e.target.value }))
+                            }
+                            placeholder="path on disk (relative)"
+                            className="flex-1 min-w-0 px-2 py-1 rounded-md bg-[#141414] border border-[#333333] text-[10px] font-mono text-white focus:outline-none focus:border-[#e50914]"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
           {/* Category Assignment */}
           <div>

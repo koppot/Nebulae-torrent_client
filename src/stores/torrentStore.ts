@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { TorrentItem, CreateTorrentParams, InspectTorrentResult } from '../types';
+import { TorrentItem, CreateTorrentParams, InspectTorrentResult, TorrentContentMatch, TorrentRenameEntry } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
 export interface SystemPathPresets {
@@ -22,6 +22,8 @@ interface TorrentState {
   removeTorrent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addTorrent: (source: string, downloadDir?: string, bytes?: number[]) => Promise<void>;
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
+  matchTorrentContent: (source: string, downloadDir: string) => Promise<TorrentContentMatch>;
+  applyTorrentRenames: (downloadDir: string, renames: TorrentRenameEntry[]) => Promise<number>;
   forceRecheck: (id: string) => Promise<void>;
   reannounce: (id: string) => Promise<void>;
   setLocation: (id: string, newPath: string) => Promise<void>;
@@ -134,6 +136,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   inspectTorrent: async (source?: string, bytes?: number[]) => {
     return await invoke<InspectTorrentResult>('inspect_torrent_file', { source, bytes });
+  },
+
+  matchTorrentContent: async (source: string, downloadDir: string) => {
+    return await invoke<TorrentContentMatch>('match_torrent_content', { source, downloadDir });
+  },
+
+  applyTorrentRenames: async (downloadDir: string, renames: TorrentRenameEntry[]) => {
+    return await invoke<number>('apply_torrent_renames', { downloadDir, renames });
   },
 
   forceRecheck: async (id: string) => {

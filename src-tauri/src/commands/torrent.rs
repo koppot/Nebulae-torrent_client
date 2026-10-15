@@ -259,6 +259,276 @@ pub fn add_torrent_bytes(
     engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
 }
 
+// ---------------------------------------------------------------------------
+// Rename-on-add: match existing content to a torrent's expected layout.
+//
+// File and folder names are part of a torrent's info-hash, so they cannot be
+// changed in the metainfo without leaving the original swarm. The supported
+// workflow renames the user's existing files on disk to the torrent's
+// expected layout before adding, so librqbit's initial recheck finds the
+// data and the torrent keeps seeding with its original info-hash.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TorrentContentFileMatch {
+    pub index: u32,
+    /// Path the torrent expects, relative to the save destination (includes
+    /// the torrent's root folder for multi-file torrents).
+    pub expected_rel_path: String,
+    pub size_bytes: u64,
+    /// Where the matching file lives today, relative to the save destination.
+    /// None when no candidate was found; the user can fill one in manually.
+    pub matched_rel_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TorrentContentMatch {
+    pub torrent_name: String,
+    pub is_multi_file: bool,
+    pub files: Vec<TorrentContentFileMatch>,
+    pub matched_count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TorrentRenameEntry {
+    /// Existing file, relative to the save destination.
+    pub from_rel: String,
+    /// Target path the torrent expects, relative to the save destination.
+    pub to_rel: String,
+}
+
+/// Greedy size-based matcher: exact relative path first, then same file name,
+/// then a single remaining same-size candidate. Ambiguous candidates are left
+/// for the user to resolve in the UI.
+fn match_content_files(
+    expected: &[(u32, String, u64)],
+    disk: &[(String, u64)],
+) -> Vec<TorrentContentFileMatch> {
+    let mut available: Vec<Option<(String, u64)>> =
+        disk.iter().map(|(p, s)| Some((p.clone(), *s))).collect();
+    let mut out = Vec::with_capacity(expected.len());
+
+    for (index, rel_path, size) in expected {
+        // Zero-byte files cannot be identified by size; leave them to the user.
+        let candidates: Vec<usize> = if *size == 0 {
+            Vec::new()
+        } else {
+            available
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| slot.as_ref().map(|(_, s)| s == size).unwrap_or(false))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        let expected_lower = rel_path.to_lowercase();
+        let expected_name_lower = rel_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(rel_path)
+            .to_lowercase();
+
+        let chosen = candidates
+            .iter()
+            .copied()
+            .find(|&i| {
+                available[i]
+                    .as_ref()
+                    .map(|(p, _)| p.to_lowercase() == expected_lower)
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                candidates.iter().copied().find(|&i| {
+                    available[i]
+                        .as_ref()
+                        .map(|(p, _)| {
+                            p.rsplit('/').next().unwrap_or(p).to_lowercase() == expected_name_lower
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .or_else(|| {
+                if candidates.len() == 1 {
+                    Some(candidates[0])
+                } else {
+                    None
+                }
+            });
+
+        let matched = chosen.and_then(|i| available[i].take());
+        out.push(TorrentContentFileMatch {
+            index: *index,
+            expected_rel_path: rel_path.clone(),
+            size_bytes: *size,
+            matched_rel_path: matched.map(|(p, _)| p),
+        });
+    }
+
+    out
+}
+
+fn collect_disk_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    depth: usize,
+    out: &mut Vec<(String, u64)>,
+) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_disk_files(root, &path, depth + 1, out);
+        } else if file_type.is_file() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                out.push((rel.to_string_lossy().replace('\\', "/"), size));
+            }
+        }
+    }
+}
+
+fn expand_home_dir(raw: &str) -> Result<std::path::PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("No save destination set".to_string());
+    }
+    let expanded = if trimmed == "~" {
+        dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        dirs::home_dir()
+            .ok_or_else(|| "Cannot resolve home directory".to_string())?
+            .join(rest)
+    } else {
+        std::path::PathBuf::from(trimmed)
+    };
+    if !expanded.is_absolute() {
+        return Err(format!(
+            "Save destination '{}' is not an absolute folder",
+            trimmed
+        ));
+    }
+    Ok(expanded)
+}
+
+/// Resolves a relative path against the save destination, rejecting absolute
+/// paths and traversal components so renames can never escape the folder.
+fn resolve_under(download_dir: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
+    let normalized = rel.trim().replace('\\', "/");
+    if normalized.is_empty() {
+        return Err("Empty path".to_string());
+    }
+    let rel_path = std::path::PathBuf::from(&normalized);
+    if rel_path.is_absolute() {
+        return Err(format!(
+            "Path '{}' must be relative to the save destination",
+            normalized
+        ));
+    }
+    for component in rel_path.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(format!("Invalid path component in '{}'", normalized));
+        }
+    }
+    Ok(download_dir.join(rel_path))
+}
+
+#[tauri::command]
+pub fn match_torrent_content(
+    source: String,
+    download_dir: String,
+) -> Result<TorrentContentMatch, String> {
+    let source_path = crate::engine::mock::normalize_source_path(&source);
+    let parsed = crate::engine::metainfo::ParsedTorrent::parse_file(&source_path)?;
+
+    let expanded = expand_home_dir(&download_dir)?;
+    if !expanded.is_dir() {
+        return Err(format!(
+            "Save destination '{}' does not exist",
+            expanded.display()
+        ));
+    }
+
+    let expected: Vec<(u32, String, u64)> = parsed
+        .files
+        .iter()
+        .map(|f| (f.index, f.name.clone(), f.size_bytes))
+        .collect();
+
+    let mut disk = Vec::new();
+    collect_disk_files(&expanded, &expanded, 0, &mut disk);
+
+    let files = match_content_files(&expected, &disk);
+    let matched_count = files
+        .iter()
+        .filter(|f| f.matched_rel_path.is_some())
+        .count();
+
+    Ok(TorrentContentMatch {
+        torrent_name: parsed.name,
+        is_multi_file: parsed.is_multi_file,
+        files,
+        matched_count,
+    })
+}
+
+#[tauri::command]
+pub fn apply_torrent_renames(
+    download_dir: String,
+    renames: Vec<TorrentRenameEntry>,
+) -> Result<usize, String> {
+    let expanded = expand_home_dir(&download_dir)?;
+    if !expanded.is_dir() {
+        return Err(format!(
+            "Save destination '{}' does not exist",
+            expanded.display()
+        ));
+    }
+    apply_torrent_renames_impl(&expanded, &renames)
+}
+
+fn apply_torrent_renames_impl(
+    download_dir: &std::path::Path,
+    renames: &[TorrentRenameEntry],
+) -> Result<usize, String> {
+    let mut applied = 0usize;
+    for entry in renames {
+        let from = resolve_under(download_dir, &entry.from_rel)?;
+        let to = resolve_under(download_dir, &entry.to_rel)?;
+        if from == to {
+            continue;
+        }
+        if !from.exists() {
+            return Err(format!(
+                "Cannot rename: '{}' does not exist",
+                entry.from_rel
+            ));
+        }
+        if to.exists() {
+            return Err(format!("Cannot rename: '{}' already exists", entry.to_rel));
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create '{}': {e}", parent.display()))?;
+        }
+        std::fs::rename(&from, &to).map_err(|e| {
+            format!(
+                "Failed to rename '{}' to '{}': {e}",
+                entry.from_rel, entry.to_rel
+            )
+        })?;
+        applied += 1;
+    }
+    Ok(applied)
+}
+
 #[tauri::command]
 pub fn remove_torrent(
     id: String,
@@ -872,6 +1142,120 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    fn expected(entries: &[(&str, u64)]) -> Vec<(u32, String, u64)> {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(i, (path, size))| (i as u32, path.to_string(), *size))
+            .collect()
+    }
+
+    #[test]
+    fn test_match_content_exact_path_wins() {
+        let exp = expected(&[("Movie/DISC_1.ISO", 100), ("Movie/DISC_2.ISO", 200)]);
+        let disk = vec![
+            ("Movie/DISC_1.ISO".to_string(), 100),
+            ("Movie/DISC_2.ISO".to_string(), 200),
+        ];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(out[0].matched_rel_path.as_deref(), Some("Movie/DISC_1.ISO"));
+        assert_eq!(out[1].matched_rel_path.as_deref(), Some("Movie/DISC_2.ISO"));
+    }
+
+    #[test]
+    fn test_match_content_same_name_different_folder() {
+        let exp = expected(&[("Banner of the Stars III OVA (2005) R2J/DISC_1.ISO", 100)]);
+        let disk = vec![("BANNER_S3/DISC_1.ISO".to_string(), 100)];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(
+            out[0].matched_rel_path.as_deref(),
+            Some("BANNER_S3/DISC_1.ISO")
+        );
+    }
+
+    #[test]
+    fn test_match_content_ambiguous_size_left_unmatched() {
+        let exp = expected(&[("a/file.bin", 100)]);
+        let disk = vec![
+            ("x/data.bin".to_string(), 100),
+            ("y/other.bin".to_string(), 100),
+        ];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(out[0].matched_rel_path, None);
+    }
+
+    #[test]
+    fn test_match_content_duplicate_name_same_size_picks_first() {
+        let exp = expected(&[("a/file.bin", 100)]);
+        let disk = vec![
+            ("x/file.bin".to_string(), 100),
+            ("y/file.bin".to_string(), 100),
+        ];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(out[0].matched_rel_path.as_deref(), Some("x/file.bin"));
+    }
+
+    #[test]
+    fn test_match_content_zero_size_never_auto_matched() {
+        let exp = expected(&[("a/empty.nfo", 0)]);
+        let disk = vec![("x/empty.nfo".to_string(), 0)];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(out[0].matched_rel_path, None);
+    }
+
+    #[test]
+    fn test_match_content_size_unique_fallback() {
+        let exp = expected(&[("Movie/DISC_1.ISO", 100)]);
+        let disk = vec![("elsewhere/data.bin".to_string(), 100)];
+        let out = match_content_files(&exp, &disk);
+        assert_eq!(
+            out[0].matched_rel_path.as_deref(),
+            Some("elsewhere/data.bin")
+        );
+    }
+
+    #[test]
+    fn test_resolve_under_rejects_escape() {
+        let base = std::path::Path::new("/tmp/base");
+        assert!(resolve_under(base, "a/b.txt").is_ok());
+        assert!(resolve_under(base, "/etc/passwd").is_err());
+        assert!(resolve_under(base, "../escape.txt").is_err());
+        assert!(resolve_under(base, "a/../../escape.txt").is_err());
+        assert!(resolve_under(base, "").is_err());
+    }
+
+    #[test]
+    fn test_apply_torrent_renames_end_to_end() {
+        let root = std::env::temp_dir().join(format!("nebulae-rename-test-{}", std::process::id()));
+        let src_dir = root.join("BANNER_S3");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("DISC_1.ISO"), vec![0u8; 100]).unwrap();
+        fs::write(src_dir.join("DISC_2.ISO"), vec![0u8; 200]).unwrap();
+
+        let renames = vec![
+            TorrentRenameEntry {
+                from_rel: "BANNER_S3/DISC_1.ISO".to_string(),
+                to_rel: "Banner of the Stars III OVA (2005) R2J/DISC_1.ISO".to_string(),
+            },
+            TorrentRenameEntry {
+                from_rel: "BANNER_S3/DISC_2.ISO".to_string(),
+                to_rel: "Banner of the Stars III OVA (2005) R2J/DISC_2.ISO".to_string(),
+            },
+        ];
+        let applied = apply_torrent_renames_impl(&root, &renames).unwrap();
+        assert_eq!(applied, 2);
+
+        let moved = root
+            .join("Banner of the Stars III OVA (2005) R2J")
+            .join("DISC_1.ISO");
+        assert!(moved.exists());
+        assert_eq!(fs::metadata(&moved).unwrap().len(), 100);
+        assert!(!src_dir.join("DISC_1.ISO").exists());
+        // The old folder itself is never deleted; only matched files move.
+        assert!(src_dir.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn test_parse_dialog_output_user_cancel() {
