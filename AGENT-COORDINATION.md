@@ -1096,6 +1096,7 @@ Directive recorded verbatim:
 
 
 
+
 ## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
 1. LIVE-VERIFIED the scrape layer against a real user torrent: tracker
    status surfaced a genuine failure - tracker.asiandvdclub.org has NO
