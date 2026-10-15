@@ -185,45 +185,82 @@ impl DiscDetector {
                 });
             }
 
-            // Check for ISO image inside directory
-            if let Ok(entries) = fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_file() {
-                        let ext = p
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        if ext == "iso" || ext == "img" {
-                            let iso_bytes = p.metadata().map(|m| m.len()).unwrap_or(0);
-                            let lower = p.to_string_lossy().to_lowercase();
-                            let is_uhd = lower.contains("uhd")
-                                || lower.contains("2160p")
-                                || iso_bytes > 55 * 1024 * 1024 * 1024;
-                            let (disc_type, layer_spec) = if is_uhd {
-                                (DiscType::UhdBluRay, DiscLayerSpec::UhdBd66)
-                            } else if iso_bytes > 9_500_000_000 {
-                                (DiscType::BluRay, DiscLayerSpec::Bd50)
-                            } else {
-                                (DiscType::DvdVideo, DiscLayerSpec::Dvd9)
-                            };
-
-                            return Some(DiscStructureInfo {
-                                disc_type,
-                                layer_spec,
-                                has_menu: true,
-                                root_path: path.to_string_lossy().to_string(),
-                                play_target: p.to_string_lossy().to_string(),
-                                cover_image,
-                                total_bytes: iso_bytes,
-                                title,
-                                disc_number,
-                                total_discs,
-                            });
+            // Check for ISO image inside directory. read_dir order is
+            // arbitrary, so a download root holding several images (e.g. an
+            // OS installer next to a multi-disc movie) must be resolved
+            // DETERMINISTICALLY: search the folder and one level of
+            // subfolders, preferring "disc 1" style names, then other
+            // disc-N names, then anything else, with the name as the
+            // final tie-break.
+            fn collect_iso_images(dir: &Path, out: &mut Vec<PathBuf>) {
+                if let Ok(entries) = fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file()
+                            && matches!(
+                                p.extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|s| s.to_ascii_lowercase()),
+                                Some(ext) if ext == "iso" || ext == "img"
+                            )
+                        {
+                            out.push(p);
                         }
                     }
                 }
+            }
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            collect_iso_images(path, &mut candidates);
+            if let Ok(subdirs) = fs::read_dir(path) {
+                for entry in subdirs.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        collect_iso_images(&p, &mut candidates);
+                    }
+                }
+            }
+            let image_rank = |p: &Path| {
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if name.contains("disc") && (name.contains('1') || name.contains("one")) {
+                    0
+                } else if name.contains("disc") {
+                    1
+                } else {
+                    2
+                }
+            };
+            candidates.sort_by(|a, b| image_rank(a).cmp(&image_rank(b)).then(a.cmp(b)));
+
+            if let Some(p) = candidates.first() {
+                let iso_bytes = p.metadata().map(|m| m.len()).unwrap_or(0);
+                let lower = p.to_string_lossy().to_lowercase();
+                let is_uhd = lower.contains("uhd")
+                    || lower.contains("2160p")
+                    || iso_bytes > 55 * 1024 * 1024 * 1024;
+                let (disc_type, layer_spec) = if is_uhd {
+                    (DiscType::UhdBluRay, DiscLayerSpec::UhdBd66)
+                } else if iso_bytes > 9_500_000_000 {
+                    (DiscType::BluRay, DiscLayerSpec::Bd50)
+                } else {
+                    (DiscType::DvdVideo, DiscLayerSpec::Dvd9)
+                };
+
+                return Some(DiscStructureInfo {
+                    disc_type,
+                    layer_spec,
+                    has_menu: true,
+                    root_path: path.to_string_lossy().to_string(),
+                    play_target: p.to_string_lossy().to_string(),
+                    cover_image,
+                    total_bytes: iso_bytes,
+                    title,
+                    disc_number,
+                    total_discs,
+                });
             }
         }
 
