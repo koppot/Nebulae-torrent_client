@@ -42,7 +42,10 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     brew install -q libdvdnav libdvdread meson ninja pkg-config
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
-    git clone --depth 1 --branch v0.41.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
+    # mpv 0.40 REMOVED DVD menu support ("DVD menu support has been
+    # removed." in the 0.41 binary). The owner requires DVD menus, so
+    # pin the last release with working dvdnav menu navigation.
+    git clone --depth 1 --branch v0.39.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
       meson setup build -Dgpl=true \
           -Ddvdnav=enabled -Dlibbluray=enabled \
@@ -59,6 +62,13 @@ fi
 mkdir -p "$TARGET_DIR/lib"
 cp -L "$MPV_BIN" "$TARGET_DIR/mpv"
 chmod 755 "$TARGET_DIR/mpv"
+
+# Menu-first lua: disc playback must land on the root menu (the owner
+# requirement - discs never auto-play the feature; navigation starts it).
+mkdir -p "$TARGET_DIR/scripts"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cp "$REPO_DIR/scripts/mpv/menu-first.lua" "$TARGET_DIR/scripts/menu-first.lua"
+chmod 644 "$TARGET_DIR/scripts/menu-first.lua"
 
 # Python 3 script to discover all non-system dylibs, copy them, rewrite IDs and rpaths
 python3 - <<EOF
@@ -216,6 +226,10 @@ for d in visited:
 
 subprocess.run(codesign_cmd + [mpv_path], check=True)
 print("Code signing completed for bundled dylib tree and mpv helper binary.")
+
+# Re-sign lua script marker (text file, no signing needed; listed here so
+# the bundle contents are obvious when reading CI logs).
+print("Menu-first lua script bundled: scripts/menu-first.lua")
 EOF
 
 # --- Bundled JRE (BD-J / 4K UHD interactive menus) --------------------------
@@ -261,6 +275,12 @@ if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/
 fi
 SMOKE_OUT=$("$TARGET_DIR/mpv" --version)
 echo "$SMOKE_OUT" | head -n 6
+# The app passes --deinterlace=auto on every launch; fail the build now if
+# this mpv release doesn't support it (option errors exit the player).
+"$TARGET_DIR/mpv" --deinterlace=help 2>/dev/null | grep -q "auto" || {
+    echo "ERROR: bundled mpv does not support --deinterlace=auto!"
+    exit 1
+}
 OPTIONS_OUT=$("$TARGET_DIR/mpv" --list-options)
 case "$OPTIONS_OUT" in
     *--dvd-device*)   : ;;

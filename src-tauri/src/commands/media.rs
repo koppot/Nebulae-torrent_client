@@ -207,6 +207,19 @@ pub fn launch_disc_player_impl(
     if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
         let mut cmd = Command::new(&player_bin);
 
+        // Disc playback must START ON THE ROOT MENU (owner requirement):
+        // some discs auto-run a first-play chain that jumps straight into
+        // the feature. The bundled lua returns to the menu the moment the
+        // disc loads; it is a harmless no-op for non-dvdnav playback.
+        let menu_script = player_bin
+            .parent()
+            .map(|d| d.join("scripts").join("menu-first.lua"));
+        if let Some(script) = menu_script {
+            if script.exists() {
+                cmd.arg(format!("--script={}", script.display()));
+            }
+        }
+
         // DVDs and many Blu-rays are interlaced. Auto deinterlacing (via
         // the libplacebo-based gpu-next renderer) restores smooth picture
         // without combing and never touches progressive content: only
