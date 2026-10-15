@@ -1326,3 +1326,16 @@ independent defects:
    ~/Downloads would otherwise be picked for the R2J torrent).
 NOTE for anyone touching the bundler: NEVER resolve otool deps through
 realpath(); Homebrew opt/ paths are symlinks - match the RAW strings.
+
+### 2026-10-15 — Droid: high-quality auto deinterlacing for disc playback
+
+Owner request: DVD/BD playback showed no deinterlacing. The launcher now
+passes --vo=gpu-next (libplacebo pipeline) and --deinterlace=auto to the
+bundled mpv on every launch: only frames flagged (or detected) interlaced
+are processed, progressive content is untouched. Owner's personal
+~/.config/mpv/mpv.conf also gained deinterlace=auto (global scope, placed
+above the [extension.*] profile sections - mpv config is section-scoped
+and appending at the bottom would bind the option to [extension.png]).
+Their deliberately-commented vo= setting was left untouched.
+NOTE: the owner's config sets input-ipc-server=/tmp/mpvsocket - a stale
+socket file there does NOT break mpv launches (verified by test).

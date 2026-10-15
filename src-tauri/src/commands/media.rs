@@ -207,6 +207,14 @@ pub fn launch_disc_player_impl(
     if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
         let mut cmd = Command::new(&player_bin);
 
+        // DVDs and many Blu-rays are interlaced. Auto deinterlacing (via
+        // the libplacebo-based gpu-next renderer) restores smooth picture
+        // without combing and never touches progressive content: only
+        // frames actually flagged (or detected) as interlaced are
+        // processed.
+        cmd.arg("--vo=gpu-next");
+        cmd.arg("--deinterlace=auto");
+
         // Ensure a Java runtime is accessible to libbluray for BD-J and 4K UHD
         // menus. The bundled JRE ships inside the package and is preferred over
         // any system JVM; its bin directory is also prepended to PATH so the
