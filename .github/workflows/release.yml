@@ -42,10 +42,12 @@ jobs:
           - **macOS Apple Silicon (M1/M2/M3/M4/M5)**:
             - `Nebulae-macOS-arm64.dmg` (standard disk image)
             - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-arm64.dmg-app.zip` (direct application bundle)
             - `Nebulae-macOS-arm64.dmg-app.tar.gz` (silent auto-update payload)
           - **macOS Intel (x86_64)**:
             - `Nebulae-macOS-x64.dmg` (standard disk image)
             - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-x64.dmg-app.zip` (direct application bundle)
             - `Nebulae-macOS-x64.dmg-app.tar.gz` (silent auto-update payload)
 
           ### Embedded Optical Disc Cinema Engine
