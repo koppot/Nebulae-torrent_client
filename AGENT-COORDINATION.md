@@ -924,6 +924,101 @@ Record of version bump instruction:
 - Status & Pending Confirmation: Commit d505c88 bumped internal version fields (package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json) to 0.9.2 per the explicit instruction above. This is flagged here for owner final confirmation.
 - Operating Constraint: NO tags, NO releases, NO GitHub version publishing will occur until the owner confirms the final version number in the coordination thread. If the owner confirms 0.9.1.1 instead of 0.9.2, the three version fields will be reverted in a single atomic commit.
 
+### 2026-10-15 — Antigravity: agent_allowed_family row 27 update executed & audit report
+
+The owner's authorized sequence for the `agent_allowed_family` row update was executed on the live database in the exact sequence specified:
+
+#### 1. Backup Execution (Step 1a)
+- SQL executed: `CREATE TABLE agent_allowed_family_backup_20261015 AS SELECT * FROM agent_allowed_family;`
+- Verification:
+  - `ORIG_COUNT`: 23
+  - `BACKUP_COUNT`: 23
+  - Row counts match exactly.
+
+#### 2. Table-wide Audit Findings (Step 1b)
+All 23 enabled rows were audited for pattern/start self-consistency (`preg_match(agent_pattern, agent_start)` and `preg_match(peer_id_pattern, peer_id_start)`):
+- **22 of 23 rows** are completely self-consistent (`Agent: MATCH | PeerID: MATCH`):
+  - ID 1: Tixati 2.80 (MATCH / MATCH)
+  - ID 3: rTorrent 0.9.6 (MATCH / MATCH)
+  - ID 4: Azureus 4.0.0.0 (MATCH / MATCH)
+  - ID 5: Azureus 5.0.0.0 (MATCH / MATCH)
+  - ID 6: Bittorrent 6.0.1 (MATCH / MATCH)
+  - ID 7: Bittorrent 7.0.1 (MATCH / MATCH)
+  - ID 8: rtorrent 0.9.8 (MATCH / MATCH)
+  - ID 9: BitComet 1.58.7.6 (MATCH / MATCH)
+  - ID 10: BitComet 1.61.11.2 (MATCH / MATCH)
+  - ID 11: Bittorrent 6.0.1 (MATCH / MATCH)
+  - ID 12: Bittorrent 7.10.5 (MATCH / MATCH)
+  - ID 13: Deluge 1.3.15 (MATCH / MATCH)
+  - ID 14: Deluge 2.0.3 (MATCH / MATCH)
+  - ID 16: Transmission 2.84 (MATCH / MATCH)
+  - ID 18: uTorrent 2.0.0.0 (MATCH / MATCH)
+  - ID 19: uTorrent 3.0.0.0 (MATCH / MATCH)
+  - ID 20: uTorrent 3.4.2 (MATCH / MATCH)
+  - ID 21: uTorrent 3.5.0 (MATCH / MATCH)
+  - ID 22: rTorrent 0.9.8 (MATCH / MATCH)
+  - ID 26: Tixati 3.11 (MATCH / MATCH)
+  - ID 28: qBittorrent 5.0.0 (MATCH / MATCH)
+  - ID 29: Tixati 3.21 (MATCH / MATCH)
+- **Exactly 1 row** had a self-inconsistency:
+  - **ID 27: Transmission 4.0.0**: `Agent: MISMATCH` (`pattern=/^Transmission\/4\.3\.1\.9/` vs `start=Transmission/4.0.3`). No other rows exhibited mismatches.
+
+#### 3. Row 27 Update & Verification (Step 1c)
+- Authorized SQL applied to row ID 27.
+- **Before State**:
+  ```json
+  {
+      "id": 27,
+      "family": "Transmission 4.0",
+      "start_name": "Transmission 4.0.0",
+      "peer_id_pattern": "/^-TR431([0-9A-Za-z])-/",
+      "peer_id_match_num": 1,
+      "peer_id_matchtype": "hex",
+      "peer_id_start": "-TR4319-",
+      "agent_pattern": "/^Transmission\\/4\\.3\\.1\\.9/",
+      "agent_match_num": 0,
+      "agent_matchtype": "dec",
+      "agent_start": "Transmission/4.0.3",
+      "exception": "no",
+      "allowhttps": "yes",
+      "enabled": "yes"
+  }
+  ```
+- **After State**:
+  ```json
+  {
+      "id": 27,
+      "family": "Transmission 4.0",
+      "start_name": "Transmission 4.0.0",
+      "peer_id_pattern": "/^-TR4([0-9])([0-9])([0-9A-Za-z])-/",
+      "peer_id_match_num": 3,
+      "peer_id_matchtype": "dec",
+      "peer_id_start": "-TR4000-",
+      "agent_pattern": "/^Transmission\\/4\\.([0-9]+)/",
+      "agent_match_num": 1,
+      "agent_matchtype": "dec",
+      "agent_start": "Transmission/4.0",
+      "exception": "no",
+      "allowhttps": "yes",
+      "enabled": "yes"
+  }
+  ```
+- **Live Verification**:
+  - `Transmission/4.1.3` with peer ID `-TR4130-...`: evaluated against live DB, returned `false` (ACCEPTED).
+  - Invalid client / mismatched peer ID: returned rejection string as expected.
+
+#### 4. Enforcement & Dry-Run Monitoring Status (Step 1d & 1e)
+- **Enforcement Remains OFF**: The blocking call in `app/controllers/announce.php` remains commented out (`$this->announce_error` not called).
+- **Dry-Run Logging Active**: Would-be rejections are actively appending to `/var/www/html/app/logs/announce_whitelist_dryrun.log`.
+- **Preliminary Live Swarm Observation**: Within minutes of activation, real ADC member traffic showed announces from:
+  - `qBittorrent/4.3.4.1` (`-qB4341-...`)
+  - `qBittorrent/4.6.7` (`-qB4670-...`)
+  - `rtorrent/0.16.11` (`-lt100B-...`)
+  - `Tixati/3.32`, `3.38`, `3.44`
+  - `rqbit 9.0.1` (`-rQ9010-...`)
+  Because the current DB whitelist only contains a very narrow set of historical versions (e.g. qBittorrent 5.0.0+, Deluge 1.3/2.0), keeping enforcement OFF is strictly necessary to prevent broad false-positive member lockouts. A full dry-run summary will be compiled after 24–48 hours for owner review.
+
+
 
 
 
