@@ -139,6 +139,9 @@ export const defaultSettings: UserSettings = {
   rtorrent_server_enabled: false,
   rtorrent_server_url: '',
   rtorrent_server_token: '',
+
+  // 10. BitTorrent Engine
+  engine: 'transmission',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

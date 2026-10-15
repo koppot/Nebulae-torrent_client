@@ -133,7 +133,10 @@ pub struct UserSettings {
     pub rtorrent_server_url: String,
     pub rtorrent_server_token: String,
 
-    // 10. Internal bookkeeping
+    // 10. Engine Selection ("transmission" | "librqbit")
+    pub engine: String,
+
+    // 11. Internal bookkeeping
     /// Version of Nebulae that last persisted these settings. When a new
     /// install takes over, settings are re-persisted with the new version
     /// and any newly applied defaults.
@@ -273,7 +276,10 @@ impl Default for UserSettings {
             rtorrent_server_url: String::new(),
             rtorrent_server_token: String::new(),
 
-            // 10. Internal bookkeeping
+            // 10. Engine Selection
+            engine: "transmission".to_string(),
+
+            // 11. Internal bookkeeping
             app_version: None,
         }
     }
@@ -377,6 +383,7 @@ mod tests {
         );
         assert_eq!(defaults.encryption_mode, deserialized.encryption_mode);
         assert_eq!(defaults.webui_port, deserialized.webui_port);
+        assert_eq!(defaults.engine, deserialized.engine);
         assert!(deserialized.auto_update_enabled);
     }
 
@@ -391,6 +398,7 @@ mod tests {
         assert_eq!(deserialized.listening_port, 6889);
         assert_eq!(deserialized.encryption_mode, "Prefer");
         assert_eq!(deserialized.max_global_connections, 500);
+        assert_eq!(deserialized.engine, "transmission");
         assert!(deserialized.auto_update_enabled);
     }
 }

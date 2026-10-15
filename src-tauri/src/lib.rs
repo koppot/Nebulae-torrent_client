@@ -74,7 +74,7 @@ pub fn run() {
     let rtorrent_server_mode =
         settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty();
 
-    let mut real_engine_opt = None;
+    let mut real_engine_opt: Option<SharedEngine> = None;
     let mut init_error: Option<String> = None;
 
     let engine: SharedEngine = if rtorrent_server_mode {
@@ -91,54 +91,111 @@ pub fn run() {
             settings.rtorrent_server_token.clone(),
         ))
     } else {
-        // 4. Initialize production engine (RqbitTorrentEngine)
+        // Initialize production engine: Transmission (default) or librqbit (selectable rollback).
         // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
-        match engine::RqbitTorrentEngine::new(
-            Arc::clone(&paths),
-            Arc::clone(&db),
-            download_dir.clone(),
-            listening_port,
-            settings.enable_upnp,
-        ) {
-            Ok(real_engine) => {
-                SafeLogger::log_to_file(
-                    &paths.logs_dir,
-                    "INFO",
-                    &format!("Initialized librqbit production engine on port {listening_port}"),
-                );
-                real_engine_opt = Some(real_engine);
-            }
-            Err(e) => {
-                SafeLogger::log_to_file(
-                    &paths.logs_dir,
-                    "WARN",
-                    &format!(
-                        "First engine initialization attempt failed: {e}. Retrying in 500ms..."
-                    ),
-                );
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                match engine::RqbitTorrentEngine::new(
-                    Arc::clone(&paths),
-                    Arc::clone(&db),
-                    download_dir,
-                    listening_port,
-                    settings.enable_upnp,
-                ) {
-                    Ok(real_engine) => {
-                        SafeLogger::log_to_file(
-                            &paths.logs_dir,
-                            "INFO",
-                            &format!("Initialized librqbit production engine on retry on port {listening_port}"),
-                        );
-                        real_engine_opt = Some(real_engine);
+        let use_librqbit = settings.engine.trim() == "librqbit";
+        if use_librqbit {
+            match engine::RqbitTorrentEngine::new(
+                Arc::clone(&paths),
+                Arc::clone(&db),
+                download_dir.clone(),
+                listening_port,
+                settings.enable_upnp,
+            ) {
+                Ok(real_engine) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "INFO",
+                        &format!("Initialized librqbit production engine on port {listening_port}"),
+                    );
+                    real_engine_opt = Some(Arc::new(real_engine));
+                }
+                Err(e) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "WARN",
+                        &format!(
+                            "First librqbit engine initialization attempt failed: {e}. Retrying in 500ms..."
+                        ),
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    match engine::RqbitTorrentEngine::new(
+                        Arc::clone(&paths),
+                        Arc::clone(&db),
+                        download_dir,
+                        listening_port,
+                        settings.enable_upnp,
+                    ) {
+                        Ok(real_engine) => {
+                            SafeLogger::log_to_file(
+                                &paths.logs_dir,
+                                "INFO",
+                                &format!("Initialized librqbit production engine on retry on port {listening_port}"),
+                            );
+                            real_engine_opt = Some(Arc::new(real_engine));
+                        }
+                        Err(retry_err) => {
+                            SafeLogger::log_to_file(
+                                &paths.logs_dir,
+                                "ERROR",
+                                &format!(
+                                    "Failed to initialize librqbit engine after retry: {retry_err}"
+                                ),
+                            );
+                            init_error = Some(retry_err);
+                        }
                     }
-                    Err(retry_err) => {
-                        SafeLogger::log_to_file(
-                            &paths.logs_dir,
-                            "ERROR",
-                            &format!("Failed to initialize real engine after retry: {retry_err}"),
-                        );
-                        init_error = Some(retry_err);
+                }
+            }
+        } else {
+            // Transmission engine (default)
+            match engine::TransmissionTorrentEngine::new(
+                Arc::clone(&paths),
+                Arc::clone(&db),
+                download_dir.clone(),
+                &settings,
+                None,
+            ) {
+                Ok(real_engine) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "INFO",
+                        &format!("Initialized transmission-daemon production engine on port {listening_port}"),
+                    );
+                    real_engine_opt = Some(Arc::new(real_engine));
+                }
+                Err(e) => {
+                    SafeLogger::log_to_file(
+                        &paths.logs_dir,
+                        "WARN",
+                        &format!(
+                            "First transmission-daemon initialization attempt failed: {e}. Retrying in 500ms..."
+                        ),
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    match engine::TransmissionTorrentEngine::new(
+                        Arc::clone(&paths),
+                        Arc::clone(&db),
+                        download_dir,
+                        &settings,
+                        None,
+                    ) {
+                        Ok(real_engine) => {
+                            SafeLogger::log_to_file(
+                                &paths.logs_dir,
+                                "INFO",
+                                &format!("Initialized transmission-daemon production engine on retry on port {listening_port}"),
+                            );
+                            real_engine_opt = Some(Arc::new(real_engine));
+                        }
+                        Err(retry_err) => {
+                            SafeLogger::log_to_file(
+                                &paths.logs_dir,
+                                "ERROR",
+                                &format!("Failed to initialize transmission-daemon engine after retry: {retry_err}"),
+                            );
+                            init_error = Some(retry_err);
+                        }
                     }
                 }
             }
@@ -156,7 +213,7 @@ pub fn run() {
         };
 
         if let Some(real_engine) = real_engine_opt {
-            Arc::new(real_engine)
+            real_engine
         } else if allow_mock {
             SafeLogger::log_to_file(
                 &paths.logs_dir,

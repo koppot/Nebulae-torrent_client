@@ -281,6 +281,9 @@ export interface UserSettings {
   rtorrent_server_enabled: boolean;
   rtorrent_server_url: string;
   rtorrent_server_token: string;
+
+  // 10. BitTorrent Engine
+  engine?: 'transmission' | 'librqbit';
 }
 
 export interface CreateTorrentParams {
@@ -328,7 +331,21 @@ export interface DiscPlayerStatus {
   note?: string | null;
 }
 
+export interface InspectTorrentResult {
+  name: string;
+  total_bytes: number;
+  piece_size: number;
+  total_pieces: number;
+  info_hash: string;
+  is_private: boolean;
+  comment: string;
+  created_by: string;
+  files: TorrentFileItem[];
+  trackers: TorrentTrackerItem[];
+}
+
 export * from './peering';
 export * from './connectivity';
 export * from './vpn';
 export * from './tracker';
+

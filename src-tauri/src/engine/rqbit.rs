@@ -271,6 +271,14 @@ impl RqbitTorrentEngine {
                 folder: Some(paths.engine_dir.clone()),
             }),
             fastresume: true,
+            dht: if listening_port == 0 {
+                Some(librqbit::DhtSessionConfig {
+                    port: Some(0),
+                    ..Default::default()
+                })
+            } else {
+                Some(librqbit::DhtSessionConfig::default())
+            },
             ..Default::default()
         };
 

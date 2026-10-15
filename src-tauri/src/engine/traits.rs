@@ -77,4 +77,7 @@ pub trait TorrentEngine: Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String>;
+    fn check_port_open(&self) -> Option<bool> {
+        None
+    }
 }

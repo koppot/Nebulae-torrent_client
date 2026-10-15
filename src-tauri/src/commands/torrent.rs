@@ -208,6 +208,32 @@ pub fn inspect_torrent_file(
                         trackers: parsed.trackers,
                     });
                 }
+                if let Ok(meta) = norm_path.metadata() {
+                    let total_bytes = meta.len();
+                    let file_name = norm_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Local File".to_string());
+                    let piece_size = recommended_piece_size_bytes(total_bytes);
+                    return Ok(InspectTorrentResult {
+                        name: file_name.clone(),
+                        total_bytes,
+                        piece_size,
+                        total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
+                        info_hash: format!("local_{:x}", total_bytes),
+                        is_private: true,
+                        comment: "Local Storage File".to_string(),
+                        created_by: "Nebulae Metainfo Tool".to_string(),
+                        files: vec![crate::commands::torrent::TorrentFileItem {
+                            index: 0,
+                            name: file_name,
+                            size_bytes: total_bytes,
+                            progress: 1.0,
+                            priority: 1,
+                        }],
+                        trackers: vec![],
+                    });
+                }
             } else if norm_path.is_dir() {
                 let files = crate::engine::mock::scan_directory_files(&norm_path)?;
                 let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
@@ -215,13 +241,14 @@ pub fn inspect_torrent_file(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Local Directory".to_string());
+                let piece_size = recommended_piece_size_bytes(total_bytes);
                 return Ok(InspectTorrentResult {
                     name: dir_name,
                     total_bytes,
-                    piece_size: 1_048_576,
-                    total_pieces: total_bytes.div_ceil(1_048_576) as u32,
+                    piece_size,
+                    total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
                     info_hash: format!("local_{:x}", total_bytes),
-                    is_private: false,
+                    is_private: true,
                     comment: "Local Storage Directory".to_string(),
                     created_by: "Nebulae Metainfo Tool".to_string(),
                     files,
@@ -232,6 +259,21 @@ pub fn inspect_torrent_file(
     }
 
     Err("Could not inspect torrent: invalid source or unsupported format".to_string())
+}
+
+/// Computes the recommended piece size in bytes based on total content size:
+/// - >= 50 GiB: 16 MiB
+/// - >= 15 GiB: 8 MiB
+/// - < 15 GiB: 1 MiB default
+pub fn recommended_piece_size_bytes(total_bytes: u64) -> u32 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if total_bytes >= 50 * GIB {
+        16 * 1024 * 1024
+    } else if total_bytes >= 15 * GIB {
+        8 * 1024 * 1024
+    } else {
+        1_048_576
+    }
 }
 
 #[tauri::command]
@@ -699,13 +741,26 @@ pub async fn create_torrent_file(
     let out_dir_clone = out_dir.clone();
     let trackers_for_build = trackers_clean.clone();
 
+    let piece_size_kib = if params.piece_size_kib == 0 {
+        let total_bytes: u64 = if source.is_file() {
+            std::fs::metadata(&source).map(|m| m.len()).unwrap_or(0)
+        } else {
+            crate::engine::mock::scan_directory_files(&source)
+                .map(|files| files.iter().map(|f| f.size_bytes).sum())
+                .unwrap_or(0)
+        };
+        recommended_piece_size_bytes(total_bytes) / 1024
+    } else {
+        params.piece_size_kib
+    };
+
     let target_file = tokio::task::spawn_blocking(move || {
         crate::engine::metainfo::build_torrent_file(
             &source_clone,
             &out_dir_clone,
-            params_clone.piece_size_kib,
+            piece_size_kib,
             &trackers_for_build,
-            params_clone.is_private,
+            true, // private: 1 stays mandatory for created torrents per private-tracker security constraint
             &params_clone.comment,
             &params_clone.created_by,
         )

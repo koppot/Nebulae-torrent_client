@@ -35,7 +35,7 @@ fn setup_test_engine(test_name: &str) -> (RqbitTorrentEngine, std::path::PathBuf
     std::fs::create_dir_all(&download_dir).unwrap();
 
     // Use ephemeral port 0 for concurrent test isolation
-    let engine = RqbitTorrentEngine::new(paths, db, download_dir, 0)
+    let engine = RqbitTorrentEngine::new(paths, db, download_dir, 0, false)
         .expect("Failed to initialize RqbitTorrentEngine");
 
     (engine, tmp)

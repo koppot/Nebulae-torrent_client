@@ -165,10 +165,11 @@ export const TorrentManagerView: React.FC = () => {
   } = useUiStore();
 
   const { peers, fetchPeers } = usePeeringStore();
-  const { engineMode } = useSettingsStore();
+  const { engineMode, settings } = useSettingsStore();
   // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
   // fulfill instead of offering actions that only produce errors.
   const isRemoteServer = engineMode === 'rtorrent_server';
+  const isTransmission = !isRemoteServer && (settings.engine || 'transmission') === 'transmission';
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -381,6 +382,20 @@ export const TorrentManagerView: React.FC = () => {
     });
   };
 
+  const openRenameFileModal = (fileIndex: number, fileName: string) => {
+    if (!selectedTorrent) return;
+    setRenameError(null);
+    setRenameModal({
+      isOpen: true,
+      type: 'file',
+      id: selectedTorrent.id,
+      fileIndex,
+      currentName: fileName,
+      newName: fileName,
+      savePath: selectedTorrent.save_path,
+    });
+  };
+
   const handleConfirmRename = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = renameModal.newName.trim();
@@ -518,24 +533,24 @@ export const TorrentManagerView: React.FC = () => {
 
             <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
               {!isRemoteServer && (
-                node.path.includes('/') ? (
-                  <span
-                    className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-                    title="Nested folders cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
-                  >
-                    <Edit2 className="w-3 h-3 text-[#525252]" />
-                    <span>Rename Folder</span>
-                  </span>
-                ) : (
+                isTransmission || !node.path.includes('/') ? (
                   <button
                     type="button"
                     onClick={() => openRenameFolderModal(node.path, node.name)}
                     className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
-                    title={`Rename the torrent folder "${node.name}" on disk (detaches, renames, re-verifies data)`}
+                    title={`Rename the folder "${node.name}"`}
                   >
                     <Edit2 className="w-3 h-3 text-[#e50914]" />
                     <span>Rename Folder</span>
                   </button>
+                ) : (
+                  <span
+                    className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                    title="Nested folders cannot be renamed: librqbit cannot remap paths inside a torrent"
+                  >
+                    <Edit2 className="w-3 h-3 text-[#525252]" />
+                    <span>Rename Folder</span>
+                  </span>
                 )
               )}
             </div>
@@ -597,13 +612,25 @@ export const TorrentManagerView: React.FC = () => {
             </button>
           )}
           {!isRemoteServer && (
-            <span
-              className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-              title="Individual files cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
-            >
-              <Edit2 className="w-3 h-3 text-[#525252]" />
-              <span>Rename File</span>
-            </span>
+            isTransmission ? (
+              <button
+                type="button"
+                onClick={() => node.file && openRenameFileModal(node.file.index, node.name)}
+                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                title={`Rename file "${node.name}"`}
+              >
+                <Edit2 className="w-3 h-3 text-[#e50914]" />
+                <span>Rename File</span>
+              </button>
+            ) : (
+              <span
+                className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                title="Individual files cannot be renamed: librqbit cannot remap paths inside a torrent"
+              >
+                <Edit2 className="w-3 h-3 text-[#525252]" />
+                <span>Rename File</span>
+              </span>
+            )
           )}
         </div>
       </div>
@@ -1115,13 +1142,25 @@ export const TorrentManagerView: React.FC = () => {
                                 </button>
                               )}
                               {!isRemoteServer && (
-                                <span
-                                  className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-                                  title="Individual files cannot be renamed: the engine (librqbit) cannot remap paths inside a torrent"
-                                >
-                                  <Edit2 className="w-3 h-3 text-[#525252]" />
-                                  <span>Rename</span>
-                                </span>
+                                isTransmission ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openRenameFileModal(file.index, file.name)}
+                                    className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                                    title={`Rename file "${file.name}"`}
+                                  >
+                                    <Edit2 className="w-3 h-3 text-[#e50914]" />
+                                    <span>Rename</span>
+                                  </button>
+                                ) : (
+                                  <span
+                                    className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                                    title="Individual files cannot be renamed: librqbit cannot remap paths inside a torrent"
+                                  >
+                                    <Edit2 className="w-3 h-3 text-[#525252]" />
+                                    <span>Rename</span>
+                                  </span>
+                                )
                               )}
                             </div>
                           </div>

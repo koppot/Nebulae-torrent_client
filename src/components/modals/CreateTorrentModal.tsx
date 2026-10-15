@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
+import { InspectTorrentResult } from '../../types';
 import { X, Sparkles, Folder, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 const LAST_SAVED_TRACKERS_KEY = 'nebulae_last_created_trackers';
@@ -31,10 +33,22 @@ export const CreateTorrentModal: React.FC = () => {
 
   if (!showCreateTorrent) return null;
 
+  const handleSourceSelected = async (path: string) => {
+    setSourcePath(path);
+    try {
+      const inspected = await invoke<InspectTorrentResult>('inspect_torrent_source', { source: path });
+      if (inspected && inspected.piece_size) {
+        setPieceSizeKib(Math.max(16, Math.round(inspected.piece_size / 1024)));
+      }
+    } catch {
+      // Keep current piece size
+    }
+  };
+
   const handleBrowseFolder = async () => {
     try {
       const path = await selectSourceFolder();
-      if (path) setSourcePath(path);
+      if (path) await handleSourceSelected(path);
     } catch {
       //
     }
@@ -43,7 +57,7 @@ export const CreateTorrentModal: React.FC = () => {
   const handleBrowseFile = async () => {
     try {
       const path = await selectSourceFile();
-      if (path) setSourcePath(path);
+      if (path) await handleSourceSelected(path);
     } catch {
       //
     }
@@ -183,11 +197,11 @@ export const CreateTorrentModal: React.FC = () => {
                 <option value={128}>128 KiB</option>
                 <option value={256}>256 KiB</option>
                 <option value={512}>512 KiB</option>
-                <option value={1024}>1 MiB (Recommended)</option>
+                <option value={1024}>1 MiB (Default &lt; 15 GiB)</option>
                 <option value={2048}>2 MiB</option>
-                <option value={4096}>4 MiB (4K Media)</option>
-                <option value={8192}>8 MiB</option>
-                <option value={16384}>16 MiB</option>
+                <option value={4096}>4 MiB</option>
+                <option value={8192}>8 MiB (ADC Default ≥ 15 GiB)</option>
+                <option value={16384}>16 MiB (ADC Default ≥ 50 GiB)</option>
               </select>
             </div>
 
