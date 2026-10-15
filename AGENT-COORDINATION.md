@@ -1111,3 +1111,51 @@ Directive recorded verbatim:
    SOURCE chain ("error sending request: dns error: ...") instead of
    the useless top-level message alone.
 4. Gates: 79 tests, clippy -D warnings, fmt, pnpm build green.
+
+### 2026-10-15 — Antigravity: Revised Final Phase execution, engine hardening, and test builds
+
+In accordance with the owner's Revised Final Phase directive, the following actions and verifications were executed:
+
+#### 1. Branch Sync and Cold Gate Re-Verification
+- **Main branch merge**: Branch `ag/transmission-engine` was synced and re-verified against latest `main` (`64c8754`, "Seeds: null-when-unknown semantics + scrape error root causes") with merge commit `14c2d5c`.
+- **Cold gates passed cleanly**:
+  - `cargo fmt --check`: 100% compliant.
+  - `cargo clippy -- -D warnings`: 0 warnings, clean compilation.
+  - `cargo test`: 100/100 tests passed (86 unit/lib tests, 9 engine integration tests, 5 rqbit integration tests).
+  - `pnpm build`: TypeScript and Vite compilation clean (1606 modules transformed).
+
+#### 2. Mockup Engine Removal from Production Runtime
+- **Mock engine isolation**: `MockTorrentEngine` was completely removed from production runtime dispatch in `src-tauri/src/lib.rs` (commit `92d7b74`).
+- **Fail-closed error recovery**: The silent fallback to `MockTorrentEngine` was eliminated. If neither Transmission nor librqbit can be initialized, the client enters an explicit recovery state with `FailedTorrentEngine`, surfacing a hard, visible error explaining that no real engine could start.
+- **Utility extraction**: Real production utilities (`normalize_source_path` and `decode_base64_data`) previously colocated in `mock.rs` were extracted into canonical home `src-tauri/src/utils/paths.rs`. `MockTorrentEngine` is retained strictly as an automated test double for `tests/engine_integration.rs` under explicit test fixture isolation.
+
+#### 3. Transmission Engine Runtime Hardening & Bug Fixes
+- **macOS `.app` Bundle Discovery**: In packaged macOS application bundles, resources reside at `Nebulae.app/Contents/Resources/resources/...`. In previous builds, `find_transmission_daemon_binary` only checked relative to `Contents/MacOS/resources/`, which failed to locate the bundled daemon unless the user had Homebrew installed. Added the macOS bundle layout search candidate (`exe_dir.parent().join("Resources")...`), verified by mounting real built DMG.
+- **`add_torrent` Input Hardening**:
+  - Killswitch fail-closed enforcement active: rejects additions immediately if VPN killswitch is engaged.
+  - Auto-detection and decoding of base64 data URLs (`data:application/x-bittorrent;base64,...` and `base64:...`).
+  - Automatic normalization and direct file reading for local file paths (`file://` URIs, paths with `~`, or quoted strings), passing raw metainfo bytes directly to Transmission JSON-RPC.
+  - Native passthrough for magnet links (`magnet:?xt=...`) and HTTP(S) URLs.
+- **Multi-File Layout Duplication Prevention**: `add_torrent_from_bytes` resolves the destination directory using `resolve_transmission_download_dir`, ensuring Transmission does not create a nested duplicate directory when a user selects an output folder already matching the torrent root name.
+- **Linux CI Compilation Fix**: Disabled `clang-tidy` during the Transmission CMake build on Ubuntu 22.04 (`-DENABLE_CLANG_TIDY=OFF -DCMAKE_CXX_CLANG_TIDY="" -DCMAKE_C_CLANG_TIDY=""`) to bypass a known LLVM 14 `StaticAccessedThroughInstanceCheck` segfault during compilation of `peer-mgr.cc`.
+
+#### 4. Migration Correctness Verification (Static Analysis)
+- **Zero Data Loss**: `run_librqbit_migration` opens existing `session.json` in read-only mode and copies `.torrent` files into memory; it never deletes, truncates, or modifies the legacy `librqbit` directory.
+- **Paused Import**: All migrated torrents are submitted to Transmission with `"paused": true`.
+- **Verify-Before-Start**: Each migrated torrent immediately triggers `torrent-verify` before resuming, ensuring on-disk piece integrity.
+- **Rollback Safety**: Setting `engine: "librqbit"` in Settings immediately activates the original `RqbitTorrentEngine` with its intact session files.
+
+#### 5. CI Test Executable Artifacts (No Release / No Tags)
+- **Workflow**: Produced via `.github/workflows/build-test.yml` (commit `334ac55`, runs `38778305410` and `38780069993`).
+- **Verified Artifacts & SHA-256 Checksums**:
+  - **Windows x64**:
+    - `Nebulae-Setup-x64.exe`: `6543efc520cc37943f8609703f152c5656ec722914dd7208588ead5bf070b547`
+    - `nebulae.exe`: `6aba3b5667f729483b96eb20fc1ddeed4f578a9e8991e55747f06936f756110f`
+  - **macOS Apple Silicon (arm64)**:
+    - `Nebulae-macOS-arm64.dmg`: `897f0205b567a7a36c9051d54045ece0518b444d5a1f2601502518472add6929`
+    - `Nebulae-macOS-arm64.dmg-app.zip`: `ac04abd600705d1d8a982f6548ee2ff06ca8bf5ac9484a6aafd2d3427efa81a0`
+  - **macOS Intel (x64)**:
+    - `Nebulae-macOS-x64.dmg`: `0a53a4665d6182d4c920933c5f82b2525b665f502d29bed647eaf9986fe9a0a6`
+    - `Nebulae-macOS-x64.dmg-app.zip`: `8fd30ab501ad881c6a4bc1d1043e1d4a8caa5db7510f0c3c935924ea7bfe3625`
+  - **Linux x86_64**:
+    - Run `38780069993` active for final deb/rpm/AppImage packaging with clang-tidy fix.
