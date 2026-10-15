@@ -82,6 +82,21 @@ pub fn find_transmission_daemon_binary(resource_dir: Option<&Path>) -> Result<Pa
             candidates.push(exe_dir.join("resources").join(bin_name));
             candidates.push(exe_dir.join(bin_name));
 
+            // macOS .app bundle layout: Contents/MacOS/nebulae -> Contents/Resources/
+            if let Some(contents_dir) = exe_dir.parent() {
+                let res_dir = contents_dir.join("Resources");
+                candidates.push(
+                    res_dir
+                        .join("resources")
+                        .join("engine")
+                        .join("transmission")
+                        .join(bin_name),
+                );
+                candidates.push(res_dir.join("engine").join("transmission").join(bin_name));
+                candidates.push(res_dir.join("transmission").join(bin_name));
+                candidates.push(res_dir.join(bin_name));
+            }
+
             // Linux packaging layouts
             if let Some(prefix) = exe_dir.parent().and_then(|p| p.parent()) {
                 candidates.push(
@@ -1201,9 +1216,52 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
+        if self.kill_switch_active.load(Ordering::SeqCst) {
+            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
+        }
+
+        let trimmed = source.trim();
+
+        // 1. Check if source is base64 encoded
+        let b64_candidate = if trimmed.starts_with("data:") {
+            trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
+        } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
+            Some(stripped)
+        } else if !trimmed.starts_with("magnet:")
+            && !trimmed.starts_with("http://")
+            && !trimmed.starts_with("https://")
+            && !trimmed.contains('/')
+            && !trimmed.contains('\\')
+            && trimmed.len() > 100
+        {
+            Some(trimmed)
+        } else {
+            None
+        };
+
+        if let Some(b64) = b64_candidate {
+            if let Ok(decoded) = crate::utils::paths::decode_base64_data(b64) {
+                return self.add_torrent_from_bytes(&decoded, download_dir);
+            }
+        }
+
+        // 2. Check if source is a local file path
+        if !trimmed.starts_with("magnet:")
+            && !trimmed.starts_with("http://")
+            && !trimmed.starts_with("https://")
+        {
+            let norm_path = crate::utils::paths::normalize_source_path(trimmed);
+            if norm_path.is_file() {
+                if let Ok(bytes) = std::fs::read(&norm_path) {
+                    return self.add_torrent_from_bytes(&bytes, download_dir);
+                }
+            }
+        }
+
+        // 3. Magnet or HTTP(S) URL
         let dest = normalize_download_dir(download_dir)?;
         let mut args = json!({
-            "filename": source,
+            "filename": trimmed,
             "paused": false
         });
         if let Some(ref d) = dest {
@@ -1220,15 +1278,33 @@ impl TorrentEngine for TransmissionTorrentEngine {
         bytes: &[u8],
         download_dir: Option<&str>,
     ) -> Result<String, String> {
+        if self.kill_switch_active.load(Ordering::SeqCst) {
+            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
+        }
+
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
         let dest = normalize_download_dir(download_dir)?;
+
+        let effective_dest = if let Some(ref d) = dest {
+            if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(bytes) {
+                Some(resolve_transmission_download_dir(
+                    d,
+                    &parsed.name,
+                    parsed.is_multi_file,
+                ))
+            } else {
+                Some(d.clone())
+            }
+        } else {
+            None
+        };
 
         let mut args = json!({
             "metainfo": b64,
             "paused": false
         });
-        if let Some(ref d) = dest {
+        if let Some(ref d) = effective_dest {
             args["download-dir"] = json!(d);
         }
 

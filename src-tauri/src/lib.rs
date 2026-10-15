@@ -210,9 +210,7 @@ pub fn run() {
             SafeLogger::log_to_file(
                 &paths.logs_dir,
                 "ERROR",
-                &format!(
-                    "Engine initialization failed. Entering recovery state: {err_msg}"
-                ),
+                &format!("Engine initialization failed. Entering recovery state: {err_msg}"),
             );
             Arc::new(engine::FailedTorrentEngine::new(err_msg))
         }

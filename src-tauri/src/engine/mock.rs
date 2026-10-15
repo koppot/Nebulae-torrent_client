@@ -4,74 +4,7 @@ use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub fn decode_base64_data(input: &str) -> Result<Vec<u8>, String> {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::new();
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for &b in input.as_bytes() {
-        if b == b'=' || b.is_ascii_whitespace() {
-            continue;
-        }
-        let val = TABLE
-            .iter()
-            .position(|&c| c == b)
-            .ok_or_else(|| "Invalid base64 character".to_string())? as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(out)
-}
-
-pub fn normalize_source_path(source: &str) -> std::path::PathBuf {
-    let mut s = source.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        s = &s[1..s.len() - 1];
-    }
-    if let Some(stripped) = s.strip_prefix("file://") {
-        let decoded = percent_decode_path(stripped);
-        return std::path::PathBuf::from(decoded);
-    }
-    if let Some(stripped) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
-    }
-    if s == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    }
-    std::path::PathBuf::from(s)
-}
-
-fn percent_decode_path(input: &str) -> String {
-    let mut bytes = Vec::new();
-    let mut chars = input.bytes();
-    while let Some(b) = chars.next() {
-        if b == b'%' {
-            if let (Some(h1), Some(h2)) = (chars.next(), chars.next()) {
-                if let Ok(val) =
-                    u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16)
-                {
-                    bytes.push(val);
-                    continue;
-                }
-                bytes.push(b'%');
-                bytes.push(h1);
-                bytes.push(h2);
-                continue;
-            }
-        }
-        bytes.push(b);
-    }
-    String::from_utf8_lossy(&bytes).to_string()
-}
+pub use crate::utils::paths::{decode_base64_data, normalize_source_path};
 
 pub fn scan_directory_files(dir: &std::path::Path) -> Result<Vec<TorrentFileItem>, String> {
     fn walk(
