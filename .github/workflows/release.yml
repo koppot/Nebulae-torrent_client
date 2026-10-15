@@ -373,10 +373,32 @@ jobs:
             ln -s /Applications "$STAGING_DIR/Applications"
             cp "$ICON_PATH" "$STAGING_DIR/.VolumeIcon.icns"
             SetFile -c icnC "$STAGING_DIR/.VolumeIcon.icns" || true
-            SetFile -a C "$STAGING_DIR" || true
-            rm -f "$DMG_NAME"
-            hdiutil create -volname "Nebulae" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_NAME"
-            rm -rf "$STAGING_DIR"
+            rm -f "$DMG_NAME" "$DMG_NAME.rw.dmg"
+            # HFS+ is required for the custom-icon flag: hdiutil defaults to
+            # APFS on recent runners, where SetFile cannot persist Finder
+            # flags and Finder ignores .VolumeIcon.icns (generic white icon,
+            # seen in the v0.9.0 release). Build read-write, set the flag ON
+            # THE MOUNTED VOLUME ROOT (a srcfolder flag does not survive
+            # hdiutil create), then compress to the final UDZO image.
+            hdiutil create -volname "Nebulae" -srcfolder "$STAGING_DIR" -fs HFS+ -ov -format UDRW "$DMG_NAME.rw.dmg"
+            DMG_MNT="$(mktemp -d)/volume"
+            hdiutil attach "$DMG_NAME.rw.dmg" -mountpoint "$DMG_MNT" -nobrowse -noautoopen
+            SetFile -a C "$DMG_MNT"
+            hdiutil detach "$DMG_MNT"
+            hdiutil convert "$DMG_NAME.rw.dmg" -format UDZO -o "$DMG_NAME" -ov
+            rm -rf "$STAGING_DIR" "$DMG_NAME.rw.dmg"
+            # Verify the flag survived the roundtrip (HFS+ synthesizes
+            # FinderInfo into the xattr listing; absence means Finder will
+            # show a generic white icon).
+            DMG_VERIFY_MNT="$(mktemp -d)/volume"
+            hdiutil attach "$DMG_NAME" -mountpoint "$DMG_VERIFY_MNT" -nobrowse -readonly
+            xattr -l "$DMG_VERIFY_MNT" 2>/dev/null | grep -q "com.apple.FinderInfo" || {
+              echo "ERROR: custom icon flag missing from DMG volume"
+              hdiutil detach "$DMG_VERIFY_MNT" || true
+              exit 1
+            }
+            hdiutil detach "$DMG_VERIFY_MNT"
+            echo "DMG volume icon verified."
           elif [ -n "$DMG_FILE" ]; then
             cp "$DMG_FILE" "$DMG_NAME"
           fi
