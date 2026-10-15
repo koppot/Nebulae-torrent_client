@@ -226,9 +226,27 @@ pub fn run() {
 
             let show_i =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Nebulae", true, None::<&str>)?;
+            let pause_all_i = tauri::menu::MenuItem::with_id(
+                app,
+                "pause-all",
+                "Pause All Torrents",
+                true,
+                None::<&str>,
+            )?;
+            let resume_all_i = tauri::menu::MenuItem::with_id(
+                app,
+                "resume-all",
+                "Resume All Torrents",
+                true,
+                None::<&str>,
+            )?;
             let quit_i =
                 tauri::menu::MenuItem::with_id(app, "quit", "Quit Nebulae", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+            let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
+            let menu = tauri::menu::Menu::with_items(
+                app,
+                &[&show_i, &pause_all_i, &resume_all_i, &separator, &quit_i],
+            )?;
 
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("nebulae-tray")
                 .tooltip("Nebulae — Torrent Client by Asian DVD Club")
@@ -247,6 +265,18 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "pause-all" => {
+                        let engine = app.state::<SharedEngine>();
+                        if let Err(e) = engine.pause_all() {
+                            tracing::warn!("Tray pause-all failed: {e}");
+                        }
+                    }
+                    "resume-all" => {
+                        let engine = app.state::<SharedEngine>();
+                        if let Err(e) = engine.resume_all() {
+                            tracing::warn!("Tray resume-all failed: {e}");
                         }
                     }
                     _ => {}
@@ -310,6 +340,16 @@ pub fn run() {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
                 use tauri::Emitter;
                 for path in paths {
+                    // Only .torrent and .adc metainfo files are accepted; anything
+                    // else is ignored instead of being treated as a torrent.
+                    let allowed = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("torrent") || e.eq_ignore_ascii_case("adc"))
+                        .unwrap_or(false);
+                    if !allowed {
+                        continue;
+                    }
                     let path_str = path.to_string_lossy().to_string();
                     let _ = window.emit("nebulae://file-dropped", path_str);
                 }
@@ -339,6 +379,8 @@ pub fn run() {
             commands::torrent::resume_torrent,
             commands::torrent::pause_all_torrents,
             commands::torrent::resume_all_torrents,
+            commands::torrent::match_torrent_content,
+            commands::torrent::apply_torrent_renames,
             commands::torrent::force_recheck_torrent,
             commands::torrent::reannounce_torrent,
             commands::torrent::set_torrent_location,
@@ -426,6 +468,20 @@ pub fn run() {
                     lock.push(payload.clone());
                 }
                 let _ = _app_handle.emit("nebulae://open-uri", payload);
+            }
+        }
+        // macOS: clicking the Dock icon after close-to-tray must bring the
+        // window back; without this the app looked gone after pressing X.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        tauri::RunEvent::Reopen { .. } => {
+            use tauri::Manager;
+            if let Some(window) = _app_handle
+                .get_webview_window("main")
+                .or_else(|| _app_handle.webview_windows().into_values().next())
+            {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
             }
         }
         _ => {}
