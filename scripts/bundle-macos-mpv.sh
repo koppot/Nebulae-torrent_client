@@ -72,7 +72,29 @@ lib_dir = os.path.join(target_dir, "lib")
 mpv_path = os.path.join(target_dir, "mpv")
 signing_identity = "$SIGNING_IDENTITY"
 
+BREW_LIB_DIRS = ['/opt/homebrew/opt', '/usr/local/opt', '/opt/homebrew/Cellar', '/usr/local/Cellar']
+
+def find_brew_lib(name):
+    """Last-resort lookup for a Homebrew dylib by filename."""
+    for root in BREW_LIB_DIRS:
+        if not os.path.isdir(root):
+            continue
+        if '/opt/' in root:
+            hits = glob.glob(os.path.join(root, '*/lib', name))
+            if hits:
+                return hits[0]
+        else:
+            hits = glob.glob(os.path.join(root, '*/*/lib', name))
+            if hits:
+                return hits[0]
+    return None
+
 def get_direct_deps(binary_path):
+    """All non-system load-command references, INCLUDING @rpath/@loader_path
+    forms. Each entry is (raw_ref, resolved_source_path_or_None). Unresolvable
+    references are reported so the hard gate can fail the build - shipping a
+    bundle with a dangling reference is what killed playback on machines
+    without the build host's Homebrew layout."""
     out = subprocess.check_output(['otool', '-L', binary_path]).decode('utf-8')
     deps = []
     for line in out.splitlines()[1:]:
@@ -82,45 +104,63 @@ def get_direct_deps(binary_path):
         dep = line.split(' (compatibility')[0].strip()
         if dep.startswith('/System/') or dep.startswith('/usr/lib/'):
             continue
-        if dep.startswith('@'):
-            # Homebrew dylibs reference siblings via @loader_path/../lib/...
-            # Resolve against this binary's directory so the walk can see
-            # and bundle them; keep the RAW string for -change matching.
-            if dep.startswith('@loader_path/') or dep.startswith('@executable_path/'):
-                suffix = dep.split('/', 1)[1]
-                cand = os.path.normpath(os.path.join(os.path.dirname(binary_path), suffix))
-                if os.path.exists(cand):
-                    deps.append(dep)
-            continue
-        if os.path.exists(dep):
-            # Keep the RAW load-command path. realpath() would resolve
-            # Homebrew symlink layers (opt/... -> Cellar/...), and the
-            # realpath never matches the string inside the Mach-O load
-            # command, so every install_name_tool -change silently no-ops
-            # and the bundle ships with absolute Homebrew references.
-            deps.append(dep)
+        if dep.startswith('@loader_path/') or dep.startswith('@executable_path/'):
+            suffix = dep.split('/', 1)[1]
+            cand = os.path.normpath(os.path.join(os.path.dirname(binary_path), suffix))
+            deps.append((dep, cand if os.path.exists(cand) else None))
+        elif dep.startswith('@rpath/'):
+            name = dep.split('/', 1)[1]
+            # Homebrew siblings live next to the referencing lib.
+            sib = os.path.join(os.path.dirname(binary_path), name)
+            if os.path.exists(sib):
+                deps.append((dep, sib))
+            else:
+                brew = find_brew_lib(name)
+                deps.append((dep, brew))
+        else:
+            if os.path.exists(dep):
+                # Keep the RAW load-command path. realpath() would resolve
+                # Homebrew symlink layers (opt/... -> Cellar/...), and the
+                # realpath never matches the string inside the Mach-O load
+                # command, so every install_name_tool -change silently
+                # no-ops and the bundle ships with absolute references.
+                deps.append((dep, dep))
+            else:
+                deps.append((dep, None))
     return deps
 
 def resolve_ref(ref, referencing_binary):
-    """Map a load-command reference to a real source path for copying."""
-    if ref.startswith('@loader_path/') or ref.startswith('@executable_path/'):
-        suffix = ref.split('/', 1)[1]
-        return os.path.normpath(os.path.join(os.path.dirname(referencing_binary), suffix))
-    return ref
+    for raw, resolved in get_direct_deps(referencing_binary):
+        if raw == ref:
+            return resolved
+    return None
 
 # Recursively crawl non-system dependencies
-queue = [resolve_ref(d, mpv_path) for d in get_direct_deps(mpv_path)]
+unresolved = []
+queue = []
+for d, r in get_direct_deps(mpv_path):
+    if r is None:
+        unresolved.append((mpv_path, d))
+    else:
+        queue.append(r)
 visited = set(queue)
 raw_refs = {}   # resolved source path -> set of raw load-command strings
 
 while queue:
     curr = queue.pop(0)
-    for ref in get_direct_deps(curr):
-        resolved = resolve_ref(ref, curr)
+    for ref, resolved in get_direct_deps(curr):
+        if resolved is None:
+            unresolved.append((curr, ref))
+            continue
         raw_refs.setdefault(resolved, set()).add(ref)
         if resolved not in visited:
             visited.add(resolved)
             queue.append(resolved)
+
+if unresolved:
+    for src, ref in unresolved:
+        print(f"UNRESOLVED DEPENDENCY: {src} -> {ref}")
+    sys.exit("FATAL: dangling library references cannot produce a working bundle.")
 
 print(f"Discovered {len(visited)} non-system dynamic libraries to bundle.")
 
@@ -145,8 +185,7 @@ for orig in visited:
 # Update references in mpv binary and all copied dylibs
 all_binaries = [mpv_path] + [os.path.join(lib_dir, os.path.basename(d)) for d in visited]
 for b in all_binaries:
-    deps = get_direct_deps(b)
-    for dep in deps:
+    for dep, _resolved in get_direct_deps(b):
         if dep in path_map:
             target_base = path_map[dep]
             subprocess.run(['install_name_tool', '-change', dep, f'@rpath/{target_base}', b], check=True)
