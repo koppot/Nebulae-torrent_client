@@ -39,7 +39,7 @@ echo "Source mpv binary: $MPV_BIN"
 if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     echo "==> Host mpv lacks libdvdnav (Homebrew dropped it from the formula)."
     echo "==> Building mpv v0.40.0 from source with DVD + Blu-ray menu support..."
-    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d x264 x265 libvpx libass libplacebo vulkan-header
+    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d x264 x265 libvpx libass libplacebo vulkan-headers
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
     # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
