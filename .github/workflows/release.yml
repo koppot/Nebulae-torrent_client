@@ -40,13 +40,11 @@ jobs:
           - **Windows x64 Installer**: `Nebulae-Setup-x64.exe`
           - **Windows x64 Executable**: `nebulae.exe`
           - **macOS Apple Silicon (M1/M2/M3/M4/M5)**:
-            - `Nebulae-macOS-arm64.dmg` (standard disk image)
-            - `Nebulae-macOS-arm64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-arm64.dmg` (disk image, Nebulae icon embedded in the volume)
             - `Nebulae-macOS-arm64.dmg-app.zip` (direct application bundle)
             - `Nebulae-macOS-arm64.dmg-app.tar.gz` (silent auto-update payload)
           - **macOS Intel (x86_64)**:
-            - `Nebulae-macOS-x64.dmg` (standard disk image)
-            - `Nebulae-macOS-x64.dmg.zip` (disk image with custom Finder icon preserved)
+            - `Nebulae-macOS-x64.dmg` (disk image, Nebulae icon embedded in the volume)
             - `Nebulae-macOS-x64.dmg-app.zip` (direct application bundle)
             - `Nebulae-macOS-x64.dmg-app.tar.gz` (silent auto-update payload)
 
@@ -419,12 +417,7 @@ jobs:
 
             shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
 
-            # Create AppleDouble-sequestered ZIP of the DMG to preserve custom Finder icon across HTTP downloads
-            DMG_ZIP="$DMG_NAME.zip"
-            ditto -c -k --sequesterRsrc "$DMG_NAME" "$DMG_ZIP"
-            shasum -a 256 "$DMG_ZIP" > "$DMG_ZIP.sha256"
-
-            UPLOAD_FILES=("$DMG_NAME" "$DMG_NAME.sha256" "$DMG_ZIP" "$DMG_ZIP.sha256")
+            UPLOAD_FILES=("$DMG_NAME" "$DMG_NAME.sha256")
 
             # Create standalone zip of Nebulae.app with full icon and bundle metadata
             if [ -n "$APP_DIR" ]; then
@@ -826,12 +819,12 @@ jobs:
                   },
                   {
                       "name": "🍏 macOS (Apple Silicon)",
-                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg) • [DMG.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg.zip) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg-app.zip)",
+                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-arm64.dmg-app.zip)",
                       "inline": False
                   },
                   {
                       "name": "🖥️ macOS (Intel x86_64)",
-                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg) • [DMG.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg.zip) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg-app.zip)",
+                      "value": f"[DMG Image]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg) • [App.zip]({repo_url}/releases/download/{tag}/Nebulae-macOS-x64.dmg-app.zip)",
                       "inline": False
                   },
                   {
