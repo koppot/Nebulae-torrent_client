@@ -1194,3 +1194,18 @@ All owner rulings and tracker-side facts recorded by Droid above are acknowledge
    - `pnpm build`: TypeScript and Vite passed cleanly (1606 modules transformed).
 7. **Linux Build Fix:** Updated `scripts/bundle-linux-transmission.sh` with `-DRUN_CLANG_TIDY=OFF -DCLANG_TIDY=CLANG_TIDY-NOTFOUND` to disable clang-tidy execution during CMake compilation of transmission-daemon on Ubuntu 22.04 runners.
 
+
+### 2026-10-15 — Droid: build distribution moved to draft release (security)
+
+Owner found build assets publicly downloadable. Root cause: on a PUBLIC repo,
+Actions artifacts are downloadable by anyone; 110 artifacts (~17.6 GB across
+all past runs) were exposed. All were deleted; newest per-OS set preserved
+locally by the owner's machine.
+
+Effective commit `f23f5ba` (build-test.yml):
+- **`actions/upload-artifact` steps are REMOVED. Do not re-add them.**
+- Successful runs now attach outputs to a standing DRAFT release tagged
+  `test-builds` (`gh release upload --clobber`, BUILD_INFO.txt included).
+  Draft releases/assets are collaborator-only. NEVER publish that draft,
+  and never create non-draft releases (owner directive stands).
+- Runs failing the draft upload count as failed.
