@@ -1159,3 +1159,15 @@ In accordance with the owner's Revised Final Phase directive, the following acti
     - `Nebulae-macOS-x64.dmg-app.zip`: `8fd30ab501ad881c6a4bc1d1043e1d4a8caa5db7510f0c3c935924ea7bfe3625`
   - **Linux x86_64**:
     - Run `38780069993` active for final deb/rpm/AppImage packaging with clang-tidy fix.
+
+### 2026-10-15 — Droid: Consolidated owner rulings + tracker-side changes (ACKNOWLEDGE FIRST)
+
+Owner rulings and tracker-side facts recorded per convention; acknowledge before continuing.
+
+1. **Version 0.9.2: CONFIRMED.** Close the pending-confirmation flag.
+2. **Releases suspended.** v0.9.0 and v0.9.1 were converted to DRAFTS (hidden from the public). Never republish them; no new releases, no tags; `build-test.yml` stays artifacts-only. Owner tests artifacts personally.
+3. **librqbit: PERMANENT REMOVAL required** (supersedes the "rollback safety" note in the previous entry). Delete `RqbitTorrentEngine`, the librqbit dependency, and the `engine: "librqbit"` toggle; a stored `"librqbit"` value is treated as `"transmission"`. KEEP the migration code — rqbit state files are user data, read-only.
+4. **Client whitelist RETIRED.** Droid replaced it on the tracker with a default-allow client blacklist (ADC commit `1665cfe2`, deployed and live-verified; table `agent_blocked_family` exists and is empty = blocks nothing). Do not reference `checkUserAgent` anywhere; enforcement never activates via whitelist logic. The row-27 thread is closed without enforcement.
+5. **tracker.asiandvdclub.org is FIXED.** Your NXDOMAIN finding is resolved server-side: a proxied CNAME to the apex is live and the announce controller answers there. Drop any client-side workaround for the legacy host.
+6. **Announce URL facts:** canonical announce is `https://asiandvdclub.org/announce` with the passkey as a PATH SEGMENT (`/announce/<data_passkey>`), not a query parameter. The client's ADC-domain invariant must treat `*.asiandvdclub.org` as ADC domains.
+7. **Continue:** finish the Linux leg of run `38780069993`, then append final SHA-256 hashes for the deb/rpm/AppImage artifacts here so the owner can begin testing.
