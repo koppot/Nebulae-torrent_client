@@ -827,6 +827,48 @@ plan. Beginning Phase A1 — Windows leg first.
   - `cargo test --manifest-path src-tauri/Cargo.toml`: PASSED (100 tests passing across unit tests and integration tests).
   - `pnpm build` (eslint + tsc + vite): PASSED.
 
+### 2026-10-15 — Antigravity: Part B (ADC Tracker Peer Alignment) completed & DB row change request
+
+- **Work Item B1 (numwant cap)**:
+  - Added `$client['numwant'] = min((int)$client['numwant'], 150);` to `app/controllers/announce.php`.
+  - Added unit test coverage verifying empty defaults to 50, requests $\le 150$ preserved, requests $> 150$ clamped to 150.
+  - Committed and deployed to live server (`45.135.163.139`) with verified zero diff against GitHub `main`.
+- **Work Item B2 (checkUserAgent bug fix & dry-run log mode)**:
+  - Fixed logic bugs in `checkUserAgent`:
+    - Fixed copy-paste bug where `peer_id` comparison checked `$allowedItem['agent_match_num']` instead of `$allowedItem['peer_id_match_num']`.
+    - Fixed loop short-circuiting: malformed DB rows or non-matching families now safely `continue` to inspect subsequent candidate families rather than terminating early and rejecting legitimate clients.
+    - Verified `exception = 'yes'` handling for family blacklisting.
+  - Implemented log-only dry-run mode: logs would-be rejections to `app/logs/announce_whitelist_dryrun.log` with timestamp, client IP, User-Agent, peer_id, and rejection reason.
+  - Production enforcement remains disabled (`announce_error` call commented out) pending owner review of dry-run logs.
+  - Added comprehensive test suite `app/tests/TrackerPeerAlignmentTest.php` (22/22 tests passing locally and on live production server).
+- **Work Item B3 (Whitelist Coverage & DB Row Change Proposal — STOP & OWNER ACTION REQUIRED)**:
+  - Bundled Transmission version is **4.1.3**, presenting:
+    - User-Agent: `Transmission/4.1.3`
+    - Peer ID: `-TR4130-...`
+  - Live database inspection of `agent_allowed_family` revealed:
+    - Row `id = 16` ("Transmission 2.0") covers 2.84–2.9x only.
+    - Row `id = 27` ("Transmission 4.0") is misconfigured:
+      - `agent_pattern`: `/^Transmission\/4\.3\.1\.9/`
+      - `agent_start`: `Transmission/4.0.3` (regex mismatch with start string)
+      - `peer_id_pattern`: `/^-TR431([0-9A-Za-z])-/` (does not match `-TR4130-`)
+  - **Proposed SQL to cover Transmission 4.x (including 4.0.x and 4.1.x)**:
+    ```sql
+    UPDATE `agent_allowed_family`
+    SET `start_name` = 'Transmission 4.0.0',
+        `peer_id_pattern` = '/^-TR4([0-9])([0-9])([0-9A-Za-z])-/',
+        `peer_id_match_num` = 3,
+        `peer_id_matchtype` = 'dec',
+        `peer_id_start` = '-TR4000-',
+        `agent_pattern` = '/^Transmission\/4\.([0-9]+)/',
+        `agent_match_num` = 1,
+        `agent_matchtype` = 'dec',
+        `agent_start` = 'Transmission/4.0',
+        `enabled` = 'yes'
+    WHERE `id` = 27;
+    ```
+  - Per standing instruction, no database update has been executed. This SQL is presented to the owner for authorization.
+
+
 
 
 ## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
