@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore, ManagerTab } from '../../stores/uiStore';
@@ -306,17 +306,25 @@ export const TorrentManagerView: React.FC = () => {
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || filteredTorrents[0];
 
+  // Sample the selected torrent's rates on a fixed 1s cadence. Triggering on
+  // value CHANGE froze the timeline during quiet periods (smoothed rates sit
+  // at exactly 0 between bursts, so deps never changed and the graph stopped
+  // advancing) — a graph must tick even when speeds are zero.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   useEffect(() => {
-    if (selectedTorrent) {
-      setSpeedHistory((prev) => {
-        const next = [...prev, { dl: selectedTorrent.download_rate, ul: selectedTorrent.upload_rate }];
-        return next.slice(-40);
-      });
-    }
-    // Intentional: sample only when the rates themselves change, not on every
-    // torrents refresh (identity churn would resample without new data).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTorrent?.download_rate, selectedTorrent?.upload_rate]);
+    const interval = setInterval(() => {
+      const { torrents: current } = useTorrentStore.getState();
+      const sel =
+        current.find((t) => t.id === selectedIdRef.current) || current[0];
+      if (sel) {
+        setSpeedHistory((prev) =>
+          [...prev, { dl: sel.download_rate, ul: sel.upload_rate }].slice(-40)
+        );
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleContextMenu = (e: React.MouseEvent, torrentId: string) => {
     e.preventDefault();
