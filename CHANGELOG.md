@@ -66,6 +66,8 @@ pre-release-marked releases, and the old updater manifest pointed at stale
   - Only `.torrent` and `.adc` metainfo files are accepted now (window-level drop filter plus validation in every Add Torrent path); anything else is rejected with a clear message instead of silently being treated as a torrent.
 - **macOS: Window Could Not Be Restored After Close-to-Tray**:
   - Clicking the Dock icon after closing the window now shows and focuses the main window again (`RunEvent::Reopen` handling).
+- **Multi-File Torrents Ignored the Torrent's Root Folder**:
+  - librqbit writes multi-file contents flat into an explicitly provided output folder (its automatic sub-foldering only applies when no output folder is given), so downloads spilled their files directly into the chosen location. The engine now joins the torrent's root name itself: content lands in `<save destination>/<torrent name>/...` as expected, and the folder is created up front with a clear error if that fails.
 - **Silent Updater Manifest Was Pointing at Stale Assets**:
   - `latest.json` previously reported version `v0.1.0-beta.1` with download URLs from that release (the workflow never exported the tag into the manifest step). The manifest now carries the real application version from `tauri.conf.json` and URLs of the actual release.
 

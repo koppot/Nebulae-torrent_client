@@ -52,6 +52,43 @@ fn normalize_download_dir(download_dir: Option<&str>) -> Result<Option<String>, 
     Ok(Some(absolute.to_string_lossy().to_string()))
 }
 
+/// Resolves the effective output folder for a torrent add.
+///
+/// librqbit writes multi-file torrent contents flat into an explicitly
+/// provided `output_folder` (its default sub-foldering only applies when
+/// `output_folder` is not set), so the torrent's root name is joined here
+/// to keep the standard `<save destination>/<torrent name>/...` layout.
+/// Unsafe torrent names keep the flat layout instead of escaping the
+/// destination. Single-file torrents land directly in the destination.
+fn resolve_output_folder(
+    download_dir: Option<&str>,
+    torrent_name: Option<&str>,
+    is_multi_file: bool,
+) -> Result<Option<String>, String> {
+    let Some(base) = normalize_download_dir(download_dir)? else {
+        return Ok(None);
+    };
+    let Some(name) = torrent_name.filter(|_| is_multi_file) else {
+        return Ok(Some(base));
+    };
+    let name_path = PathBuf::from(name);
+    if name_path.is_absolute()
+        || !name_path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return Ok(Some(base));
+    }
+    let joined = PathBuf::from(&base).join(name_path);
+    std::fs::create_dir_all(&joined).map_err(|e| {
+        format!(
+            "Cannot create '{}': {e}. Pick another folder under Save Destination.",
+            joined.display()
+        )
+    })?;
+    Ok(Some(joined.to_string_lossy().to_string()))
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingMagnet {
     pub raw_url: String,
@@ -452,7 +489,23 @@ impl TorrentEngine for RqbitTorrentEngine {
             }
         }
 
-        let output_folder = normalize_download_dir(download_dir)?;
+        // For disk-path sources, join the torrent's root name so multi-file
+        // content lands in the standard layout (see resolve_output_folder).
+        // Magnets cannot know the name at add time; base64 payloads delegate
+        // to add_torrent_from_bytes which parses its own bytes.
+        let parsed_layout = if !trimmed.starts_with("magnet:") {
+            let source_path = crate::engine::mock::normalize_source_path(trimmed);
+            crate::engine::metainfo::ParsedTorrent::parse_file(&source_path)
+                .ok()
+                .map(|p| (p.name, p.is_multi_file))
+        } else {
+            None
+        };
+        let output_folder = resolve_output_folder(
+            download_dir,
+            parsed_layout.as_ref().map(|(n, _)| n.as_str()),
+            parsed_layout.as_ref().map(|(_, m)| *m).unwrap_or(false),
+        )?;
 
         let opts = AddTorrentOptions {
             output_folder,
@@ -633,7 +686,14 @@ impl TorrentEngine for RqbitTorrentEngine {
             return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
         }
 
-        let output_folder = normalize_download_dir(download_dir)?;
+        let parsed_layout = crate::engine::metainfo::ParsedTorrent::parse_bytes(bytes)
+            .ok()
+            .map(|p| (p.name, p.is_multi_file));
+        let output_folder = resolve_output_folder(
+            download_dir,
+            parsed_layout.as_ref().map(|(n, _)| n.as_str()),
+            parsed_layout.as_ref().map(|(_, m)| *m).unwrap_or(false),
+        )?;
 
         let opts = AddTorrentOptions {
             output_folder,
@@ -1132,7 +1192,7 @@ impl TorrentEngine for RqbitTorrentEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_download_dir;
+    use super::{normalize_download_dir, resolve_output_folder};
 
     #[test]
     fn normalize_download_dir_accepts_absolute() {
@@ -1157,5 +1217,39 @@ mod tests {
         assert!(normalize_download_dir(None).unwrap().is_none());
         assert!(normalize_download_dir(Some("")).unwrap().is_none());
         assert!(normalize_download_dir(Some("   ")).unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_output_folder_single_file_stays_flat() {
+        let base = std::env::temp_dir().join("nebulae-resolve-single");
+        let out = resolve_output_folder(base.to_str(), Some("DISC.ISO"), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, base.to_string_lossy());
+        let _ = std::fs::remove_dir(&base);
+    }
+
+    #[test]
+    fn resolve_output_folder_multi_file_joins_name() {
+        let base = std::env::temp_dir().join("nebulae-resolve-multi");
+        let name = "Banner of the Stars III OVA (2005) R2J";
+        let out = resolve_output_folder(base.to_str(), Some(name), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, base.join(name).to_string_lossy());
+        assert!(base.join(name).is_dir());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_output_folder_unsafe_name_stays_flat() {
+        let base = std::env::temp_dir().join("nebulae-resolve-unsafe");
+        for bad in ["../escape", "/etc/passwd", "a/../../escape"] {
+            let out = resolve_output_folder(base.to_str(), Some(bad), true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(out, base.to_string_lossy());
+        }
+        let _ = std::fs::remove_dir(&base);
     }
 }
