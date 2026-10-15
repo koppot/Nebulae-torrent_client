@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release Tag (e.g. v0.1.0-beta.1)'
+        description: 'Release Tag (e.g. v0.9.0)'
         required: false
-        default: 'v0.1.0-beta.1'
+        default: 'v0.9.0'
 
 jobs:
   build-release:
@@ -204,7 +204,10 @@ jobs:
             
             Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
           releaseDraft: false
-          prerelease: true
+          # Must NOT be a prerelease: the in-app updater endpoint is GitHub's
+          # /releases/latest/download/latest.json, which never resolves
+          # prereleases or drafts.
+          prerelease: false
 
       # --- Windows code signing (provider-neutral gate) --------------------------
       # WINDOWS_SIGN_PROVIDER selects the provider. Unset/'none'/'unsigned' skips
@@ -684,12 +687,17 @@ jobs:
       - name: Generate latest.json updater manifest and attach to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          # The manifest version MUST equal the packaged app version
+          # (tauri.conf.json) and use plain semver without a leading "v",
+          # otherwise tauri-plugin-updater cannot compare versions.
+          export APP_VERSION="$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
           python3 -c '
           import json, os, glob, datetime
 
-          tag = os.environ.get("TAG", "v0.1.0-beta.1").strip()
+          tag = os.environ["TAG"].strip()
+          version = os.environ["APP_VERSION"].strip()
           repo_url = "https://github.com/koppot/Nebulae-torrent_client"
           base_url = f"{repo_url}/releases/download/{tag}"
 
@@ -701,7 +709,7 @@ jobs:
               return ""
 
           manifest = {
-              "version": tag,
+              "version": version,
               "notes": f"Nebulae {tag} release with silent background auto-updates.",
               "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "platforms": {}
@@ -754,7 +762,9 @@ jobs:
           python3 -c '
           import os, json, urllib.request
 
-          tag = os.environ.get("TAG", "").strip() or "v0.1.0-beta.7"
+          tag = os.environ.get("TAG", "").strip()
+          if not tag:
+              raise SystemExit("TAG is not set; cannot announce the release")
           webhook = os.environ.get("ANNOUNCEMENT_WEBHOOK")
           if not webhook:
               print("DISCORD_RELEASE_WEBHOOK_URL not configured; skipping announcement.")

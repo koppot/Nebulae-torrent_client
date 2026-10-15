@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-14
+
+Release consolidation: all earlier `v0.1.0-beta.*` releases were removed from
+the GitHub Releases page; this is the single supported release. The version
+number moved to `0.9.0` so the in-app silent updater can finally resolve and
+compare releases correctly (GitHub `/releases/latest` never resolves
+pre-release-marked releases, and the old updater manifest pointed at stale
+`v0.1.0-beta.1` assets).
+
 ### Added
 - **Bundled Optical Disc Player (Zero-Prerequisite Playback)**:
   - **Windows (NSIS)**: Bundled pinned portable `mpv.exe` + `d3dcompiler_43.dll` compiled with `libdvdnav` and `libbluray` (`shinchiro/mpv-winbuild-cmake` tag `20261014`, SHA-256: `ab6236a2b78a3e9e93a156c1f638d3182ee906006d019c15d1b7b056a7c9a4c5`) into `$INSTDIR/resources/player/`.
@@ -28,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Interactive menu launcher (`launch_disc_player`) with automated Java JRE environment injection (`JAVA_HOME`) for BD-J and 4K UHD menu rendering via `libbluray`.
   - Local cover art and disc scan detection (`scan_disc_artwork`) searching for authentic booklet and cover scans (`folder.jpg`, `cover.jpg`, `scans/`).
   - Video frame thumbnail generator with persistent caching under `Nebulae/internal/cache/thumbnails/`.
+- **Rename Existing Content When Adding a Torrent**:
+  - File and folder names are part of a torrent's info-hash, so renames happen on disk, not in the metainfo. The Add Torrent window can scan the save destination, match existing files to the torrent's expected layout by size and name, show the mapping (expected path on the left, current disk location editable on the right), and move files into the torrent's expected layout before adding, so the initial recheck finds the data and the torrent seeds with its original info-hash.
+  - Path traversal and absolute paths are rejected; folders are created as needed and nothing is ever deleted.
+- **Extended Tray Menu**:
+  - The tray/taskbar menu now offers Pause All Torrents and Resume All Torrents (features that exist in Nebulae) alongside Open Nebulae and Quit Nebulae.
 - **Multi-Disc Boxset & Series Aggregator**:
   - Clustered multi-disc releases into unified Boxset carousels in `SimpleMediaView` with individual disc selection pills.
 - **Disk Space Cleaner & Completed Media Organizer**:
@@ -45,6 +59,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Windows Cross-Platform Compilation**:
   - Guarded Unix domain socket stream in `src-tauri/src/engine/rtorrent/scgi.rs` with `#[cfg(unix)]` to eliminate compilation failures on Windows.
   - Scoped `tauri::Manager` trait import in `src-tauri/src/updater.rs` under `#[cfg(windows)]` for `try_state`.
+- **macOS: Adding Torrents Failed with "Read-only file system (os error 30)"**:
+  - librqbit received the raw save destination, so a literal `~/Downloads` resolved against the process CWD (`/` for bundled GUI apps) onto the read-only system volume. Save destinations are now expanded (`~`), anchored to the home directory when relative, and pre-created with a clear error message when the folder cannot be written.
+- **Drag-and-Drop Accepted Any File as a Torrent**:
+  - Only `.torrent` and `.adc` metainfo files are accepted now (window-level drop filter plus validation in every Add Torrent path); anything else is rejected with a clear message instead of silently being treated as a torrent.
+- **macOS: Window Could Not Be Restored After Close-to-Tray**:
+  - Clicking the Dock icon after closing the window now shows and focuses the main window again (`RunEvent::Reopen` handling).
+- **Silent Updater Manifest Was Pointing at Stale Assets**:
+  - `latest.json` previously reported version `v0.1.0-beta.1` with download URLs from that release (the workflow never exported the tag into the manifest step). The manifest now carries the real application version from `tauri.conf.json` and URLs of the actual release.
+
+### Changed
+- **Torrent Creator Defaults**:
+  - "Start seeding when torrent is created" is now unchecked by default (opt-in).
+  - A torrent file cannot be generated without at least one tracker URL; the creator shows "Please enter torrent tracker URL".
 
 ## [0.1.0-beta.8] - 2026-10-14
 
