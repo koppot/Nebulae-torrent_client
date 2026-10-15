@@ -1018,6 +1018,79 @@ All 23 enabled rows were audited for pattern/start self-consistency (`preg_match
   - `rqbit 9.0.1` (`-rQ9010-...`)
   Because the current DB whitelist only contains a very narrow set of historical versions (e.g. qBittorrent 5.0.0+, Deluge 1.3/2.0), keeping enforcement OFF is strictly necessary to prevent broad false-positive member lockouts. A full dry-run summary will be compiled after 24–48 hours for owner review.
 
+### 2026-10-15 — Owner directive: Revised Final Phase (cold correctness, build-test workflow, mock removal)
+
+Directive recorded verbatim:
+> "Antigravity — REVISED FINAL PHASE directive from the owner. It supersedes
+> the previous final-phase prompt in these points: NO fabricated test
+> scenarios, NO simulated migration runs, NO seeded/scratch profiles, and no
+> owner test-matrix authoring. The owner will test the real application on
+> real data personally. Your validation scope is COLD CORRECTNESS ONLY — the
+> existing gates as part of finalizing — plus one cleanup task defined below.
+> 
+> === 1. SYNC THE BRANCH ===
+> main has advanced (64c8754, "Seeds: null-when-unknown semantics + scrape
+> error root causes"). Merge or rebase ag/transmission-engine onto current
+> main, resolve conflicts, rerun all cold gates: cargo fmt --check,
+> cargo clippy -- -D warnings, cargo test, pnpm build. Record the merge
+> commit and results.
+> 
+> === 2. PRODUCE WORKING EXECUTABLES FOR EVERY OS (artifacts only) ===
+> - Push ag/transmission-engine to origin.
+> - Add a minimal build-test workflow (workflow_dispatch) running the same
+>   three OS build legs as release.yml but ONLY uploading workflow
+>   artifacts — no gh release create, no latest.json, no updater assets.
+>   Prefer a separate .github/workflows/build-test.yml; release.yml and the
+>   signing gate must stay byte-identical.
+> - Required artifacts: Windows Nebulae-Setup-x64.exe + standalone exe,
+>   macOS arm64 + x64 DMG, Linux deb/rpm/AppImage + standalone binary.
+> - Dispatch, verify all legs green, record run URL + per-artifact SHA-256
+>   + download locations in AGENT-COORDINATION.md.
+> - BLOCKER RULE: if artifacts cannot be produced without a tag or
+>   published release, STOP and record the blocker with your proposal.
+>   Never publish.
+> 
+> === 3. REMOVE ALL MOCKUPS (owner instruction) ===
+> Once the gates above are green, remove from PRODUCTION code every path
+> that can present fake or simulated data to the user, specifically:
+> - MockTorrentEngine (src-tauri/src/engine/mock.rs) and the
+>   NEBULAE_FORCE_MOCK_ENGINE selection branch in lib.rs;
+> - any remaining placeholder/fabricated values (e.g. seeds/peers "1 if
+>   finished else 0"-style substitutions, demo or sample content paths);
+> - any scratch files or stub data created during this task.
+> EXCEPTION: fixtures/doubles used exclusively inside the automated test
+> suite stay — they are part of cold-correctness validation, not app
+> behavior. If you believe a listed mock serves a legitimate purpose,
+> do not silently keep it: record the argument in AGENT-COORDINATION.md
+> and wait for the owner's ruling. After removal, rerun ALL cold gates
+> (fmt, clippy -D warnings, cargo test, pnpm build) and commit the cleanup
+> as its own change. The shipped app must contain no way to show the user
+> data that is not real.
+> 
+> === 4. MIGRATION CORRECTNESS — BY CODE VERIFICATION ONLY ===
+> The legacy librqbit → Transmission migration runs for real on the
+> owner's machine at first launch of the new build. Verify its zero-loss
+> properties statically (code review + unit tests of the migration
+> function): paused import, verify-before-start, rqbit state dir never
+> written or deleted, rollback by settings toggle. Do NOT run any
+> simulated migration. Document the verified properties in
+> AGENT-COORDINATION.md.
+> 
+> === 5. OPEN THREADS (non-blocking) ===
+> - DB row 27: if the owner's authorized sequence (backup → table audit →
+>   UPDATE → verify) is not yet executed, execute and record it with
+>   before/after output. Whitelist enforcement stays OFF; dry-run
+>   monitoring continues.
+> - Version ruling (0.9.2 vs 0.9.1.1) stays pending — no version field
+>   changes until the owner rules in the coordination thread.
+> 
+> === STANDING CONSTRAINTS (unchanged) ===
+> git status before staging, stage only your own files, no destructive git,
+> no tags/releases/publishing, signing gate and updater secrets untouched,
+> all progress/hashes/run links into AGENT-COORDINATION.md under your own
+> heading. The public release happens only after the owner tests these
+> artifacts and rules on the version."
+
 
 
 
