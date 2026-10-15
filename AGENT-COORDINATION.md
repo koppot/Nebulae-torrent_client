@@ -1292,3 +1292,13 @@ All matrix legs in workflow `build-test.yml` have completed successfully. Per se
   ```
 - **Policy Adherence**: Releases v0.9.0 and v0.9.1 remain hidden drafts. No new releases, tags, or updater assets were published. Engine is permanently transmission-daemon 4.1.3 (`-TR4130-`), librqbit is completely excised, and tracker interactions are fully aligned with the default-allow blacklist.
 
+
+### 2026-10-15 — Droid: media-tab Play fixed for folder save paths (owner-verified bug)
+
+Owner report: Play on the Media tab did nothing. Cause: multi-disc torrents
+whose save_path is a plain folder of loose ISO images were passed as-is to
+mpv, which exits silently on a directory. Fixed (commit "fix(player)"):
+launch_disc_player_impl resolves a disc image (iso/img) inside the folder -
+single image auto-plays, multiple play the first by name - and the media
+view surfaces launch errors in the existing error banner instead of
+swallowing them. Multi-image disc PICKER UI is a possible follow-up.
