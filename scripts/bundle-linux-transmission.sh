@@ -86,19 +86,24 @@ cmake -S "$SRC_DIR" -B "$BUILD_ROOT" \
 
 echo "==> Building transmission-daemon..."
 cmake --build "$BUILD_ROOT" --target transmission-daemon -j"$(nproc)"
-cmake --install "$BUILD_ROOT" --component daemon
+cmake --install "$BUILD_ROOT" 2>/dev/null || true
 
-DAEMON_BIN="$INSTALL_ROOT/bin/transmission-daemon"
-if [ ! -x "$DAEMON_BIN" ]; then
-    # Some install layouts put it in sbin
+DAEMON_BIN=""
+if [ -x "$BUILD_ROOT/daemon/transmission-daemon" ]; then
+    DAEMON_BIN="$BUILD_ROOT/daemon/transmission-daemon"
+elif [ -x "$INSTALL_ROOT/bin/transmission-daemon" ]; then
+    DAEMON_BIN="$INSTALL_ROOT/bin/transmission-daemon"
+elif [ -x "$INSTALL_ROOT/sbin/transmission-daemon" ]; then
     DAEMON_BIN="$INSTALL_ROOT/sbin/transmission-daemon"
 fi
-if [ ! -x "$DAEMON_BIN" ]; then
-    echo "ERROR: transmission-daemon not found after install. Contents of $INSTALL_ROOT:"
+
+if [ -z "$DAEMON_BIN" ] || [ ! -x "$DAEMON_BIN" ]; then
+    echo "ERROR: transmission-daemon not found after build/install. Searching build tree:"
+    find "$BUILD_ROOT" -name "transmission-daemon" -type f
     find "$INSTALL_ROOT" -type f
     exit 1
 fi
-echo "    Built: $DAEMON_BIN"
+echo "    Found daemon binary: $DAEMON_BIN"
 
 # --- Walk ldd, copy non-glibc/non-system libs, patch RPATH ---
 echo "==> Copying daemon binary to resource dir..."
