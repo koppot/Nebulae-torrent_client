@@ -35,12 +35,24 @@ pub fn run() {
     };
 
     // 3. Resolve user settings for engine session (listening_port & download_directory)
-    let settings = db
-        .get_setting("user_settings_json")
-        .ok()
-        .flatten()
-        .and_then(|json| serde_json::from_str::<commands::settings::UserSettings>(&json).ok())
-        .unwrap_or_default();
+    let settings = {
+        let mut s = db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<commands::settings::UserSettings>(&json).ok())
+            .unwrap_or_default();
+        // Normalize BEFORE deriving engine inputs: the stored default port
+        // must move off the stock Transmission port (51413) so a standalone
+        // Transmission install can't collide with the bundled daemon.
+        if s.engine.trim() == "librqbit" {
+            s.engine = "transmission".to_string();
+        }
+        if s.listening_port == 51413 {
+            s.listening_port = 41413;
+        }
+        s
+    };
 
     let download_dir = if !settings.download_directory.trim().is_empty() {
         std::path::PathBuf::from(settings.download_directory.trim())
