@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
+import { errorMessage } from '../../utils/errors';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -116,10 +117,8 @@ export const SimpleMediaView: React.FC = () => {
       const folder = await selectSourceFolder();
       if (!folder) return;
       await invoke('launch_disc_player', { filePath: folder, preferMenu: true });
-    } catch (err: any) {
-      setExternalDiscError(
-        typeof err === 'string' ? err : err?.message || 'Could not launch the disc.'
-      );
+    } catch (err: unknown) {
+      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
     }
   };
 
@@ -151,7 +150,7 @@ export const SimpleMediaView: React.FC = () => {
         destinationRoot: organizeDestPath.trim(),
       });
       setOrganizeReport(rep);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setOrganizeReport({
         source_path: organizeTargetItem.save_path,
         destination_path: organizeDestPath,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { DiagnosticSummary } from '../../types';
 import { AlertTriangle, RefreshCw, Copy, Check, Power } from 'lucide-react';
 
 interface RecoveryScreenProps {
@@ -38,7 +39,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
 
   const handleCopyReport = async () => {
     try {
-      const summary = await invoke<any>('get_diagnostic_summary');
+      const summary = await invoke<DiagnosticSummary>('get_diagnostic_summary');
       const logs = await invoke<string>('export_logs');
       const text = [
         '=== Nebulae Diagnostic Report ===',

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { useUiStore } from '../../stores/uiStore';
+import { useUiStore, ManagerTab } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
@@ -228,6 +228,20 @@ export const TorrentManagerView: React.FC = () => {
     }
   }, [selectedId, activeManagerTab, fetchPeers]);
 
+  // Filtered list — declared BEFORE the keyboard effect below, whose deps
+  // reference it during render.
+  const filteredTorrents = torrents.filter((t) => {
+    if (searchQuery && !t.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+      return false;
+    }
+    if (managerCategoryFilter === 'downloading') return t.status === 'Downloading';
+    if (managerCategoryFilter === 'seeding') return t.status === 'Seeding';
+    if (managerCategoryFilter === 'completed') return t.status === 'Completed';
+    if (managerCategoryFilter === 'paused') return t.status === 'Paused';
+    if (managerCategoryFilter === 'media') return t.is_media;
+    return true;
+  });
+
   // Keyboard navigation & actions
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -277,7 +291,7 @@ export const TorrentManagerView: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, torrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
+  }, [selectedId, torrents, filteredTorrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -290,18 +304,6 @@ export const TorrentManagerView: React.FC = () => {
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
 
-  const filteredTorrents = torrents.filter((t) => {
-    if (searchQuery && !t.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false;
-    }
-    if (managerCategoryFilter === 'downloading') return t.status === 'Downloading';
-    if (managerCategoryFilter === 'seeding') return t.status === 'Seeding';
-    if (managerCategoryFilter === 'completed') return t.status === 'Completed';
-    if (managerCategoryFilter === 'paused') return t.status === 'Paused';
-    if (managerCategoryFilter === 'media') return t.is_media;
-    return true;
-  });
-
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || filteredTorrents[0];
 
   useEffect(() => {
@@ -311,6 +313,9 @@ export const TorrentManagerView: React.FC = () => {
         return next.slice(-40);
       });
     }
+    // Intentional: sample only when the rates themselves change, not on every
+    // torrents refresh (identity churn would resample without new data).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTorrent?.download_rate, selectedTorrent?.upload_rate]);
 
   const handleContextMenu = (e: React.MouseEvent, torrentId: string) => {
@@ -390,7 +395,7 @@ export const TorrentManagerView: React.FC = () => {
         await renameTorrentFile(renameModal.id, renameModal.fileIndex, trimmed);
       }
       setRenameModal((prev) => ({ ...prev, isOpen: false }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setRenameError(String(err));
     }
   };
@@ -770,7 +775,7 @@ export const TorrentManagerView: React.FC = () => {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveManagerTab(tab.id as any)}
+                  onClick={() => setActiveManagerTab(tab.id as ManagerTab)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t font-medium transition ${
                     isActive
                       ? 'border-b-2 border-[#e50914] text-white bg-[#141414]'

@@ -297,3 +297,46 @@ Owner directives applied before tagging:
 Release verification: 4 build legs success, 4 Linux distro containers
 (Debian 12, Ubuntu 24.04, Fedora 40, openSUSE Leap 15.6) success,
 aggregate success; stray draft from the cancelled first attempt deleted.
+
+## 2026-10-15 (Droid) — v0.9.1 wave: release engineering + add-modal crash fix
+
+1. VERSIONING POLICY (owner, 2026-10-15): the pending wave ships as 0.9.1
+   (tagged repeatedly, never published - every run failed). The version that
+   SUPERSEDES 0.9.1 after release is 0.9.1.1 (not 0.9.2). NOTE for that day:
+   Cargo/tauri.conf/updater require strict 3-part semver; ship internal
+   fields semver-compatible and carry the 4-part name in the git tag.
+2. RELEASE RUN FAILURES AND FIXES (three cancelled runs before green):
+   a. Windows: my duplicate re-sign block had an extra closing brace -
+      pwsh ParserError in "Prepare and upload named artifact (Windows)".
+      Removed: the step already re-signs the final installer canonically.
+   b. Linux "player missing from repacked payload": TWO causes stacked.
+      First, squashfs-tools >= 4.6 writes `unsquashfs -l` listings to
+      stderr (4.4/4.5: stdout) - the 2>/dev/null verification grep saw
+      nothing. Fixed by capturing both streams. Second, and the real one:
+      rust-cache restores target/ between runs INCLUDING a stale
+      target/player-staging (mpv binary itself not restored - non-cargo
+      blob), so `mv resources/player target/player-staging` NESTED the
+      player (player-staging/player/mpv) and the injection copied the
+      nesting intact; the probe expects resources/player/mpv. FIXED:
+      staging moved OUTSIDE target/ (src-tauri/player-staging, never
+      cached), rm -rf before the move, fail-fast checks for the mpv
+      binary, verbose diagnostics on verification failure.
+   c. create-release "not a git repository" (earlier): explicit
+      --repo koppot/Nebulae-torrent_client on gh release create.
+3. ADD-MODAL BLANK SCREEN (owner report on macOS 0.9.0): AddTorrentModal
+   called useEffect AFTER `if (!showAddTorrent) return null` - opening the
+   modal changed the hook count ("Rendered more hooks...") and React
+   unmounted the ENTIRE app: blank dark-blue window. The rename-wave
+   commit 22f18c7 introduced it; pnpm build (tsc+vite) never linted.
+   FIXED: effect moved above the return. AUDIT: eslint-plugin-react-hooks
+   rules-of-hooks over ALL of src/ = this was the ONLY hooks violation.
+4. LINT GATE: eslint 9 + typescript-eslint + react-hooks wired INTO
+   pnpm build (pnpm lint && tsc && vite build). All 21 pre-existing
+   no-explicit-any errors fixed properly (shared errorMessage helper in
+   src/utils/errors.ts, FileWithPath + ManagerTab + SettingsTab types,
+   UserSettings indexed casts in SettingsModal; no suppressions except one
+   documented intentional exhaustive-deps in TorrentManagerView speed
+   history). DeleteTorrentModal handleConfirm moved into useCallback above
+   the early return (fixes its stale-closure warning properly).
+   Shadows to watch: modals name state `errorMessage` - import the helper
+   as toErrorMessage.

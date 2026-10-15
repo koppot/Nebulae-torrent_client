@@ -110,9 +110,9 @@ export const CreateTorrentModal: React.FC = () => {
         setIsSubmitting(false);
         setShowCreateTorrent(false);
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsSubmitting(false);
-      setStatusMessage({ type: 'err', text: `Failed to create torrent: ${err}` });
+      setStatusMessage({ type: 'err', text: `Failed to create torrent: ${String(err)}` });
     }
   };
 

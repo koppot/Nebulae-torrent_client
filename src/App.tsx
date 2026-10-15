@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useUiStore } from './stores/uiStore';
+import { useUiStore, ManagerTab } from './stores/uiStore';
+import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
@@ -156,7 +157,7 @@ export const App: React.FC = () => {
     }
 
     if (tabParam === 'peers' || tabParam === 'files' || tabParam === 'trackers' || tabParam === 'general') {
-      useUiStore.getState().setActiveManagerTab(tabParam as any);
+      useUiStore.getState().setActiveManagerTab(tabParam as ManagerTab);
     }
 
     if (modalParam === 'doctor') {
@@ -212,7 +213,7 @@ export const App: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
-      const source = (file as any).path || file.name;
+      const source = (file as FileWithPath).path || file.name;
       openAddTorrentWithSource(source);
     }
   };

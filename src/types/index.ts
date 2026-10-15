@@ -1,5 +1,9 @@
 export type ViewMode = 'media' | 'manager' | 'compact';
 
+// Drag-dropped File objects carry the absolute native path in a non-standard
+// `path` property provided by the webview (Tauri), absent from the DOM type.
+export type FileWithPath = File & { path?: string };
+
 export interface TorrentFileItem {
   index: number;
   name: string;

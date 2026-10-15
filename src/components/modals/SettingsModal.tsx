@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { DiagnosticSummary, AssociationStatus, DiscPlayerStatus } from '../../types';
+import {
+  DiagnosticSummary,
+  AssociationStatus,
+  DiscPlayerStatus,
+  UserSettings,
+} from '../../types';
+import { errorMessage } from '../../utils/errors';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
@@ -27,14 +33,24 @@ import {
   Film,
 } from 'lucide-react';
 
+type SettingsTab =
+  | 'behavior'
+  | 'downloads'
+  | 'connection'
+  | 'speed'
+  | 'bittorrent'
+  | 'rss'
+  | 'webui'
+  | 'rtorrent'
+  | 'media'
+  | 'advanced';
+
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
   const { settings, saveSettings } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
 
-  const [activeTab, setActiveTab] = useState<
-    'behavior' | 'downloads' | 'connection' | 'speed' | 'bittorrent' | 'rss' | 'webui' | 'rtorrent' | 'media' | 'advanced'
-  >('behavior');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
 
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -160,8 +176,8 @@ export const SettingsModal: React.FC = () => {
       const res = await invoke<AssociationStatus>('register_protocol_associations');
       setAssociationStatus(res);
       showStatus(res.message);
-    } catch (e: any) {
-      showStatus(`Registration failed: ${e}`);
+    } catch (e: unknown) {
+      showStatus(`Registration failed: ${errorMessage(e, 'Registration failed')}`);
     } finally {
       setIsRegistering(false);
     }
@@ -211,7 +227,7 @@ export const SettingsModal: React.FC = () => {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
+                  onClick={() => setActiveTab(tab.id as SettingsTab)}
                   className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition ${
                     isActive
                       ? 'bg-[#e50914] text-white font-semibold shadow'
@@ -254,7 +270,7 @@ export const SettingsModal: React.FC = () => {
                       <label className="block text-[11px] text-[#a3a3a3] mb-1">Color Theme</label>
                       <select
                         value={settings.theme}
-                        onChange={(e) => saveSettings({ theme: e.target.value as any })}
+                        onChange={(e) => saveSettings({ theme: e.target.value as UserSettings['theme'] })}
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="dark">Dark Space / Charcoal</option>
@@ -610,7 +626,7 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <select
                         value={settings.peer_connection_protocol}
-                        onChange={(e) => saveSettings({ peer_connection_protocol: e.target.value as any })}
+                        onChange={(e) => saveSettings({ peer_connection_protocol: e.target.value as UserSettings['peer_connection_protocol'] })}
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="Both">Both TCP and μTP</option>
@@ -725,7 +741,7 @@ export const SettingsModal: React.FC = () => {
                       <label className="block text-[11px] text-[#a3a3a3] mb-1">Type</label>
                       <select
                         value={settings.proxy_type}
-                        onChange={(e) => saveSettings({ proxy_type: e.target.value as any })}
+                        onChange={(e) => saveSettings({ proxy_type: e.target.value as UserSettings['proxy_type'] })}
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="None">(None)</option>
@@ -992,7 +1008,7 @@ export const SettingsModal: React.FC = () => {
                     </label>
                     <select
                       value={settings.encryption_mode}
-                      onChange={(e) => saveSettings({ encryption_mode: e.target.value as any })}
+                      onChange={(e) => saveSettings({ encryption_mode: e.target.value as UserSettings['encryption_mode'] })}
                       className="w-56 px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                     >
                       <option value="Prefer">Prefer Encryption</option>
@@ -1066,7 +1082,7 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <select
                         value={settings.seeding_limit_action}
-                        onChange={(e) => saveSettings({ seeding_limit_action: e.target.value as any })}
+                        onChange={(e) => saveSettings({ seeding_limit_action: e.target.value as UserSettings['seeding_limit_action'] })}
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="Pause">Pause torrent</option>

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { errorMessage as toErrorMessage } from '../../utils/errors';
 import {
   Trash2,
   X,
@@ -29,6 +30,23 @@ export const DeleteTorrentModal: React.FC = () => {
     }
   }, [deleteModalTarget]);
 
+  // Declared with useCallback BEFORE the keyboard effect below so the effect
+  // can depend on a stable identity (hooks must also stay above the early
+  // `return null` further down).
+  const handleConfirm = useCallback(async () => {
+    if (!deleteModalTarget || isDeleting) return;
+    setIsDeleting(true);
+    setErrorMessage(null);
+
+    try {
+      await removeTorrent(deleteModalTarget.id, deleteFiles);
+      setDeleteModalTarget(null);
+    } catch (err: unknown) {
+      setErrorMessage(toErrorMessage(err, 'Failed to remove torrent'));
+      setIsDeleting(false);
+    }
+  }, [deleteModalTarget, isDeleting, deleteFiles, removeTorrent, setDeleteModalTarget]);
+
   // Handle keyboard events (Enter to confirm, Escape to cancel)
   useEffect(() => {
     if (!deleteModalTarget) return;
@@ -45,27 +63,13 @@ export const DeleteTorrentModal: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteModalTarget, deleteFiles, isDeleting]);
+  }, [deleteModalTarget, deleteFiles, isDeleting, handleConfirm, setDeleteModalTarget]);
 
   if (!deleteModalTarget) return null;
 
   const handleClose = () => {
     if (isDeleting) return;
     setDeleteModalTarget(null);
-  };
-
-  const handleConfirm = async () => {
-    if (!deleteModalTarget || isDeleting) return;
-    setIsDeleting(true);
-    setErrorMessage(null);
-
-    try {
-      await removeTorrent(deleteModalTarget.id, deleteFiles);
-      setDeleteModalTarget(null);
-    } catch (err: any) {
-      setErrorMessage(typeof err === 'string' ? err : err?.message || 'Failed to remove torrent');
-      setIsDeleting(false);
-    }
   };
 
   return (

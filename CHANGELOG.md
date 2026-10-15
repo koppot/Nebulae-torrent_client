@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.1] - 2026-10-15
 
 ### Fixed
+- **Add-Torrent Modal Blank Screen (macOS)**: clicking Add could leave the entire window as a blank dark screen. A hook was called after the modal's early return, so opening the modal changed the number of hooks between renders and React unmounted the whole app tree (no error boundary). The effect moved above the return, an ESLint `rules-of-hooks` gate now runs inside `pnpm build` (this class of bug can no longer be built or tagged), and the full codebase was audited with the rule - this was the only instance.
 - **Second Instance Fought Over the Listening Port (Recovery Screen)**:
   - Closing the window only hides Nebulae to the tray, so launching it again (for example right after installing an update) started a second process whose engine could not bind port 51413 (`Address already in use`), landing in the recovery screen. A new instance now automatically terminates the previously active Nebulae daemon (identified via an instance lock file, with PID-recycle protection) and takes over the engine port and persistence files.
   - When the takeover happens across versions, the persisted settings are re-stamped with the new version (and any newly introduced defaults), so settings are updated by the new install.

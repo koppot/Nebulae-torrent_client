@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { InspectTorrentResult, TorrentContentMatch } from '../../types';
+import { InspectTorrentResult, TorrentContentMatch, FileWithPath } from '../../types';
+import { errorMessage as toErrorMessage } from '../../utils/errors';
 import {
   X,
   Plus,
@@ -169,9 +170,8 @@ export const AddTorrentModal: React.FC = () => {
       setContentMatch(null);
       setRenameInputs({});
       setShowAddTorrent(false);
-    } catch (err: any) {
-      const msg = typeof err === 'string' ? err : err?.message || 'Failed to add torrent';
-      setErrorMessage(msg);
+    } catch (err: unknown) {
+      setErrorMessage(toErrorMessage(err, 'Failed to add torrent'));
     } finally {
       setIsSubmitting(false);
     }
@@ -209,6 +209,16 @@ export const AddTorrentModal: React.FC = () => {
     addRecentDirectory,
     setShowAddTorrent,
   ]);
+
+  // A different torrent or save destination invalidates any previous match.
+  // NOTE: must stay ABOVE the `if (!showAddTorrent) return null` early
+  // return — hooks may never run conditionally, or React crashes the whole
+  // tree ("Rendered more hooks than during the previous render"), leaving a
+  // blank screen when the modal opens.
+  useEffect(() => {
+    setContentMatch(null);
+    setRenameInputs({});
+  }, [torrentSource, downloadDir]);
 
   if (!showAddTorrent) return null;
 
@@ -290,7 +300,7 @@ export const AddTorrentModal: React.FC = () => {
         );
         return;
       }
-      const source = (file as any).path || file.name;
+      const source = (file as FileWithPath).path || file.name;
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
       setTorrentSource(source);
@@ -331,7 +341,7 @@ export const AddTorrentModal: React.FC = () => {
   const handleFolderInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      const path = (files[0] as any).path;
+      const path = (files[0] as FileWithPath).path;
       if (path) {
         const dir = path.substring(0, path.lastIndexOf('/'));
         if (dir) setDownloadDir(dir);
@@ -353,12 +363,6 @@ export const AddTorrentModal: React.FC = () => {
     }
   };
 
-  // A different torrent or save destination invalidates any previous match.
-  useEffect(() => {
-    setContentMatch(null);
-    setRenameInputs({});
-  }, [torrentSource, downloadDir]);
-
   const handleFindContent = async () => {
     const source = (torrentSource || selectedFileName || '').trim();
     const targetDir = (downloadDir || settings.download_directory || '').trim();
@@ -373,11 +377,11 @@ export const AddTorrentModal: React.FC = () => {
       }
       setRenameInputs(inputs);
       setErrorMessage(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setContentMatch(null);
       setRenameInputs({});
       setErrorMessage(
-        typeof err === 'string' ? err : err?.message || 'Could not scan the save destination'
+        toErrorMessage(err, 'Could not scan the save destination')
       );
     } finally {
       setMatchLoading(false);
@@ -417,7 +421,7 @@ export const AddTorrentModal: React.FC = () => {
         <input
           ref={folderInputRef}
           type="file"
-          // @ts-ignore
+          // @ts-expect-error -- non-standard webview attributes for folder picking
           webkitdirectory="true"
           directory=""
           onChange={handleFolderInputChange}

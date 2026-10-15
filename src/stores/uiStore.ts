@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { ViewMode } from '../types';
 
+export type ManagerTab = 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
+
 interface UiState {
   viewMode: ViewMode;
   theme: 'dark' | 'light';
@@ -12,7 +14,7 @@ interface UiState {
   showVpnManager: boolean;
   showTrackerDashboard: boolean;
   splashDismissed: boolean;
-  activeManagerTab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
+  activeManagerTab: ManagerTab;
   managerCategoryFilter: string;
   searchQuery: string;
   initialAddTorrentSource: string | null;
@@ -29,7 +31,7 @@ interface UiState {
   setShowVpnManager: (show: boolean) => void;
   setShowTrackerDashboard: (show: boolean) => void;
   setSplashDismissed: (dismissed: boolean) => void;
-  setActiveManagerTab: (tab: 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log') => void;
+  setActiveManagerTab: (tab: ManagerTab) => void;
   setManagerCategoryFilter: (filter: string) => void;
   setSearchQuery: (query: string) => void;
   setInitialAddTorrentSource: (source: string | null) => void;
