@@ -34,11 +34,7 @@ impl SafeLogger {
     }
 
     pub fn init_tracing() {
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(
-                "info,librqbit_tracker_comms=warn,librqbit::tracker=warn,librqbit::tracker_comms=warn",
-            )
-        });
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)

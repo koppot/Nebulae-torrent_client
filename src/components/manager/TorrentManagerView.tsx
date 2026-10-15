@@ -546,7 +546,7 @@ export const TorrentManagerView: React.FC = () => {
                 ) : (
                   <span
                     className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-                    title="Nested folders cannot be renamed: librqbit cannot remap paths inside a torrent"
+                    title="Nested folders cannot be renamed with the active engine"
                   >
                     <Edit2 className="w-3 h-3 text-[#525252]" />
                     <span>Rename Folder</span>
@@ -625,7 +625,7 @@ export const TorrentManagerView: React.FC = () => {
             ) : (
               <span
                 className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-                title="Individual files cannot be renamed: librqbit cannot remap paths inside a torrent"
+                title="Individual files cannot be renamed with the active engine"
               >
                 <Edit2 className="w-3 h-3 text-[#525252]" />
                 <span>Rename File</span>
@@ -980,7 +980,7 @@ export const TorrentManagerView: React.FC = () => {
                               onClick={() => {
                                 toggleSuperSeeding(selectedTorrent.id);
                                 setSuperSeedingNotice(
-                                  'Observational: Super-Seeding (BEP 16) is not supported by upstream librqbit 9.0.1. Tracked in docs/upstream-issues/rqbit-super-seeding.md.'
+                                  'Super-Seeding (BEP 16) is not supported by Transmission daemon.'
                                 );
                               }}
                               className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
@@ -1155,7 +1155,7 @@ export const TorrentManagerView: React.FC = () => {
                                 ) : (
                                   <span
                                     className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
-                                    title="Individual files cannot be renamed: librqbit cannot remap paths inside a torrent"
+                                    title="Individual files cannot be renamed with the active engine"
                                   >
                                     <Edit2 className="w-3 h-3 text-[#525252]" />
                                     <span>Rename</span>

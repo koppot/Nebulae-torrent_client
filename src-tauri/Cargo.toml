@@ -34,7 +34,6 @@ sha1 = "0.11.0"
 serde_bencode = "0.2.4"
 serde_bytes = "0.11.19"
 reqwest = { version = "0.13.5", features = ["blocking", "json"] }
-librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
 keyring = "3"
 network-interface = "2.0.5"
 roxmltree = "0.20"

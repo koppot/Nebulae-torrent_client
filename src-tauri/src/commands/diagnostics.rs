@@ -108,7 +108,7 @@ pub fn get_diagnostic_summary(paths: State<Arc<AppPaths>>) -> Result<DiagnosticS
             "Uninitialized"
         }
         .to_string(),
-        engine_status: "Initialized (rqbit local-first)".to_string(),
+        engine_status: "Initialized (Transmission sidecar)".to_string(),
         internal_storage_status: "Isolated in Nebulae/internal/".to_string(),
         total_logs_size_bytes: logs_size,
     })

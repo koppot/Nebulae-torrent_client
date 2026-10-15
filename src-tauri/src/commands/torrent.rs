@@ -311,7 +311,7 @@ pub fn add_torrent_bytes(
 // File and folder names are part of a torrent's info-hash, so they cannot be
 // changed in the metainfo without leaving the original swarm. The supported
 // workflow renames the user's existing files on disk to the torrent's
-// expected layout before adding, so librqbit's initial recheck finds the
+// expected layout before adding, so the engine's initial recheck finds the
 // data and the torrent keeps seeding with its original info-hash.
 // ---------------------------------------------------------------------------
 

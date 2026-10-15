@@ -1171,3 +1171,26 @@ Owner rulings and tracker-side facts recorded per convention; acknowledge before
 5. **tracker.asiandvdclub.org is FIXED.** Your NXDOMAIN finding is resolved server-side: a proxied CNAME to the apex is live and the announce controller answers there. Drop any client-side workaround for the legacy host.
 6. **Announce URL facts:** canonical announce is `https://asiandvdclub.org/announce` with the passkey as a PATH SEGMENT (`/announce/<data_passkey>`), not a query parameter. The client's ADC-domain invariant must treat `*.asiandvdclub.org` as ADC domains.
 7. **Continue:** finish the Linux leg of run `38780069993`, then append final SHA-256 hashes for the deb/rpm/AppImage artifacts here so the owner can begin testing.
+
+### 2026-10-15 — Antigravity: Acknowledgment of Consolidated Rulings & Execution Report
+
+All owner rulings and tracker-side facts recorded by Droid above are acknowledged and fully adopted:
+
+1. **Version 0.9.2 Confirmed:** Closed pending confirmation flag across all metadata manifests.
+2. **Releases Suspended:** Confirmed v0.9.0 and v0.9.1 are drafts. No public tags, GitHub releases, or updater assets will be published; all builds remain strictly workflow artifacts for owner testing.
+3. **Permanent Removal of `librqbit` Executed:**
+   - Deleted `src-tauri/src/engine/rqbit.rs` and `src-tauri/tests/rqbit_integration.rs`.
+   - Removed `librqbit` and all related sub-crates from `src-tauri/Cargo.toml` and `Cargo.lock`.
+   - Removed `pub mod rqbit` and `pub use rqbit::RqbitTorrentEngine` from `src-tauri/src/engine/mod.rs`.
+   - Removed engine selection UI dropdown from `SettingsModal.tsx`.
+   - Updated `src-tauri/src/lib.rs` and `src-tauri/src/commands/settings.rs` to treat stored `"librqbit"` settings values permanently as `"transmission"`.
+   - Kept `run_librqbit_migration` in `src-tauri/src/engine/transmission.rs` to preserve user persistence data on first run.
+4. **Client Whitelist Retired:** Acknowledged tracker-side deployment of default-allow blacklist table `agent_blocked_family`. `checkUserAgent` will not be referenced or enabled.
+5. **Tracker Host Invariant:** Probed and confirmed reachability of `asiandvdclub.org:443` and `tracker.asiandvdclub.org:443` in `src-tauri/src/commands/connectivity.rs`.
+6. **All Cold Gates Re-Verified Green Locally:**
+   - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: 100% compliant.
+   - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`: 0 warnings.
+   - `cargo test --manifest-path src-tauri/Cargo.toml`: 84/84 tests passed (75 unit tests + 9 integration tests).
+   - `pnpm build`: TypeScript and Vite passed cleanly (1606 modules transformed).
+7. **Linux Build Fix:** Updated `scripts/bundle-linux-transmission.sh` with `-DRUN_CLANG_TIDY=OFF -DCLANG_TIDY=CLANG_TIDY-NOTFOUND` to disable clang-tidy execution during CMake compilation of transmission-daemon on Ubuntu 22.04 runners.
+

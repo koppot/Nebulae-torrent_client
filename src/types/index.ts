@@ -283,7 +283,7 @@ export interface UserSettings {
   rtorrent_server_token: string;
 
   // 10. BitTorrent Engine
-  engine?: 'transmission' | 'librqbit';
+  engine?: 'transmission';
 }
 
 export interface CreateTorrentParams {

@@ -33,7 +33,7 @@ export const SplashScreen: React.FC = () => {
     async function runSubsystemInit() {
       try {
         setInitProgress(25);
-        setInitStepText('Checking librqbit engine status...');
+        setInitStepText('Checking BitTorrent engine status...');
         await invoke('get_engine_init_error');
 
         if (cancelled) return;

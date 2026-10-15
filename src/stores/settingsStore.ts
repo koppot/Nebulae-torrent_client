@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 interface SettingsState {
   settings: UserSettings;
   isLoading: boolean;
-  /** Session engine mode reported by the backend: 'local' (librqbit/mock)
+  /** Session engine mode reported by the backend: 'local' (transmission)
    *  or 'rtorrent_server'. The GUI hides options the engine cannot fulfill. */
   engineMode: 'local' | 'rtorrent_server';
   loadSettings: () => Promise<void>;

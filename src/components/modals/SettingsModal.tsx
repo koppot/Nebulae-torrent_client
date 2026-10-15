@@ -1540,27 +1540,6 @@ export const SettingsModal: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-[#333333]">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
-                    BitTorrent Engine (App Restart Required)
-                  </h3>
-                  <div className="max-w-md">
-                    <label className="block text-[11px] text-[#a3a3a3] mb-1">
-                      Active Engine
-                    </label>
-                    <select
-                      value={settings.engine || 'transmission'}
-                      onChange={(e) => saveSettings({ engine: e.target.value as 'transmission' | 'librqbit' })}
-                      className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
-                    >
-                      <option value="transmission">Transmission (Default · Rarest-first, unchoke slots, Fast Extension)</option>
-                      <option value="librqbit">librqbit (Legacy / Rollback)</option>
-                    </select>
-                    <p className="text-[11px] text-[#8c8c8c] mt-1.5">
-                      Nebulae runs transmission-daemon in an isolated sidecar process. Switching engines takes effect after restarting the application.
-                    </p>
-                  </div>
-                </div>
 
                 <div className="pt-3 border-t border-[#333333]">
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">

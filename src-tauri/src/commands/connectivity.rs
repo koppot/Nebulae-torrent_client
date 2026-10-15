@@ -77,10 +77,16 @@ async fn probe_dns_latency() -> u32 {
 
 async fn probe_tracker_reachability() -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(2500), async {
-        tokio::net::TcpStream::connect("tracker.asiandvdclub.org:443")
+        tokio::net::TcpStream::connect("asiandvdclub.org:443")
             .await
             .is_ok()
+            || tokio::net::TcpStream::connect("tracker.asiandvdclub.org:443")
+                .await
+                .is_ok()
             || tokio::net::TcpStream::connect("tracker.asiandvdclub.org:80")
+                .await
+                .is_ok()
+            || tokio::net::TcpStream::connect("asiandvdclub.org:80")
                 .await
                 .is_ok()
     })

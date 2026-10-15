@@ -290,7 +290,10 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
     let mut settings = UserSettings::default();
 
     if let Ok(Some(val)) = db.get_setting("user_settings_json") {
-        if let Ok(parsed) = serde_json::from_str::<UserSettings>(&val) {
+        if let Ok(mut parsed) = serde_json::from_str::<UserSettings>(&val) {
+            if parsed.engine.trim() == "librqbit" {
+                parsed.engine = "transmission".to_string();
+            }
             settings = parsed;
         }
     }
@@ -299,7 +302,13 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 }
 
 #[tauri::command]
-pub fn save_user_settings(settings: UserSettings, db: State<Arc<Database>>) -> Result<(), String> {
+pub fn save_user_settings(
+    mut settings: UserSettings,
+    db: State<Arc<Database>>,
+) -> Result<(), String> {
+    if settings.engine.trim() == "librqbit" {
+        settings.engine = "transmission".to_string();
+    }
     let json = serde_json::to_string(&settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
 
@@ -314,7 +323,7 @@ pub fn save_user_settings(settings: UserSettings, db: State<Arc<Database>>) -> R
 #[derive(Debug, Clone)]
 pub struct EngineMode(pub String);
 
-/// `"local"` (librqbit or mock) or `"rtorrent_server"`.
+/// `"local"` (Transmission) or `"rtorrent_server"`.
 #[tauri::command]
 pub fn get_engine_mode(mode: State<EngineMode>) -> String {
     mode.0.clone()
