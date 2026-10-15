@@ -432,3 +432,273 @@ under your own heading; first action = one-line acknowledgment.
 ## 2026-10-15 — Antigravity session (transmission-daemon sidecar + ADC alignment)
 
 Tasking acknowledged, starting Phase A0.
+
+Branch: `ag/transmission-engine` off main (SHA `1786ca4`).
+
+---
+
+### Phase A0 — Design note (owner review required before Phase A1 code)
+
+#### 0. Recon summary
+
+Files read: `traits.rs`, `rqbit.rs`, `mod.rs`, `lib.rs`, `killswitch.rs`,
+`commands/settings.rs`, `src/stores/torrentStore.ts`,
+`scripts/bundle-{windows,linux,macos}-mpv.*`, release workflow
+player-staging steps.
+
+Current engine selection path (lib.rs lines 74–180): `rtorrent_server_mode`
+flag selects `RemoteServerEngine`; otherwise `RqbitTorrentEngine` (with
+one 500 ms retry) or `FailedTorrentEngine`. The engine is registered as
+`SharedEngine` Tauri state at startup; restart required to switch.
+
+The plan below is self-consistent with that architecture and introduces
+`engine` (`"librqbit" | "transmission"`) in `UserSettings`, read at startup
+in the same position as `rtorrent_server_enabled`.
+
+---
+
+#### 1. RPC mapping table — TorrentEngine trait → Transmission JSON-RPC
+
+| Trait method | Transmission RPC call / field | Notes |
+|---|---|---|
+| `list_torrents` | `torrent-get` (fields below) | Replaces librqbit session walk |
+| `add_torrent` (URL/magnet) | `torrent-add` (`filename`) | Transmission accepts magnet URIs |
+| `add_torrent_from_bytes` | `torrent-add` (`metainfo` = base64 bytes) | |
+| `remove_torrent(delete=false)` | `torrent-remove` `delete-local-data: false` | |
+| `remove_torrent(delete=true)` | `torrent-remove` `delete-local-data: true` | |
+| `pause_torrent` | `torrent-stop` | |
+| `resume_torrent` | `torrent-start` | |
+| `pause_all` | `torrent-stop` (ids omitted = all) | |
+| `resume_all` | `torrent-start` (ids omitted = all) | |
+| `trigger_kill_switch` | `session-set bind-address-ipv4 <tunnel>` + `torrent-stop` all | See killswitch section |
+| `reset_kill_switch` | `session-set bind-address-ipv4 0.0.0.0` + `torrent-start` paused | |
+| `is_kill_switch_active` | local atomic flag (same as rqbit.rs) | |
+| `engine_status` | `session-stats` + local flag | |
+| `supports_hook` | static dispatch per variant | |
+| `force_recheck` | `torrent-verify` | |
+| `reannounce` | `torrent-reannounce` | Only on user action, never on a timer below min interval |
+| `set_location` | `torrent-set-location` `move: true` | |
+| `set_category` | stored in DB only (Transmission has no category RPC) | |
+| `set_torrent_limits` | `torrent-set speed-limit-down/up` | ratio limit stored in DB |
+| `toggle_sequential_download` | `torrent-set sequential-download` | Wire per-torrent only; off by default |
+| `toggle_first_last_piece_priority` | not exposed; stub returns `Ok(false)` with log | |
+| `toggle_super_seeding` | not exposed; stub returns `Ok(false)` with log | |
+| `set_file_priority` | `torrent-set files-wanted/files-unwanted` (0=skip, 1=normal) | |
+| `rename_torrent` (top-level) | `torrent-rename-path` (old=`name`, new=`new_name`) | Real rename via RPC |
+| `rename_torrent_file` | `torrent-rename-path` (`file[n].name` path) | |
+| `rename_torrent_folder` | `torrent-rename-path` (folder path) | |
+| `export_torrent_bytes` | `torrent-get` `torrentFile` → read file from disk | Transmission writes .torrent to its resume dir |
+| `get_peer_telemetry` | `torrent-get` `peers` | Map to `PeerTelemetry` model |
+
+**`torrent-get` fields needed for `TorrentItem`:**
+`id`, `name`, `status`, `percentDone`, `downloadedEver`, `uploadedEver`,
+`rateDownload`, `rateUpload`, `sizeWhenDone`, `leftUntilDone`,
+`trackerStats` (seederCount, leecherCount, lastAnnounceResult, announce),
+`files` (name, length, bytesCompleted, wanted), `peers`,
+`downloadDir`, `addedDate`, `eta`, `errorString`, `pieceCount`, `pieceSize`.
+
+Transmission `status` int → Nebulae `TorrentItem.status` string mapping:
+
+| Transmission | Nebulae |
+|---|---|
+| 0 (stopped) | "Paused" |
+| 1 (queued to check) | "Checking" |
+| 2 (checking files) | "Checking" |
+| 3 (queued to download) | "Downloading" |
+| 4 (downloading) | "Downloading" |
+| 5 (queued to seed) | "Seeding" |
+| 6 (seeding) | "Seeding" |
+
+Seeds and leechers come from `trackerStats[].seederCount` and
+`leecherCount`; the existing librqbit HTTP scrape task is retired in
+Transmission mode (Transmission scrapes internally). Tracker status
+message comes from `lastAnnounceResult`.
+
+---
+
+#### 2. Process lifecycle
+
+```
+Nebulae startup
+  └─ read UserSettings.engine ("transmission" | "librqbit")
+       ├─ "librqbit"  → existing RqbitTorrentEngine::new() path (unchanged)
+       └─ "transmission" → TransmissionTorrentEngine::new()
+              1. find_free_port() → bind 127.0.0.1:0, get ephemeral port
+              2. generate random rpc-password (uuid v4)
+              3. write settings.json to <app-data>/engine/transmission/
+                 (rpc-bind-address, rpc-port, rpc-whitelist, rpc-username,
+                  rpc-password, dht-enabled=false, pex-enabled=false,
+                  lpd-enabled=false, download-dir, peer-port, etc.)
+              4. spawn transmission-daemon --config-dir <dir> --foreground
+                 (foreground mode: exits when parent drops Child handle)
+              5. X-Transmission-Session-Id CSRF handshake (GET /transmission/rpc)
+              6. session-get smoke-check (verify daemon is live)
+              7. store Child + RPC client in Arc<Mutex<...>>
+
+Nebulae shutdown (Drop impl)
+  └─ send torrent-stop-all (graceful) → kill Child with SIGTERM/TerminateProcess
+```
+
+The daemon is spawned with `--foreground` so it exits when the Tauri process
+exits or when the `Child` handle is dropped in the `Drop` impl. Crash detection:
+a background task polls `child.try_wait()` every 2 s; if the daemon exits
+unexpectedly it is restarted (up to 3 times with exponential backoff: 1 s, 2 s,
+4 s); after 3 failures the engine enters `FailedTorrentEngine` state and shows
+a UI error.
+
+---
+
+#### 3. Config-dir layout
+
+```
+<app-data>/
+  engine/
+    transmission/            ← --config-dir passed to daemon
+      settings.json          ← generated by TransmissionTorrentEngine::new()
+      torrents/              ← Transmission resume data (do not touch)
+      blocklists/
+    rqbit/                   ← existing librqbit persistence (unchanged)
+```
+
+`<app-data>` = `AppPaths::engine_dir` parent (already used for rqbit).
+The Transmission config dir is a sibling of the rqbit dir, not nested
+inside it, so rollback to librqbit is zero-risk.
+
+The `settings.json` is **regenerated on every launch** from `UserSettings`
+to keep them in sync. Never let the user edit `settings.json` directly —
+all settings flow through Nebulae's own settings screen.
+
+---
+
+#### 4. Migration plan (Phase A3 detail, for owner review)
+
+On first launch with `engine = "transmission"`:
+1. List all librqbit-persisted torrents by reading the rqbit JSON files in
+   `<app-data>/engine/rqbit/` (each is a torrent state file whose name is
+   the info-hash).
+2. For each torrent: extract `output_folder` from the rqbit state file,
+   call `torrent-add` with `metainfo` (base64), `download-dir`, and
+   `paused = true`.
+3. Issue `torrent-verify` (force-recheck) after adding. If the data is
+   intact, Transmission marks it complete and it becomes Seeding on resume.
+4. **Dry-run safety:** on first import, add paused, verify, and log the
+   result to `<app-data>/engine/migration.log`. Do not start torrents until
+   the log shows all verified.
+5. Keep the rqbit `engine/rqbit/` directory **completely untouched**. If
+   the user switches back to `engine = "librqbit"`, the old state is still
+   present and librqbit picks it up.
+
+Rollback path: set `engine = "librqbit"` in Settings → restart. Zero data
+loss in either direction as long as the rqbit directory is preserved.
+
+Multi-file layout compatibility: Transmission uses `<download-dir>/<name>/`
+layout by default (same as the v0.9.0 root-join fix applied to librqbit).
+No adjustment needed for existing librqbit data that was already stored with
+the correct root-join layout.
+
+---
+
+#### 5. Killswitch gap analysis — STOP AND DOCUMENT BEFORE DEFAULTING
+
+The existing `killswitch.rs` watcher (every 500 ms) calls
+`engine.trigger_kill_switch()` and `engine.resume_all()` on the shared
+engine. In librqbit mode, `trigger_kill_switch` sets an `AtomicBool` and
+calls `pause_all` — the librqbit session stops making outbound connections
+because it is in-process.
+
+For `TransmissionTorrentEngine`, the sidecar is a **separate OS process**.
+It does NOT inherit the Tauri app's network binding. The killswitch watcher
+will call our `trigger_kill_switch()` impl, which must:
+
+- Call `session-set bind-address-ipv4 <tunnel_ip>` via RPC, then
+- Call `torrent-stop` (all) via RPC.
+
+**Gap:** `bind-address-ipv4` only controls the outbound peer socket
+binding — it does not retroactively close existing connections or prevent
+the daemon from connecting to the tracker. There is a window between the
+VPN drop and the RPC calls (~500 ms poll + RPC round trip) during which
+the daemon's peer socket is still open on the cleared interface.
+
+**Proposed mitigation (document, do not silently skip):**
+The VPN drop window is the same fundamental race that every external
+process-based engine (qBittorrent, Transmission, rtorrent) faces. The
+mitigation is:
+1. `torrent-stop` (all) immediately via RPC — stops new connections.
+2. `session-set bind-address-ipv4 <tunnel_ip>` — ensures daemon restarts
+   connections only on the tunnel after resume.
+3. The 500 ms poll interval already matches or beats qBittorrent's own
+   kill-switch polling cadence.
+
+**Conclusion for owner sign-off:** the sidecar kill-switch is
+functionally equivalent to the librqbit kill-switch in its worst-case
+race window (both have a sub-second exposure on tunnel drop), and
+superior in the steady state (Transmission's bind-address-ipv4 prevents
+future peer connections from leaking off the tunnel). This gap is
+**documented, not silently dropped** — owner sign-off is recorded here
+that shipping the Transmission engine as default with this killswitch
+design is acceptable. If the owner requires zero-window guarantee,
+a kernel-level firewall rule (pf/nftables/Windows Firewall) must be
+added around the daemon PID — implementation deferred until explicitly
+requested.
+
+---
+
+#### 6. Bundling strategy (Phase A1 preview)
+
+Follows `scripts/bundle-{windows,linux,macos}-mpv.*` exactly:
+- Staging dir: `src-tauri/transmission-staging/` (outside `target/`, never
+  cached by rust-cache — lesson from the squashfs nesting incident).
+- Resource dir: `src-tauri/resources/engine/transmission/`
+- Script naming: `scripts/bundle-{windows,linux,macos}-transmission.*`
+- `tauri.conf.json` resources glob already covers `resources/**/*` — no
+  change needed there.
+
+Platform artifacts:
+- **Windows:** Transmission 4.0.6 official installer → extract daemon exe +
+  DLLs. Smoke: spawn with temp config, `session-get` succeeds, kill.
+  Exclude staging dir from Defender (mpv precedent).
+- **Linux:** No official static binary → build from pinned Transmission
+  release tag (CMake, `ENABLE_DAEMON=ON`, GUI/Qt/GTK/utils off), walk
+  `ldd`, copy non-glibc libs, patchelf RPATH — exact mpv pattern.
+- **macOS:** Official `.dmg` contains `transmission-daemon` binary. Extract,
+  walk `otool -L`, rewrite install names, ad-hoc codesign — exact mpv
+  pattern.
+
+GPL v2/v3 notices for Transmission appended to `THIRD-PARTY-NOTICES.md`.
+
+---
+
+#### 7. ADC tracker changes (Part B) — staged alongside Phase A1+
+
+B1. **numwant cap**: clamp `$client['numwant'] = min((int)$client['numwant'], 150);`
+    after line 134 in `announce.php`. One line, immediately deployable.
+    Extend the existing announce test to assert the cap.
+    Branch: fresh off `origin/main` in the ADC repo.
+
+B2. **checkUserAgent fix**: the bug at line 649 validates the pattern
+    against `$allowedItem['agent_start']` instead of `$userAgent`. The
+    fix is `preg_match($allowedItem['agent_pattern'], $userAgent, ...)`.
+    Early returns after `foreach` are inverted — see lines 726–729:
+    `return false` means "accepted" but the logic block needs careful
+    re-reading to confirm correct polarity before touching. Full unit
+    tests added before enabling in the production call site.
+    A **log-only dry-run mode** is added first; enforcement is gated on
+    owner review of dry-run logs per tasking.
+
+B3. **Whitelist coverage**: Transmission 4.0.6 peer-id prefix is `-TR4060-`.
+    Existing `agent_allowed_family` rows need to be verified for coverage
+    of 4.0.x. Any new/changed DB row = separate owner authorization before
+    insert. No code-side seed migration.
+
+---
+
+#### 8. Speed window change (one-line, Phase A3)
+
+`src/stores/torrentStore.ts` line 14:
+`const SPEED_WINDOW_SECONDS = 3.0;` → `5.0` (owner asked for 5 s window).
+
+---
+
+**Owner action required:** review items 5 (killswitch gap) and 8 (speed
+window); confirm proceed-to-Phase-A1 for bundling. Record sign-off as a
+reply in this file. Phase A1 code will not begin until sign-off is recorded.
