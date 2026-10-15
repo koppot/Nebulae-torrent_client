@@ -105,7 +105,7 @@ pub async fn run_connectivity_doctor_test(
         .flatten()
         .and_then(|s| serde_json::from_str::<crate::commands::settings::UserSettings>(&s).ok())
         .map(|s| s.listening_port)
-        .unwrap_or(51413);
+        .unwrap_or(41413);
 
     // Run probes concurrently
     let (upnp, nat_pmp, ipv4, ipv6, dns_ms, tracker_ok) = tokio::join!(

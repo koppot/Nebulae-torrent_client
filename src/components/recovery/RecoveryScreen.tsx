@@ -95,7 +95,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
           {isPortConflict ? (
             <>
               <p>
-                The engine could not start because its listening port (51413) is already
+                The engine could not start because its listening port (41413) is already
                 in use. This is almost always another Nebulae instance still running in
                 the menu bar / system tray &mdash; closing the window does not quit
                 Nebulae. It can also be another torrent client on the same port.
@@ -110,7 +110,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
             <>
               <p>
                 The BitTorrent transfer engine could not be initialized on your system. This typically
-                occurs if port 51413 is currently in use by another torrent client, or if file
+                occurs if port 41413 is currently in use by another torrent client, or if file
                 permissions prevent access to the configured download directory.
               </p>
               <p>

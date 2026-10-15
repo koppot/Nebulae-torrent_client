@@ -332,7 +332,7 @@ impl MockTorrentEngine {
             tauri::async_runtime::spawn(async move {
                 let peer_id = b"-NE0100-849204820194";
                 if let Ok((seeds, peers)) =
-                    announce_http_tracker(&tr_url, &raw_hash, peer_id, 51413, left).await
+                    announce_http_tracker(&tr_url, &raw_hash, peer_id, 41413, left).await
                 {
                     if let Ok(mut items) = torrents_ref.lock() {
                         if let Some(item) = items.iter_mut().find(|t| t.id == target_id) {

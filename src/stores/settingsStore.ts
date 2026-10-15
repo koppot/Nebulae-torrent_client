@@ -52,7 +52,7 @@ export const defaultSettings: UserSettings = {
 
   // 3. Connection
   peer_connection_protocol: 'Both',
-  listening_port: 51413,
+  listening_port: 41413,
   randomize_port_on_startup: false,
   enable_upnp: true,
   max_global_connections: 500,

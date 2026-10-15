@@ -121,7 +121,7 @@ mod tests {
         let peer = PeerTelemetry {
             peer_id: "test-peer-1".to_string(),
             ip: "192.168.1.50".to_string(),
-            port: 51413,
+            port: 41413,
             rtt_ms: 15,
             req_resp_latency_ms: 20,
             sustained_dl_bps: 8 * 1024 * 1024, // 8 MiB/s

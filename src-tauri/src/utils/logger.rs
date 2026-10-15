@@ -92,9 +92,9 @@ mod tests {
         assert!(!sanitized_auth.contains("supersecretauth"));
         assert_eq!(sanitized_auth, "[REDACTED_TRACKER_URL]");
 
-        let non_secret_log = "Engine listening on port 51413";
+        let non_secret_log = "Engine listening on port 41413";
         let normal = SafeLogger::sanitize(non_secret_log);
-        assert_eq!(normal, "Engine listening on port 51413");
+        assert_eq!(normal, "Engine listening on port 41413");
     }
 
     #[test]

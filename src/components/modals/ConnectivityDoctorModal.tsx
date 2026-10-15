@@ -8,7 +8,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
   const { report, isRunningTest, isRetestingPort, runDoctorTest, retestPort } = useConnectivityStore();
   const [activeAccordion, setActiveAccordion] = useState<string | null>(null);
   const [copiedCert, setCopiedCert] = useState(false);
-  const [portInput, setPortInput] = useState('51413');
+  const [portInput, setPortInput] = useState('41413');
 
   useEffect(() => {
     if (showConnectivityDoctor && !report) {
@@ -155,7 +155,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                 className="w-20 px-2 py-1 text-xs rounded border border-[#333333] bg-[#141414] text-white font-mono focus:border-[#e50914] focus:outline-none"
               />
               <button
-                onClick={() => retestPort(parseInt(portInput) || 51413)}
+                onClick={() => retestPort(parseInt(portInput) || 41413)}
                 disabled={isRetestingPort}
                 className="px-2.5 py-1 text-xs rounded border border-[#333333] bg-[#141414] hover:bg-[#262626] text-white transition"
               >
@@ -192,7 +192,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   <div className="px-3 py-2 bg-[#141414] text-[#a3a3a3] space-y-1 font-mono text-[11px]">
                     <p>1. Open http://router.asus.com in your browser.</p>
                     <p>2. Go to WAN → Virtual Server / Port Forwarding.</p>
-                    <p>3. Add Profile: Port = 51413, Protocol = BOTH, Local IP = device IP.</p>
+                    <p>3. Add Profile: Port = 41413, Protocol = BOTH, Local IP = device IP.</p>
                   </div>
                 )}
               </div>
@@ -209,7 +209,7 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   <div className="px-3 py-2 bg-[#141414] text-[#a3a3a3] space-y-1 font-mono text-[11px]">
                     <p>1. Open http://routerlogin.net.</p>
                     <p>2. Go to Advanced → Port Forwarding.</p>
-                    <p>3. Forward port 51413 to your local IP address.</p>
+                    <p>3. Forward port 41413 to your local IP address.</p>
                   </div>
                 )}
               </div>

@@ -188,7 +188,9 @@ impl Default for UserSettings {
 
             // 3. Connection
             peer_connection_protocol: "Both".to_string(),
-            listening_port: 51413,
+            // Nebulae-specific default: avoids binding conflicts with a
+            // standalone Transmission install (stock default 51413).
+            listening_port: 41413,
             randomize_port_on_startup: false,
             enable_upnp: true,
             max_global_connections: 500,
@@ -293,6 +295,12 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
         if let Ok(mut parsed) = serde_json::from_str::<UserSettings>(&val) {
             if parsed.engine.trim() == "librqbit" {
                 parsed.engine = "transmission".to_string();
+            }
+            // Migrate the stock Transmission default port to the Nebulae-
+            // specific default so existing installs move off a port a
+            // standalone Transmission client on the same machine may claim.
+            if parsed.listening_port == 51413 {
+                parsed.listening_port = 41413;
             }
             settings = parsed;
         }

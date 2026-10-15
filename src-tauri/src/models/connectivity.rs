@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn test_certificate_formatting() {
         let cert = ConnectivityReport::generate_certificate(
-            51413,
+            41413,
             PortStatus::Open,
             true,
             true,
@@ -98,7 +98,7 @@ mod tests {
 
         assert_eq!(
             cert,
-            "ADC Connectable: Yes — Port 51413 Reachable — IPv6 Ready — Tracker Healthy — VPN Bound (utun3)"
+            "ADC Connectable: Yes — Port 41413 Reachable — IPv6 Ready — Tracker Healthy — VPN Bound (utun3)"
         );
     }
 }

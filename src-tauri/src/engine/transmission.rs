@@ -15,27 +15,35 @@ use crate::models::peering::{LocalityTier, PeerTelemetry};
 use crate::utils::network::find_active_vpn_interface;
 use crate::utils::paths::AppPaths;
 
+/// Expands a leading `~` to the user's home directory. Relative paths resolve
+/// against the home directory, never the process working directory (which can
+/// be a read-only volume when the app is launched straight from a mounted DMG).
+fn expand_tilde_path(path: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let raw = path.to_string_lossy();
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        return Some(home);
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return Some(home.join(rest));
+    }
+    let as_path = PathBuf::from(trimmed);
+    if as_path.is_absolute() {
+        Some(as_path)
+    } else {
+        Some(home.join(as_path))
+    }
+}
+
 /// Helper to normalize download directory paths (expand `~`, convert to absolute).
 fn normalize_download_dir(download_dir: Option<&str>) -> Result<Option<String>, String> {
     let Some(raw) = download_dir.map(str::trim).filter(|d| !d.is_empty()) else {
         return Ok(None);
     };
 
-    let home = || dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string());
-
-    let expanded = if raw == "~" {
-        home()?
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        home()?.join(rest)
-    } else {
-        PathBuf::from(raw)
-    };
-
-    let absolute = if expanded.is_absolute() {
-        expanded
-    } else {
-        home()?.join(expanded)
-    };
+    let absolute = expand_tilde_path(Path::new(raw))
+        .ok_or_else(|| "Cannot resolve home directory".to_string())?;
 
     std::fs::create_dir_all(&absolute).map_err(|e| {
         format!(
@@ -749,6 +757,12 @@ impl TransmissionTorrentEngine {
                 engine_dir.display()
             )
         })?;
+        // The front-end default is the literal string '~/Downloads'; expand it
+        // to an absolute path or transmission-daemon resolves it against its
+        // working directory, which is read-only when launched from a DMG.
+        let default_download_dir = expand_tilde_path(&default_download_dir).ok_or_else(|| {
+            "Cannot resolve home directory for the default download directory".to_string()
+        })?;
         std::fs::create_dir_all(&default_download_dir).map_err(|e| {
             format!(
                 "Failed to create default download directory '{}': {e}",
@@ -831,6 +845,10 @@ impl TransmissionTorrentEngine {
             .arg("--config-dir")
             .arg(&engine_dir)
             .arg("--foreground")
+            // Pin the working directory to the writable engine dir: inheriting
+            // the app's CWD (e.g. a mounted DMG volume) must never affect the
+            // daemon's path handling.
+            .current_dir(&engine_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -1872,5 +1890,27 @@ mod tests {
         let flat_resolved =
             resolve_transmission_download_dir("/home/user/Downloads", "OtherSeries", true);
         assert_eq!(flat_resolved, "/home/user/Downloads");
+    }
+
+    #[test]
+    fn test_expand_tilde_path_expands_front_end_default() {
+        let home = dirs::home_dir().expect("test environment must have a home directory");
+
+        // The exact default shipped by settingsStore.ts must resolve to the
+        // real home Downloads dir, never a relative '~/Downloads' directory.
+        assert_eq!(
+            expand_tilde_path(Path::new("~/Downloads")),
+            Some(home.join("Downloads"))
+        );
+        assert_eq!(expand_tilde_path(Path::new("~")), Some(home.clone()));
+        assert_eq!(
+            expand_tilde_path(Path::new("/absolute/path")),
+            Some(PathBuf::from("/absolute/path"))
+        );
+        // Relative paths must resolve against home, not the process CWD.
+        assert_eq!(
+            expand_tilde_path(Path::new("relative/dir")),
+            Some(home.join("relative/dir"))
+        );
     }
 }
