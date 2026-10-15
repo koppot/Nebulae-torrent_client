@@ -61,3 +61,12 @@ ADC/
 *.log
 !src-tauri/src/engine/
 !src-tauri/src/engine/**
+
+# Bundled sidecars, binaries, and staging
+src-tauri/player-staging/
+src-tauri/transmission-staging/
+src-tauri/transmission-staging-appimage/
+src-tauri/resources/player/mpv*
+src-tauri/resources/player/lib/
+src-tauri/resources/player/jre/
+src-tauri/resources/engine/transmission/

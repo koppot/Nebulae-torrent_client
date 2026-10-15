@@ -183,6 +183,30 @@ jobs:
         run: |
           ./scripts/bundle-macos-mpv.sh
 
+      # --- Transmission-daemon sidecar bundling (Phase A1) ------------------
+      # Follows the exact mpv precedent: staging dir outside target/, pinned
+      # URL + SHA-256 verified in each script, per-leg smoke test.
+      - name: Bundle transmission-daemon engine (Windows x64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/bundle-windows-transmission.ps1
+
+      - name: Bundle transmission-daemon engine (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/bundle-linux-transmission.sh
+
+      - name: Install transmission-cli on macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          brew install transmission-cli || brew upgrade transmission-cli || true
+
+      - name: Bundle transmission-daemon engine (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/bundle-macos-transmission.sh
+
       # --- Linux split build ------------------------------------------------
       # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
       # auto-scans AppDir/usr/lib recursively: the bundled player library
@@ -194,25 +218,50 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm tauri build --bundles deb,rpm
 
-      - name: Build Linux AppImage without player resources
+      - name: Build Linux AppImage without player/engine resources
         if: runner.os == 'Linux'
         run: |
           # Stage OUTSIDE target/: rust-cache restores target/ between runs and
-          # strips the non-cargo mpv blob, which would nest the move and break
-          # the injection probe.
+          # strips the non-cargo blobs, which would nest the move and break
+          # the injection probe (squashfs nesting incident, engine parallel).
           rm -rf src-tauri/player-staging
           mv src-tauri/resources/player src-tauri/player-staging
+          rm -rf src-tauri/transmission-staging-appimage
+          mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
           pnpm tauri build --bundles appimage
 
-      - name: Inject bundled player into AppImage (and refresh updater bundle)
+      - name: Inject bundled player + engine into AppImage (and refresh updater bundle)
         if: runner.os == 'Linux'
         run: |
           ./scripts/appimage-inject-player.sh
+          # Also inject the transmission engine resources
           APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
+          OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
+          dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
+          "$APPIMAGE_PATH" --appimage-extract > /dev/null
+          mkdir -p squashfs-root/usr/share/nebulae/resources/engine
+          rm -rf squashfs-root/usr/share/nebulae/resources/engine
+          cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          # Verify engine daemon is present
+          if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
+            echo "ERROR: transmission-daemon missing from AppImage engine staging"
+            find squashfs-root/usr/share/nebulae/resources/ -maxdepth 3 | head -30
+            exit 1
+          fi
+          mksquashfs squashfs-root /tmp/appimage-payload.squashfs -root-owned -noappend
+          cat /tmp/appimage-runtime /tmp/appimage-payload.squashfs > "$APPIMAGE_PATH.new"
+          chmod +x "$APPIMAGE_PATH.new"
+          mv "$APPIMAGE_PATH.new" "$APPIMAGE_PATH"
+          rm -rf squashfs-root
+          # Verify both player and engine in final image
+          LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
+          printf '%s\n' "$LISTING" | grep -q "resources/player/mpv" || { echo "ERROR: mpv missing from repacked AppImage"; exit 1; }
+          printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
+          echo "SUCCESS: player + engine injected into $APPIMAGE_PATH"
           cd "$(dirname "$APPIMAGE_PATH")"
           NAME="$(basename "$APPIMAGE_PATH")"
           # Regenerate the updater payload from the INJECTED AppImage so
-          # auto-updates ship the bundled player too, then re-sign it.
+          # auto-updates ship the bundled player and engine, then re-sign it.
           tar -czf "$NAME.tar.gz" "$NAME"
           pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$(pwd)/$NAME.tar.gz"
 
