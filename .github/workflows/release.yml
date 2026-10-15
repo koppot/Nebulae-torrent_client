@@ -464,19 +464,6 @@ jobs:
             }
           }
 
-          # Updater signature for the FINAL installer bytes (previously provided
-          # incidentally by tauri-action's raw asset upload; the manifest reads
-          # the canonical name). Signing is deterministic for the same key.
-          if (Test-Path 'Nebulae-Setup-x64.exe') {
-            pnpm tauri signer sign -k $env:TAURI_SIGNING_PRIVATE_KEY -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD 'Nebulae-Setup-x64.exe'
-            if (Test-Path 'Nebulae-Setup-x64.exe.sig') {
-              gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
-            } else {
-              Write-Host 'WARNING: Nebulae-Setup-x64.exe.sig was not produced - windows updater entry will be missing.'
-            }
-          }
-          }
-
           # Machine-readable signing status for this release.
           if (Test-Path 'WINDOWS-SIGNING-STATUS.txt') {
             gh release upload "$tag" 'WINDOWS-SIGNING-STATUS.txt' --clobber
