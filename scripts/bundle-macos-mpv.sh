@@ -44,8 +44,8 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     trap 'rm -rf "$BUILD_ROOT"' EXIT
     # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
     # removed." in the 0.41 binary) but 0.41 also updated mpv for the
-    # current brew ffmpeg. Pin 0.40 (still has dvdnav menus, newer API
-    # surface) and FAIL THE BUILD if the menu removal marker appears -
+    # current brew ffmpeg. Pin 0.39 (the LAST release with dvdnav menu
+    # navigation; 0.40 removed it too) and FAIL THE BUILD if the menu removal marker appears -
     # the owner requires DVD menus, always.
     # mpv 0.39/0.40 do not compile against brew's bleeding-edge ffmpeg 9
     # (AVCodec/FF_PROFILE API churn), so build a period-matched ffmpeg 7.1
@@ -67,7 +67,7 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
         echo "ERROR: source build of ffmpeg 7.1 failed."
         exit 1
     }
-    git clone --depth 1 --branch v0.40.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
+    git clone --depth 1 --branch v0.39.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
       export PKG_CONFIG_PATH="$BUILD_ROOT/ffmpeg-install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" &&
       meson setup build -Dgpl=true \
@@ -300,7 +300,8 @@ if [ -f "$TARGET_DIR/lib/libbluray.4.dylib" ]; then
     echo "BD-J support verified in bundled libbluray."
 fi
 # Menu-support gate: this marker string proves dvdnav menus were removed.
-if strings "$TARGET_DIR/mpv" 2>/dev/null | grep -q "DVD menu support has been removed"; then
+# Binary grep (not strings) so it cannot be defeated by string-table shifts.
+if grep -aqc "DVD menu support has been removed" "$TARGET_DIR/mpv" >/dev/null 2>&1; then
     echo "ERROR: this mpv release has DVD menu support REMOVED - owner requires menus!"
     exit 1
 fi
