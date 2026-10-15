@@ -42,10 +42,12 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     brew install -q libdvdnav libdvdread meson ninja pkg-config
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
-    # mpv 0.40 REMOVED DVD menu support ("DVD menu support has been
-    # removed." in the 0.41 binary). The owner requires DVD menus, so
-    # pin the last release with working dvdnav menu navigation.
-    git clone --depth 1 --branch v0.39.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
+    # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
+    # removed." in the 0.41 binary) but 0.41 also updated mpv for the
+    # current brew ffmpeg. Pin 0.40 (still has dvdnav menus, newer API
+    # surface) and FAIL THE BUILD if the menu removal marker appears -
+    # the owner requires DVD menus, always.
+    git clone --depth 1 --branch v0.40.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
       meson setup build -Dgpl=true \
           -Ddvdnav=enabled -Dlibbluray=enabled \
@@ -275,6 +277,11 @@ if [ -f "$TARGET_DIR/lib/libbluray.4.dylib" ]; then
         exit 1
     }
     echo "BD-J support verified in bundled libbluray."
+fi
+# Menu-support gate: this marker string proves dvdnav menus were removed.
+if strings "$TARGET_DIR/mpv" 2>/dev/null | grep -q "DVD menu support has been removed"; then
+    echo "ERROR: this mpv release has DVD menu support REMOVED - owner requires menus!"
+    exit 1
 fi
 if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/|@loader_path|@executable_path'; then
     echo "ERROR: bundled mpv still references libraries outside the bundle;"
