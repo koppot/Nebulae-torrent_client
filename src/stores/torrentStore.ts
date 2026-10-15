@@ -2,54 +2,109 @@ import { create } from 'zustand';
 import { TorrentItem, CreateTorrentParams, InspectTorrentResult, TorrentContentMatch, TorrentRenameEntry } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
-// Display-side speed smoothing: librqbit reports raw per-second rates that
-// swing between a burst rate and 0 on small swarms, which made the UI
-// flicker (e.g. 4 MB/s -> 0 B/s every second). An exponential moving
-// average keeps the display readable while staying honest: values decay
-// quickly to zero and stop smoothing entirely when a torrent is inactive.
-const SPEED_EMA_ALPHA = 0.5;
-interface SpeedEmaState {
-  down: number;
-  up: number;
-  downZeroStreak: number;
-  upZeroStreak: number;
+// Display-side speed presentation, modeled on the established torrent
+// clients. qBittorrent (libtorrent) and Transmission do NOT display raw
+// per-tick rates: both derive speed from cumulative byte counters over a
+// short window (libtorrent: ~2s sliding window; Transmission tr_bandwidth:
+// ~2s decaying average of counter deltas). librqbit's raw per-second rates
+// swing between burst and 0 on small swarms, so raw display flickers.
+// Nebulae therefore computes a decaying average of COUNTER DELTAS over a
+// ~3s time constant and settles honestly to zero when the counters stop
+// moving. Per-tick raw rates are never passed through.
+const SPEED_WINDOW_SECONDS = 3.0;
+const SPEED_IDLE_SNAP_TICKS = 6; // ~3s at 500ms telemetry before snapping to exact 0
+interface SpeedCounterState {
+  lastDownBytes: number | null;
+  lastUpBytes: number | null;
+  lastTimeMs: number | null;
+  avgDown: number;
+  avgUp: number;
+  idleTicks: number;
 }
-const speedEma = new Map<string, SpeedEmaState>();
+const speedCounters = new Map<string, SpeedCounterState>();
 
 export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
   const seen = new Set<string>();
+  const now = Date.now();
   const out = torrents.map((t) => {
     seen.add(t.id);
     const active = t.status === 'Downloading' || t.status === 'Seeding';
     if (!active) {
-      speedEma.delete(t.id);
-      return t;
+      speedCounters.delete(t.id);
+      return { ...t, download_rate: 0, upload_rate: 0 };
     }
-    const prev = speedEma.get(t.id);
-    const smooth = (raw: number, prevValue: number | undefined, streak: number) => {
-      if (raw === 0) {
-        const nextStreak = streak + 1;
-        if (prevValue === undefined || nextStreak >= 2) {
-          return { value: 0, streak: nextStreak };
-        }
-        return { value: prevValue * 0.5, streak: nextStreak };
-      }
-      const value =
-        prevValue === undefined ? raw : prevValue + SPEED_EMA_ALPHA * (raw - prevValue);
-      return { value, streak: 0 };
+    const prev = speedCounters.get(t.id) ?? {
+      lastDownBytes: null,
+      lastUpBytes: null,
+      lastTimeMs: null,
+      avgDown: 0,
+      avgUp: 0,
+      idleTicks: 0,
     };
-    const down = smooth(t.download_rate, prev?.down, prev?.downZeroStreak ?? 0);
-    const up = smooth(t.upload_rate, prev?.up, prev?.upZeroStreak ?? 0);
-    speedEma.set(t.id, {
-      down: down.value,
-      up: up.value,
-      downZeroStreak: down.streak,
-      upZeroStreak: up.streak,
+
+    // dt guard: clamp weird intervals (app sleep, first sample, clock jumps).
+    let dt = prev.lastTimeMs === null ? 0 : (now - prev.lastTimeMs) / 1000;
+    if (dt <= 0.01 || dt > 30) {
+      // Anchor (or re-anchor after a long gap) without producing a spike.
+      dt = 0;
+    }
+
+    const deltaOf = (current: number, last: number | null) => {
+      if (dt === 0 || last === null) return null; // no interval yet
+      const delta = current - last;
+      return delta > 0 ? delta : 0; // counter reset (recheck/re-add) = no traffic
+    };
+
+    const downDelta = deltaOf(t.downloaded_bytes, prev.lastDownBytes);
+    const upDelta = deltaOf(t.uploaded_bytes, prev.lastUpBytes);
+    const instDown = downDelta === null ? null : downDelta / dt;
+    const instUp = upDelta === null ? null : upDelta / dt;
+
+    // Exponential smoothing with a time-based weight, equivalent to the
+    // clients' windowed averages: newer samples weigh proportionally to
+    // the elapsed fraction of the window.
+    const weight = dt === 0 ? 0 : 1 - Math.exp(-dt / SPEED_WINDOW_SECONDS);
+    const noTraffic =
+      (downDelta === null || downDelta === 0) && (upDelta === null || upDelta === 0);
+    const idleTicks = noTraffic ? prev.idleTicks + 1 : 0;
+    const decayed = (avg: number) => {
+      // Counter not advancing: decay toward zero on the same time constant.
+      return avg * Math.exp(-dt / SPEED_WINDOW_SECONDS);
+    };
+
+    let avgDown = prev.avgDown;
+    let avgUp = prev.avgUp;
+    if (dt === 0) {
+      // First sample or re-anchor: keep the current average, wait for an interval.
+    } else if (instDown !== null && instDown > 0) {
+      avgDown += weight * (instDown - avgDown);
+    } else if (downDelta === 0) {
+      avgDown = decayed(avgDown);
+    }
+    if (dt !== 0 && instUp !== null && instUp > 0) {
+      avgUp += weight * (instUp - avgUp);
+    } else if (dt !== 0 && upDelta === 0) {
+      avgUp = decayed(avgUp);
+    }
+
+    // Snap to exact zero once traffic has been absent for a while, so an
+    // idle torrent does not display an asymptotic sliver forever.
+    const snap = idleTicks >= SPEED_IDLE_SNAP_TICKS;
+    const finalDown = snap ? 0 : avgDown;
+    const finalUp = snap ? 0 : avgUp;
+
+    speedCounters.set(t.id, {
+      lastDownBytes: t.downloaded_bytes,
+      lastUpBytes: t.uploaded_bytes,
+      lastTimeMs: now,
+      avgDown: finalDown,
+      avgUp: finalUp,
+      idleTicks,
     });
-    return { ...t, download_rate: down.value, upload_rate: up.value };
+    return { ...t, download_rate: finalDown, upload_rate: finalUp };
   });
-  for (const id of [...speedEma.keys()]) {
-    if (!seen.has(id)) speedEma.delete(id);
+  for (const id of [...speedCounters.keys()]) {
+    if (!seen.has(id)) speedCounters.delete(id);
   }
   return out;
 }

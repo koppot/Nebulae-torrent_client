@@ -340,3 +340,18 @@ aggregate success; stray draft from the cancelled first attempt deleted.
    the early return (fixes its stale-closure warning properly).
    Shadows to watch: modals name state `errorMessage` - import the helper
    as toErrorMessage.
+5. SPEED DISPLAY REWORK (owner: "show average, not momentous"): the
+   alpha=0.5 per-500ms EMA still flickered. Rebuilt like the established
+   clients (qBittorrent/libtorrent ~2s sliding window; Transmission
+   tr_bandwidth ~2s decaying counter average): displayed speed now comes
+   from CUMULATIVE BYTE COUNTER deltas (downloaded_bytes/uploaded_bytes)
+   with a 3s time-constant EMA, decay-to-zero on stalled counters, exact
+   0 B/s snap after ~3s idle, dt clamped 0.01-30s, counter resets treated
+   as zero traffic. Raw rates never pass through.
+6. DMG ICON (owner: white generic icon): shipped v0.9.0 dmg contains
+   .VolumeIcon.icns but the volume custom-icon flag was never set
+   (SetFile -a C on the srcfolder is a silent no-op; hdiutil defaults to
+   APFS where the flag does not persist). Fix: create UDRW with -fs HFS+,
+   SetFile -a C on the MOUNTED volume root, convert to UDZO, verify the
+   flag in CI. Also REMOVED the old dmg-in-zip (AppleDouble sequester)
+   runaround from the workflow, release body, and Discord embed.
