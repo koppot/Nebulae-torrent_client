@@ -868,6 +868,63 @@ plan. Beginning Phase A1 — Windows leg first.
     ```
   - Per standing instruction, no database update has been executed. This SQL is presented to the owner for authorization.
 
+### 2026-10-15 — Owner authorization for agent_allowed_family change + version record reconciliation
+
+=== 1. DB AUTHORIZATION: row 27 UPDATE — APPROVED WITH MANDATORY SEQUENCE ===
+
+The owner authorizes the proposed UPDATE to agent_allowed_family row id=27,
+which Droid review confirmed is semantically correct against the fixed
+checkUserAgent logic (minimum-version floor: Transmission 4.0+, bundled
+-TR4130- passes, 5.x correctly unmatched by this row). Execute exactly:
+
+a. BACKUP FIRST, no exceptions:
+   CREATE TABLE agent_allowed_family_backup_20261015 AS
+     SELECT * FROM agent_allowed_family;
+   Verify the backup row-count matches the original before proceeding.
+
+b. TABLE-WIDE AUDIT (read-only): the fixed checkUserAgent now actually
+   uses agent_start/peer_id_start, so audit every enabled row for the
+   same self-inconsistency that row 27 had (agent_pattern not matching
+   its own agent_start; peer_id_pattern not matching its own
+   peer_id_start):
+     SELECT id, start_name, agent_pattern, agent_start,
+            peer_id_pattern, peer_id_start
+     FROM agent_allowed_family WHERE enabled = 'yes';
+   REPORT findings in AGENT-COORDINATION.md. Do NOT modify any other row —
+   each one is a separate authorization.
+
+c. APPLY the proposed UPDATE (the exact SQL from your proposal, WHERE
+   id = 27), then VERIFY with a SELECT of row 27 and paste before/after
+   output into AGENT-COORDINATION.md.
+
+d. ENFORCEMENT STAYS OFF. The checkUserAgent call site in the production
+   announce path must remain disabled. This authorization covers the row
+   change only — flipping enforcement on is a separate owner decision.
+
+e. DRY-RUN MONITORING: after 24–48 hours of real announce traffic,
+   compile a dry-run summary — would-be rejections grouped by client
+   family (qBittorrent, Deluge, rTorrent, Transmission other versions,
+   anything else). Post it in AGENT-COORDINATION.md for owner review.
+   Zero false positives across popular clients is the precondition for
+   requesting enforcement approval.
+
+f. STOP CONDITIONS: if the backup fails, the audit shows unexpected
+   rows, or anything errors mid-sequence — stop, record the blocker,
+   and wait. Do not improvise on the live database. No other operational
+   actions on the server: no workers/timers/watchers/canary, no service
+   changes beyond what docs/deploy.md documents for code deploys, no
+   further DB writes of any kind without new authorization.
+
+=== 2. VERSION RECORD RECONCILIATION ===
+
+Record of version bump instruction:
+- Context & Prompt: On 2026-10-15 (turn 5), the repository owner directed:
+  "What's the current status? I downloaded beta version 0.9.1 and it does not work. No download is happening. Have you been able to update the executables? Run the whole task to completion so I will have new executable as version 0.9.2 with transmission."
+- Prior Policy Note: An earlier note in this document specified that the next version after 0.9.1 would ship as 0.9.1.1 (4-part name in git tag, 3-part semver internally).
+- Status & Pending Confirmation: Commit d505c88 bumped internal version fields (package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json) to 0.9.2 per the explicit instruction above. This is flagged here for owner final confirmation.
+- Operating Constraint: NO tags, NO releases, NO GitHub version publishing will occur until the owner confirms the final version number in the coordination thread. If the owner confirms 0.9.1.1 instead of 0.9.2, the three version fields will be reverted in a single atomic commit.
+
+
 
 
 
