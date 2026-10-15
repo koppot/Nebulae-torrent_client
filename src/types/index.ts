@@ -16,8 +16,9 @@ export interface TorrentTrackerItem {
   tier: number;
   url: string;
   status: string;
-  seeds: number;
-  peers: number;
+  // null = unknown (scrape unavailable/failed) - rendered as a dash
+  seeds: number | null;
+  peers: number | null;
   downloaded: number;
   message: string;
 }
@@ -126,7 +127,8 @@ export interface TorrentItem {
   progress: number;
   status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Error';
   eta_seconds?: number;
-  seeds: number;
+  // null = unknown (no successful tracker scrape yet) - rendered as a dash
+  seeds: number | null;
   peers: number;
   ratio: number;
   category: string;

@@ -138,8 +138,8 @@ impl ParsedTorrent {
                 tier,
                 url,
                 status: "Queued".to_string(),
-                seeds: 0,
-                peers: 0,
+                seeds: None,
+                peers: None,
                 downloaded: 0,
                 message: "Awaiting announce".to_string(),
             })

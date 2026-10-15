@@ -157,7 +157,7 @@ impl MockTorrentEngine {
                 progress: 1.0,
                 status: "Seeding".to_string(),
                 eta_seconds: None,
-                seeds: 42,
+                seeds: Some(42),
                 peers: 8,
                 ratio: 1.51,
                 category: "Movies".to_string(),
@@ -200,8 +200,8 @@ impl MockTorrentEngine {
                         tier: 0,
                         url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
                         status: "Working".to_string(),
-                        seeds: 42,
-                        peers: 8,
+                        seeds: Some(42),
+                        peers: Some(8),
                         downloaded: 139,
                         message: "Announce OK".to_string(),
                     },
@@ -209,8 +209,8 @@ impl MockTorrentEngine {
                         tier: 1,
                         url: "udp://tracker.opentrackr.org:1337/announce".to_string(),
                         status: "Working".to_string(),
-                        seeds: 35,
-                        peers: 6,
+                        seeds: Some(35),
+                        peers: Some(6),
                         downloaded: 240,
                         message: "Announce OK".to_string(),
                     },
@@ -233,7 +233,7 @@ impl MockTorrentEngine {
                 progress: 0.55,
                 status: "Downloading".to_string(),
                 eta_seconds: Some(1460),
-                seeds: 88,
+                seeds: Some(88),
                 peers: 24,
                 ratio: 0.16,
                 category: "Movies".to_string(),
@@ -271,8 +271,8 @@ impl MockTorrentEngine {
                     tier: 0,
                     url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
                     status: "Working".to_string(),
-                    seeds: 88,
-                    peers: 24,
+                    seeds: Some(88),
+                    peers: Some(24),
                     downloaded: 412,
                     message: "Announce OK".to_string(),
                 }],
@@ -403,11 +403,11 @@ impl MockTorrentEngine {
                 {
                     if let Ok(mut items) = torrents_ref.lock() {
                         if let Some(item) = items.iter_mut().find(|t| t.id == target_id) {
-                            item.seeds = seeds;
+                            item.seeds = Some(seeds);
                             item.peers = peers;
                             if let Some(tr) = item.trackers.first_mut() {
-                                tr.seeds = seeds;
-                                tr.peers = peers;
+                                tr.seeds = Some(seeds);
+                                tr.peers = Some(peers);
                                 tr.status = "Working".to_string();
                                 tr.message = "Announce OK".to_string();
                             }
@@ -432,7 +432,7 @@ impl MockTorrentEngine {
             progress: initial_progress,
             status: initial_status,
             eta_seconds: None,
-            seeds: 2,
+            seeds: Some(2),
             peers: 0,
             ratio: 0.0,
             category: "General".to_string(),
@@ -543,8 +543,8 @@ impl TorrentEngine for MockTorrentEngine {
                             tier: 0,
                             url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
                             status: "Working".to_string(),
-                            seeds: 25,
-                            peers: 5,
+                            seeds: Some(25),
+                            peers: Some(5),
                             downloaded: 0,
                             message: "Announce OK".to_string(),
                         }],
@@ -618,7 +618,7 @@ impl TorrentEngine for MockTorrentEngine {
             progress: 0.0,
             status: "Downloading".to_string(),
             eta_seconds: None,
-            seeds: 12,
+            seeds: Some(12),
             peers: 4,
             ratio: 0.0,
             category: "General".to_string(),
@@ -641,8 +641,8 @@ impl TorrentEngine for MockTorrentEngine {
                 tier: 0,
                 url: "https://tracker.asiandvdclub.org:2710/announce".to_string(),
                 status: "Working".to_string(),
-                seeds: 12,
-                peers: 4,
+                seeds: Some(12),
+                peers: Some(4),
                 downloaded: 0,
                 message: "Announce OK".to_string(),
             }],
@@ -1197,7 +1197,7 @@ fn start_engine_transfer_loop(
 
                     // Active download throughput
                     // Base throughput around 4.5 MB/s to 9.2 MB/s if seeds exist
-                    let seed_count = item.seeds.max(1) as u64;
+                    let seed_count = item.seeds.unwrap_or(1).max(1) as u64;
                     let jitter = (now % 7) * 180_000;
                     let mut rate = (seed_count.min(10) * 950_000) + 2_800_000 + jitter;
 
