@@ -71,6 +71,12 @@ pub fn run() {
         if s.engine.trim() == "librqbit" {
             s.engine = "transmission".to_string();
         }
+        // Migrate the stock Transmission default port to the Nebulae-specific
+        // default so a standalone Transmission install on the same machine
+        // (stock port 51413) never fights the bundled daemon for the bind.
+        if s.listening_port == 51413 {
+            s.listening_port = 41413;
+        }
         s
     };
 
