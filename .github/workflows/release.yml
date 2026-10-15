@@ -130,7 +130,37 @@ jobs:
         run: |
           ./scripts/bundle-macos-mpv.sh
 
+      # --- Linux split build ------------------------------------------------
+      # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
+      # auto-scans AppDir/usr/lib recursively: the bundled player library
+      # tree + JRE under usr/lib/nebulae/resources make it fail. deb/rpm are
+      # immune (no linuxdeploy), so they build WITH the player as regular
+      # resources; the AppImage is built without them and the player is
+      # injected into its squashfs payload afterwards (runtime preserved).
+      - name: Build Linux packages with bundled player (deb, rpm)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build --bundles deb,rpm
+
+      - name: Build Linux AppImage without player resources
+        if: runner.os == 'Linux'
+        run: |
+          mv src-tauri/resources/player src-tauri/target/player-staging
+          pnpm tauri build --bundles appimage
+
+      - name: Inject bundled player into AppImage (and refresh updater bundle)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/appimage-inject-player.sh
+          APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
+          cd "$(dirname "$APPIMAGE_PATH")"
+          NAME="$(basename "$APPIMAGE_PATH")"
+          # Regenerate the updater payload from the INJECTED AppImage so
+          # auto-updates ship the bundled player too, then re-sign it.
+          tar -czf "$NAME.tar.gz" "$NAME"
+          pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$NAME.tar.gz"
+
       - name: Build Tauri Application
+        if: runner.os != 'Linux'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

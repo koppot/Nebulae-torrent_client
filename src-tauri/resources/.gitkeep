@@ -1,0 +1,3 @@
+# Keeps the bundle resources glob ("resources/**/*") non-empty when the
+# self-contained player tree is moved out of this directory for the
+# AppImage-only build leg (see scripts/appimage-inject-player.sh).

@@ -65,6 +65,15 @@ $MpvDest = Join-Path $TargetDir "mpv.exe"
 Copy-Item -Path $MpvSource -Destination $MpvDest -Force
 Write-Host "Staged: $MpvDest"
 
+# --- Windows Defender exclusion (unsigned player binary on CI runners) ---
+# Unsigned player binaries are routinely quarantined by Defender on hosted
+# runners, which makes every subsequent execution silently produce nothing.
+Write-Host "==> Excluding the player staging directory from Windows Defender..."
+$ResolvedTarget = (Resolve-Path $TargetDir).Path
+Add-MpPreference -ExclusionPath $ResolvedTarget -ErrorAction SilentlyContinue
+Add-MpPreference -ExclusionProcess "mpv.exe" -ErrorAction SilentlyContinue
+Write-Host "Defender exclusion set for: $ResolvedTarget"
+
 $D3dSource = Join-Path $ExtractDir "d3dcompiler_43.dll"
 if (Test-Path $D3dSource) {
     $D3dDest = Join-Path $TargetDir "d3dcompiler_43.dll"
@@ -91,8 +100,13 @@ if ($env:NEB_SKIP_JRE -ne "1") {
 }
 
 Write-Host "==> Running smoke test on bundled mpv.exe..."
-$VersionInfo = & $MpvDest --version
+$VersionInfo = & $MpvDest --version 2>&1 | Out-String
 Write-Host $VersionInfo
+Write-Host "mpv.exe exit code: $LASTEXITCODE"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($VersionInfo)) {
+    $StillThere = Test-Path $MpvDest
+    throw "Bundled mpv.exe did not run (exit code: $LASTEXITCODE, binary present: $StillThere). If the binary is missing, Windows Defender quarantined it despite the configured exclusion - inspect the Defender event log on the runner."
+}
 
 # mpv 0.41+ no longer prints a feature list in --version output; verify
 # compiled-in disc support via the presence of the device options instead.

@@ -45,7 +45,7 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     git clone --depth 1 --branch v0.41.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
       meson setup build -Dgpl=true \
-          -Dlibdvdnav=enabled -Dlibdvdread=enabled -Dlibbluray=enabled \
+          -Ddvdnav=enabled -Dlibbluray=enabled \
           -Dtests=false --prefix "$BUILD_ROOT/install" --buildtype release &&
       ninja -C build &&
       ninja -C build install ) || {
