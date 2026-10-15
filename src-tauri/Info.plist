@@ -86,5 +86,7 @@
 			</dict>
 		</dict>
 	</array>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Nebulae reads inserted DVD, Blu-ray, and 4K UHD discs from your external or internal optical drive so the bundled Nebulae player can play them with full menu navigation.</string>
 </dict>
 </plist>

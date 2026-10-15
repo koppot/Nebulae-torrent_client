@@ -39,7 +39,7 @@ interface MediaGroup {
 }
 
 export const SimpleMediaView: React.FC = () => {
-  const { torrents, pauseTorrent, resumeTorrent } = useTorrentStore();
+  const { torrents, pauseTorrent, resumeTorrent, selectSourceFolder } = useTorrentStore();
   const { setShowAddTorrent, setViewMode } = useUiStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
@@ -57,6 +57,7 @@ export const SimpleMediaView: React.FC = () => {
   const [organizeDestPath, setOrganizeDestPath] = useState<string>('');
   const [organizeReport, setOrganizeReport] = useState<OrganizeMediaReport | null>(null);
   const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
+  const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
 
   // Query disk space info on mount
   useEffect(() => {
@@ -104,6 +105,22 @@ export const SimpleMediaView: React.FC = () => {
 
   const handleOpenFolder = (path: string) => {
     invoke('open_torrent_folder', { path }).catch(() => {});
+  };
+
+  // Play an external/internal optical disc: the user points Nebulae at the
+  // mounted DVD/Blu-ray/UHD volume; the bundled Nebulae engine plays it with
+  // full menu navigation. No system player is used.
+  const handlePlayExternalDisc = async () => {
+    setExternalDiscError(null);
+    try {
+      const folder = await selectSourceFolder();
+      if (!folder) return;
+      await invoke('launch_disc_player', { filePath: folder, preferMenu: true });
+    } catch (err: any) {
+      setExternalDiscError(
+        typeof err === 'string' ? err : err?.message || 'Could not launch the disc.'
+      );
+    }
   };
 
   const handleCleanCache = async (dryRun: boolean = false) => {
@@ -495,6 +512,15 @@ export const SimpleMediaView: React.FC = () => {
           </button>
 
           <button
+            onClick={handlePlayExternalDisc}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-semibold transition"
+            title="Play a DVD, Blu-ray, or UHD disc from your optical drive with the bundled Nebulae player"
+          >
+            <Disc className="w-4 h-4 text-adc-accent" />
+            <span>Play External Disc</span>
+          </button>
+
+          <button
             onClick={() => setShowAddTorrent(true)}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white text-xs font-semibold transition shadow-md"
           >
@@ -503,6 +529,12 @@ export const SimpleMediaView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {externalDiscError && (
+        <div className="mt-2 p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
+          {externalDiscError}
+        </div>
+      )}
 
       {torrents.length === 0 ? (
         /* Empty State */
