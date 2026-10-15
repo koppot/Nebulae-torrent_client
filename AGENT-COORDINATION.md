@@ -264,3 +264,36 @@ primitive used in commit 22f18c7).
 
 Validation: pnpm build clean, cargo fmt/clippy -D warnings clean, 71
 lib tests pass.
+
+## 2026-10-15 — Droid: v0.9.0 consolidated release (tag v0.9.0, run 38670728734 green)
+
+Owner directives applied before tagging:
+
+1. RELEASE CONSOLIDATION: all v0.1.0-beta.* releases were deleted from the
+   GitHub Releases page (git tags kept). The line now ships as v0.9.0
+   (version fields in tauri.conf.json / package.json / Cargo.toml).
+2. UPDATER FIXED: latest.json previously advertised v0.1.0-beta.1 with that
+   release's URLs (TAG was never exported to the manifest step) and GitHub
+   /releases/latest never resolves prereleases. The manifest now carries
+   the app version from tauri.conf.json (plain semver, no "v" prefix) and
+   the release is no longer marked prerelease. Verified live: version 0.9.0,
+   all four platform URLs on v0.9.0 assets.
+3. BUNDLED-ONLY ENGINE: all OS player detection removed (system mpv/VLC/
+   IINA probes, system-JVM fallbacks, OS default-launcher fallbacks). The
+   bundled Nebulae player is the only engine; a missing one reports an
+   incomplete installation. Media Station gains "Play External Disc"
+   (user points at the mounted DVD/Blu-ray/UHD volume; no OS drive
+   detection). macOS Info.plist declares NSRemovableVolumesUsageDescription.
+4. TRAY MENU: Add Torrent and Create New Torrent open the matching modals
+   via nebulae://tray-action (window shown first).
+5. SPEED DISPLAY: display-side fast-decay EMA over the 500ms telemetry and
+   the 5s poll; librqbit's raw rates burst 4 MB/s <-> 0 B/s on small swarms.
+6. MULTI-FILE LAYOUT FIX (last-minute, cancelled the first v0.9.0 run):
+   librqbit writes multi-file content flat when output_folder is explicit;
+   the engine now joins the torrent's root name and pre-creates
+   <save destination>/<torrent name>/ (unsafe names fall back flat).
+7. Drop/open choke point in uiStore rejects non-metainfo files globally.
+
+Release verification: 4 build legs success, 4 Linux distro containers
+(Debian 12, Ubuntu 24.04, Fedora 40, openSUSE Leap 15.6) success,
+aggregate success; stray draft from the cancelled first attempt deleted.
