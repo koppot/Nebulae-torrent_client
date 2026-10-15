@@ -307,6 +307,14 @@ pub fn launch_disc_player_impl(
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
+        // Capture the player's stderr so a fast failure carries its actual
+        // diagnostic (dyld errors, bad options, disc open failures) instead
+        // of a bare exit status. GUI launches send stderr to /dev/null.
+        let mpv_log_path = std::env::temp_dir().join("nebulae-mpv.log");
+        if let Ok(log_file) = std::fs::File::create(&mpv_log_path) {
+            cmd.stderr(std::process::Stdio::from(log_file));
+        }
+
         match cmd.spawn() {
             Ok(mut child) => {
                 // A player that dies immediately (missing libraries, dyld
@@ -317,11 +325,25 @@ pub fn launch_disc_player_impl(
                 std::thread::sleep(std::time::Duration::from_millis(1500));
                 if let Some(status) = child.try_wait().ok().flatten() {
                     if !status.success() {
+                        let said = std::fs::read_to_string(&mpv_log_path).unwrap_or_default();
+                        let tail: String = said
+                            .chars()
+                            .rev()
+                            .take(300)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
                         return Err(format!(
-                            "The bundled player exited immediately ({status}). The disc image may be damaged, or the installation is incomplete - reinstall Nebulae or check Settings > Media."
+                            "The bundled player exited immediately ({status}). Player output: {}",
+                            tail.trim()
                         ));
                     }
                 }
+                tracing::info!(
+                    "Player launch healthy; diagnostics at {}",
+                    mpv_log_path.display()
+                );
                 return Ok(());
             }
             Err(e) => {
