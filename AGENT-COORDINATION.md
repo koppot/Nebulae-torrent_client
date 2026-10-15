@@ -1339,3 +1339,16 @@ and appending at the bottom would bind the option to [extension.png]).
 Their deliberately-commented vo= setting was left untouched.
 NOTE: the owner's config sets input-ipc-server=/tmp/mpvsocket - a stale
 socket file there does NOT break mpv launches (verified by test).
+
+### 2026-10-15 — Droid: exit-status-2 ROOT CAUSE FOUND (nondeterministic ISO pick in detector)
+
+The persistent "player exited immediately (exit status: 2)" was NOT the
+player: DiscDetector::inspect(folder) returned the FIRST iso/img file
+read_dir yielded (top-level only, arbitrary order). The owner's download
+root holds an unrelated Windows installer ISO next to the movie's disc
+folder, so Play launched the installer image and dvdnav died on it
+("failed to read VIDEO_TS.IFO"). Captured with the new player-stderr
+banner + a reproduction launch of launch_disc_player_impl. FIXED in
+disc_detector.rs: folder resolution scans one level of subfolders and
+ranks disc-1 > disc-N > others (name tie-break). Repro test passes for
+both save_path shapes (root + subfolder).
