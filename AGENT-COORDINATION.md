@@ -805,6 +805,29 @@ plan. Beginning Phase A1 — Windows leg first.
   - `THIRD-PARTY-NOTICES.md` updated with full GPLv2 notice for Transmission, pinned hashes, `-TR4130-` peer-id prefix, private-tracker compliance notice, and dynamic library attribution table.
   - `.gitignore` updated with `src-tauri/transmission-staging/`, `src-tauri/transmission-staging-appimage/`, and `src-tauri/resources/engine/transmission/`.
 
+### 2026-10-15 — Antigravity: Phase A2–A4 client engine implementation & alignment completed
+
+- **Phase A2 (Transmission Engine Adapter & Lifecycle)**:
+  - Created `src-tauri/src/engine/transmission.rs` implementing `TorrentEngine` trait over Transmission JSON-RPC.
+  - Implemented Addendum 1 orphan cleanup: detects and cleans up stale `transmission-daemon` instances bound to our config-dir / RPC port on startup across macOS, Linux, and Windows.
+  - Implemented Addendum 4 bind-at-spawn hardening: binds session `bind-address-ipv4` to active tunnel address at engine spawn when VPN mode is active (`AdcOnlyVpn` or `SystemVpn`), eliminating the off-tunnel start window.
+  - Fully mapped all `TorrentEngine` methods to Transmission RPC (`torrent-get`, `torrent-add`, `torrent-remove`, `torrent-stop`, `torrent-start`, `torrent-verify`, `torrent-reannounce`, `torrent-rename-path`, `session-set`, `session-stats`, `port-test`).
+  - Added real port testing (`check_port_open`) via `port-test` RPC, returning live reachability status in the UI connectivity modal.
+  - Added `engine` setting (`transmission` | `librqbit`) with graceful single 500 ms retry and fallback to `RqbitTorrentEngine`.
+  - Added real UI support for file and folder renaming via `torrent-rename-path`.
+- **Phase A3 (ADC Alignment & Migration)**:
+  - Updated `SPEED_WINDOW_SECONDS` to 5.0 (and idle snap ticks to 10) in `src/stores/torrentStore.ts` for smooth 5-second rolling moving average.
+  - Enforced ADC piece size defaults: $\ge 50\text{ GiB} \to 16\text{ MiB}$, $\ge 15\text{ GiB} \to 8\text{ MiB}$, $< 15\text{ GiB} \to 1\text{ MiB}$ in `commands/torrent.rs` and `CreateTorrentModal.tsx`. Hardcoded `private: 1` flag on torrent creation.
+  - Dynamic multi-file directory layout resolution (`resolve_transmission_download_dir`): detects whether output folder already contains the root directory name to prevent nested duplicate folders upon migration or download.
+  - Automatic migration (`run_librqbit_migration`): reads legacy state from `engine/rqbit/`, adds paused, triggers `torrent-verify`, preserves original `engine/rqbit/` files for zero-risk rollback.
+- **Phase A4 (Quality Gates & Version Bump)**:
+  - User requested explicit version bump to 0.9.2: bumped in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+  - `cargo fmt --check`: PASSED.
+  - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`: PASSED (0 warnings, 0 errors).
+  - `cargo test --manifest-path src-tauri/Cargo.toml`: PASSED (100 tests passing across unit tests and integration tests).
+  - `pnpm build` (eslint + tsc + vite): PASSED.
+
+
 
 ## 2026-10-15 (Droid) — v0.9.1 wave 3: honest unknown-seeds semantics
 1. LIVE-VERIFIED the scrape layer against a real user torrent: tracker
