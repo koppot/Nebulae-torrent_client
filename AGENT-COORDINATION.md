@@ -1431,3 +1431,25 @@ both save_path shapes (root + subfolder).
   codesign --force --deep --sign E3A26A990308798F8DE4B7C49A3E27BFEF192623
   /Applications/Nebulae.app
   so the firewall identity stays stable across rebuilds.
+
+## 2026-10-16 — Context-menu correctness batch (baaf4a4)
+
+- File priority NEVER worked: the engine setter hardcoded
+  `priority-normal` regardless of the chosen bucket, and the list mapper
+  never read fileStats[].priority (it only mapped wanted→1/!wanted→0), so
+  the dropdown always displayed "Normal". Setter now maps 1→normal,
+  2/3→high (Transmission has no "maximum"); the mapper reads the real
+  priority and renders it on the UI's 0/1/2 scale.
+- Owner-reported 5-10s lag on pause/resume/menu actions: the 5s telemetry
+  poll + 500ms push could revert optimistic state before the engine
+  reflected it. Every mutating store action now fetches engine truth
+  immediately after the RPC and logs failures instead of swallowing them.
+- Sequential-download toggle only appears in the context menu while the
+  torrent is downloading; the files-tab summary line
+  ("N files · M folders · size") was removed as duplicate.
+- UI: Nebulae version added to the status bar's lower-right
+  (getVersion from @tauri-apps/api/app); title-bar X now MINIMIZES to the
+  dock/taskbar (close_to_tray=true path) so the window is restorable,
+  matching the owner's directive; the "uploaded / of total" progress
+  label is centered.
+- Gates: tsc clean, clippy 0 findings, cargo tests green, pushed baaf4a4.
