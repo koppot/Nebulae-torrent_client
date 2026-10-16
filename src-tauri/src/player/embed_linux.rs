@@ -32,7 +32,7 @@ fn xcell() -> &'static std::sync::Mutex<Option<XHandle>> {
     CELL.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-fn with_x<R: Send>(
+fn with_x<R: Send + 'static>(
     app: &AppHandle,
     f: impl FnOnce(&XHandle) -> R + Send + 'static,
 ) -> Result<R, String> {
@@ -159,8 +159,8 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
             xh.overlay,
             (x * scale) as i32,
             (y * scale) as i32,
-            (w * scale) as i32,
-            (h * scale) as i32,
+            (w * scale).max(0.0) as u32,
+            (h * scale).max(0.0) as u32,
         );
         (xh.xlib.XFlush)(xh.display);
     })
