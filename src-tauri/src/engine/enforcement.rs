@@ -67,7 +67,7 @@ pub fn spawn(
     encrypted_passkey: String,
     rpc_client: Arc<TransmissionRpcClient>,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         run_poller(tracker_base_url, encrypted_passkey, rpc_client).await;
     });
 }
@@ -121,7 +121,14 @@ async fn run_poller(
                     continue;
                 }
                 match resp.json::<BlockedPeersResponse>().await {
-                    Ok(body) => body.blocked_ips.into_iter().collect(),
+                    Ok(body) => {
+                        let ips: HashSet<String> = body.blocked_ips.into_iter().collect();
+                        info!(
+                            "[enforcement] tracker poll successful — {} blocked IP(s) currently in feed",
+                            ips.len()
+                        );
+                        ips
+                    }
                     Err(e) => {
                         warn!("[enforcement] failed to parse tracker response: {e}");
                         continue;
@@ -134,11 +141,6 @@ async fn run_poller(
             // Nothing to do this cycle.
             continue;
         }
-
-        info!(
-            "[enforcement] {} blocked IP(s) active in swarm",
-            blocked_ips.len()
-        );
 
         // ── 2. Fetch current peers from Transmission ─────────────────────────
         let rpc = Arc::clone(&rpc_client);

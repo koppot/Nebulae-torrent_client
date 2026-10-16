@@ -1150,8 +1150,18 @@ impl TransmissionTorrentEngine {
             Arc::new(Mutex::new(HashMap::new()));
 
         {
-            match get_secret(&passkey_secret_target()) {
-                Ok(passkey) if !passkey.is_empty() => {
+            let passkey_opt = get_secret(&passkey_secret_target())
+                .ok()
+                .filter(|p| !p.trim().is_empty())
+                .or_else(|| {
+                    db.get_setting("adc_passkey")
+                        .ok()
+                        .flatten()
+                        .filter(|p| !p.trim().is_empty())
+                });
+
+            match passkey_opt {
+                Some(passkey) => {
                     crate::engine::enforcement::spawn(
                         "https://asiandvdclub.org".to_string(),
                         passkey,
@@ -1159,11 +1169,8 @@ impl TransmissionTorrentEngine {
                     );
                     info!("[enforcement] tracker enforcement poller spawned");
                 }
-                Ok(_) => {
+                None => {
                     info!("[enforcement] passkey empty — enforcement poller not started (link your ADC account)");
-                }
-                Err(e) => {
-                    warn!("[enforcement] could not read passkey from keychain ({e}) — enforcement poller not started");
                 }
             }
         }

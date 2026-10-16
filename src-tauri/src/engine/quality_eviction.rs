@@ -90,7 +90,7 @@ pub fn spawn(
     db: Arc<Database>,
     peer_remove_unsupported: Arc<AtomicBool>,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         run_eviction_loop(rpc_client, peer_ema_cache, db, peer_remove_unsupported).await;
     });
 }
@@ -103,6 +103,12 @@ async fn run_eviction_loop(
 ) {
     // Per-peer cooldown tracker: maps "torrent_hash:ip:port" → last eviction time.
     let mut eviction_history: HashMap<String, Instant> = HashMap::new();
+
+    info!(
+        "[quality_eviction] eviction loop started — poll interval: {}s, threshold: {}",
+        POLL_INTERVAL.as_secs(),
+        DEFAULT_QUALITY_THRESHOLD
+    );
 
     // Initial delay — wait one full cycle before the first eviction pass so the
     // EMA state has time to build up from actual peer data.
@@ -134,13 +140,10 @@ async fn run_eviction_loop(
                 for (key, when) in cycle_result.evicted {
                     eviction_history.insert(key, when);
                 }
-                // Also check cooldown on next cycle by re-filtering.
-                if cycle_result.total_evicted > 0 {
-                    info!(
-                        "[quality_eviction] cycle complete — {} peer(s) evicted for poor quality",
-                        cycle_result.total_evicted
-                    );
-                }
+                info!(
+                    "[quality_eviction] cycle complete — {} peer(s) evicted for poor quality",
+                    cycle_result.total_evicted
+                );
             }
             Ok(Err(e)) => {
                 warn!("[quality_eviction] cycle error: {e}");
