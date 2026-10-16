@@ -154,6 +154,19 @@ pub async fn run_connectivity_doctor_test(
         PortStatus::Closed
     };
 
+    // Record which signal produced the verdict — the three signals measure
+    // very different things and blending them produced misleading "Open"
+    // reports (see port_open_evidence docs on the report struct).
+    let port_open_evidence = if port_open_from_engine.is_some() {
+        Some("transmission-self-test".to_string())
+    } else if total_inbound_peers > 0 {
+        Some("inbound-peers".to_string())
+    } else if port_listening {
+        Some("local-listener".to_string())
+    } else {
+        None
+    };
+
     let nat_type = if upnp || nat_pmp {
         NatType::FullCone
     } else {
@@ -171,9 +184,23 @@ pub async fn run_connectivity_doctor_test(
 
     let mut plain_language_findings = Vec::new();
     if port_status == PortStatus::Open {
-        plain_language_findings.push(format!(
-            "Incoming BitTorrent port {listening_port} is open and active."
-        ));
+        // Be explicit about WHAT the verdict is based on — a transmission
+        // self-test or connected peers is NOT proof that new external peers
+        // can reach the port right now.
+        match port_open_evidence.as_deref() {
+            Some("transmission-self-test") => plain_language_findings.push(format!(
+                "Port {listening_port}: the engine's self-test passed, but this test connects from your own machine and can pass even when the internet cannot reach the port (no NAT loopback). Treat it as unverified."
+            )),
+            Some("inbound-peers") => plain_language_findings.push(format!(
+                "Port {listening_port}: {total_inbound_peers} peers are connected, but they may have connected earlier or over IPv6; this does not prove new inbound IPv4 connections work."
+            )),
+            Some("local-listener") => plain_language_findings.push(format!(
+                "Port {listening_port} is bound locally, but nothing has verified that the internet can reach it."
+            )),
+            _ => plain_language_findings.push(format!(
+                "Incoming BitTorrent port {listening_port} is open and active."
+            )),
+        }
     } else {
         plain_language_findings.push(format!(
             "Port {listening_port} is not currently open for incoming connections."
@@ -233,6 +260,7 @@ pub async fn run_connectivity_doctor_test(
         tracker_auth_ok: tracker_ok,
         inbound_connections: total_inbound_peers,
         outbound_connections: total_outbound_peers,
+        port_open_evidence,
         certificate_text,
         plain_language_findings,
         suggested_fixes,
