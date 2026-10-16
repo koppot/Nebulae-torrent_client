@@ -61,8 +61,25 @@ interface PlayableDisc {
   torrent: TorrentItem; // progress/status source
 }
 
-export const SimpleMediaView: React.FC = () => {
-  const { torrents, pauseTorrent, selectSourceFolder, setSelectedId } = useTorrentStore();
+/**
+ * The torrent's ACTUAL content path. `save_path` is the download ROOT (the
+ * engine reports the download dir), so disc-set detection, thumbnails, folder
+ * display and playback all resolved against ~/Downloads instead of the
+ * release folder — the lone "DVD-9" badge and wrong-disc playback. The
+ * release folder/file is save_path + name.
+ */
+export const contentPath = (t: TorrentItem): string => {
+  const base = t.save_path.replace(/\/+$/, '');
+  return base.endsWith(t.name) ? base : `${base}/${t.name}`;
+};
+
+/** Folder to reveal in Finder: the release folder, or the parent of a file. */
+export const folderOf = (t: TorrentItem): string => {
+  const p = contentPath(t);
+  return /\.[a-z0-9]+$/i.test(p) ? p.split('/').slice(0, -1).join('/') : p;
+};
+
+export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent, selectSourceFolder, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode } = useUiStore();
   const { seedTimeRecords, fetchSeedTimeRecords } = useTrackerStore();
 
@@ -113,7 +130,7 @@ export const SimpleMediaView: React.FC = () => {
   useEffect(() => {
     torrents.forEach((t) => {
       if (!(t.id in discSetMap)) {
-        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: t.save_path })
+        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: contentPath(t) })
           .then((set) => {
             setDiscSetMap((prev) => ({ ...prev, [t.id]: set }));
             const primary = set[0];
@@ -123,7 +140,7 @@ export const SimpleMediaView: React.FC = () => {
           })
           .catch((err) => {
             invoke('log_frontend', {
-              message: `disc set failed for ${t.save_path}: ${errorMessage(err, 'unknown')}`,
+              message: `disc set failed for ${contentPath(t)}: ${errorMessage(err, 'unknown')}`,
             }).catch(() => {});
             setDiscSetMap((prev) => ({ ...prev, [t.id]: [] }));
           });
@@ -139,13 +156,13 @@ export const SimpleMediaView: React.FC = () => {
   useEffect(() => {
     torrents.forEach((t) => {
       if (!(t.id in thumbMap)) {
-        invoke<ThumbnailResult>('get_media_thumbnail', { mediaPath: t.save_path })
+        invoke<ThumbnailResult>('get_media_thumbnail', { mediaPath: contentPath(t) })
           .then((res) => {
             setThumbMap((prev) => ({ ...prev, [t.id]: res.thumbnail_path ?? null }));
           })
           .catch((err) => {
             invoke('log_frontend', {
-              message: `thumbnail failed for ${t.save_path}: ${errorMessage(err, 'unknown')}`,
+              message: `thumbnail failed for ${contentPath(t)}: ${errorMessage(err, 'unknown')}`,
             }).catch(() => {});
             setThumbMap((prev) => ({ ...prev, [t.id]: null }));
           });
@@ -208,7 +225,7 @@ export const SimpleMediaView: React.FC = () => {
     groupId?: string,
     targetPath?: string,
   ) => {
-    const playPath = targetPath || torrent.save_path;
+    const playPath = targetPath || contentPath(torrent);
     invoke('log_frontend', {
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
     }).catch(() => {});
@@ -227,6 +244,9 @@ export const SimpleMediaView: React.FC = () => {
   const handleOpenFolder = (path: string) => {
     invoke('open_torrent_folder', { path }).catch(() => {});
   };
+
+  // Reveal the release's own folder in Finder (not the download root).
+  const handleRevealRelease = (t: TorrentItem) => handleOpenFolder(folderOf(t));
 
   // "Details" in the Canva mock: jump into the Manager with this release selected.
   const openDetails = (id: string) => {
@@ -361,7 +381,7 @@ export const SimpleMediaView: React.FC = () => {
             key: item.id,
             label: String(discMetaMap[item.id]?.disc_number || idx + 1),
             title: item.name,
-            path: item.save_path,
+            path: contentPath(item),
             torrent: item,
           }))
         : set.length > 1
@@ -377,7 +397,7 @@ export const SimpleMediaView: React.FC = () => {
                 key: currentItem.id,
                 label: '1',
                 title: currentItem.name,
-                path: currentItem.save_path,
+                path: contentPath(currentItem),
                 torrent: currentItem,
               },
             ];
@@ -418,7 +438,7 @@ export const SimpleMediaView: React.FC = () => {
         ? `ADC: ${currentItem.ratio.toFixed(2)}${seedTimeText ? ` · Seed time: ${seedTimeText}` : ''}`
         : null;
 
-    const folderName = currentItem.save_path.split('/').filter(Boolean).pop() || currentItem.save_path;
+    const folderName = folderOf(currentItem).split('/').filter(Boolean).pop() || currentItem.save_path;
 
     return (
       <div
@@ -497,9 +517,9 @@ export const SimpleMediaView: React.FC = () => {
 
           {/* Visible folder: the release's own folder, click to open. */}
           <button
-            onClick={() => handleOpenFolder(currentItem.save_path)}
+            onClick={() => handleRevealRelease(currentItem)}
             className="w-full flex items-center gap-1.5 text-left text-[9px] font-mono text-[#a3a3a3] hover:text-white transition"
-            title={`Open ${currentItem.save_path}`}
+            title={`Open ${folderOf(currentItem)}`}
           >
             <FolderOpen className="w-3 h-3 flex-shrink-0" />
             <span className="truncate">{folderName}</span>
@@ -576,7 +596,7 @@ export const SimpleMediaView: React.FC = () => {
             </button>
 
             <button
-              onClick={() => handleOpenFolder(currentItem.save_path)}
+              onClick={() => handleRevealRelease(currentItem)}
               className="p-1.5 rounded-md border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
               title="Open Enclosing Folder"
             >

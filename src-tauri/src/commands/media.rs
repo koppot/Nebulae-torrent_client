@@ -560,18 +560,18 @@ pub fn get_media_thumbnail(
 /// the DB per title+year. Returns None silently when no match / no key.
 #[tauri::command]
 pub fn fetch_tmdb_release(
-    app: tauri::AppHandle,
     title: String,
     year: Option<i32>,
 ) -> Result<Option<crate::utils::tmdb::TmdbMatch>, String> {
-    use tauri::Manager;
-    let db_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Data dir: {e}"))?
-        .join("internal/db/nebulae.db");
-    let db =
-        crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
+    // The DB lives in the app's own "Nebulae" data dir (AppPaths), NOT under
+    // the bundle identifier dir — resolving it from app.path() produced
+    // org.asiandvdclub.nebulae/internal/db/... which never existed, so every
+    // TMDB fetch died on "unable to open database file" before any lookup.
+    let db_path = crate::utils::paths::AppPaths::init()?.db_file;
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Data dir: {e}"))?;
+    }
+    let db = crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
     let result = crate::utils::tmdb::fetch_poster(&db, &title, &title, year);
     match &result {
         Ok(Some(m)) => tracing::info!(
