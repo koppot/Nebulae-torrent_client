@@ -105,6 +105,9 @@ export async function resolvePoster(
       } catch {
         /* ignore */
       }
+      invoke('log_frontend', {
+        message: `poster: ADC match for "${torrentName}"`,
+      }).catch(() => {});
       // /poster/{id} is hotlink-protected: the webview's <img> would be
       // rejected, so pull the bytes through the authenticated backend and
       // serve the cached local file (also works offline).
@@ -131,6 +134,11 @@ export async function resolvePoster(
   }
 
   // 3. Local pipeline (cover scan → ffmpeg frame → TMDB when configured).
+  if (map) {
+    invoke('log_frontend', {
+      message: `poster: no ADC match for "${torrentName}" — falling back to local pipeline`,
+    }).catch(() => {});
+  }
   try {
     const res = await invoke<{ thumbnail_path?: string | null }>('get_media_thumbnail', {
       mediaPath: contentPath,
