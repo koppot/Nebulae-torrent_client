@@ -94,8 +94,14 @@ async fn run_poller(
 
     info!("[enforcement] poller started — feed: {}", feed_url);
 
+    let mut is_initial = true;
     loop {
-        sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        if is_initial {
+            is_initial = false;
+            sleep(Duration::from_secs(5)).await;
+        } else {
+            sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        }
 
         if peer_remove_unsupported.load(Ordering::Relaxed) {
             // RPC unavailable: keep sleeping so the loop stays alive in case

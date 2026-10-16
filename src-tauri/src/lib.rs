@@ -258,6 +258,14 @@ pub fn run() {
         .setup(move |app| {
             use tauri::Manager;
 
+            // Diagnostics for the reported white-screen-on-launch: log the
+            // URL the main window was actually pointed at.
+            if let Some(w) = app.get_webview_window("main") {
+                let url = w.url().map(|u| u.to_string()).unwrap_or_else(|e| format!("url error: {e}"));
+                eprintln!("[diag] main window url = {url}");
+                println!("[diag] main window url = {url}");
+            }
+
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
             engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
