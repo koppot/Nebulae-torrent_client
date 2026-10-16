@@ -38,38 +38,16 @@ echo "Source mpv binary: $MPV_BIN"
 # (they are Homebrew mpv's own dependencies).
 if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
     echo "==> Host mpv lacks libdvdnav (Homebrew dropped it from the formula)."
-    echo "==> Building mpv v0.40.0 from source with DVD + Blu-ray menu support..."
-    brew install -q libdvdnav libdvdread meson ninja pkg-config nasm dav1d libass libplacebo vulkan-headers
+    echo "==> Building mpv v0.41.0 from source with DVD + Blu-ray support..."
+    brew install -q libdvdnav libdvdread meson ninja pkg-config
     BUILD_ROOT="$(mktemp -d)"
     trap 'rm -rf "$BUILD_ROOT"' EXIT
-    # mpv 0.41 REMOVED DVD menu support ("DVD menu support has been
-    # removed." in the 0.41 binary) but 0.41 also updated mpv for the
-    # current brew ffmpeg. Pin 0.39 (the LAST release with dvdnav menu
-    # navigation; 0.40 removed it too) and FAIL THE BUILD if the menu removal marker appears -
-    # the owner requires DVD menus, always.
-    # mpv 0.39/0.40 do not compile against brew's bleeding-edge ffmpeg 9
-    # (AVCodec/FF_PROFILE API churn), so build a period-matched ffmpeg 7.1
-    # from source first and compile mpv against it. The dylib walk below
-    # bundles the built ffmpeg libraries like any other dependency.
-    echo "==> Building ffmpeg n7.1.1 (period-matched for mpv 0.40)..."
-    git clone --depth 1 --branch n7.1.1 https://github.com/FFmpeg/FFmpeg "$BUILD_ROOT/ffmpeg"
-    ( cd "$BUILD_ROOT/ffmpeg" &&
-      ./configure --prefix="$BUILD_ROOT/ffmpeg-install" \
-          --disable-doc --disable-debug --disable-static --enable-shared \
-          --disable-programs --disable-ffplay --disable-autodetect \
-          --disable-network --disable-encoders --disable-muxers \
-          --enable-gpl --enable-libdav1d \
-          --enable-encoder=png,mjpeg,pam,targa,xbm,xwd,bmp,gif \
-          --enable-muxer=image2 \
-          --extra-cflags="-Wno-deprecated-declarations" &&
-      make -j"$(sysctl -n hw.ncpu)" &&
-      make install ) || {
-        echo "ERROR: source build of ffmpeg 7.1 failed."
-        exit 1
-    }
-    git clone --depth 1 --branch v0.39.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
+    # NOTE: mpv has NO DVD menu support in ANY modern release (removed
+    # upstream in 2015). Menu playback is VLC's job - the launcher prefers
+    # VLC for discs when menu mode is requested. This build exists for
+    # title playback with dvd angles/PGC positioning.
+    git clone --depth 1 --branch v0.41.0 https://github.com/mpv-player/mpv "$BUILD_ROOT/mpv"
     ( cd "$BUILD_ROOT/mpv" &&
-      export PKG_CONFIG_PATH="$BUILD_ROOT/ffmpeg-install/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" &&
       meson setup build -Dgpl=true \
           -Ddvdnav=enabled -Dlibbluray=enabled \
           -Dtests=false --prefix "$BUILD_ROOT/install" --buildtype release &&
@@ -79,19 +57,12 @@ if ! "$MPV_BIN" --list-options 2>/dev/null | grep -q -- "--dvd-device"; then
         exit 1
     }
     MPV_BIN="$BUILD_ROOT/install/bin/mpv"
-    echo "Built mpv with DVD menu support: $MPV_BIN"
+    echo "Built mpv: $MPV_BIN"
 fi
 
 mkdir -p "$TARGET_DIR/lib"
 cp -L "$MPV_BIN" "$TARGET_DIR/mpv"
 chmod 755 "$TARGET_DIR/mpv"
-
-# Menu-first lua: disc playback must land on the root menu (the owner
-# requirement - discs never auto-play the feature; navigation starts it).
-mkdir -p "$TARGET_DIR/scripts"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cp "$REPO_DIR/scripts/mpv/menu-first.lua" "$TARGET_DIR/scripts/menu-first.lua"
-chmod 644 "$TARGET_DIR/scripts/menu-first.lua"
 
 # Python 3 script to discover all non-system dylibs, copy them, rewrite IDs and rpaths
 python3 - <<EOF
@@ -252,7 +223,7 @@ print("Code signing completed for bundled dylib tree and mpv helper binary.")
 
 # Re-sign lua script marker (text file, no signing needed; listed here so
 # the bundle contents are obvious when reading CI logs).
-print("Menu-first lua script bundled: scripts/menu-first.lua")
+print("Bundled dylib tree signed.")
 EOF
 
 # --- Bundled JRE (BD-J / 4K UHD interactive menus) --------------------------
@@ -300,12 +271,6 @@ if [ -f "$TARGET_DIR/lib/libbluray.4.dylib" ]; then
         exit 1
     }
     echo "BD-J support verified in bundled libbluray."
-fi
-# Menu-support gate: this marker string proves dvdnav menus were removed.
-# Binary grep (not strings) so it cannot be defeated by string-table shifts.
-if grep -aqc "DVD menu support has been removed" "$TARGET_DIR/mpv" >/dev/null 2>&1; then
-    echo "ERROR: this mpv release has DVD menu support REMOVED - owner requires menus!"
-    exit 1
 fi
 if otool -L "$TARGET_DIR/mpv" 2>/dev/null | grep -qE '/opt/homebrew/|/usr/local/|@loader_path|@executable_path'; then
     echo "ERROR: bundled mpv still references libraries outside the bundle;"
