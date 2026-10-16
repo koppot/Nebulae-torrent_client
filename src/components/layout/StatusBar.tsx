@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useConnectivityStore } from '../../stores/connectivityStore';
+import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
 
 interface TailscaleStatus {
@@ -29,6 +30,8 @@ export const StatusBar: React.FC = () => {
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
+  const [vpn, setVpn] = useState<VpnStatus | null>(null);
+  const vpnConfigured = vpn ? vpn.mode !== 'NoVpn' : false;
   const [disk, setDisk] = useState<VolumeSpace | null>(null);
   const [appVersion, setAppVersion] = useState<string>('');
 
@@ -69,6 +72,13 @@ export const StatusBar: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const poll = () => invoke<VpnStatus>('get_vpn_status').then(setVpn).catch(() => {});
+    poll();
+    const timer = setInterval(poll, 15 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const reportFresh = !!lastDoctorRun && Date.now() - lastDoctorRun < REPORT_FRESH_MS;
   const port = report?.listening_port || 41413;
   const portState = reportFresh ? (report?.port_status === 'Open' ? 'Open' : 'Closed') : '—';
@@ -91,7 +101,7 @@ export const StatusBar: React.FC = () => {
 
   return (
     <footer className="h-6 bg-[#141414] border-t border-[#262626] flex items-center justify-between px-3 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
-      {/* Left: Swarm Connectivity, DHT, Port, Tailscale */}
+      {/* Left: Connectivity, Port, Tailscale, VPN */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5" title={connectionBasis}>
           <span
@@ -105,14 +115,6 @@ export const StatusBar: React.FC = () => {
             {connected ? 'Connected' : 'Disconnected'}
           </span>
         </div>
-
-        <span className="text-[#333333]">|</span>
-
-        <span
-          title="Private tracker swarm: DHT/PEX/LPD are disabled at the engine and can never be enabled for ADC transfers"
-        >
-          DHT: Off · private
-        </span>
 
         <span className="text-[#333333]">|</span>
 
@@ -144,9 +146,9 @@ export const StatusBar: React.FC = () => {
           title={
             tailscale?.connected
               ? tailscale.adc_reachable === false
-                ? `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip}), but the ADC server is not reachable through it — traffic is on the default connection`
-                : `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip})`
-              : 'Secure Network (Tailscale ADC) not detected'
+                ? `Tailscale is active on ${tailscale.interface}, but the ADC server is not reachable through it — traffic is on the default connection`
+                : `Tailscale is active on ${tailscale.interface}`
+              : 'Tailscale is not connected'
           }
         >
           <span
@@ -158,13 +160,32 @@ export const StatusBar: React.FC = () => {
                 : 'bg-[#333333]'
             }`}
           />
-          <span className={tailscale?.connected ? 'text-white' : ''}>
-            Tailscale ADC:{' '}
-            {tailscale?.connected
-              ? tailscale.adc_reachable === false
-                ? 'ADC 응답 없음'
-                : tailscale.tailnet_ip
-              : '—'}
+          <span className={tailscale?.connected ? 'text-white' : ''}>Tailscale</span>
+        </div>
+
+        <span className="text-[#333333]">|</span>
+
+        <div
+          className={`flex items-center gap-1.5 ${vpnConfigured ? '' : 'opacity-40'}`}
+          title={
+            !vpnConfigured
+              ? 'No VPN profile configured'
+              : vpn?.connected
+                ? `VPN active on ${vpn.interface_name} (${vpn.assigned_ip})`
+                : 'VPN profile configured, but not connected'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              !vpnConfigured
+                ? 'bg-[#333333]'
+                : vpn?.connected
+                  ? 'bg-emerald-500'
+                  : 'bg-red-500'
+            }`}
+          />
+          <span className={vpnConfigured && vpn?.connected ? 'text-white' : ''}>
+            VPN: {vpnConfigured ? (vpn?.connected ? vpn?.assigned_ip || 'connected' : 'disconnected') : 'not configured'}
           </span>
         </div>
       </div>
