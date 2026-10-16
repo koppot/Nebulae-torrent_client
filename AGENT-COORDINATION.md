@@ -1607,3 +1607,26 @@ reference page proportions (~176px wide), poster keeps the 660:800 aspect.
   testing with Transmission's external port-test; first reachable port is
   persisted (user_settings_json + daemon settings.json). If none opens, the
   log states the router-refuses-mappings verdict (manual forward required).
+
+## Batch: media page redesign (owner spec, Canva mock DAHYMDJ7xCQ)
+
+Owner: title on the midline BELOW the poster; hover replaces the LOWER HALF
+of the poster with grayscale info (title, year, DVD-5/DVD-9xN, total size,
+total duration, Details + Play/Resume); right-click menu (Show in Finder,
+Play, Resume + extras); Details popup pulls ADC website info when available,
+else TMDB/Trakt summary; no duplicate/extra info; SVG icons.
+
+- SimpleMediaView: portal hover REPLACED by an in-poster bottom-half overlay
+  (grayscale: black/85, gray text, light-gray buttons; single Play OR Resume
+  button per owner's "two buttons"); title centered under the poster;
+  removed folder line, ADC line, synopsis and disc pills from the card
+  (duplicate info); downloading faces keep % + thin bar.
+- Right-click menu: Show in Finder / Play / Resume (when a last-played disc
+  exists) / Details / Copy Path / Open in Manager; closes on click, scroll,
+  resize, or right-click elsewhere.
+- Details popup: fetch_adc_page (new command, asiandvdclub.org host
+  allowlist, stored session cookie if any, HTML->text excerpt, login-gate
+  detection) + ADC seed stats; falls back to TMDB/Trakt overview; the popup
+  labels its source; "no summary available" is stated honestly.
+- tmdb.rs: TmdbMatch gains runtime (from /movie/{id}, DB-cached) -> the
+  hover meta line shows "4h 12m" when the catalogue provides it.

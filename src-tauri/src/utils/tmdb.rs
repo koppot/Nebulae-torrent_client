@@ -47,11 +47,17 @@ struct TraktIds {
 #[derive(Debug, Deserialize)]
 struct TmdbItem {
     #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
     poster_path: Option<String>,
     #[serde(default)]
     overview: Option<String>,
     #[serde(default)]
     release_date: Option<String>,
+    // /movie/{id} detail responses carry the runtime (minutes); search
+    // results do not (defaults to None there).
+    #[serde(default)]
+    runtime: Option<u32>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -59,6 +65,10 @@ pub struct TmdbMatch {
     pub poster_webp: PathBuf,
     pub overview: Option<String>,
     pub year: Option<i32>,
+    /// Feature runtime in minutes (owner: "total time duration" in the
+    /// hover panel); None when the catalogue doesn't provide it.
+    #[serde(default)]
+    pub runtime: Option<u32>,
 }
 
 /// Search TMDB for a release and cache its poster as WebP.
@@ -85,6 +95,11 @@ pub fn fetch_poster(
                     .ok()
                     .flatten()
                     .and_then(|y| y.parse().ok()),
+                runtime: db
+                    .get_setting(&format!("{cache_key}:runtime"))
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.parse().ok()),
             }));
         }
     }
@@ -153,6 +168,22 @@ pub fn fetch_poster(
         .as_deref()
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
+    // The runtime comes from the /movie/{id} detail response; the search
+    // result doesn't carry it. One bounded extra request, failures skipped.
+    let runtime: Option<u32> = match item.id {
+        Some(id) => {
+            let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/movie/{id}"))
+                .map_err(|e| format!("TMDB url: {e}"))?;
+            detail_url.query_pairs_mut().append_pair("api_key", &api_key);
+            client
+                .get(detail_url)
+                .send()
+                .ok()
+                .and_then(|r| r.json::<TmdbItem>().ok())
+                .and_then(|d| d.runtime)
+        }
+        None => None,
+    };
     let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
     let webp_path = webp.clone().unwrap_or(raw_path.clone());
     let _ = std::fs::remove_file(&raw_path);
@@ -165,11 +196,15 @@ pub fn fetch_poster(
     if let Some(y) = year {
         let _ = db.set_setting(&format!("{cache_key}:year"), &y.to_string());
     }
+    if let Some(rt) = runtime {
+        let _ = db.set_setting(&format!("{cache_key}:runtime"), &rt.to_string());
+    }
 
     Ok(Some(TmdbMatch {
         poster_webp: webp_path,
         overview: item.overview,
         year,
+        runtime,
     }))
 }
 
@@ -275,14 +310,19 @@ fn trakt_fallback(
         .as_deref()
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
+    let runtime = detail.runtime;
     let _ = db.set_setting(cache_key, &webp_path.display().to_string());
     if let Some(ov) = &overview {
         let _ = db.set_setting(&format!("{cache_key}:overview"), ov);
+    }
+    if let Some(rt) = runtime {
+        let _ = db.set_setting(&format!("{cache_key}:runtime"), &rt.to_string());
     }
     Ok(Some(TmdbMatch {
         poster_webp: webp_path,
         overview,
         year,
+        runtime,
     }))
 }
 

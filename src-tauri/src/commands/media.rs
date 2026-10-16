@@ -681,6 +681,91 @@ pub fn tmdb_configured() -> bool {
     crate::utils::tmdb::has_api_key()
 }
 
+/// Fetch the release's ADC webpage for the Details popup (owner: "on details
+/// it should get information from ADC website if available"). ADC torrents
+/// usually carry the details.php URL in their comment. The page is members-
+/// only: any stored session cookie is attached, and a login-redirect answer
+/// is reported as unavailable so the frontend falls back to TMDB/Trakt.
+#[tauri::command]
+pub fn fetch_adc_page(url: String) -> Result<String, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| format!("url: {e}"))?;
+    let host = parsed.host_str().unwrap_or_default().to_lowercase();
+    // Only the ADC site is ever fetched — never an arbitrary URL.
+    if !matches!(host.as_str(), "asiandvdclub.org" | "www.asiandvdclub.org") {
+        return Err(format!("not an ADC url: {host}"));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let mut req = client.get(&url);
+    // A website session (if the owner ever linked one) rides along; the
+    // announce passkey is NOT a website credential and is not sent.
+    if let Ok(cookie) = crate::utils::keyring::get_secret("adc:session_cookie") {
+        if !cookie.is_empty() {
+            req = req.header("Cookie", cookie);
+        }
+    }
+    let html = req
+        .send()
+        .map_err(|e| format!("fetch: {e}"))?
+        .text()
+        .map_err(|e| format!("body: {e}"))?;
+
+    // Login gate or empty page → treat as "ADC info unavailable".
+    let lower = html.to_lowercase();
+    if lower.contains("name=\"form_login\"") || lower.contains("login.php") && html.len() < 4096 {
+        return Err("ADC page requires a website login".into());
+    }
+
+    // Crude HTML → text: drop script/style blocks and tags, collapse
+    // whitespace. `split('<')` alternates text and tag segments.
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut skipping: Option<String> = None; // current <script>/<style> kind
+    for seg in html.split('<') {
+        if !in_tag {
+            if skipping.is_none() {
+                text.push_str(seg);
+            }
+            in_tag = true;
+        } else if let Some(gt) = seg.find('>') {
+            let tag = seg[..gt].to_lowercase();
+            let rest = &seg[gt + 1..];
+            match &skipping {
+                Some(kind) => {
+                    if tag.starts_with(&format!("/{kind}")) {
+                        skipping = None;
+                    }
+                }
+                None => {
+                    if tag.starts_with("script") {
+                        skipping = Some("script".into());
+                    } else if tag.starts_with("style") {
+                        skipping = Some("style".into());
+                    } else {
+                        text.push_str(rest);
+                    }
+                }
+            }
+            in_tag = false;
+        }
+        // A tag segment without '>' is malformed; drop it.
+    }
+    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.trim().to_string();
+    if text.len() < 80 {
+        return Err("ADC page carried no usable description".into());
+    }
+    let mut excerpt = text.chars().take(1500).collect::<String>();
+    if excerpt.len() < text.len() {
+        excerpt.push('…');
+    }
+    tracing::info!("[adc] details page fetched: {} chars", excerpt.len());
+    Ok(excerpt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

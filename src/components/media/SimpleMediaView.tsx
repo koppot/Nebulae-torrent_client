@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useEffect } from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { useTrackerStore } from '../../stores/trackerStore';
-import { formatBytes, formatEta } from '../../lib/formatters';
+import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openInPlayer, resumeInPlayer, savedPositionMs } from '../../lib/playerStore';
@@ -20,10 +19,10 @@ interface FetchTmdbResult {
   poster_webp: string;
   overview: string | null;
   year: number | null;
+  runtime: number | null;
 }
 import {
   Play,
-  Pause,
   Plus,
   FolderOpen,
   ArrowDownCircle,
@@ -33,6 +32,8 @@ import {
   FolderArchive,
   Search,
   X,
+  Info,
+  Copy,
 } from 'lucide-react';
 
 interface MediaGroup {
@@ -80,62 +81,58 @@ export const folderOf = (t: TorrentItem): string => {
   return /\.[a-z0-9]+$/i.test(p) ? p.split('/').slice(0, -1).join('/') : p;
 };
 
-export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent, selectSourceFolder, setSelectedId } = useTorrentStore();
+export const SimpleMediaView: React.FC = () => {  const { torrents, selectSourceFolder, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode } = useUiStore();
   const { seedTimeRecords, fetchSeedTimeRecords } = useTrackerStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
   const [discSetMap, setDiscSetMap] = useState<Record<string, DiscStructureInfo[]>>({});
-  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
-  const [tmdbMap, setTmdbMap] = useState<Record<string, { poster?: string; overview?: string }>>({});
-  const [selectedDiscs, setSelectedDiscs] = useState<Record<string, number>>({});
+  // Read-only: per-disc selection now happens in the player's disc switcher;
+  // the group's active item follows the last-played disc.
+  const [selectedDiscs] = useState<Record<string, number>>({});  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
+  const [tmdbMap, setTmdbMap] = useState<
+    Record<string, { poster?: string; overview?: string; runtime?: number }>
+  >({});
   const [groupBoxsets, setGroupBoxsets] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Hover panel portal (Canva): a fixed-position panel attached below the
-  // hovered card's poster. Rendered through a portal so the scroll container
-  // can never clip it (the in-flow version is why hover appeared dead).
-  const [hoverPortal, setHoverPortal] = useState<{
-    left: number;
-    top: number;
-    content: React.ReactNode;
-  } | null>(null);
-  const hoverTimer = useRef<number | null>(null);
-  const closeHover = () => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-    setHoverPortal(null);
-  };
-  // The panel is viewport-anchored: any scroll closes it.
-  useEffect(() => {
-    if (!hoverPortal) return;
-    const onScroll = () => setHoverPortal(null);
-    window.addEventListener('scroll', onScroll, true);
-    return () => window.removeEventListener('scroll', onScroll, true);
-  }, [hoverPortal]);
+  // Hover = the lower half of the poster is replaced by grayscale info
+  // (owner). The overlay lives INSIDE the poster box, so nothing can clip
+  // it and no portal is needed.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const openHoverFor = (e: React.MouseEvent, content: React.ReactNode) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => {
-      // 660:800 is the aspect, not the size (owner): grid cards ≈176px wide,
-      // hover card ≈ 1.4× that, same 660/800-derived poster crop on top.
-      const W = 248;
-      const POSTER_H = 148; // the poster frame stays visible, top-cropped
-      const left = Math.max(
-        8,
-        Math.min(r.left + r.width / 2 - W / 2, window.innerWidth - W - 8),
-      );
-      // Attach below the poster like the reference; flip up when it would
-      // leave the viewport (bottom shelf).
-      const est = POSTER_H + 320;
-      const top =
-        r.top + est > window.innerHeight - 8
-          ? Math.max(8, window.innerHeight - est - 8)
-          : r.top;
-      setHoverPortal({ left, top, content });
-    }, 250);
-  };
+  // Right-click menu on a poster (owner): Show in Finder, Play, Resume, plus
+  // a few useful extras. Viewport-anchored, grayscale, closes on any click.
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    groupId: string;
+    itemId: string;
+  } | null>(null);
+
+  // Details popup (owner): ADC website info when available, otherwise the
+  // TMDB/Trakt summary. Fetched when the popup opens.
+  const [detailsFor, setDetailsFor] = useState<{ groupId: string; itemId: string } | null>(null);
+  const [detailsData, setDetailsData] = useState<{
+    adcUrl: string | null;
+    adcText: string | null;
+    overview: string | null;
+    runtimeMin: number | null;
+    source: 'adc' | 'tmdb' | 'none';
+  } | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+
+  // Any scroll dismisses the context menu.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const dismiss = () => setCtxMenu(null);
+    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('resize', dismiss);
+    return () => {
+      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('resize', dismiss);
+    };
+  }, [ctxMenu]);
 
   // Last-played disc per group: a resume should re-open the disc the owner
   // watched last, not the group's first item (owner directive). The stored
@@ -252,7 +249,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           setTmdbMap((prev) => ({
             ...prev,
             [t.id]: res
-              ? { poster: res.poster_webp, overview: res.overview ?? undefined }
+              ? {
+                  poster: res.poster_webp,
+                  overview: res.overview ?? undefined,
+                  runtime: res.runtime ?? undefined,
+                }
               : {},
           }));
         })
@@ -324,6 +325,60 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
   const openDetails = (id: string) => {
     setSelectedId(id);
     setViewMode('manager');
+  };
+
+  // Details POPUP (owner): ADC website info when the torrent carries its
+  // page URL, otherwise the TMDB/Trakt summary (which the engine caches).
+  const openDetailsPopup = async (groupId: string, item: TorrentItem) => {
+    setDetailsFor({ groupId, itemId: item.id });
+    setDetailsLoading(true);
+    setDetailsData(null);
+
+    const adcUrl = /https?:\/\/(?:www\.)?asiandvdclub\.org\/[^\s"']+/i.exec(item.comment)?.[0] || null;
+    let adcText: string | null = null;
+    if (adcUrl) {
+      try {
+        adcText = await invoke<string>('fetch_adc_page', { url: adcUrl });
+      } catch (err) {
+        invoke('log_frontend', {
+          message: `adc details unavailable: ${errorMessage(err, 'unknown')}`,
+        }).catch(() => {});
+      }
+    }
+
+    // TMDB/Trakt summary — DB-cached engine-side; the same call the poster
+    // fallback uses, so this never refires a network search per open.
+    let overview: string | null = null;
+    let runtimeMin: number | null = null;
+    try {
+      const parsed = await invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: item.name });
+      const res = await invoke<FetchTmdbResult | null>('fetch_tmdb_release', {
+        title: parsed.clean_title,
+        year: parsed.year ?? undefined,
+      });
+      if (res) {
+        overview = res.overview ?? null;
+        runtimeMin = res.runtime ?? null;
+      }
+    } catch {
+      // Keep the ADC-only content; the popup says which source it used.
+    }
+
+    setDetailsData({
+      adcUrl,
+      adcText,
+      overview,
+      runtimeMin,
+      source: adcText ? 'adc' : overview ? 'tmdb' : 'none',
+    });
+    setDetailsLoading(false);
+  };
+
+  const fmtRuntime = (min: number | null | undefined) => {
+    if (!min || min <= 0) return null;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
   // Play an external/internal optical disc: the user points Nebulae at the
@@ -437,7 +492,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
     const currentItem = group.items[group.active_index] || group.items[0];
     const discInfo = discMetaMap[currentItem.id];
     const progressPct = Math.round(group.overall_progress * 100);
-    const itemProgressPct = Math.round(currentItem.progress * 100);
     const isDownloading = currentItem.status === 'Downloading';
     // Cover priority: structure-detected scan, then the WebP poster cache,
     // then TMDB (fetched lazily below), then any remote poster URL.
@@ -501,21 +555,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         : groupSpecs.map(layerLabel).join(' + ')
       : null;
 
-    // ADC hover line (Canva: "ADC: 2.48 - Seed time: 2d 14h").
-    const seedSeconds = seedTimeRecords.find((r) => r.info_hash === currentItem.info_hash)
-      ?.seeding_time_seconds;
-    const seedTimeText = fmtSeedTime(seedSeconds);
-    const adcLine =
-      currentItem.ratio > 0 || seedTimeText
-        ? `ADC: ${currentItem.ratio.toFixed(2)}${seedTimeText ? ` · Seed time: ${seedTimeText}` : ''}`
-        : null;
-
-    const folderName = folderOf(currentItem).split('/').filter(Boolean).pop() || currentItem.save_path;
-
-    // The Canva hover panel: poster on top, then title/meta/ADC/folder/
-    // synopsis/pills/actions, progress line last. Built per card and shown
-    // through the fixed portal below (an in-flow absolute panel gets clipped
-    // by the scroll container at the bottom shelf — hover appeared dead).
+    // Poster art: object-cover trims the picture into the 660:800 frame.
     const posterArt = coverImage ? (
       <img
         src={localSrc(coverImage)}
@@ -532,189 +572,90 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
       </div>
     );
 
-    const hoverPanel = (
-      <>
-        {/* The poster frame STAYS on the hover card (owner: "frame still
-            there") — top-cropped like the reference mock. */}
-        <div className="h-[148px] w-full bg-[#141414] relative overflow-hidden">
-          {posterArt}
-          <div className="absolute top-2 left-2">
-            <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
-              {currentItem.status}
-            </span>
-          </div>
-          {discBadge && (
-            <div className="absolute top-2 right-2">
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-black/80 border border-[#333333] text-amber-300 font-mono font-semibold">
-                {discBadge}
-              </span>
-            </div>
-          )}
-        </div>
-
-        <div className="p-4 space-y-2">
-          <p className="text-[16px] font-semibold text-white leading-tight" title={group.clean_title}>
-            {group.clean_title}
-          </p>
-          <div className="text-[12px] font-mono text-[#a3a3a3]">
-            {group.year ? `${group.year} · ` : ''}
-            {discCount} {discCount === 1 ? 'disc' : 'discs'}
-            {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
-          </div>
-          {adcLine && <div className="text-[12px] font-mono text-[#737373]">{adcLine}</div>}
-
-          {/* Visible folder: the release's own folder, click to open. */}
-          <button
-            onClick={() => handleRevealRelease(currentItem)}
-            className="w-full flex items-center gap-2 text-left text-[11px] font-mono text-[#a3a3a3] hover:text-white transition"
-            title={`Open ${folderOf(currentItem)}`}
-          >
-            <FolderOpen className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">{folderName}</span>
-          </button>
-
-          {tmdbMap[group.id]?.overview && (
-            <p
-              className="text-[12px] text-[#a3a3a3] leading-snug line-clamp-3"
-              title={tmdbMap[group.id].overview}
-            >
-              {tmdbMap[group.id].overview}
-            </p>
-          )}
-
-          {/* Multi-disc pills: visible for BOTH boxsets and multi-ISO sets */}
-          {discs.length > 1 && (
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {discs.map((d, idx) => (
-                <button
-                  key={d.key}
-                  onClick={() => setSelectedDiscs((prev) => ({ ...prev, [group.id]: idx }))}
-                  title={d.title}
-                  className={`text-[11px] font-mono px-2 py-0.5 rounded-full transition ${
-                    idx === effIdx
-                      ? 'bg-[#e50914] text-white font-bold'
-                      : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
-                  }`}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center gap-3.5 pt-1">
-            <button
-              onClick={() => {
-                closeHover();
-                handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
-              }}
-              className="px-4 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[13px] flex items-center gap-1.5 transition"
-              title="Play Interactive Disc Menus (dvdnav/BD-J)"
-            >
-              <Play className="w-4 h-4 fill-white" />
-              <span>Play</span>
-            </button>
-
-            {!isDownloading && resumePath && (
-              // Shown ONLY when there is something to resume (owner rule):
-              // continues the last-played disc PAST the menu at its position.
-              <button
-                onClick={() => {
-                  closeHover();
-                  handleResumeDisc(group.id, resumePath);
-                }}
-                className="px-4 py-1.5 rounded-md border border-[#333333] text-white text-[13px] font-semibold flex items-center gap-1.5 hover:bg-[#262626] transition"
-                title={`Resume the disc you played last: ${resumePath.split('/').pop()}`}
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Resume</span>
-              </button>
-            )}
-
-            {isDownloading && (
-              <button
-                onClick={() => pauseTorrent(currentItem.id)}
-                className="p-2.5 rounded-lg border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
-                title="Pause"
-              >
-                <Pause className="w-4 h-4" />
-              </button>
-            )}
-
-            <button
-              onClick={() => {
-                closeHover();
-                openDetails(currentItem.id);
-              }}
-              className="px-4 py-1.5 rounded-md border border-[#e50914]/50 text-[#e50914] text-[13px] font-medium hover:bg-[#e50914]/10 hover:text-white transition"
-              title="Open this release in Nebulae Manager"
-            >
-              Details
-            </button>
-
-            <button
-              onClick={() => handleRevealRelease(currentItem)}
-              className="p-2.5 rounded-lg border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
-              title="Open Enclosing Folder"
-            >
-              <FolderOpen className="w-4 h-4" />
-            </button>
-          </div>
-
-          {variant === 'active' && currentItem.eta_seconds != null && (
-            <div className="text-[13px] font-mono text-[#737373]">
-              ETA {formatEta(currentItem.eta_seconds)} · disc {itemProgressPct}%
-            </div>
-          )}
-        </div>
-
-        {/* Progress line under the panel, like the reference's 79% line */}
-        <div className="px-4 pb-4 flex items-center gap-2">
-          <div className="h-[5px] flex-1 rounded-full bg-[#333333] overflow-hidden">
-            <div
-              className={`h-full transition-all duration-300 ${
-                currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
-              }`}
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-          <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
-        </div>
-      </>
-    );
+    // Hover meta line: exactly the owner's list — year, disc formats, size,
+    // duration. Grayscale only; nothing duplicated.
+    const runtimeText = fmtRuntime(tmdbMap[group.id]?.runtime ?? null);
+    const hoverMeta = [group.year, discBadge, formatBytes(group.total_bytes), runtimeText]
+      .filter(Boolean)
+      .join(' · ');
 
     return (
       <div
         key={group.id}
-        onMouseEnter={(e) => openHoverFor(e, hoverPanel)}
-        onMouseLeave={() => {
-          if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+        onMouseEnter={() => setHoveredId(group.id)}
+        onMouseLeave={() => setHoveredId((prev) => (prev === group.id ? null : prev))}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY, groupId: group.id, itemId: currentItem.id });
         }}
         className="group relative rounded-lg cursor-pointer w-[176px] flex-shrink-0"
       >
-        {/* 660:800 is the aspect (owner: "proportions, not the size"):
-            ~176px-wide cards, picture crops to fill, title below, and on
-            downloading rows: % right-aligned above a full-width thin bar.
-            The elevation lives in the hover portal. */}
         <div className="rounded-lg overflow-hidden">
           <div className="aspect-[660/800] w-full bg-[#141414] relative overflow-hidden">
             {posterArt}
+
+            {/* Hover: the lower HALF of the poster is replaced with the info
+                panel — grayscale only, two action buttons (owner spec). */}
+            {hoveredId === group.id && (
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-black/90 border-t border-[#3a3a3a] p-3 flex flex-col justify-between">
+                <div className="space-y-1 min-h-0">
+                  <p
+                    className="text-[13px] font-semibold text-white leading-tight line-clamp-2"
+                    title={group.clean_title}
+                  >
+                    {group.clean_title}
+                  </p>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] leading-snug">{hoverMeta}</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {resumePath && !isDownloading ? (
+                    <button
+                      onClick={() => handleResumeDisc(group.id, resumePath)}
+                      className="flex-1 px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
+                      title="Resume the last-played disc past its menu"
+                    >
+                      <Play className="w-3 h-3 fill-black" />
+                      <span>Resume</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handlePlayDisc(effDisc.torrent, group.id, effDisc.path)}
+                      className="flex-1 px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
+                      title="Play (interactive disc menus)"
+                    >
+                      <Play className="w-3 h-3 fill-black" />
+                      <span>Play</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => openDetailsPopup(group.id, currentItem)}
+                    className="flex-1 px-2 py-1.5 rounded-md border border-[#555555] text-[#e5e5e5] text-[11px] font-medium hover:bg-[#262626] hover:text-white transition"
+                    title="Summary from ADC (when available) or TMDB/Trakt"
+                  >
+                    Details
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Below the tile: title, % right, full-width bar (downloading) */}
+          {/* Title on the midline BELOW the poster (owner). */}
           <div className="pt-2">
-            <h4 className="text-[14px] font-medium text-white truncate leading-tight" title={group.clean_title}>
+            <h4
+              className="text-[12px] font-medium text-white text-center truncate leading-tight"
+              title={group.clean_title}
+            >
               {group.clean_title}
             </h4>
             {variant === 'active' && (
               <>
                 <div className="flex justify-end mt-1">
-                  <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
+                  <span className="text-[11px] font-mono text-[#a3a3a3]">{progressPct}%</span>
                 </div>
                 <div className="h-[4px] w-full rounded-full bg-[#333333] overflow-hidden mt-1">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
+                      currentItem.status === 'Seeding' ? 'bg-white' : 'bg-white'
                     }`}
                     style={{ width: `${progressPct}%` }}
                   />
@@ -947,22 +888,203 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         </div>
       )}
 
-      {/* Canva hover panel: fixed-position portal — attached below the
-          hovered card's poster, never clipped by the scroll container. */}
-      {hoverPortal &&
-        createPortal(
+      {/* Right-click menu on a poster (grayscale, owner spec + extras). */}
+      {ctxMenu && (
+        <div
+          className="fixed inset-0 z-[190]"
+          onClick={() => setCtxMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setCtxMenu(null);
+          }}
+        >
           <div
-            className="fixed z-[90] w-60 rounded-xl bg-[#1c1c1c] border border-[#2f2f2f] shadow-2xl shadow-black/70 overflow-hidden"
-            style={{ left: hoverPortal.left, top: hoverPortal.top }}
-            onMouseEnter={() => {
-              if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+            className="absolute w-44 rounded-lg bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 py-1.5"
+            style={{
+              left: Math.min(ctxMenu.x, window.innerWidth - 190),
+              top: Math.min(ctxMenu.y, window.innerHeight - 210),
             }}
-            onMouseLeave={closeHover}
           >
-            {hoverPortal.content}
-          </div>,
-          document.body,
-        )}
+            {(() => {
+              const group = groupItems([...activeDownloads, ...readyToWatch]).find(
+                (g) => g.id === ctxMenu.groupId,
+              );
+              const item =
+                group?.items.find((t) => t.id === ctxMenu.itemId) || group?.items[0];
+              if (!group || !item) return null;
+              const saved = lastPlayedDiscs[group.id];
+              const resumeTarget = saved
+                ? saved.startsWith('/')
+                  ? saved
+                  : (discSetMap[item.id] ?? []).find((d) => d.play_target === saved)?.play_target
+                : null;
+              const act =
+                'w-full text-left px-3 py-1.5 text-[11px] text-[#d4d4d4] hover:bg-[#262626] hover:text-white flex items-center gap-2 transition';
+              return (
+                <>
+                  <button className={act} onClick={() => { setCtxMenu(null); handleRevealRelease(item); }}>
+                    <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      handlePlayDisc(item, group.id);
+                    }}
+                  >
+                    <Play className="w-3.5 h-3.5" /> Play
+                  </button>
+                  {resumeTarget && (
+                    <button
+                      className={act}
+                      onClick={() => {
+                        setCtxMenu(null);
+                        handleResumeDisc(group.id, resumeTarget);
+                      }}
+                    >
+                      <Play className="w-3.5 h-3.5" /> Resume
+                    </button>
+                  )}
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      openDetailsPopup(group.id, item);
+                    }}
+                  >
+                    <Info className="w-3.5 h-3.5" /> Details
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      navigator.clipboard?.writeText(contentPath(item)).catch(() => {});
+                      setCtxMenu(null);
+                    }}
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Copy Path
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      openDetails(item.id);
+                    }}
+                  >
+                    <FolderArchive className="w-3.5 h-3.5" /> Open in Manager
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Details popup: ADC website info when available, otherwise the
+          TMDB/Trakt summary (owner). Grayscale. */}
+      {detailsFor && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setDetailsFor(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-[#161616] border border-[#333333] shadow-2xl p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const group = groupItems([...activeDownloads, ...readyToWatch]).find(
+                (g) => g.id === detailsFor.groupId,
+              );
+              const item =
+                group?.items.find((t) => t.id === detailsFor.itemId) || group?.items[0];
+              if (!group || !item) return null;
+              const set = discSetMap[item.id] ?? [];
+              const specs = Array.from(new Set(set.map((d) => d.layer_spec)));
+              const count = set.length || group.items.length;
+              const badge = specs.length
+                ? specs.length === 1
+                  ? `${count > 1 ? `${count}× ` : ''}${layerLabel(specs[0])}`
+                  : specs.map(layerLabel).join(' + ')
+                : null;
+              const seed = seedTimeRecords.find((r) => r.info_hash === item.info_hash);
+              const meta = [
+                group.year,
+                badge,
+                formatBytes(group.total_bytes),
+                fmtRuntime(detailsData?.runtimeMin ?? null),
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <h3 className="text-[16px] font-semibold text-white leading-tight">
+                        {group.clean_title}
+                      </h3>
+                      <div className="text-[11px] font-mono text-[#a3a3a3]">{meta}</div>
+                    </div>
+                    <button
+                      onClick={() => setDetailsFor(null)}
+                      className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {detailsLoading ? (
+                    <p className="text-[12px] text-[#737373] italic">Fetching details…</p>
+                  ) : detailsData ? (
+                    <div className="space-y-3 max-h-[50vh] overflow-y-auto">
+                      {detailsData.adcText && (
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                            AsianDVDClub
+                          </span>
+                          <p className="text-[12px] text-[#d4d4d4] leading-relaxed whitespace-pre-line">
+                            {detailsData.adcText}
+                          </p>
+                          {detailsData.adcUrl && (
+                            <a
+                              href={detailsData.adcUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] text-[#a3a3a3] underline underline-offset-2 hover:text-white"
+                            >
+                              Open the ADC release page
+                            </a>
+                          )}
+                          {seed && (
+                            <p className="text-[11px] font-mono text-[#8c8c8c]">
+                              Seed time {fmtSeedTime(seed.seeding_time_seconds) || '0m'} of{' '}
+                              {fmtSeedTime(seed.required_seeding_seconds) || '—'} required
+                              {seed.is_shield_satisfied ? ' · shield satisfied' : ''}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {detailsData.overview && (
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                            {detailsData.source === 'tmdb' ? 'TMDB / Trakt' : 'TMDB'}
+                          </span>
+                          <p className="text-[12px] text-[#a3a3a3] leading-relaxed">
+                            {detailsData.overview}
+                          </p>
+                        </div>
+                      )}
+                      {!detailsData.adcText && !detailsData.overview && (
+                        <p className="text-[12px] text-[#737373] italic">
+                          No summary available{detailsData.adcUrl ? ' — the ADC page requires a website login' : ''}.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

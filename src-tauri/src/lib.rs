@@ -521,6 +521,7 @@ pub fn run() {
             commands::media::organize_completed_media,
             commands::media::get_media_thumbnail,
             commands::media::fetch_tmdb_release,
+            commands::media::fetch_adc_page,
             commands::media::tmdb_configured,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
