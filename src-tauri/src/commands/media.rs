@@ -26,9 +26,19 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
 pub fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
     let path = Path::new(&file_path);
     if !path.exists() {
+        tracing::warn!("[disc-set] path missing: {file_path}");
         return Err(format!("Media path does not exist: {file_path}"));
     }
-    Ok(DiscDetector::inspect_all(path))
+    let set = DiscDetector::inspect_all(path);
+    tracing::info!(
+        "[disc-set] {file_path} -> {} disc(s): {}",
+        set.len(),
+        set.iter()
+            .map(|d| format!("{:?}/{:?}", d.disc_type, d.layer_spec))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(set)
 }
 
 #[tauri::command]
@@ -527,6 +537,7 @@ pub fn get_media_thumbnail(
 ) -> Result<crate::utils::library_cleaner::ThumbnailResult, String> {
     let path = Path::new(&media_path);
     if !path.exists() {
+        tracing::warn!("[thumbnail] media path does not exist: {media_path}");
         return Err(format!("Media path does not exist: {media_path}"));
     }
 
@@ -534,7 +545,14 @@ pub fn get_media_thumbnail(
         .map(|p| p.cache_dir)
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    Ok(crate::utils::library_cleaner::LibraryCleaner::get_or_create_thumbnail(path, &cache_dir))
+    let result =
+        crate::utils::library_cleaner::LibraryCleaner::get_or_create_thumbnail(path, &cache_dir);
+    if let Some(p) = &result.thumbnail_path {
+        tracing::info!("[thumbnail] {media_path} -> {p}");
+    } else {
+        tracing::warn!("[thumbnail] {media_path} -> no cover found (TMDB fallback should fire)");
+    }
+    Ok(result)
 }
 
 /// TMDB poster + metadata for a release (used when the local folder ships no
@@ -554,7 +572,19 @@ pub fn fetch_tmdb_release(
         .join("internal/db/nebulae.db");
     let db =
         crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
-    crate::utils::tmdb::fetch_poster(&db, &title, &title, year)
+    let result = crate::utils::tmdb::fetch_poster(&db, &title, &title, year);
+    match &result {
+        Ok(Some(m)) => tracing::info!(
+            "[tmdb] match for {title:?}: poster={} year={:?}",
+            m.poster_webp.display(),
+            m.year
+        ),
+        // Silent-skip (no keychain entry) or genuinely no match: both mean the
+        // grid keeps its placeholder — log it so the owner sees WHY.
+        Ok(None) => tracing::warn!("[tmdb] no match or no credentials for {title:?}"),
+        Err(e) => tracing::warn!("[tmdb] fetch failed for {title:?}: {e}"),
+    }
+    result
 }
 
 /// Whether TMDB integration is configured (Settings pane indicator).

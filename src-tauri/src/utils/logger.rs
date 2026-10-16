@@ -104,21 +104,35 @@ impl std::io::Write for DualGuard<'_> {
         // them so the file gets a timestamped copy while stderr stays raw.
         self.line.extend_from_slice(buf);
         std::io::stderr().write_all(buf)?;
+        // Emit complete lines to the file immediately instead of trusting
+        // the subscriber to call flush after every event.
+        if self.line.ends_with(b"\n") {
+            self.flush_to_file();
+        }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        if !self.line.is_empty() {
-            let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let text = String::from_utf8_lossy(&self.line);
-            if let Ok(mut guard) = self.file.lock() {
-                if let Some(f) = guard.as_mut() {
-                    let _ = f.write_all(format!("[{ts}] {text}").as_bytes());
-                }
-            }
-            self.line.clear();
-        }
+        self.flush_to_file();
         std::io::stderr().flush()
+    }
+}
+
+impl DualGuard<'_> {
+    fn flush_to_file(&mut self) {
+        if self.line.is_empty() {
+            return;
+        }
+        let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let text = String::from_utf8_lossy(&self.line)
+            .trim_end_matches('\n')
+            .to_string();
+        if let Ok(mut guard) = self.file.lock() {
+            if let Some(f) = guard.as_mut() {
+                let _ = f.write_all(format!("[{ts}] {text}\n").as_bytes());
+            }
+        }
+        self.line.clear();
     }
 }
 
@@ -189,6 +203,33 @@ mod tests {
         assert!(!content.contains("urn:btih:0123456789abcdef"));
         assert!(content.contains("[REDACTED_TRACKER_URL]"));
         assert!(content.contains("[REDACTED_MAGNET_LINK]"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_tracing_events_reach_the_session_file() {
+        // Regression: the tracing subscriber used to write to stderr only,
+        // so player-stage and webview breadcrumbs never appeared in the
+        // session log (the empty-log mystery). Both legs must land.
+        let tmp = std::env::temp_dir().join(format!(
+            "nebulae_tracing_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        SafeLogger::init_tracing_with_file(Some(&tmp));
+        tracing::info!("tracing-file-regression-check");
+
+        let content = std::fs::read_to_string(tmp.join("nebulae_session.log"))
+            .expect("session log must exist");
+        assert!(
+            content.contains("tracing-file-regression-check"),
+            "tracing events must land in the session log, got: {content:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

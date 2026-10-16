@@ -1778,12 +1778,14 @@ mod tests {
 
     #[test]
     fn test_build_transmission_settings_mapping_table() {
-        let mut user_settings = UserSettings::default();
-        user_settings.listening_port = 52123;
-        user_settings.enable_upnp = true;
-        user_settings.max_connections_per_torrent = 150; // Should be clamped to 100
-        user_settings.max_global_connections = 600; // Should be clamped to 500
-        user_settings.max_upload_slots_per_torrent = 10; // Should be clamped to 8
+        let user_settings = UserSettings {
+            listening_port: 52123,
+            enable_upnp: true,
+            max_connections_per_torrent: 150, // Should be clamped to 100
+            max_global_connections: 600,      // Should be clamped to 500
+            max_upload_slots_per_torrent: 10, // Should be clamped to 8
+            ..Default::default()
+        };
 
         let config = build_transmission_settings(
             &user_settings,

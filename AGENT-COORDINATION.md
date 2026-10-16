@@ -1475,3 +1475,34 @@ both save_path shapes (root + subfolder).
 - Gates: tsc clean, eslint clean, clippy 0, 91 tests, CI green for both
   pushes; installed 0cb5b85 arm64 build + deep re-signed (Team 2YJ32CEY87),
   engine listening on 41413.
+
+## Session 2026-10-16 — posters render, disc specs accurate, Canva-proportioned media view
+
+Owner findings worked: "Where's the poster?", "only DVD-9 shown although there
+are two discs", "no visible folder", "did not follow the Canva proportions",
+"mouse over should present information same way as canvas proposed".
+
+- POSTER ROOT CAUSE: the webview cannot load raw file:// URLs from its
+  tauri:// origin — enabled tauri.conf assetProtocol (scope $HOME, /Volumes,
+  /tmp) + protocol-asset feature, and the view now maps local covers through
+  convertFileSrc. WebP/TMDB poster paths finally render.
+- Silent-failure ban: detect_disc_set / get_media_thumbnail / fetch_tmdb_release
+  now tracing-log results (disc-set summary, cache path, TMDB match/miss);
+  frontend effect catches emit [frontend] breadcrumbs via log_frontend.
+- Tracing→file hardening: DualGuard flushes complete lines to the session log
+  inside write() (no reliance on subscriber flush) + regression test
+  test_tracing_events_reach_the_session_file.
+- Disc accuracy: shared classify_disc_bytes ladder — 2.2 GB / 3.4 GB ISOs are
+  DVD-5 (the dir branch mislabelled any sub-9.5 GB image DVD-9, the exact
+  owner complaint); BD-25 tier added; regression test pins the real Banner
+  of the Stars III sizes.
+- Media view rebuilt to the Canva proportions (dark bg kept per owner
+  override): Nebulae wordmark + "Search library..." pill, small-caps section
+  headers with count chips, fluid auto-fill poster grid (~6-7 per row),
+  clean card faces (poster + status/spec pills + title + thin bar with %),
+  hover elevates the card and opens the panel BELOW the poster with title,
+  year·discs·spec·size, "ADC: ratio · Seed time" line (seed-time records),
+  the release folder (click opens), TMDB synopsis, disc pills for BOTH
+  boxsets and single-torrent multi-ISO sets (individually playable),
+  Play/Resume/Pause/Details/Open-Folder (Details jumps to Manager, selected).
+- Gates: tsc clean, eslint clean, clippy 0, 86 lib tests green.
