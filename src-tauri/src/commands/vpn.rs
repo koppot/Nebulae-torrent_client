@@ -7,9 +7,9 @@ use tauri::State;
 use uuid::Uuid;
 
 #[tauri::command]
-pub fn get_vpn_status(
-    db: State<Arc<Database>>,
-    engine: State<SharedEngine>,
+pub async fn get_vpn_status(
+    db: State<'_, Arc<Database>>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<VpnStatus, String> {
     let mode_str = db
         .get_setting("vpn_mode")
@@ -75,7 +75,7 @@ pub fn get_vpn_status(
 }
 
 #[tauri::command]
-pub fn set_vpn_mode(mode: VpnMode, db: State<Arc<Database>>) -> Result<(), String> {
+pub fn set_vpn_mode(mode: VpnMode, db: State<'_, Arc<Database>>) -> Result<(), String> {
     let mode_str = match mode {
         VpnMode::NoVpn => "NoVpn",
         VpnMode::SystemVpn => "SystemVpn",
@@ -87,7 +87,7 @@ pub fn set_vpn_mode(mode: VpnMode, db: State<Arc<Database>>) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn toggle_kill_switch(enabled: bool, db: State<Arc<Database>>) -> Result<(), String> {
+pub fn toggle_kill_switch(enabled: bool, db: State<'_, Arc<Database>>) -> Result<(), String> {
     db.set_setting("vpn_kill_switch", if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -97,7 +97,7 @@ pub fn toggle_kill_switch(enabled: bool, db: State<Arc<Database>>) -> Result<(),
 pub fn import_wireguard_profile(
     content: String,
     profile_name: String,
-    db: State<Arc<Database>>,
+    db: State<'_, Arc<Database>>,
 ) -> Result<VpnProfile, String> {
     let parsed = ParsedWireGuardProfile::parse_conf(&content)?;
     let id = Uuid::new_v4().to_string();
@@ -132,7 +132,7 @@ pub fn import_wireguard_profile(
 pub fn import_openvpn_profile(
     content: String,
     profile_name: String,
-    db: State<Arc<Database>>,
+    db: State<'_, Arc<Database>>,
 ) -> Result<VpnProfile, String> {
     let parsed = crate::models::vpn::ParsedOpenVpnProfile::parse_ovpn(&content)?;
     let id = Uuid::new_v4().to_string();
@@ -169,12 +169,12 @@ pub fn import_openvpn_profile(
 }
 
 #[tauri::command]
-pub fn list_vpn_profiles(db: State<Arc<Database>>) -> Result<Vec<VpnProfile>, String> {
+pub fn list_vpn_profiles(db: State<'_, Arc<Database>>) -> Result<Vec<VpnProfile>, String> {
     db.list_vpn_profiles().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_vpn_profile(id: String, db: State<Arc<Database>>) -> Result<(), String> {
+pub fn delete_vpn_profile(id: String, db: State<'_, Arc<Database>>) -> Result<(), String> {
     let _ = crate::utils::keyring::delete_secret(&crate::utils::keyring::vpn_secret_target(&id));
     db.delete_vpn_profile(&id).map_err(|e| e.to_string())
 }

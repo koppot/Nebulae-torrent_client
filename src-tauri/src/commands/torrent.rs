@@ -282,7 +282,7 @@ pub fn recommended_piece_size_bytes(total_bytes: u64) -> u32 {
 }
 
 #[tauri::command]
-pub fn list_torrents(engine: State<SharedEngine>) -> Result<Vec<TorrentItem>, String> {
+pub async fn list_torrents(engine: State<'_, SharedEngine>) -> Result<Vec<TorrentItem>, String> {
     engine.list_torrents()
 }
 
@@ -291,7 +291,7 @@ pub fn add_torrent(
     source: String,
     download_dir: Option<String>,
     bytes: Option<Vec<u8>>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     if let Some(raw) = bytes {
         if !raw.is_empty() {
@@ -305,7 +305,7 @@ pub fn add_torrent(
 pub fn add_torrent_bytes(
     bytes: Vec<u8>,
     download_dir: Option<String>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
 }
@@ -584,38 +584,41 @@ fn apply_torrent_renames_impl(
 pub fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.remove_torrent(&id, delete_files.unwrap_or(false))
 }
 
 #[tauri::command]
-pub fn pause_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn pause_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.pause_torrent(&id)
 }
 
 #[tauri::command]
-pub fn resume_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn resume_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.resume_torrent(&id)
 }
 
 #[tauri::command]
-pub fn pause_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn pause_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.pause_all()
 }
 
 #[tauri::command]
-pub fn resume_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn resume_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.resume_all()
 }
 
 #[tauri::command]
-pub fn force_recheck_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn force_recheck_torrent(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<(), String> {
     engine.force_recheck(&id)
 }
 
 #[tauri::command]
-pub fn reannounce_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn reannounce_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.reannounce(&id)
 }
 
@@ -623,7 +626,7 @@ pub fn reannounce_torrent(id: String, engine: State<SharedEngine>) -> Result<(),
 pub fn set_torrent_location(
     id: String,
     new_path: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_location(&id, &new_path)
 }
@@ -632,7 +635,7 @@ pub fn set_torrent_location(
 pub fn set_torrent_category(
     id: String,
     category: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_category(&id, &category)
 }
@@ -643,25 +646,31 @@ pub fn set_torrent_speed_limits(
     dl_kib: u32,
     ul_kib: u32,
     ratio_limit: f32,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_torrent_limits(&id, dl_kib, ul_kib, ratio_limit)
 }
 
 #[tauri::command]
-pub fn toggle_torrent_sequential(id: String, engine: State<SharedEngine>) -> Result<bool, String> {
+pub async fn toggle_torrent_sequential(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<bool, String> {
     engine.toggle_sequential_download(&id)
 }
 
 #[tauri::command]
-pub fn toggle_torrent_first_last(id: String, engine: State<SharedEngine>) -> Result<bool, String> {
+pub async fn toggle_torrent_first_last(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<bool, String> {
     engine.toggle_first_last_piece_priority(&id)
 }
 
 #[tauri::command]
 pub fn toggle_torrent_super_seeding(
     id: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
     engine.toggle_super_seeding(&id)
 }
@@ -671,7 +680,7 @@ pub fn set_file_priority(
     id: String,
     file_index: u32,
     priority: u8,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_file_priority(&id, file_index, priority)
 }
@@ -680,7 +689,7 @@ pub fn set_file_priority(
 pub fn rename_torrent(
     id: String,
     new_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent(&id, &new_name)
 }
@@ -690,7 +699,7 @@ pub fn rename_torrent_file(
     id: String,
     file_index: u32,
     new_file_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent_file(&id, file_index, &new_file_name)
 }
@@ -700,7 +709,7 @@ pub fn rename_torrent_folder(
     id: String,
     old_folder_path: String,
     new_folder_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
 }
@@ -787,7 +796,7 @@ pub async fn create_torrent_file(
 pub fn export_torrent_file(
     id: String,
     destination_path: Option<String>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     let bytes = engine.export_torrent_bytes(&id)?;
     let torrents = engine.list_torrents()?;
@@ -827,17 +836,17 @@ pub fn export_torrent_file(
 }
 
 #[tauri::command]
-pub fn get_engine_status(engine: State<SharedEngine>) -> Result<EngineStatus, String> {
+pub async fn get_engine_status(engine: State<'_, SharedEngine>) -> Result<EngineStatus, String> {
     Ok(engine.engine_status())
 }
 
 #[tauri::command]
-pub fn trigger_kill_switch_command(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn trigger_kill_switch_command(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.trigger_kill_switch()
 }
 
 #[tauri::command]
-pub fn reset_kill_switch_command(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn reset_kill_switch_command(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.reset_kill_switch()
 }
 

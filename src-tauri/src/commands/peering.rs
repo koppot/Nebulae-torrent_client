@@ -28,9 +28,9 @@ pub fn save_peering_settings(
 use crate::engine::SharedEngine;
 
 #[tauri::command]
-pub fn get_peer_telemetry(
+pub async fn get_peer_telemetry(
     torrent_id: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<Vec<PeerTelemetry>, String> {
     engine.get_peer_telemetry(&torrent_id)
 }
