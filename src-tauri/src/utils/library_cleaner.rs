@@ -419,27 +419,40 @@ impl LibraryCleaner {
 
         if let Some(video) = target_video {
             if let Ok(()) = fs::create_dir_all(&thumb_dir) {
-                let mut cmd = create_hidden_command("ffmpeg");
-                cmd.args([
-                    "-ss",
-                    "00:00:30",
-                    "-i",
-                    &video.to_string_lossy(),
-                    "-vframes",
-                    "1",
-                    "-q:v",
-                    "2",
-                    "-y",
-                    &cached_thumb.to_string_lossy(),
-                ]);
+                // DVD ISOs lead with the menu title (often a black loop) —
+                // 30s in is exactly the black frame the owner complained
+                // about. Seek into the FEATURE instead, and retry deeper
+                // positions while the frame is near-black (a black 720x480
+                // JPEG compresses to ~2KB; real content ~10x that).
+                let seeks = ["00:05:00", "00:12:00", "00:20:00", "00:00:30"];
+                for (idx, ss) in seeks.iter().enumerate() {
+                    let mut cmd = create_hidden_command("ffmpeg");
+                    cmd.args([
+                        "-ss",
+                        ss,
+                        "-i",
+                        &video.to_string_lossy(),
+                        "-vframes",
+                        "1",
+                        "-q:v",
+                        "2",
+                        "-y",
+                        &cached_thumb.to_string_lossy(),
+                    ]);
 
-                if let Ok(output) = cmd.output() {
-                    if output.status.success() && cached_thumb.exists() {
-                        return ThumbnailResult {
-                            thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
-                            is_disc_artwork: false,
-                            source: "video_frame".to_string(),
-                        };
+                    if let Ok(output) = cmd.output() {
+                        if output.status.success() && cached_thumb.exists() {
+                            let size = fs::metadata(&cached_thumb)
+                                .map(|m| m.len())
+                                .unwrap_or(0);
+                            if size > 15_000 || idx == seeks.len() - 1 {
+                                return ThumbnailResult {
+                                    thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
+                                    is_disc_artwork: false,
+                                    source: "video_frame".to_string(),
+                                };
+                            }
+                        }
                     }
                 }
             }
