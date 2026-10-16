@@ -407,44 +407,12 @@ impl LibraryCleaner {
             };
         }
 
-        // 3. Attempt video frame extraction via ffmpeg if installed
+        // 3. Attempt video frame extraction via ffmpeg if installed.
+        // The source is the file itself (single-file torrent) or the largest
+        // video inside the release folder (a folder torrent whose video list
+        // is the ISO set). ISO handling is unified below.
         let target_video = if media_path.is_file() {
-            let ext = media_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            #[cfg(target_os = "macos")]
-            {
-                if ext == "iso" || ext == "img" {
-                    // The generic demuxer cannot seek a raw ISO — every -ss
-                    // re-decodes frame 0, which is the black DVD-menu loop
-                    // (three identical 2.2KB black frames at 5/12 min proved
-                    // it). Mount the image read-only and extract from the
-                    // largest VOB/video inside instead.
-                    match Self::mount_disc_image_for_extraction(media_path) {
-                        Some((mount_point, video)) => {
-                            let result =
-                                Self::extract_frame(&video, &thumb_dir, &cached_thumb);
-                            let _ = create_hidden_command("hdiutil")
-                                .args(["detach", "-quiet", &mount_point.to_string_lossy()])
-                                .output();
-                            if let Some(r) = result {
-                                return r;
-                            }
-                            None // extraction failed: skip the raw-image attempt
-                        }
-                        None => Some(media_path.to_path_buf()), // raw attempt
-                    }
-                } else {
-                    Some(media_path.to_path_buf())
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = ext;
-                Some(media_path.to_path_buf())
-            }
+            Some(media_path.to_path_buf())
         } else if media_path.is_dir() {
             // Find largest video file in directory
             find_largest_video_file(media_path)
@@ -453,6 +421,38 @@ impl LibraryCleaner {
         };
 
         if let Some(video) = target_video {
+            let ext = video
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            #[cfg(target_os = "macos")]
+            if ext == "iso" || ext == "img" {
+                // The generic demuxer cannot seek a raw ISO — every -ss
+                // re-decodes frame 0, which is the black DVD-menu loop
+                // (three identical 2.2KB black frames at 5/12 min proved
+                // it). Mount the image read-only and extract from the
+                // largest VOB/video inside instead.
+                if let Some((mount_point, inner_video)) =
+                    Self::mount_disc_image_for_extraction(&video)
+                {
+                    let result = Self::extract_frame(&inner_video, &thumb_dir, &cached_thumb);
+                    let _ = create_hidden_command("hdiutil")
+                        .args(["detach", "-quiet", &mount_point.to_string_lossy()])
+                        .output();
+                    if let Some(r) = result {
+                        return r;
+                    }
+                    return ThumbnailResult {
+                        thumbnail_path: None,
+                        is_disc_artwork: false,
+                        source: "none".to_string(),
+                    };
+                }
+                // Mount failed: try the raw image below.
+            }
+
             if let Some(result) = Self::extract_frame(&video, &thumb_dir, &cached_thumb) {
                 return result;
             }
