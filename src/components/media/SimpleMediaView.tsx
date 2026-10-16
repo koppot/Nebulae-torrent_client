@@ -291,7 +291,6 @@ export const SimpleMediaView: React.FC = () => {
     const discInfo = discMetaMap[currentItem.id];
     const progressPct = Math.round(currentItem.progress * 100);
     const isDownloading = currentItem.status === 'Downloading';
-    const canResumePlayback = rememberedIdx >= 0 || lastPlayedDiscs[group.id] === currentItem.id;
     // Cover priority: structure-detected scan, then the WebP poster cache,
     // then any remote poster URL the engine recorded.
     const coverImage =
@@ -335,19 +334,31 @@ export const SimpleMediaView: React.FC = () => {
                 <span>Disc</span>
               </button>
 
-              {isDownloading || !canResumePlayback ? (
+              {isDownloading ? (
                 <button
-                  onClick={() => (isDownloading ? pauseTorrent(currentItem.id) : resumeTorrent(currentItem.id))}
+                  onClick={() => pauseTorrent(currentItem.id)}
                   className="p-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark transition"
-                  title={isDownloading ? 'Pause' : 'Resume'}
+                  title="Pause"
                 >
-                  {isDownloading ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+                  <Pause className="w-4 h-4" />
                 </button>
               ) : (
                 <button
-                  onClick={() => handlePlayDisc(currentItem, true, group.id)}
+                  onClick={() => {
+                    // A last-played disc exists → re-open it; otherwise this
+                    // is a plain transport resume of the paused download.
+                    if (lastPlayedDiscs[group.id]) {
+                      handlePlayDisc(currentItem, true, group.id);
+                    } else {
+                      resumeTorrent(currentItem.id);
+                    }
+                  }}
                   className="px-3 py-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark text-xs font-semibold flex items-center gap-1.5 transition"
-                  title={`Resume from the last disc you played: ${currentItem.name}`}
+                  title={
+                    lastPlayedDiscs[group.id]
+                      ? `Resume from the last disc you played: ${currentItem.name}`
+                      : 'Resume download / seeding'
+                  }
                 >
                   <Play className="w-4 h-4 fill-white" />
                   <span>Resume</span>
