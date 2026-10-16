@@ -261,7 +261,10 @@ pub fn run() {
             // Diagnostics for the reported white-screen-on-launch: log the
             // URL the main window was actually pointed at.
             if let Some(w) = app.get_webview_window("main") {
-                let url = w.url().map(|u| u.to_string()).unwrap_or_else(|e| format!("url error: {e}"));
+                let url = w
+                    .url()
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|e| format!("url error: {e}"));
                 eprintln!("[diag] main window url = {url}");
                 println!("[diag] main window url = {url}");
             }

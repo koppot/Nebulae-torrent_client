@@ -18,10 +18,12 @@ pub async fn fetch_adc_poster_map() -> Result<HashMap<String, String>, String> {
     .map_err(|e| format!("join: {e}"))?
 }
 
-/// Download an ADC poster image to the local cache and return the file
-/// path. Needed because `/poster/{id}` is hotlink-protected (Referer
-/// check): an <img> tag from the webview would be rejected, while an
-/// authenticated backend GET works. Local files also survive offline.
+/// Download an ADC poster image into the app's hidden cache directory and
+/// return the file path (owner directive: posters live in the app cache,
+/// NOT next to the media). Needed because `/poster/{id}` is hotlink-
+/// protected (Referer check): an <img> tag from the webview would be
+/// rejected, while an authenticated backend GET works. Local files also
+/// survive offline.
 #[tauri::command]
 pub async fn download_adc_poster(url: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -52,21 +54,23 @@ pub async fn download_adc_poster(url: String) -> Result<String, String> {
             return Err("empty poster body".into());
         }
 
-        let cache_dir = crate::utils::paths::AppPaths::init()?
-            .cache_dir
-            .join("posters");
-        std::fs::create_dir_all(&cache_dir).map_err(|e| format!("mkdir: {e}"))?;
-        // Stable FNV-1a name from the URL so repeat resolutions dedupe.
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for b in url.as_bytes() {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
         let ext = if bytes.starts_with(&[0x89, b'P']) {
             "png"
         } else {
             "webp"
         };
+
+        // App's hidden cache directory (stable FNV-1a name from the URL so
+        // repeat resolutions dedupe to one file).
+        let cache_dir = crate::utils::paths::AppPaths::init()?
+            .cache_dir
+            .join("posters");
+        std::fs::create_dir_all(&cache_dir).map_err(|e| format!("mkdir: {e}"))?;
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for b in url.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
         let path = cache_dir.join(format!("{hash:016x}.{ext}"));
         std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
         Ok(path.display().to_string())

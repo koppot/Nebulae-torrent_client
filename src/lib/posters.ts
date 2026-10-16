@@ -51,8 +51,7 @@ function normalizeName(name: string): string {
 export function posterForTorrent(infoHash: string): string | null {
   const cache = loadCache();
   const stored = (cache.by_name as Record<string, string | undefined>)[infoHash];
-  if (!stored) return null;
-  return stored.startsWith('http') ? stored : convertFileSrc(stored);
+  return stored ?? null; // raw path or remote URL; caller converts for display
 }
 
 async function fetchAdcMap(): Promise<AdcPosterCache | null> {
@@ -118,7 +117,11 @@ export async function resolvePoster(
           } catch {
             /* ignore */
           }
-          return convertFileSrc(local);
+          // RAW local path — the renderer converts via convertFileSrc exactly
+          // once. Returning an asset:// URL here caused double conversion
+          // (asset://localhost/%2Fasset%3A%2F%2F...) and a 403 from the
+          // asset protocol scope (the reported blank posters).
+          return local;
         }
       } catch {
         /* fall back to the raw URL; the img may still load */
@@ -132,12 +135,18 @@ export async function resolvePoster(
     const res = await invoke<{ thumbnail_path?: string | null }>('get_media_thumbnail', {
       mediaPath: contentPath,
     });
-    if (res.thumbnail_path) return convertFileSrc(res.thumbnail_path);
+    if (res.thumbnail_path) return res.thumbnail_path;
   } catch {
     /* fall through to placeholder */
   }
 
   return null;
+}
+
+/** Convert a resolver result for display: remote URLs pass through, local
+ * filesystem paths go through the asset protocol exactly once. */
+export function toDisplaySrc(p: string): string {
+  return p.startsWith('http') ? p : convertFileSrc(p);
 }
 
 export function clearPosterCaches(): void {

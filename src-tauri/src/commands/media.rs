@@ -641,27 +641,38 @@ pub fn organize_completed_media(
 }
 
 #[tauri::command]
-pub fn get_media_thumbnail(
+pub async fn get_media_thumbnail(
     media_path: String,
 ) -> Result<crate::utils::library_cleaner::ThumbnailResult, String> {
-    let path = Path::new(&media_path);
-    if !path.exists() {
-        tracing::warn!("[thumbnail] media path does not exist: {media_path}");
-        return Err(format!("Media path does not exist: {media_path}"));
-    }
+    // Heavy work (disc-artwork scan, image decode, WebP encode, ffmpeg frame
+    // extraction) MUST stay off the main thread — a sync command here froze
+    // the whole app whenever the media grid requested several thumbnails at
+    // once (the reported hang leading to a forced quit).
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&media_path);
+        if !path.exists() {
+            tracing::warn!("[thumbnail] media path does not exist: {media_path}");
+            return Err(format!("Media path does not exist: {media_path}"));
+        }
 
-    let cache_dir = crate::utils::paths::AppPaths::init()
-        .map(|p| p.cache_dir)
-        .unwrap_or_else(|_| PathBuf::from("."));
+        let cache_dir = crate::utils::paths::AppPaths::init()
+            .map(|p| p.cache_dir)
+            .unwrap_or_else(|_| PathBuf::from("."));
 
-    let result =
-        crate::utils::library_cleaner::LibraryCleaner::get_or_create_thumbnail(path, &cache_dir);
-    if let Some(p) = &result.thumbnail_path {
-        tracing::info!("[thumbnail] {media_path} -> {p}");
-    } else {
-        tracing::warn!("[thumbnail] {media_path} -> no cover found (TMDB fallback should fire)");
-    }
-    Ok(result)
+        let result = crate::utils::library_cleaner::LibraryCleaner::get_or_create_thumbnail(
+            path, &cache_dir,
+        );
+        if let Some(p) = &result.thumbnail_path {
+            tracing::info!("[thumbnail] {media_path} -> {p}");
+        } else {
+            tracing::warn!(
+                "[thumbnail] {media_path} -> no cover found (TMDB fallback should fire)"
+            );
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))?
 }
 
 /// TMDB poster + metadata for a release (used when the local folder ships no
