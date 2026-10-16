@@ -111,11 +111,17 @@ pub fn fetch_poster(
 
     let api_key = match get_secret("tmdb:api_key") {
         Ok(k) if !k.is_empty() => k,
-        _ => {
+        empty_or_err => {
             // Distinguish this from a genuine no-match in the log: the owner
-            // needs to know whether credentials or the catalogue came up short.
+            // needs to know whether credentials or the catalogue came up
+            // short. Log the ACTUAL keychain error (ACL deny vs empty key)
+            // so the fix is deducible from the session log alone.
+            let detail = match empty_or_err {
+                Ok(_) => "key exists but is empty".to_string(),
+                Err(e) => e,
+            };
             tracing::warn!(
-                "[tmdb] no API key readable from the keychain — TMDB disabled for {title:?}"
+                "[tmdb] keychain read for tmdb:api_key failed: {detail} — TMDB disabled for {title:?}"
             );
             return Ok(None);
         }
