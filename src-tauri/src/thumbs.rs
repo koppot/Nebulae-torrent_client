@@ -39,12 +39,24 @@ impl std::error::Error for ThumbError {}
 
 /// Candidate basenames ranked best-first (a real poster beats a random scan).
 const PREFERRED_STEMS: &[&str] = &[
-    "poster", "cover", "front", "folder", "disc", "dvd", "art", "scan", "thumb", "screenshot",
+    "poster",
+    "cover",
+    "front",
+    "folder",
+    "disc",
+    "dvd",
+    "art",
+    "scan",
+    "thumb",
+    "screenshot",
 ];
 
 fn is_image(p: &Path) -> bool {
     matches!(
-        p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("jpg" | "jpeg" | "png" | "webp" | "bmp" | "tiff" | "tif")
     )
 }
@@ -63,8 +75,16 @@ fn list_images(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn score_candidate(p: &Path) -> i64 {
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
-    let stem = p.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let stem = p
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     // A preferred stem dominates; among equals, bigger files win (higher-res
     // scans); .png/.jpg get a small edge over exotic formats.
     let stem_rank = PREFERRED_STEMS
@@ -72,7 +92,11 @@ fn score_candidate(p: &Path) -> i64 {
         .position(|s| stem.contains(s))
         .map(|i| 1_000_000 - (i as i64) * 10_000)
         .unwrap_or(0);
-    let size_bonus = (fs::metadata(p).map(|m| m.len()).unwrap_or(0).min(50_000_000) / 1000) as i64;
+    let size_bonus = (fs::metadata(p)
+        .map(|m| m.len())
+        .unwrap_or(0)
+        .min(50_000_000)
+        / 1000) as i64;
     let ext_bonus = if name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png") {
         500
     } else {
@@ -136,8 +160,8 @@ pub fn ensure_thumbnail(app_cache_dir: &Path, torrent_path: &Path) -> Result<Pat
         return Ok(dest);
     }
 
-    let img =
-        image::open(&source).map_err(|e| ThumbError::Decode(format!("{}: {e}", source.display())))?;
+    let img = image::open(&source)
+        .map_err(|e| ThumbError::Decode(format!("{}: {e}", source.display())))?;
     let (w, _) = img.dimensions();
     let scaled = if w > THUMB_WIDTH {
         img.resize(THUMB_WIDTH, u32::MAX, image::imageops::FilterType::Triangle)

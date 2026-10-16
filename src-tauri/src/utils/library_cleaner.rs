@@ -468,7 +468,11 @@ impl LibraryCleaner {
     /// Shared frame extraction: seeks deep past the DVD menu and retries
     /// later positions while the frame is near-black (a black 720x480 JPEG
     /// compresses to ~2KB; real content ~10x that).
-    fn extract_frame(video: &Path, thumb_dir: &Path, cached_thumb: &Path) -> Option<ThumbnailResult> {
+    fn extract_frame(
+        video: &Path,
+        thumb_dir: &Path,
+        cached_thumb: &Path,
+    ) -> Option<ThumbnailResult> {
         if fs::create_dir_all(thumb_dir).is_err() {
             return None;
         }

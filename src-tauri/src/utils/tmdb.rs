@@ -15,7 +15,9 @@ const TMDB_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w342";
 
 pub fn has_api_key() -> bool {
-    get_secret("tmdb:api_key").map(|k| !k.is_empty()).unwrap_or(false)
+    get_secret("tmdb:api_key")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +94,9 @@ pub fn fetch_poster(
         _ => {
             // Distinguish this from a genuine no-match in the log: the owner
             // needs to know whether credentials or the catalogue came up short.
-            tracing::warn!("[tmdb] no API key readable from the keychain — TMDB disabled for {title:?}");
+            tracing::warn!(
+                "[tmdb] no API key readable from the keychain — TMDB disabled for {title:?}"
+            );
             return Ok(None);
         }
     };
@@ -133,7 +137,9 @@ pub fn fetch_poster(
     if !img_resp.status().is_success() {
         return Err(format!("TMDB image returned {}", img_resp.status()));
     }
-    let bytes = img_resp.bytes().map_err(|e| format!("TMDB image body: {e}"))?;
+    let bytes = img_resp
+        .bytes()
+        .map_err(|e| format!("TMDB image body: {e}"))?;
     let thumbs_dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
@@ -190,14 +196,15 @@ fn trakt_fallback(
         Ok(k) if !k.is_empty() => k,
         _ => {
             // Nothing anywhere: cache the miss so we don't re-search.
-            tracing::warn!("[tmdb] trakt: no client id in the keychain — fallback unavailable for {title:?}");
+            tracing::warn!(
+                "[tmdb] trakt: no client id in the keychain — fallback unavailable for {title:?}"
+            );
             let _ = db.set_setting(cache_key, "");
             return Ok(None);
         }
     };
 
-    let mut trakt_url =
-        url::Url::parse(&format!("{TRAKT_BASE}/search/movie,show")).unwrap();
+    let mut trakt_url = url::Url::parse(&format!("{TRAKT_BASE}/search/movie,show")).unwrap();
     trakt_url
         .query_pairs_mut()
         .append_pair("query", title)
@@ -214,7 +221,10 @@ fn trakt_fallback(
         return Ok(None);
     }
     let body: Vec<TraktSearchResult> = resp.json().map_err(|e| format!("Trakt parse: {e}"))?;
-    let Some(hit) = body.iter().find_map(|r| r.movie.as_ref().or(r.show.as_ref())) else {
+    let Some(hit) = body
+        .iter()
+        .find_map(|r| r.movie.as_ref().or(r.show.as_ref()))
+    else {
         let _ = db.set_setting(cache_key, "");
         return Ok(None);
     };
@@ -227,7 +237,9 @@ fn trakt_fallback(
     // Map the Trakt match back to TMDB for art.
     let api_key = get_secret("tmdb:api_key").unwrap_or_default();
     let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/movie/{tmdb_id}")).unwrap();
-    detail_url.query_pairs_mut().append_pair("api_key", &api_key);
+    detail_url
+        .query_pairs_mut()
+        .append_pair("api_key", &api_key);
     let detail: TmdbItem = client
         .get(detail_url)
         .send()
@@ -243,7 +255,9 @@ fn trakt_fallback(
         .get(format!("{TMDB_IMAGE}{poster}"))
         .send()
         .map_err(|e| format!("TMDB image: {e}"))?;
-    let bytes = img_resp.bytes().map_err(|e| format!("TMDB image body: {e}"))?;
+    let bytes = img_resp
+        .bytes()
+        .map_err(|e| format!("TMDB image body: {e}"))?;
     let thumbs_dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
@@ -251,7 +265,8 @@ fn trakt_fallback(
     std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
     let raw_path = thumbs_dir.join(format!("trakt-{}.jpg", hash_of(lookup_key)));
     std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
-    let webp_path = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).unwrap_or(raw_path.clone());
+    let webp_path =
+        crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).unwrap_or(raw_path.clone());
     let _ = std::fs::remove_file(&raw_path);
 
     let overview = detail.overview.clone().or_else(|| hit.overview.clone());
@@ -276,7 +291,10 @@ const TRAKT_BASE: &str = "https://api.trakt.tv";
 /// Returns the cached TMDB overview for a release (for the hover panel).
 pub fn cached_overview(db: &crate::db::Database, lookup_key: &str) -> Option<String> {
     let cache_key = format!("tmdb_poster:{}:overview", lookup_key.to_lowercase());
-    db.get_setting(&cache_key).ok().flatten().filter(|s| !s.is_empty())
+    db.get_setting(&cache_key)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]

@@ -46,9 +46,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let raw = win
-        .ns_window()
-        .map_err(|e| format!("no NSWindow: {e}"))?;
+    let raw = win.ns_window().map_err(|e| format!("no NSWindow: {e}"))?;
     unsafe {
         let ns_win: *mut NSWindow = raw as *mut NSWindow;
         if ns_win.is_null() {
@@ -110,10 +108,7 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
             None => return,
         };
         let content_height = superview.frame().size.height;
-        let rect = NSRect::new(
-            NSPoint::new(x, content_height - y - h),
-            NSSize::new(w, h),
-        );
+        let rect = NSRect::new(NSPoint::new(x, content_height - y - h), NSSize::new(w, h));
         (*view).setFrame(rect);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))

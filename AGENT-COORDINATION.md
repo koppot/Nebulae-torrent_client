@@ -1557,3 +1557,20 @@ faces show title ONLY (no bar), per the reference.
   displayed).
 - After the owner's server reboot: CI green for a74b0b8 chain; app
   relaunched; listener back on 41413 both stacks.
+
+## Session 2026-10-16 (cont. 4) — owner's card dimensions (660×800)
+
+Owner supplied three reference crops + explicit units: the card tile is
+660×800 design px = 330×400 CSS; poster height identical across shelves;
+poster width adjustable to available data but NEVER below 660 design px
+(330 CSS); the picture TRIMS (object-cover) to fill; the hover card keeps
+the poster frame visible (top-cropped ~230px) above the panel; shelves are
+HORIZONTAL SCROLL ROWS, not a wrapped grid.
+
+- Card: w-[330px] flex-shrink-0, poster aspect-[660/800] object-cover,
+  title 16px, downloading faces show % right-aligned (14px) above a
+  full-width 5px bar — exactly screenshot 1's structure.
+- Shelves: flex gap-6 overflow-x-auto rows (was a wrapped grid).
+- Hover portal: W=415 (≈1.26× card per the Foundation crop), poster frame
+  top-cropped 230px, panel type scaled up (title 20px, meta 15px, ADC
+  14px, Play/Details 16px pills), progress line 6px/14px.
