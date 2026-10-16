@@ -21,6 +21,7 @@ import {
   LayoutGrid,
   Film,
   Minimize2,
+  Maximize2,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -93,12 +94,7 @@ export const TitleBar: React.FC = () => {
   const handleMinimize = async () => {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      if (settings.minimize_to_tray) {
-        await win.hide();
-      } else {
-        await win.minimize();
-      }
+      await getCurrentWindow().minimize();
     } catch (e) {
       console.warn('Minimize not supported in web context', e);
     }
@@ -141,30 +137,38 @@ export const TitleBar: React.FC = () => {
       <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
         {/* macOS Native-Style Window Traffic Lights */}
         {platform === 'mac' && (
-          <div className="flex items-center gap-2 pr-2.5 pl-0.5 flex-shrink-0">
+          <div className="flex items-center pr-2.5 pl-0 flex-shrink-0">
+            {/* 24px hit areas around 12px dots — the dots alone were too
+                small to click reliably (owner: "buttons are not functional"). */}
             <button
               type="button"
               onClick={handleClose}
-              className="w-3 h-3 rounded-full bg-[#ff5f56] hover:brightness-90 flex items-center justify-center group transition"
-              title="Close"
+              className="w-6 h-6 flex items-center justify-center group transition"
+              title="Minimize to Dock"
             >
-              <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              <span className="w-3 h-3 rounded-full bg-[#ff5f56] group-hover:brightness-90 flex items-center justify-center transition">
+                <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              </span>
             </button>
             <button
               type="button"
               onClick={handleMinimize}
-              className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:brightness-90 flex items-center justify-center group transition"
+              className="w-6 h-6 flex items-center justify-center group transition"
               title="Minimize"
             >
-              <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              <span className="w-3 h-3 rounded-full bg-[#ffbd2e] group-hover:brightness-90 flex items-center justify-center transition">
+                <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              </span>
             </button>
             <button
               type="button"
               onClick={handleToggleMaximize}
-              className="w-3 h-3 rounded-full bg-[#27c93f] hover:brightness-90 flex items-center justify-center group transition"
+              className="w-6 h-6 flex items-center justify-center group transition"
               title="Zoom / Maximize"
             >
-              <Square className="w-1.5 h-1.5 text-black/60 opacity-0 group-hover:opacity-100" />
+              <span className="w-3 h-3 rounded-full bg-[#27c93f] group-hover:brightness-90 flex items-center justify-center transition">
+                <Square className="w-1.5 h-1.5 text-black/60 opacity-0 group-hover:opacity-100" />
+              </span>
             </button>
           </div>
         )}
@@ -334,16 +338,26 @@ export const TitleBar: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setViewMode('compact')}
+            onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
               viewMode === 'compact'
                 ? 'bg-[#e50914] text-white font-semibold shadow-xs'
                 : 'text-[#a3a3a3] hover:text-white'
             }`}
-            title="Compact Mini-Bar Mode"
+            title={
+              viewMode === 'compact'
+                ? 'Expand — Restore Full Manager View'
+                : 'Compact Mini-Bar Mode'
+            }
           >
-            <Minimize2 className="w-3 h-3" />
-            <span className="hidden xl:inline">Compact</span>
+            {viewMode === 'compact' ? (
+              <Maximize2 className="w-3 h-3" />
+            ) : (
+              <Minimize2 className="w-3 h-3" />
+            )}
+            <span className="hidden xl:inline">
+              {viewMode === 'compact' ? 'Expand' : 'Compact'}
+            </span>
           </button>
         </div>
 

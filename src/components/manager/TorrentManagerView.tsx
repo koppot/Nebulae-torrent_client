@@ -178,8 +178,6 @@ export const TorrentManagerView: React.FC = () => {
     renameTorrentFolder,
     setFilePriority,
     toggleSequential,
-    toggleFirstLast,
-    toggleSuperSeeding,
     setTorrentLimits,
   } = useTorrentStore();
 
@@ -268,7 +266,6 @@ export const TorrentManagerView: React.FC = () => {
     ulKib: 0,
     ratioLimit: -1,
   });
-  const [superSeedingNotice, setSuperSeedingNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeManagerTab === 'peers' && selectedId) {
@@ -613,19 +610,17 @@ export const TorrentManagerView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => openRenameFolderModal(node.path, node.name)}
-                    className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                    className="p-1.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center transition"
                     title={`Rename the folder "${node.name}"`}
                   >
                     <Edit2 className="w-3 h-3 text-[#e50914]" />
-                    <span>Rename Folder</span>
                   </button>
                 ) : (
                   <span
-                    className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                    className="p-1.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center cursor-not-allowed"
                     title="Nested folders cannot be renamed with the active engine"
                   >
                     <Edit2 className="w-3 h-3 text-[#525252]" />
-                    <span>Rename Folder</span>
                   </span>
                 )
               )}
@@ -698,19 +693,17 @@ export const TorrentManagerView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => node.file && openRenameFileModal(node.file.index, node.name)}
-                className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                className="p-1.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center transition"
                 title={`Rename file "${node.name}"`}
               >
                 <Edit2 className="w-3 h-3 text-[#e50914]" />
-                <span>Rename File</span>
               </button>
             ) : (
               <span
-                className="px-2 py-0.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center gap-1 text-[10px] cursor-not-allowed"
+                className="p-1.5 rounded bg-[#141414] border border-[#1f1f1f] text-[#525252] flex items-center cursor-not-allowed"
                 title="Individual files cannot be renamed with the active engine"
               >
                 <Edit2 className="w-3 h-3 text-[#525252]" />
-                <span>Rename File</span>
               </span>
             )
           )}
@@ -959,19 +952,6 @@ export const TorrentManagerView: React.FC = () => {
             {selectedTorrent ? (
               activeManagerTab === 'general' ? (
                 <div className="space-y-3">
-                  {superSeedingNotice && (
-                    <div className="flex items-center justify-between p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
-                      <span>{superSeedingNotice}</span>
-                      <button
-                        type="button"
-                        onClick={() => setSuperSeedingNotice(null)}
-                        className="p-1 hover:text-white"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
                     <div className="space-y-1">
                       <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Size</span>
@@ -1075,48 +1055,22 @@ export const TorrentManagerView: React.FC = () => {
                             Swarm Controls
                           </span>
                           <div className="flex flex-wrap items-center gap-1.5">
+                            {/* Sequential is the only swarm toggle Transmission's
+                                RPC actually supports; 1st/Last and Super-Seed
+                                were silent no-ops and are removed. */}
                             <button
                               type="button"
                               onClick={() => toggleSequential(selectedTorrent.id)}
-                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
+                              className={`p-1.5 rounded border transition ${
                                 selectedTorrent.sequential_download
                                   ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
                                   : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
                               }`}
-                              title="Sequential Downloading (Stream in order)"
-                            >
-                              Sequential: {selectedTorrent.sequential_download ? 'ON' : 'OFF'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleFirstLast(selectedTorrent.id)}
-                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
-                                selectedTorrent.first_last_piece_prio
-                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                              title={`Sequential Downloading (Stream in order) — ${
+                                selectedTorrent.sequential_download ? 'ON' : 'OFF'
                               }`}
-                              title="Prioritize first and last piece for container headers"
                             >
-                              1st/Last: {selectedTorrent.first_last_piece_prio ? 'ON' : 'OFF'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                toggleSuperSeeding(selectedTorrent.id);
-                                setSuperSeedingNotice(
-                                  'Super-Seeding (BEP 16) is not supported by Transmission daemon.'
-                                );
-                              }}
-                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition ${
-                                selectedTorrent.super_seeding
-                                  ? 'bg-pink-500/20 text-pink-400 border-pink-500/40'
-                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
-                              }`}
-                              title="Super-Seeding Mode (Initial Seeding / BEP 16)"
-                            >
-                              Super-Seed: {selectedTorrent.super_seeding ? 'ON' : 'OFF'}
+                              <Zap className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>

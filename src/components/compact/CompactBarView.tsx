@@ -21,6 +21,7 @@ export const CompactBarView: React.FC = () => {
   const totalDownSpeed = torrents.reduce((acc, t) => acc + (t.download_rate || 0), 0);
   const totalUpSpeed = torrents.reduce((acc, t) => acc + (t.upload_rate || 0), 0);
   const activeCount = torrents.filter((t) => t.status === 'Downloading' || t.status === 'Seeding').length;
+  const errorCount = torrents.filter((t) => t.status === 'Error').length;
 
   const handleMinimizeToTray = async () => {
     try {
@@ -60,6 +61,14 @@ export const CompactBarView: React.FC = () => {
             </div>
             <div className="text-slate-400 text-[11px]">
               <span>{activeCount} active transfers</span>
+              {errorCount > 0 && (
+                <span
+                  className="ml-2 px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/40 font-semibold"
+                  title="One or more transfers are in an error state — expand to Manager mode and inspect them"
+                >
+                  {errorCount} error{errorCount === 1 ? '' : 's'}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -130,7 +139,11 @@ export const CompactBarView: React.FC = () => {
                     <span className="font-semibold text-white truncate text-xs" title={t.name}>
                       {t.name}
                     </span>
-                    <span className="font-mono text-[10px] text-slate-400 px-1.5 py-0.5 rounded bg-adc-dark border border-adc-cardBorderDark shrink-0">
+                    <span
+                      className={`font-mono text-[10px] px-1.5 py-0.5 rounded bg-adc-dark border border-adc-cardBorderDark shrink-0 ${
+                        t.status === 'Error' ? 'text-red-400 border-red-500/40 bg-red-500/10' : ''
+                      }`}
+                    >
                       {t.status}
                     </span>
                   </div>
