@@ -1649,3 +1649,19 @@ correspond"). Remove the pink "DISCS" chip in the player bar.
   now falls back to /search/tv (+ /tv/{id} detail, episode_run_time),
   Trakt detail tries movie then tv. TV/OVA titles now resolve.
 - PlayerOverlay: DISCS chip removed (Layers icon import dropped).
+
+## Batch: player bar — chapter ticks, skip arrows, gray Menu
+
+Owner: chapters not as a menu but as TICKS on the play bar; single forward
+arrow = chapter switch, double = episode (title) switch; "Disc N" chip gets
+a border in its font color; "Disc Menu" renamed "Menu", pink -> the bar's
+gray.
+
+- Seek bar: even-interval chapter ticks (engine exposes the count, not
+  per-chapter offsets), 2px gray marks above the track.
+- Skip cluster around Play: ChevronLeft/-Right = chapter ±1,
+  ChevronsLeft/-Right = title ∓1 (episodes). Titles clamp >= 1 (0 is the
+  menu domain).
+- Chapters popup + List button removed with their state.
+- "Disc N" chip: border-[#a3a3a3] (same as its text); "Menu" button:
+  border-[#333333]/text-[#a3a3a3]/hover gray — no accent color.

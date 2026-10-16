@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  ChevronLeft,
+  ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Disc,
-  List,
   Pause,
   Play,
   RotateCcw,
@@ -65,7 +66,6 @@ export default function PlayerOverlay() {
   const [volume, setVolume] = useState(80);
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
-  const [showChapters, setShowChapters] = useState(false);
   const [showDiscs, setShowDiscs] = useState(false);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
   const lastSaveRef = useRef(0);
@@ -87,7 +87,6 @@ export default function PlayerOverlay() {
     if (!player.open) return;
     setEnded(false);
     setSeeking(null);
-    setShowChapters(false);
     setShowDiscs(false);
     setDiscChoices(null);
 
@@ -202,11 +201,6 @@ export default function PlayerOverlay() {
     invoke('player_set_volume', { volume: next ? 0 : volume }).catch(() => {});
   };
 
-  const chapters: number[] = [];
-  if (poll.chapter_count > 1) {
-    for (let i = 0; i < Math.min(poll.chapter_count, 80); i++) chapters.push(i);
-  }
-
   return (
     <div className="fixed inset-0 z-[100] bg-black flex flex-col select-none">
       {/* Video hole: the native overlay shows through this exact rect. */}
@@ -232,55 +226,6 @@ export default function PlayerOverlay() {
           bar grows, the video hole shrinks, and the ResizeObserver re-syncs
           the native view to the smaller rect. */}
       <div className="shrink-0 bg-[#111111] border-t border-[#262626]">
-        {/* Chapters row. */}
-        {showChapters && chapters.length > 0 && (
-          <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto">
-            <div className="flex items-center justify-between pb-2 border-b border-[#262626]">
-              <span className="text-[11px] font-semibold text-white flex items-center gap-1.5">
-                <List className="w-3.5 h-3.5 text-[#e50914]" />
-                Chapters — Title {poll.title}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => invoke('player_set_chapter', { chapter: Math.max(poll.chapter - 1, 0) }).catch(() => {})}
-                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                  title="Previous chapter"
-                >
-                  <ChevronsLeft className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => invoke('player_set_chapter', { chapter: Math.min(poll.chapter + 1, poll.chapter_count - 1) }).catch(() => {})}
-                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                  title="Next chapter"
-                >
-                  <ChevronsRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-            <div className="grid grid-cols-8 gap-1.5 pt-2">
-              {chapters.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    invoke('player_set_chapter', { chapter: c }).catch(() => {});
-                    setShowChapters(false);
-                  }}
-                  className={`text-[10px] font-mono py-1 rounded transition ${
-                    c === poll.chapter
-                      ? 'bg-[#e50914] text-white font-bold'
-                      : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
-                  }`}
-                >
-                  {c + 1}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Disc switcher row: every disc of the playing release, by number. */}
         {showDiscs && discChoices && discChoices.length > 1 && (
           <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto space-y-1">
@@ -306,13 +251,14 @@ export default function PlayerOverlay() {
           </div>
         )}
 
-        <div className="px-4 py-3 flex items-center gap-3">
-          {/* The current disc, by number (owner: "Disc 1", never a filename).
-              Clicking it opens the disc list (when there is more than one). */}
+        <div className="px-4 py-3 flex items-center gap-2.5">
+          {/* The current disc, by number (owner: "Disc 1", never a filename),
+              bordered in the same color as its text. Clicking it opens the
+              disc list (when there is more than one). */}
           <button
             type="button"
             onClick={() => setShowDiscs(!showDiscs)}
-            className="text-xs text-[#a3a3a3] font-medium truncate max-w-[280px] hover:text-white transition text-left"
+            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate max-w-[240px] border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
             title={
               discChoices && discChoices.length > 1
                 ? `${discLabel} — click to choose another disc`
@@ -322,32 +268,42 @@ export default function PlayerOverlay() {
             {discLabel}
           </button>
 
-          {/* Disc Menu: a real button — leaves the feature and re-opens the
-              interactive menu. Always available while a disc plays: dvdnav
-              builds report title_count 0, so the button must not depend on
-              it; the engine falls back to restarting the disc when
-              set_title(0) is ignored. */}
+          {/* Menu: leaves the feature and re-opens the disc's interactive
+              menu, in the same gray as the rest of the bar. Always available
+              while a disc plays: dvdnav builds report title_count 0, so the
+              button must not depend on it; the engine falls back to
+              restarting the disc when set_title(0) is ignored. */}
           {player.isDisc && (
             <button
               type="button"
               onClick={() => invoke('player_return_to_menu').catch(() => {})}
-              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-adc-accent/50 text-adc-accent hover:bg-adc-accent/10 transition"
+              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded-md border border-[#333333] text-[#a3a3a3] hover:bg-[#262626] hover:text-white transition"
               title="Return to the disc's interactive menu"
             >
-              Disc Menu
+              Menu
             </button>
           )}
 
+          {/* Skip controls: single arrows switch chapters, double arrows
+              switch episodes (DVD titles), owner directive. */}
           {poll.chapter_count > 1 && (
             <button
               type="button"
-              onClick={() => setShowChapters(!showChapters)}
-              className={`shrink-0 p-1.5 rounded transition ${
-                showChapters ? 'bg-[#262626] text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-              }`}
-              title={`Chapters (${poll.chapter_count})`}
+              onClick={() => invoke('player_set_chapter', { chapter: Math.max(poll.chapter - 1, 0) }).catch(() => {})}
+              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              title="Previous chapter"
             >
-              <List className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          )}
+          {(player.isDisc && (poll.title_count > 1 || poll.title > 1)) && (
+            <button
+              type="button"
+              onClick={() => invoke('player_set_title', { title: Math.max(poll.title - 1, 1) }).catch(() => {})}
+              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              title="Previous episode (title)"
+            >
+              <ChevronsLeft className="w-4 h-4" />
             </button>
           )}
 
@@ -360,21 +316,56 @@ export default function PlayerOverlay() {
           {poll.playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
         </button>
 
+          {(player.isDisc && (poll.title_count > 1 || poll.title > 0)) && (
+            <button
+              type="button"
+              onClick={() => invoke('player_set_title', { title: poll.title + 1 }).catch(() => {})}
+              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              title="Next episode (title)"
+            >
+              <ChevronsRight className="w-4 h-4" />
+            </button>
+          )}
+          {poll.chapter_count > 1 && (
+            <button
+              type="button"
+              onClick={() => invoke('player_set_chapter', { chapter: poll.chapter + 1 }).catch(() => {})}
+              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              title="Next chapter"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          )}
+
         <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
           {fmt(pos)}
         </span>
-        <input
-          type="range"
-          min={0}
-          max={dur || 1}
-          step={250}
-          value={Math.min(pos, dur || 1)}
-          onChange={(e) => setSeeking(Number(e.target.value))}
-          onMouseUp={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
-          onTouchEnd={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
-          className="flex-1 accent-[#e50914] h-1"
-          disabled={dur === 0}
-        />
+
+        {/* Seek bar with chapter ticks (owner: chapters as ticks, not a
+            menu). The engine exposes the chapter count but not per-chapter
+            offsets, so ticks sit at even intervals of the title length. */}
+        <div className="relative flex-1 flex items-center h-4">
+          {poll.chapter_count > 1 &&
+            Array.from({ length: poll.chapter_count - 1 }, (_, i) => (
+              <span
+                key={i}
+                className="absolute top-1/2 -translate-y-1/2 w-[2px] h-2.5 rounded bg-[#8c8c8c]/70 pointer-events-none"
+                style={{ left: `${((i + 1) / poll.chapter_count) * 100}%` }}
+              />
+            ))}
+          <input
+            type="range"
+            min={0}
+            max={dur || 1}
+            step={250}
+            value={Math.min(pos, dur || 1)}
+            onChange={(e) => setSeeking(Number(e.target.value))}
+            onMouseUp={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
+            className="relative w-full accent-[#e50914] h-1"
+            disabled={dur === 0}
+          />
+        </div>
         <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
           {fmt(dur)}
         </span>
