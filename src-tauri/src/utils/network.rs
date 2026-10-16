@@ -222,6 +222,49 @@ pub fn detect_tailscale() -> Option<(String, String)> {
         })
 }
 
+/// One-shot-per-process auto-heal for Tailscale sitting in the "Stopped"
+/// state at login (observed after the app's network-extension auto-update:
+/// the login auto-connect path is interrupted and nothing retries the
+/// connection). When the backend is Stopped — NOT NeedsLogin, which would
+/// open an interactive browser auth — issue a single `tailscale up`. The
+/// persisted wants-running flag then makes normal logins auto-connect.
+pub fn heal_stopped_tailscale() -> Option<String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static HEALED_THIS_SESSION: AtomicBool = AtomicBool::new(false);
+    if HEALED_THIS_SESSION.swap(true, Ordering::SeqCst) {
+        return None; // one attempt per process; never flap the VPN
+    }
+
+    let output = std::process::Command::new("tailscale")
+        .arg("status")
+        .arg("--json")
+        .output()
+        .ok()?;
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let backend = parsed
+        .get("BackendState")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if backend != "Stopped" {
+        return None; // Running / NeedsLogin / Starting — leave it alone
+    }
+
+    tracing::warn!("[tailscale] backend Stopped at startup — issuing one `tailscale up` auto-heal");
+    let up = std::process::Command::new("tailscale")
+        .arg("up")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    if up.success() {
+        Some("healed: tailscale up".to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

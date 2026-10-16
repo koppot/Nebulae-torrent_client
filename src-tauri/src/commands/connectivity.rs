@@ -350,24 +350,37 @@ pub struct TailscaleStatus {
 }
 
 #[tauri::command]
-pub fn get_tailscale_status() -> Result<TailscaleStatus, String> {
-    Ok(match crate::utils::network::detect_tailscale() {
-        Some((interface, tailnet_ip)) => {
-            let probe = crate::utils::network::probe_adc_over_tailnet();
-            TailscaleStatus {
-                connected: true,
-                interface: Some(interface),
-                tailnet_ip: Some(tailnet_ip),
-                adc_reachable: probe.as_ref().map(|(_, r)| *r),
-                adc_node: probe.map(|(n, _)| n),
+pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
+    // Process spawns (tailscale status --json, ADC TCP probe) must stay off
+    // the main thread.
+    tokio::task::spawn_blocking(|| {
+        if crate::utils::network::detect_tailscale().is_none() {
+            // Stopped at login (observed after network-extension updates):
+            // one bounded auto-heal attempt, then re-detect.
+            if let Some(heal) = crate::utils::network::heal_stopped_tailscale() {
+                tracing::info!("[tailscale] {heal}");
             }
         }
-        None => TailscaleStatus {
-            connected: false,
-            interface: None,
-            tailnet_ip: None,
-            adc_reachable: None,
-            adc_node: None,
-        },
+        Ok(match crate::utils::network::detect_tailscale() {
+            Some((interface, tailnet_ip)) => {
+                let probe = crate::utils::network::probe_adc_over_tailnet();
+                TailscaleStatus {
+                    connected: true,
+                    interface: Some(interface),
+                    tailnet_ip: Some(tailnet_ip),
+                    adc_reachable: probe.as_ref().map(|(_, r)| *r),
+                    adc_node: probe.map(|(n, _)| n),
+                }
+            }
+            None => TailscaleStatus {
+                connected: false,
+                interface: None,
+                tailnet_ip: None,
+                adc_reachable: None,
+                adc_node: None,
+            },
+        })
     })
+    .await
+    .map_err(|e| format!("join: {e}"))?
 }
