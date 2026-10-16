@@ -1542,3 +1542,18 @@ headers with 22px square chips / ~28px header-to-cards / ~64px section gap
 220px with 4:5 poster + panel below (14px title, 12px meta, Play filled +
 Details outlined-accent) + progress line under the panel. Ready-to-Watch
 faces show title ONLY (no bar), per the reference.
+
+## Session 2026-10-16 (cont. 3) — black poster fixed (ISO mount + VOB), keychain re-trust
+
+- ROOT CAUSE of the black card art: ffmpeg's generic demuxer cannot seek a
+  raw ISO — every -ss re-decoded frame 0 (three identical 2.2KB black JPEGs
+  at 5/12 min proved it). Fix (macOS): mount the ISO read-only via hdiutil
+  to a temp mountpoint, extract from the LARGEST VOB inside (seekable),
+  detach; deep-seek ladder 5/12/20 min with a >15KB non-black heuristic.
+  Verified on the owner's real disc: 55.9KB feature frame extracted.
+- KEYCHAIN: the repeated codesign re-signs broke the items' ACLs — the new
+  [tmdb] no-API-key warn exposed it; all four items re-granted with
+  -T /Applications/Nebulae.app -T /usr/bin/security (values never
+  displayed).
+- After the owner's server reboot: CI green for a74b0b8 chain; app
+  relaunched; listener back on 41413 both stacks.

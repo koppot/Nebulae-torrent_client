@@ -409,7 +409,42 @@ impl LibraryCleaner {
 
         // 3. Attempt video frame extraction via ffmpeg if installed
         let target_video = if media_path.is_file() {
-            Some(media_path.to_path_buf())
+            let ext = media_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            #[cfg(target_os = "macos")]
+            {
+                if ext == "iso" || ext == "img" {
+                    // The generic demuxer cannot seek a raw ISO — every -ss
+                    // re-decodes frame 0, which is the black DVD-menu loop
+                    // (three identical 2.2KB black frames at 5/12 min proved
+                    // it). Mount the image read-only and extract from the
+                    // largest VOB/video inside instead.
+                    match Self::mount_disc_image_for_extraction(media_path) {
+                        Some((mount_point, video)) => {
+                            let result =
+                                Self::extract_frame(&video, &thumb_dir, &cached_thumb);
+                            let _ = create_hidden_command("hdiutil")
+                                .args(["detach", "-quiet", &mount_point.to_string_lossy()])
+                                .output();
+                            if let Some(r) = result {
+                                return r;
+                            }
+                            None // extraction failed: skip the raw-image attempt
+                        }
+                        None => Some(media_path.to_path_buf()), // raw attempt
+                    }
+                } else {
+                    Some(media_path.to_path_buf())
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = ext;
+                Some(media_path.to_path_buf())
+            }
         } else if media_path.is_dir() {
             // Find largest video file in directory
             find_largest_video_file(media_path)
@@ -418,43 +453,8 @@ impl LibraryCleaner {
         };
 
         if let Some(video) = target_video {
-            if let Ok(()) = fs::create_dir_all(&thumb_dir) {
-                // DVD ISOs lead with the menu title (often a black loop) —
-                // 30s in is exactly the black frame the owner complained
-                // about. Seek into the FEATURE instead, and retry deeper
-                // positions while the frame is near-black (a black 720x480
-                // JPEG compresses to ~2KB; real content ~10x that).
-                let seeks = ["00:05:00", "00:12:00", "00:20:00", "00:00:30"];
-                for (idx, ss) in seeks.iter().enumerate() {
-                    let mut cmd = create_hidden_command("ffmpeg");
-                    cmd.args([
-                        "-ss",
-                        ss,
-                        "-i",
-                        &video.to_string_lossy(),
-                        "-vframes",
-                        "1",
-                        "-q:v",
-                        "2",
-                        "-y",
-                        &cached_thumb.to_string_lossy(),
-                    ]);
-
-                    if let Ok(output) = cmd.output() {
-                        if output.status.success() && cached_thumb.exists() {
-                            let size = fs::metadata(&cached_thumb)
-                                .map(|m| m.len())
-                                .unwrap_or(0);
-                            if size > 15_000 || idx == seeks.len() - 1 {
-                                return ThumbnailResult {
-                                    thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
-                                    is_disc_artwork: false,
-                                    source: "video_frame".to_string(),
-                                };
-                            }
-                        }
-                    }
-                }
+            if let Some(result) = Self::extract_frame(&video, &thumb_dir, &cached_thumb) {
+                return result;
             }
         }
 
@@ -463,6 +463,71 @@ impl LibraryCleaner {
             is_disc_artwork: false,
             source: "none".to_string(),
         }
+    }
+
+    /// Shared frame extraction: seeks deep past the DVD menu and retries
+    /// later positions while the frame is near-black (a black 720x480 JPEG
+    /// compresses to ~2KB; real content ~10x that).
+    fn extract_frame(video: &Path, thumb_dir: &Path, cached_thumb: &Path) -> Option<ThumbnailResult> {
+        if fs::create_dir_all(thumb_dir).is_err() {
+            return None;
+        }
+        let seeks = ["00:05:00", "00:12:00", "00:20:00", "00:00:30"];
+        for (idx, ss) in seeks.iter().enumerate() {
+            let mut cmd = create_hidden_command("ffmpeg");
+            cmd.args([
+                "-ss",
+                ss,
+                "-i",
+                &video.to_string_lossy(),
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
+                "-y",
+                &cached_thumb.to_string_lossy(),
+            ]);
+
+            if let Ok(output) = cmd.output() {
+                if output.status.success() && cached_thumb.exists() {
+                    let size = fs::metadata(cached_thumb).map(|m| m.len()).unwrap_or(0);
+                    if size > 15_000 || idx == seeks.len() - 1 {
+                        return Some(ThumbnailResult {
+                            thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
+                            is_disc_artwork: false,
+                            source: "video_frame".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Mount a disc image read-only (macOS hdiutil) and return the largest
+    /// video file inside together with the mount point (the caller MUST
+    /// detach the mount point after extracting).
+    #[cfg(target_os = "macos")]
+    fn mount_disc_image_for_extraction(image: &Path) -> Option<(PathBuf, PathBuf)> {
+        let mount_point =
+            std::env::temp_dir().join(format!("neb-iso-mount-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&mount_point);
+        let ok = create_hidden_command("hdiutil")
+            .args([
+                "attach",
+                "-readonly",
+                "-nobrowse",
+                "-mountpoint",
+                &mount_point.to_string_lossy(),
+                &image.to_string_lossy(),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return None;
+        }
+        Some((mount_point.clone(), find_largest_video_file(&mount_point)?))
     }
 }
 
