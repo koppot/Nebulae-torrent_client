@@ -12,6 +12,7 @@ use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem}
 use crate::db::{Database, TorrentDbMetadata};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::models::peering::{LocalityTier, PeerTelemetry};
+use crate::utils::keyring::{get_secret, passkey_secret_target};
 use crate::utils::network::{find_active_egress_vpn_interface, find_active_vpn_interface};
 use crate::utils::paths::AppPaths;
 
@@ -500,6 +501,24 @@ impl TransmissionRpcClient {
             "name": name
         });
         self.request("torrent-rename-path", Some(args))?;
+        Ok(())
+    }
+
+    /// Disconnect a specific peer from a specific torrent.
+    ///
+    /// Uses Transmission's `peer-remove` RPC method (TR 4.x+).
+    /// `torrent_id` is the numeric Transmission torrent id (not the info-hash).
+    /// `peer_address` is the peer's `"ip:port"` string as returned by `torrent-get peers[]`.
+    ///
+    /// If the daemon does not support `peer-remove` it returns an error string
+    /// beginning with "Transmission RPC call 'peer-remove' failed:" which the
+    /// caller can detect to skip future removal attempts.
+    pub fn peer_remove(&self, torrent_id: i64, peer_address: &str) -> Result<(), String> {
+        let args = json!({
+            "ids": [torrent_id],
+            "address": peer_address
+        });
+        self.request("peer-remove", Some(args))?;
         Ok(())
     }
 }
@@ -1104,6 +1123,28 @@ impl TransmissionTorrentEngine {
                     }
                 }
             });
+        }
+
+        // 9. Spawn tracker-enforcement poller (peer-remove for banned leechers).
+        //    The passkey lives in the OS keychain — the same credential that the
+        //    announce URL uses. If no account is linked yet, we skip silently.
+        {
+            match get_secret(&passkey_secret_target()) {
+                Ok(passkey) if !passkey.is_empty() => {
+                    crate::engine::enforcement::spawn(
+                        "https://asiandvdclub.org".to_string(),
+                        passkey,
+                        Arc::clone(&rpc_client),
+                    );
+                    info!("[enforcement] tracker enforcement poller spawned");
+                }
+                Ok(_) => {
+                    info!("[enforcement] passkey empty — enforcement poller not started (link your ADC account)");
+                }
+                Err(e) => {
+                    warn!("[enforcement] could not read passkey from keychain ({e}) — enforcement poller not started");
+                }
+            }
         }
 
         Ok(Self {
