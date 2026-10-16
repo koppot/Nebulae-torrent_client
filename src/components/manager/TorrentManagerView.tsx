@@ -6,7 +6,8 @@ import { useUiStore, ManagerTab } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
-import { TorrentFileItem } from '../../types';
+import { TorrentFileItem, TorrentItem } from '../../types';
+import PosterHoverPopup, { PosterPopupTarget } from './PosterHoverPopup';
 import {
   Play,
   Pause,
@@ -291,6 +292,41 @@ export const TorrentManagerView: React.FC = () => {
   });
 
   const [filesViewMode, setFilesViewMode] = useState<'tree' | 'flat'>('tree');
+
+  // Poster hover popup state (ADC torrents.php behavior): ~250 ms settle
+  // delay on the name cell, dismiss on leave. One shared card.
+  const [posterPopup, setPosterPopup] = useState<{
+    target: PosterPopupTarget;
+    x: number;
+    y: number;
+  } | null>(null);
+  const posterTimerRef = useRef<number | null>(null);
+  const openPosterPopup = (t: TorrentItem, e: React.MouseEvent) => {
+    const { clientX, clientY } = e;
+    if (posterTimerRef.current) window.clearTimeout(posterTimerRef.current);
+    posterTimerRef.current = window.setTimeout(() => {
+      setPosterPopup({
+        target: {
+          id: t.id,
+          name: t.name,
+          info_hash: t.info_hash,
+          save_path: t.save_path,
+          size_bytes: t.total_bytes,
+          progress: t.progress,
+          category: t.category,
+        },
+        x: clientX,
+        y: clientY,
+      });
+    }, 250);
+  };
+  const closePosterPopup = () => {
+    if (posterTimerRef.current) {
+      window.clearTimeout(posterTimerRef.current);
+      posterTimerRef.current = null;
+    }
+    setPosterPopup(null);
+  };
   const [fileFilter, setFileFilter] = useState('');
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
 
@@ -802,6 +838,11 @@ export const TorrentManagerView: React.FC = () => {
 
   return (
     <div className="flex-1 flex overflow-hidden font-sans select-none bg-[#141414] text-white">
+      <PosterHoverPopup
+        target={posterPopup?.target ?? null}
+        x={posterPopup?.x ?? 0}
+        y={posterPopup?.y ?? 0}
+      />
       {/* 1. Left Sidebar: Categories & Filters */}
       <aside className="w-48 bg-[#141414] border-r border-[#262626] flex flex-col p-2 space-y-4 text-xs">
         <div>
@@ -990,7 +1031,12 @@ export const TorrentManagerView: React.FC = () => {
                     }`}
                   >
                     <td className={`py-2 px-3 font-sans font-medium truncate max-w-xs ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
-                      {t.name}
+                      <span
+                        onMouseEnter={(e) => openPosterPopup(t, e)}
+                        onMouseLeave={closePosterPopup}
+                      >
+                        {t.name}
+                      </span>
                     </td>
                     <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
                     <td className="py-2 px-2.5">

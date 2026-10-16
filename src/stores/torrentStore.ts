@@ -9,9 +9,10 @@ import { invoke } from '@tauri-apps/api/core';
 // ~2s decaying average of counter deltas). librqbit's raw per-second rates
 // swing between burst and 0 on small swarms, so raw display flickers.
 // Nebulae therefore computes a decaying average of COUNTER DELTAS over a
-// ~5s time constant and settles honestly to zero when the counters stop
-// moving. Per-tick raw rates are never passed through.
-const SPEED_WINDOW_SECONDS = 5.0;
+// ~15s time constant (owner-requested: the 5s window still fluctuated
+// widely on small swarms) and settles honestly to zero when the counters
+// stop moving. Per-tick raw rates are never passed through.
+const SPEED_WINDOW_SECONDS = 15.0;
 const SPEED_IDLE_SNAP_TICKS = 10; // ~5s at 500ms telemetry before snapping to exact 0
 interface SpeedCounterState {
   lastDownBytes: number | null;

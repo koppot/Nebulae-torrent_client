@@ -14,10 +14,22 @@ use crate::utils::keyring::get_secret;
 const TMDB_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w342";
 
+/// Owner directive: TMDB works for ALL downloads out of the box — the user
+/// never needs to obtain their own key. The bundled key is the app's own
+/// account key; a keychain override (tmdb:api_key) still wins when present.
+const BUNDLED_TMDB_API_KEY: &str = "ec0fadf7fe0d8dcf71b7a1d4d8b6d941";
+
+/// Resolve the effective TMDB key: keychain override first, bundled key
+/// as the always-available fallback.
+fn effective_api_key() -> Option<String> {
+    match get_secret("tmdb:api_key") {
+        Ok(k) if !k.is_empty() => Some(k),
+        _ => Some(BUNDLED_TMDB_API_KEY.to_string()),
+    }
+}
+
 pub fn has_api_key() -> bool {
-    get_secret("tmdb:api_key")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false)
+    effective_api_key().is_some()
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,20 +121,12 @@ pub fn fetch_poster(
         }
     }
 
-    let api_key = match get_secret("tmdb:api_key") {
-        Ok(k) if !k.is_empty() => k,
-        empty_or_err => {
-            // Distinguish this from a genuine no-match in the log: the owner
-            // needs to know whether credentials or the catalogue came up
-            // short. Log the ACTUAL keychain error (ACL deny vs empty key)
-            // so the fix is deducible from the session log alone.
-            let detail = match empty_or_err {
-                Ok(_) => "key exists but is empty".to_string(),
-                Err(e) => e,
-            };
-            tracing::warn!(
-                "[tmdb] keychain read for tmdb:api_key failed: {detail} — TMDB disabled for {title:?}"
-            );
+    let api_key = match effective_api_key() {
+        Some(k) => k,
+        None => {
+            // effective_api_key() currently always returns Some (bundled
+            // fallback), so this branch is defensive only.
+            tracing::warn!("[tmdb] no TMDB key available — TMDB disabled for {title:?}");
             return Ok(None);
         }
     };
@@ -303,7 +307,7 @@ fn trakt_fallback(
 
     // Map the Trakt match back to TMDB for art. Trakt matched movie OR show;
     // try the movie detail first, then the TV detail (same TMDB id space).
-    let api_key = get_secret("tmdb:api_key").unwrap_or_default();
+    let api_key = effective_api_key().unwrap_or_default();
     let fetch_detail = |kind: &str| -> Result<Option<TmdbItem>, String> {
         let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{tmdb_id}")).unwrap();
         detail_url
