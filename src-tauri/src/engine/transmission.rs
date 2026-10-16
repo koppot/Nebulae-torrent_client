@@ -742,6 +742,83 @@ pub fn run_librqbit_migration(
     let _ = db.set_setting("transmission_migration_completed", "true");
 }
 
+/// Owner directive: try different peer ports until one is found externally
+/// reachable. Each candidate is applied live (`session-set` "peer-port", the
+/// daemon rebinds) and tested with Transmission's own external port test.
+/// The first reachable port wins and is persisted; if none is reachable the
+/// configured port is kept and the log records the honest verdict — this
+/// router refuses programmatic mappings (NAT-PMP/PCP), so a manual forward
+/// in the router UI remains the only path to connectability.
+fn negotiate_reachable_port(
+    rpc: &TransmissionRpcClient,
+    db: &Arc<Database>,
+    engine_dir: &Path,
+    configured: u16,
+) {
+    let mut candidates: Vec<u16> = vec![configured];
+    for delta in [1u32, 2, 3, 5, 11] {
+        if let Ok(p) = u16::try_from(configured as u32 + delta) {
+            candidates.push(p);
+        }
+    }
+
+    for (i, &port) in candidates.iter().enumerate() {
+        if i > 0 {
+            if let Err(e) = rpc.session_set(json!({ "peer-port": port })) {
+                warn!("[port] candidate {port}: session-set failed: {e}");
+                continue;
+            }
+            // Give the daemon a moment to rebind before testing.
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        match rpc.port_test() {
+            Ok(true) => {
+                info!("[port] negotiated: peer port {port} is externally reachable");
+                persist_negotiated_port(db, engine_dir, port);
+                return;
+            }
+            Ok(false) => info!("[port] candidate {port}: externally closed"),
+            Err(e) => warn!("[port] candidate {port}: test failed: {e}"),
+        }
+    }
+
+    warn!(
+        "[port] none of the tried ports ({}) is externally reachable; keeping {configured}. \
+         The router refuses programmatic mappings (NAT-PMP/PCP) — a manual port forward is required.",
+        candidates
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
+/// Persist the negotiated port everywhere the port is read: the stored user
+/// settings (status bar, connectivity doctor, next spawn) and the daemon's
+/// own settings.json (so a restart rebinds the same port even if the DB
+/// write fails).
+fn persist_negotiated_port(db: &Arc<Database>, engine_dir: &Path, port: u16) {
+    if let Ok(Some(raw)) = db.get_setting("user_settings_json") {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if v.get("listening_port").and_then(|p| p.as_u64()) != Some(port as u64) {
+                v["listening_port"] = json!(port);
+                if let Ok(s) = serde_json::to_string(&v) {
+                    if let Err(e) = db.set_setting("user_settings_json", &s) {
+                        warn!("[port] failed to persist negotiated port: {e}");
+                    }
+                }
+            }
+        }
+    }
+    let sp = engine_dir.join("settings.json");
+    if let Ok(raw) = std::fs::read_to_string(&sp) {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            v["peer-port"] = json!(port);
+            let _ = std::fs::write(&sp, serde_json::to_string_pretty(&v).unwrap_or_default());
+        }
+    }
+}
+
 impl TransmissionTorrentEngine {
     pub fn new(
         paths: Arc<AppPaths>,
@@ -886,6 +963,21 @@ impl TransmissionTorrentEngine {
 
         // 7b. Execute one-time migration from librqbit if needed
         run_librqbit_migration(&rpc_client, &paths.engine_dir, &db);
+
+        // 7c. Owner directive: try different peer ports until one is found
+        // externally reachable. Runs on a background thread (each external
+        // port test takes seconds); the winning port is persisted so the
+        // status bar, connectivity doctor and the next spawn all use it.
+        {
+            let rpc = Arc::clone(&rpc_client);
+            let db = Arc::clone(&db);
+            let engine_dir_neg = engine_dir.clone();
+            let configured = settings.listening_port;
+            let _ = std::thread::Builder::new()
+                .name("port-negotiator".into())
+                .spawn(move || negotiate_reachable_port(&rpc, &db, &engine_dir_neg, configured))
+                .map_err(|e| warn!("[port] negotiator thread failed to spawn: {e}"));
+        }
 
         let cached_meta = db.list_all_torrent_metadata().unwrap_or_default();
 

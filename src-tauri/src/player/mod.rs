@@ -54,4 +54,9 @@ pub struct PlayerState {
     pub media_player: Mutex<usize>,
     /// Set once playback starts; lets `player_poll` report "ended" exactly once.
     pub started: Mutex<bool>,
+    /// What the owner asked to play (may be a folder) — kept so "return to
+    /// disc menu" can restart playback fresh when dvdnav ignores set_title.
+    pub current_path: Mutex<Option<String>>,
+    /// The resolved playback target (ISO/VIDEO_TS root) of the session.
+    pub current_resolved: Mutex<Option<String>>,
 }

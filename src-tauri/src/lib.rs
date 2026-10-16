@@ -509,6 +509,7 @@ pub fn run() {
             commands::media::player_poll,
             commands::media::player_set_title,
             commands::media::player_set_chapter,
+            commands::media::player_return_to_menu,
             commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,

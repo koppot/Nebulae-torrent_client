@@ -219,15 +219,12 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
 /// Discs start at their root menu; plain files and disc-less folders play
 /// the main feature. There is no external-player fallback: if the overlay
 /// cannot be created, playback fails with an error.
-#[tauri::command]
-pub fn player_open(
-    app: tauri::AppHandle,
-    state: tauri::State<PlayerState>,
-    file_path: String,
+fn start_playback(
+    app: &tauri::AppHandle,
+    state: &PlayerState,
+    file_path: &str,
 ) -> Result<ResolvedPlayback, String> {
-    tracing::info!("player_open: entry, path='{file_path}'");
-    stop_session(&app, &state);
-    let resolved = match resolve_playback(&file_path) {
+    let resolved = match resolve_playback(file_path) {
         Ok(r) => {
             tracing::info!(
                 "player_open: resolved '{}' (disc: {}, external: {})",
@@ -243,10 +240,10 @@ pub fn player_open(
         }
     };
 
-    match player::ensure_overlay(&app) {
+    match player::ensure_overlay(app) {
         Ok(view) => {
             tracing::info!("player_open: overlay ready (view ptr {view:#x})");
-            let lib = match loaded_lib(&state) {
+            let lib = match loaded_lib(state) {
                 Ok(l) => l,
                 Err(e) => {
                     tracing::error!("player_open: libvlc load failed: {e}");
@@ -256,7 +253,7 @@ pub fn player_open(
             // The overlay is created hidden; make it visible BEFORE the vout
             // attaches, or the video renders into a hidden view (a dead
             // black rectangle that receives no clicks).
-            if let Err(e) = player::set_overlay_hidden(&app, false) {
+            if let Err(e) = player::set_overlay_hidden(app, false) {
                 tracing::error!("player_open: overlay unhide failed: {e}");
                 return Err(e);
             }
@@ -286,6 +283,60 @@ pub fn player_open(
             ))
         }
     }
+}
+
+#[tauri::command]
+pub fn player_open(
+    app: tauri::AppHandle,
+    state: tauri::State<PlayerState>,
+    file_path: String,
+) -> Result<ResolvedPlayback, String> {
+    tracing::info!("player_open: entry, path='{file_path}'");
+    stop_session(&app, &state);
+    *poison(&state.current_path) = Some(file_path.clone());
+    let resolved = start_playback(&app, &state, &file_path)?;
+    *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
+    Ok(resolved)
+}
+
+/// Return DVD/BD playback to its interactive menu.
+///
+/// `set_title(0)` is the textbook way to jump to the dvdnav menu domain, but
+/// some dvdnav builds ignore it mid-title. When the title number does not
+/// change after a grace period we simply restart the disc fresh — a freshly
+/// opened DVD always presents its menu.
+#[tauri::command]
+pub fn player_return_to_menu(
+    app: tauri::AppHandle,
+    state: tauri::State<PlayerState>,
+) -> Result<(), String> {
+    tracing::info!("[player] return_to_menu: requested");
+    let mp = *poison(&state.media_player);
+    let lib = loaded_lib(&state)?;
+    if mp != 0 {
+        unsafe {
+            (lib.libvlc_media_player_set_title)(mp as *mut std::ffi::c_void, 0);
+        }
+        tracing::info!("[player] return_to_menu: set_title(0) sent");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let at_menu = mp != 0
+        && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0;
+    if at_menu {
+        tracing::info!("[player] return_to_menu: now at menu title");
+        return Ok(());
+    }
+    // dvdnav ignored us — restart the disc; a fresh open always shows the menu.
+    let path = poison(&state.current_path)
+        .clone()
+        .unwrap_or_default();
+    if path.is_empty() {
+        tracing::warn!("[player] return_to_menu: no current path to restart");
+        return Err("no current media to restart".into());
+    }
+    tracing::info!("[player] return_to_menu: set_title ineffective — restarting '{path}'");
+    stop_session(&app, &state);
+    start_playback(&app, &state, &path).map(|_| ())
 }
 
 #[tauri::command]

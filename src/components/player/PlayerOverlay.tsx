@@ -67,6 +67,7 @@ export default function PlayerOverlay() {
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
   const [showChapters, setShowChapters] = useState(false);
+  const [showDiscs, setShowDiscs] = useState(false);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
   const lastSaveRef = useRef(0);
 
@@ -88,6 +89,7 @@ export default function PlayerOverlay() {
     setEnded(false);
     setSeeking(null);
     setShowChapters(false);
+    setShowDiscs(false);
     setDiscChoices(null);
 
     const apply = (p: Poll) => {
@@ -127,36 +129,51 @@ export default function PlayerOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player.open]);
 
+  // Disc set of the playing release: names the current disc ("Disc 1") in
+  // the control bar and feeds the switcher popup. Refetched when the resolved
+  // path changes (after a disc switch) so the label follows the playback.
+  useEffect(() => {
+    if (!player.open || !player.isDisc) {
+      setDiscChoices(null);
+      return;
+    }
+    let alive = true;
+    const dir = player.resolvedPath.split('/').slice(0, -1).join('/');
+    invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dir })
+      .then((set) => {
+        if (!alive) return;
+        setDiscChoices(
+          set.map((d, idx) => ({
+            label: `Disc ${d.disc_number || idx + 1}`,
+            detail: `${d.play_target.split('/').pop() || d.play_target} · ${formatBytes(d.total_bytes)}`,
+            path: d.play_target,
+          })),
+        );
+      })
+      .catch(() => {
+        if (alive) setDiscChoices(null);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.open, player.isDisc, player.resolvedPath]);
+
   if (!player.open) return null;
 
   const dur = poll.length_ms;
   const pos = seeking ?? poll.time_ms;
-  const isDiscNav = player.isDisc && poll.title_count > 0;
-  const atMenu = isDiscNav && poll.title === 0;
-  const dirName = player.resolvedPath.split('/').slice(0, -1).join('/');
 
-  // All discs of the playing release (multi-ISO torrents): the title button
-  // opens this list so any disc can be jumped to from inside the player.
-  const openDiscChoices = async () => {
-    if (discChoices) {
-      setDiscChoices(null);
-      return;
-    }
-    try {
-      const set = await invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dirName });
-      const choices = set.map((d, idx) => ({
-        label: `Disc ${d.disc_number || idx + 1}`,
-        detail: `${(d.play_target.split('/').pop() || d.play_target)} · ${formatBytes(d.total_bytes)}`,
-        path: d.play_target,
-      }));
-      setDiscChoices(choices.length > 0 ? choices : null);
-    } catch {
-      setDiscChoices(null);
-    }
-  };
+  // The current disc by number (owner: "Disc 1", never a filename). Matched
+  // against the resolved playback target; resolve_playback may hand back the
+  // disc FOLDER while play_target is the ISO inside it, so match either way.
+  const currentDisc = discChoices?.find(
+    (d) => d.path.startsWith(player.resolvedPath) || player.resolvedPath.startsWith(d.path),
+  );
+  const discLabel = player.isDisc ? currentDisc?.label || 'Disc 1' : player.title;
 
   const switchDisc = async (path: string) => {
-    setDiscChoices(null);
+    setShowDiscs(false);
     try {
       await openInPlayer(path);
     } catch {
@@ -187,7 +204,7 @@ export default function PlayerOverlay() {
   };
 
   const chapters: number[] = [];
-  if (isDiscNav && poll.chapter_count > 1) {
+  if (poll.chapter_count > 1) {
     for (let i = 0; i < Math.min(poll.chapter_count, 80); i++) chapters.push(i);
   }
 
@@ -209,128 +226,137 @@ export default function PlayerOverlay() {
         </div>
       )}
 
-      {/* Chapters popover: every chapter of the current disc title. */}
-      {showChapters && chapters.length > 0 && (
-        <div className="absolute bottom-16 right-4 z-[110] w-72 max-h-80 overflow-y-auto rounded-lg bg-[#181818] border border-[#262626] shadow-2xl p-3">
-          <div className="flex items-center justify-between pb-2 border-b border-[#262626]">
-            <span className="text-[11px] font-semibold text-white flex items-center gap-1.5">
-              <List className="w-3.5 h-3.5 text-[#e50914]" />
-              Chapters — Title {poll.title}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => invoke('player_set_chapter', { chapter: Math.max(poll.chapter - 1, 0) }).catch(() => {})}
-                className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                title="Previous chapter"
-              >
-                <ChevronsLeft className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => invoke('player_set_chapter', { chapter: Math.min(poll.chapter + 1, poll.chapter_count - 1) }).catch(() => {})}
-                className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                title="Next chapter"
-              >
-                <ChevronsRight className="w-3.5 h-3.5" />
-              </button>
+      {/* Nebulae control bar. Popups render INSIDE the bar, as a row above
+          the buttons: the native video overlay covers the whole webview area
+          above this bar, so absolutely-positioned popovers there render
+          BEHIND the video (invisible, unclickable). When a popup opens the
+          bar grows, the video hole shrinks, and the ResizeObserver re-syncs
+          the native view to the smaller rect. */}
+      <div className="shrink-0 bg-[#111111] border-t border-[#262626]">
+        {/* Chapters row. */}
+        {showChapters && chapters.length > 0 && (
+          <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-[#262626]">
+              <span className="text-[11px] font-semibold text-white flex items-center gap-1.5">
+                <List className="w-3.5 h-3.5 text-[#e50914]" />
+                Chapters — Title {poll.title}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => invoke('player_set_chapter', { chapter: Math.max(poll.chapter - 1, 0) }).catch(() => {})}
+                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                  title="Previous chapter"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => invoke('player_set_chapter', { chapter: Math.min(poll.chapter + 1, poll.chapter_count - 1) }).catch(() => {})}
+                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                  title="Next chapter"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-8 gap-1.5 pt-2">
+              {chapters.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    invoke('player_set_chapter', { chapter: c }).catch(() => {});
+                    setShowChapters(false);
+                  }}
+                  className={`text-[10px] font-mono py-1 rounded transition ${
+                    c === poll.chapter
+                      ? 'bg-[#e50914] text-white font-bold'
+                      : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
+                  }`}
+                >
+                  {c + 1}
+                </button>
+              ))}
             </div>
           </div>
-          <div className="grid grid-cols-5 gap-1.5 pt-2">
-            {chapters.map((c) => (
+        )}
+
+        {/* Disc switcher row: every disc of the playing release, by number. */}
+        {showDiscs && discChoices && discChoices.length > 1 && (
+          <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto space-y-1">
+            <span className="text-[11px] font-semibold text-white flex items-center gap-1.5 pb-1 border-b border-[#262626]">
+              <Disc className="w-3.5 h-3.5 text-[#e50914]" />
+              Select disc
+            </span>
+            {discChoices.map((d) => (
               <button
-                key={c}
+                key={d.path}
                 type="button"
-                onClick={() => {
-                  invoke('player_set_chapter', { chapter: c }).catch(() => {});
-                  setShowChapters(false);
-                }}
-                className={`text-[10px] font-mono py-1 rounded transition ${
-                  c === poll.chapter
-                    ? 'bg-[#e50914] text-white font-bold'
-                    : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
+                onClick={() => switchDisc(d.path)}
+                className={`w-full text-left px-2 py-1.5 rounded transition ${
+                  d === currentDisc
+                    ? 'bg-[#e50914]/15 text-white'
+                    : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
                 }`}
               >
-                {c + 1}
+                <span className="text-[12px] font-semibold">{d.label}</span>
+                <span className="block text-[9px] font-mono text-[#737373]">{d.detail}</span>
               </button>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Disc switcher popup: every disc of the playing release. */}
-      {discChoices && (
-        <div className="absolute bottom-16 left-4 z-[110] w-72 rounded-lg bg-[#181818] border border-[#262626] shadow-2xl p-3 space-y-1">
-          <span className="text-[11px] font-semibold text-white flex items-center gap-1.5 pb-1 border-b border-[#262626]">
-            <Disc className="w-3.5 h-3.5 text-[#e50914]" />
-            Select disc
-          </span>
-          {discChoices.map((d) => (
+        <div className="px-4 py-3 flex items-center gap-3">
+          {/* The current disc, by number (owner: "Disc 1", never a filename).
+              Clicking it opens the disc list (when there is more than one). */}
+          <button
+            type="button"
+            onClick={() => setShowDiscs(!showDiscs)}
+            className="text-xs text-[#a3a3a3] font-medium truncate max-w-[280px] hover:text-white transition text-left"
+            title={
+              discChoices && discChoices.length > 1
+                ? `${discLabel} — click to choose another disc`
+                : discLabel
+            }
+          >
+            {discLabel}
+            {discChoices && discChoices.length > 1 && (
+              <span className="ml-2 text-[10px] uppercase tracking-wider text-adc-accent inline-flex items-center gap-1">
+                <Layers className="w-3 h-3" />
+                Discs
+              </span>
+            )}
+          </button>
+
+          {/* Disc Menu: a real button — leaves the feature and re-opens the
+              interactive menu. Always available while a disc plays: dvdnav
+              builds report title_count 0, so the button must not depend on
+              it; the engine falls back to restarting the disc when
+              set_title(0) is ignored. */}
+          {player.isDisc && (
             <button
-              key={d.path}
               type="button"
-              onClick={() => switchDisc(d.path)}
-              className={`w-full text-left px-2 py-1.5 rounded transition ${
-                player.resolvedPath === d.path
-                  ? 'bg-[#e50914]/15 text-white'
-                  : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-              }`}
+              onClick={() => invoke('player_return_to_menu').catch(() => {})}
+              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-adc-accent/50 text-adc-accent hover:bg-adc-accent/10 transition"
+              title="Return to the disc's interactive menu"
             >
-              <span className="text-[11px] font-semibold">{d.label}</span>
-              <span className="block text-[9px] font-mono text-[#737373]">{d.detail}</span>
+              Disc Menu
             </button>
-          ))}
-        </div>
-      )}
-
-      {/* Nebulae control bar */}
-      <div className="shrink-0 px-4 py-3 bg-[#111111] border-t border-[#262626] flex items-center gap-3">
-        {/* Title doubles as the disc switcher for multi-disc releases. */}
-        <button
-          type="button"
-          onClick={openDiscChoices}
-          className="text-xs text-[#a3a3a3] font-medium truncate max-w-[280px] hover:text-white transition text-left"
-          title={`${player.title} — click to choose another disc`}
-        >
-          {player.title}
-          {player.isDisc && !atMenu && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-adc-accent inline-flex items-center gap-1">
-              <Layers className="w-3 h-3" />
-              Discs
-            </span>
           )}
-        </button>
 
-        {/* Disc Menu: a real button — leaves the feature and re-opens the
-            interactive menu (title 0 is the dvdnav menu domain). */}
-        {isDiscNav && (
-          <button
-            type="button"
-            onClick={() => invoke('player_set_title', { title: 0 }).catch(() => {})}
-            disabled={atMenu}
-            className={`shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded border transition ${
-              atMenu
-                ? 'border-[#333333] text-[#737373]'
-                : 'border-adc-accent/50 text-adc-accent hover:bg-adc-accent/10'
-            }`}
-            title="Return to the disc's interactive menu"
-          >
-            Disc Menu
-          </button>
-        )}
-
-        {isDiscNav && poll.chapter_count > 1 && (
-          <button
-            type="button"
-            onClick={() => setShowChapters(!showChapters)}
-            className={`shrink-0 p-1.5 rounded transition ${
-              showChapters ? 'bg-[#262626] text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-            }`}
-            title={`Chapters (${poll.chapter_count})`}
-          >
-            <List className="w-4 h-4" />
-          </button>
-        )}
+          {poll.chapter_count > 1 && (
+            <button
+              type="button"
+              onClick={() => setShowChapters(!showChapters)}
+              className={`shrink-0 p-1.5 rounded transition ${
+                showChapters ? 'bg-[#262626] text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+              }`}
+              title={`Chapters (${poll.chapter_count})`}
+            >
+              <List className="w-4 h-4" />
+            </button>
+          )}
 
         <button
           type="button"
@@ -389,6 +415,7 @@ export default function PlayerOverlay() {
         >
           <X className="w-4 h-4" />
         </button>
+        </div>
       </div>
     </div>
   );

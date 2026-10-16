@@ -1574,3 +1574,36 @@ HORIZONTAL SCROLL ROWS, not a wrapped grid.
 - Hover portal: W=415 (≈1.26× card per the Foundation crop), poster frame
   top-cropped 230px, panel type scaled up (title 20px, meta 15px, ADC
   14px, Play/Details 16px pills), progress line 6px/14px.
+
+## Batch: player controls + port negotiator (owner reports)
+
+Owner: disc switcher shows "Disc 1" (numbered only), popup lists Disc 1/2/…,
+Disc Menu + chapters buttons dead; AND "try different ports until one is open";
+AND "660 by 800 represents proportions, not the size" — cards follow the
+reference page proportions (~176px wide), poster keeps the 660:800 aspect.
+
+- ROOT CAUSE (switcher + popups): the native video overlay covers the ENTIRE
+  webview area above the control bar; absolutely-positioned popovers
+  (bottom-16) rendered BEHIND the video — the log PROVED the title button
+  fired (detect_disc_set at 12:35:58/12:38:21) while nothing appeared.
+  Disc Menu/Chapters never rendered: gated on title_count>0, and dvdnav
+  reports 0.
+- Popups now render INSIDE the control bar (rows above the buttons); the
+  bar grows, the video hole shrinks, the ResizeObserver re-syncs the native
+  view.
+- Title = "Disc N" (matched from the disc set vs resolvedPath in either
+  direction; resolve returns the FOLDER, play_target is the ISO inside).
+  Popup lists "Disc N" only. Chapters gated on chapter_count>1 only.
+- Disc Menu → new `player_return_to_menu`: set_title(0) → 1.2s grace →
+  if the title didn't change, restart the disc fresh (dvdnav ignores
+  set_title on some builds; a fresh open always shows the menu).
+  PlayerState now carries current_path/current_resolved; player_open
+  refactored into start_playback().
+- Cards rescaled to reference proportions: w-[176px], aspect-[660/800],
+  title 14px, % 12px, bar 4px; hover portal W=248, poster 148px, title
+  16/meta 12/ADC 12, buttons 13px. (660:800 kept as the aspect.)
+- Port negotiator (owner directive): background thread tries the configured
+  peer port then +1/+2/+3/+5/+11, applying each live via session-set and
+  testing with Transmission's external port-test; first reachable port is
+  persisted (user_settings_json + daemon settings.json). If none opens, the
+  log states the router-refuses-mappings verdict (manual forward required).

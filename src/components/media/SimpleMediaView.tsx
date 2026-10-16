@@ -118,16 +118,17 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => {
-      // Reference units: hover card ≈ 830/660 ≈ 1.26× the 330px card.
-      const W = 415;
-      const POSTER_H = 230; // the poster frame stays visible, top-cropped
+      // 660:800 is the aspect, not the size (owner): grid cards ≈176px wide,
+      // hover card ≈ 1.4× that, same 660/800-derived poster crop on top.
+      const W = 248;
+      const POSTER_H = 148; // the poster frame stays visible, top-cropped
       const left = Math.max(
         8,
         Math.min(r.left + r.width / 2 - W / 2, window.innerWidth - W - 8),
       );
       // Attach below the poster like the reference; flip up when it would
       // leave the viewport (bottom shelf).
-      const est = POSTER_H + 400;
+      const est = POSTER_H + 320;
       const top =
         r.top + est > window.innerHeight - 8
           ? Math.max(8, window.innerHeight - est - 8)
@@ -535,7 +536,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
       <>
         {/* The poster frame STAYS on the hover card (owner: "frame still
             there") — top-cropped like the reference mock. */}
-        <div className="h-[230px] w-full bg-[#141414] relative overflow-hidden">
+        <div className="h-[148px] w-full bg-[#141414] relative overflow-hidden">
           {posterArt}
           <div className="absolute top-2 left-2">
             <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
@@ -551,21 +552,21 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           )}
         </div>
 
-        <div className="p-5 space-y-2.5">
-          <p className="text-[20px] font-semibold text-white leading-tight" title={group.clean_title}>
+        <div className="p-4 space-y-2">
+          <p className="text-[16px] font-semibold text-white leading-tight" title={group.clean_title}>
             {group.clean_title}
           </p>
-          <div className="text-[15px] font-mono text-[#a3a3a3]">
+          <div className="text-[12px] font-mono text-[#a3a3a3]">
             {group.year ? `${group.year} · ` : ''}
             {discCount} {discCount === 1 ? 'disc' : 'discs'}
             {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
           </div>
-          {adcLine && <div className="text-[14px] font-mono text-[#737373]">{adcLine}</div>}
+          {adcLine && <div className="text-[12px] font-mono text-[#737373]">{adcLine}</div>}
 
           {/* Visible folder: the release's own folder, click to open. */}
           <button
             onClick={() => handleRevealRelease(currentItem)}
-            className="w-full flex items-center gap-2 text-left text-[13px] font-mono text-[#a3a3a3] hover:text-white transition"
+            className="w-full flex items-center gap-2 text-left text-[11px] font-mono text-[#a3a3a3] hover:text-white transition"
             title={`Open ${folderOf(currentItem)}`}
           >
             <FolderOpen className="w-3.5 h-3.5 flex-shrink-0" />
@@ -574,7 +575,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
           {tmdbMap[group.id]?.overview && (
             <p
-              className="text-[14px] text-[#a3a3a3] leading-snug line-clamp-4"
+              className="text-[12px] text-[#a3a3a3] leading-snug line-clamp-3"
               title={tmdbMap[group.id].overview}
             >
               {tmdbMap[group.id].overview}
@@ -589,7 +590,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                   key={d.key}
                   onClick={() => setSelectedDiscs((prev) => ({ ...prev, [group.id]: idx }))}
                   title={d.title}
-                  className={`text-[13px] font-mono px-2.5 py-1 rounded-full transition ${
+                  className={`text-[11px] font-mono px-2 py-0.5 rounded-full transition ${
                     idx === effIdx
                       ? 'bg-[#e50914] text-white font-bold'
                       : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
@@ -607,7 +608,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 closeHover();
                 handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
               }}
-              className="px-6 py-2.5 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[16px] flex items-center gap-2 transition"
+              className="px-4 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[13px] flex items-center gap-1.5 transition"
               title="Play Interactive Disc Menus (dvdnav/BD-J)"
             >
               <Play className="w-4 h-4 fill-white" />
@@ -622,7 +623,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                   closeHover();
                   handleResumeDisc(group.id, resumePath);
                 }}
-                className="px-5 py-2.5 rounded-lg border border-[#333333] text-white text-[16px] font-semibold flex items-center gap-2 hover:bg-[#262626] transition"
+                className="px-4 py-1.5 rounded-md border border-[#333333] text-white text-[13px] font-semibold flex items-center gap-1.5 hover:bg-[#262626] transition"
                 title={`Resume the disc you played last: ${resumePath.split('/').pop()}`}
               >
                 <Play className="w-4 h-4 fill-current" />
@@ -645,7 +646,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 closeHover();
                 openDetails(currentItem.id);
               }}
-              className="px-6 py-2.5 rounded-lg border border-[#e50914]/50 text-[#e50914] text-[16px] font-medium hover:bg-[#e50914]/10 hover:text-white transition"
+              className="px-4 py-1.5 rounded-md border border-[#e50914]/50 text-[#e50914] text-[13px] font-medium hover:bg-[#e50914]/10 hover:text-white transition"
               title="Open this release in Nebulae Manager"
             >
               Details
@@ -668,8 +669,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         </div>
 
         {/* Progress line under the panel, like the reference's 79% line */}
-        <div className="px-5 pb-4 flex items-center gap-2.5">
-          <div className="h-[6px] flex-1 rounded-full bg-[#333333] overflow-hidden">
+        <div className="px-4 pb-4 flex items-center gap-2">
+          <div className="h-[5px] flex-1 rounded-full bg-[#333333] overflow-hidden">
             <div
               className={`h-full transition-all duration-300 ${
                 currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
@@ -677,7 +678,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
               style={{ width: `${progressPct}%` }}
             />
           </div>
-          <span className="text-[14px] font-mono text-[#a3a3a3]">{progressPct}%</span>
+          <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
         </div>
       </>
     );
@@ -689,10 +690,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         onMouseLeave={() => {
           if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
         }}
-        className="group relative rounded-lg cursor-pointer w-[330px] flex-shrink-0"
+        className="group relative rounded-lg cursor-pointer w-[176px] flex-shrink-0"
       >
-        {/* Reference card: 660×800 design px = 330×400 CSS. Bare poster
-            (660/800 aspect, picture crops to fill), title below, and on
+        {/* 660:800 is the aspect (owner: "proportions, not the size"):
+            ~176px-wide cards, picture crops to fill, title below, and on
             downloading rows: % right-aligned above a full-width thin bar.
             The elevation lives in the hover portal. */}
         <div className="rounded-lg overflow-hidden">
@@ -701,16 +702,16 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           </div>
 
           {/* Below the tile: title, % right, full-width bar (downloading) */}
-          <div className="pt-2.5">
-            <h4 className="text-[16px] font-medium text-white truncate leading-tight" title={group.clean_title}>
+          <div className="pt-2">
+            <h4 className="text-[14px] font-medium text-white truncate leading-tight" title={group.clean_title}>
               {group.clean_title}
             </h4>
             {variant === 'active' && (
               <>
                 <div className="flex justify-end mt-1">
-                  <span className="text-[14px] font-mono text-[#a3a3a3]">{progressPct}%</span>
+                  <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
                 </div>
-                <div className="h-[5px] w-full rounded-full bg-[#333333] overflow-hidden mt-1">
+                <div className="h-[4px] w-full rounded-full bg-[#333333] overflow-hidden mt-1">
                   <div
                     className={`h-full transition-all duration-300 ${
                       currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
