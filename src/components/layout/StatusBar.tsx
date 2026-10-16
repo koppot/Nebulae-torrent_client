@@ -65,6 +65,33 @@ export const StatusBar: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Primary LAN interface IP, for the Connected tooltip (owner request:
+  // hovering "Connected" shows the current IP address). Re-resolved on the
+  // same 60 s cadence as the disk stat; interfaces rarely change faster.
+  const [localIp, setLocalIp] = useState<{ ip: string; iface: string } | null>(null);
+  useEffect(() => {
+    const resolve = () =>
+      invoke<Array<{ name: string; ip_addresses: string[]; is_vpn: boolean }>>(
+        'get_network_interfaces'
+      )
+        .then((list) => {
+          const candidate = list.find(
+            (i) =>
+              !i.is_vpn &&
+              !i.name.startsWith('lo') &&
+              i.ip_addresses.some((ip) => ip.includes('.'))
+          );
+          if (candidate) {
+            const ip = candidate.ip_addresses.find((p) => p.includes('.')) || '';
+            setLocalIp({ ip, iface: candidate.name });
+          }
+        })
+        .catch(() => {});
+    resolve();
+    const timer = setInterval(resolve, 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     const poll = () => invoke<VolumeSpace>('get_volume_disk_space').then(setDisk).catch(() => {});
     poll();
@@ -93,17 +120,21 @@ export const StatusBar: React.FC = () => {
       (t.peers > 0 || t.trackers?.some((tr) => tr.status === 'Working') || (t.seeds ?? 0) > 0)
   );
   const connected = isPortOpen || swarmActive;
-  const connectionBasis = isPortOpen
-    ? 'Inbound port verified reachable'
-    : swarmActive
-      ? 'Swarm activity live (port not re-verified yet — runs the doctor every 10 min)'
-      : 'No port verification and no swarm activity';
 
   return (
     <footer className="h-6 bg-[#141414] border-t border-[#262626] flex items-center justify-between px-3 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
       {/* Left: Connectivity, Port, Tailscale, VPN */}
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5" title={connectionBasis}>
+        <div
+          className="flex items-center gap-1.5"
+          title={
+            connected
+              ? localIp
+                ? `Connected — IP ${localIp.ip} (${localIp.iface})`
+                : 'Connected'
+              : 'Disconnected'
+          }
+        >
           <span
             className={`w-2 h-2 rounded-full transition-colors ${
               connected
@@ -146,8 +177,8 @@ export const StatusBar: React.FC = () => {
           title={
             tailscale?.connected
               ? tailscale.adc_reachable === false
-                ? `Tailscale is active on ${tailscale.interface}, but the ADC server is not reachable through it — traffic is on the default connection`
-                : `Tailscale is active on ${tailscale.interface}`
+                ? 'ADC host offline'
+                : `Tailscale connected — IP ${tailscale.tailnet_ip ?? ''}`
               : 'Tailscale is not connected'
           }
         >
@@ -161,6 +192,9 @@ export const StatusBar: React.FC = () => {
             }`}
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>Tailscale</span>
+          {tailscale?.connected && tailscale.adc_reachable === false && (
+            <span className="text-amber-500">· ADC host offline</span>
+          )}
         </div>
 
         <span className="text-[#333333]">|</span>
