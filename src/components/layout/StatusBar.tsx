@@ -114,8 +114,25 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#333333]">|</span>
 
-        <span title="Inbound Listening Port">
-          Port: {port} <span className="text-white">[{portState}]</span>
+        <span
+          title={`Inbound Listening Port ${port} — ${
+            reportFresh
+              ? portState === 'Open'
+                ? 'verified reachable'
+                : 'verified closed'
+              : 'not verified yet (doctor runs every 10 min)'
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full inline-block mr-1.5 ${
+              !reportFresh
+                ? 'bg-[#333333]'
+                : portState === 'Open'
+                  ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                  : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          Port: {port}
         </span>
 
         <span className="text-[#333333]">|</span>

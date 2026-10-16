@@ -6,3 +6,4 @@ pub mod media_parser;
 pub mod network;
 pub mod paths;
 pub mod process;
+pub mod tmdb;

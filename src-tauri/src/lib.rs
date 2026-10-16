@@ -513,6 +513,8 @@ pub fn run() {
             commands::media::clean_cache_files,
             commands::media::organize_completed_media,
             commands::media::get_media_thumbnail,
+            commands::media::fetch_tmdb_release,
+            commands::media::tmdb_configured,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
             commands::tracker::link_adc_account,

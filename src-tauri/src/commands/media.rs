@@ -526,6 +526,32 @@ pub fn get_media_thumbnail(
     Ok(crate::utils::library_cleaner::LibraryCleaner::get_or_create_thumbnail(path, &cache_dir))
 }
 
+/// TMDB poster + metadata for a release (used when the local folder ships no
+/// cover scan). Credentials come from the OS keychain; results are cached in
+/// the DB per title+year. Returns None silently when no match / no key.
+#[tauri::command]
+pub fn fetch_tmdb_release(
+    app: tauri::AppHandle,
+    title: String,
+    year: Option<i32>,
+) -> Result<Option<crate::utils::tmdb::TmdbMatch>, String> {
+    use tauri::Manager;
+    let db_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Data dir: {e}"))?
+        .join("internal/db/nebulae.db");
+    let db =
+        crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
+    crate::utils::tmdb::fetch_poster(&db, &title, &title, year)
+}
+
+/// Whether TMDB integration is configured (Settings pane indicator).
+#[tauri::command]
+pub fn tmdb_configured() -> bool {
+    crate::utils::tmdb::has_api_key()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

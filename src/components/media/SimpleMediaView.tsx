@@ -1,29 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
-import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
+import { formatBytes, formatSpeed, formatEta } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import {
   TorrentItem,
   DiscStructureInfo,
-  CacheCleanupReport,
   OrganizeMediaReport,
   ThumbnailResult,
+  ParsedMediaMetadata,
 } from '../../types';
+
+/** Shape of the Rust TmdbMatch (serde-serialized). */
+interface FetchTmdbResult {
+  poster_webp: string;
+  overview: string | null;
+  year: number | null;
+}
 import {
   Play,
   Pause,
   Plus,
   FolderOpen,
   ArrowDownCircle,
-  CheckCircle2,
   Disc,
-  Trash2,
   Eraser,
   Layers,
   FolderArchive,
   X,
-  Sparkles,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { openInPlayer } from '../../lib/playerStore';
@@ -45,6 +49,7 @@ export const SimpleMediaView: React.FC = () => {
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
   const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
+  const [tmdbMap, setTmdbMap] = useState<Record<string, { poster?: string; overview?: string }>>({});
   const [selectedDiscs, setSelectedDiscs] = useState<Record<string, number>>({});
   const [groupBoxsets, setGroupBoxsets] = useState<boolean>(true);
 
@@ -68,12 +73,6 @@ export const SimpleMediaView: React.FC = () => {
       return next;
     });
   };
-
-  // Modals state
-  const [showCleanerModal, setShowCleanerModal] = useState<boolean>(false);
-  const [cleanerDays, setCleanerDays] = useState<number>(30);
-  const [cleaningReport, setCleaningReport] = useState<CacheCleanupReport | null>(null);
-  const [isCleaning, setIsCleaning] = useState<boolean>(false);
 
   const [organizeTargetItem, setOrganizeTargetItem] = useState<TorrentItem | null>(null);
   const [organizeDestPath, setOrganizeDestPath] = useState<string>('');
@@ -117,9 +116,36 @@ export const SimpleMediaView: React.FC = () => {
       (t.is_media || t.category === 'Movies') &&
       (t.progress > 0.05 || t.status === 'Seeding' || t.status === 'Completed')
   );
-  const completedSeeding = torrents.filter(
-    (t) => t.status === 'Seeding' || t.status === 'Completed'
-  );
+
+  // TMDB fallback art + synopsis: fetched once per release that has no
+  // local cover at all (structure scan and WebP cache both empty). The
+  // command parses the title via the engine's parser, then caches its match
+  // in the DB, so this fires once per release ever.
+  useEffect(() => {
+    const shelves = [...activeDownloads, ...readyToWatch];
+    shelves.forEach((t) => {
+      if (t.id in tmdbMap) return;
+      const hasLocalCover =
+        discMetaMap[t.id]?.cover_image || (thumbMap[t.id] ?? null) !== null;
+      if (hasLocalCover) return;
+      invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: t.name })
+        .then((parsed) =>
+          invoke<FetchTmdbResult>('fetch_tmdb_release', {
+            title: parsed.clean_title,
+            year: parsed.year ?? undefined,
+          }),
+        )
+        .then((res) => {
+          setTmdbMap((prev) => ({
+            ...prev,
+            [t.id]: res
+              ? { poster: res.poster_webp, overview: res.overview ?? undefined }
+              : {},
+          }));
+        })
+        .catch(() => setTmdbMap((prev) => ({ ...prev, [t.id]: {} })));
+    });
+  }, [activeDownloads, readyToWatch, discMetaMap, thumbMap, tmdbMap]);
 
   const handlePlayDisc = async (torrent: TorrentItem, preferMenu: boolean = true, groupId?: string) => {
     void preferMenu; // the embedded engine always starts discs at their menu
@@ -153,21 +179,6 @@ export const SimpleMediaView: React.FC = () => {
       await openInPlayer(folder);
     } catch (err: unknown) {
       setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
-    }
-  };
-
-  const handleCleanCache = async (dryRun: boolean = false) => {
-    setIsCleaning(true);
-    try {
-      const rep = await invoke<CacheCleanupReport>('clean_cache_files', {
-        olderThanDays: cleanerDays,
-        dryRun,
-      });
-      setCleaningReport(rep);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsCleaning(false);
     }
   };
 
@@ -237,52 +248,6 @@ export const SimpleMediaView: React.FC = () => {
     });
   };
 
-  const getDiscBadge = (disc?: DiscStructureInfo | null) => {
-    if (!disc) return null;
-    let label = 'OPTICAL DISC';
-    let color = 'bg-adc-cardBorderDark text-slate-300';
-
-    switch (disc.layer_spec) {
-      case 'Dvd5':
-        label = 'DVD-5';
-        color = 'bg-amber-950/80 border-amber-600/40 text-amber-300';
-        break;
-      case 'Dvd9':
-        label = 'DVD-9';
-        color = 'bg-amber-900/80 border-amber-500/50 text-amber-200';
-        break;
-      case 'Bd25':
-        label = 'BD-25';
-        color = 'bg-cyan-950/80 border-cyan-500/40 text-cyan-300';
-        break;
-      case 'Bd50':
-        label = 'BD-50';
-        color = 'bg-blue-950/80 border-blue-500/50 text-blue-300';
-        break;
-      case 'UhdBd66':
-        label = '4K UHD BD-66';
-        color = 'bg-purple-950/80 border-purple-500/50 text-purple-300';
-        break;
-      case 'UhdBd100':
-        label = '4K UHD BD-100';
-        color = 'bg-pink-950/80 border-pink-500/50 text-pink-300';
-        break;
-      default:
-        if (disc.disc_type === 'DvdVideo') label = 'DVD VIDEO';
-        else if (disc.disc_type === 'BluRay') label = 'BLU-RAY';
-        else if (disc.disc_type === 'UhdBluRay') label = '4K UHD';
-        else if (disc.disc_type === 'IsoImage') label = 'DISC ISO';
-    }
-
-    return (
-      <span
-        className={`text-[9px] px-1.5 py-0.5 rounded border font-mono font-semibold tracking-wider ${color}`}
-      >
-        {label}
-      </span>
-    );
-  };
-
   const renderGroupCard = (group: MediaGroup, variant: 'active' | 'watch' | 'seeding') => {
     // A remembered last-played disc wins as the card's face (and what
     // "Resume" re-opens) until the owner picks a different disc tab.
@@ -298,17 +263,31 @@ export const SimpleMediaView: React.FC = () => {
     const progressPct = Math.round(currentItem.progress * 100);
     const isDownloading = currentItem.status === 'Downloading';
     // Cover priority: structure-detected scan, then the WebP poster cache,
-    // then any remote poster URL the engine recorded.
-    const coverImage =
-      discInfo?.cover_image || thumbMap[currentItem.id] || currentItem.poster_url;
+    // then TMDB (fetched lazily below), then any remote poster URL.
+    const localCover = discInfo?.cover_image || thumbMap[currentItem.id];
+    const coverImage = localCover || tmdbMap[group.id]?.poster || currentItem.poster_url;
+
+    // Aggregated disc badge: a boxset whose discs share one layer spec reads
+    // "2× DVD-9"; mixed specs read "DVD-9 + DVD-5" (owner: a lone DVD-9 badge
+    // on a two-disc set is misleading).
+    const layerLabel = (ls?: string) =>
+      (({ Dvd5: 'DVD-5', Dvd9: 'DVD-9', Bd25: 'BD-25', Bd50: 'BD-50', UhdBd66: 'UHD-66', UhdBd100: 'UHD-100' }) as Record<string, string>)[ls || ''] || 'Disc';
+    const groupSpecs = Array.from(
+      new Set(group.items.map((i) => discMetaMap[i.id]?.layer_spec).filter(Boolean)),
+    ) as string[];
+    const discBadge = groupSpecs.length
+      ? groupSpecs.length === 1
+        ? `${group.is_boxset ? `${group.items.length}× ` : ''}${layerLabel(groupSpecs[0])}`
+        : groupSpecs.map(layerLabel).join(' + ')
+      : null;
 
     return (
       <div
         key={group.id}
-        className="group relative flex-shrink-0 w-80 rounded-2xl bg-adc-cardDark/80 border border-adc-cardBorderDark/70 hover:border-adc-accent/50 overflow-hidden flex flex-col justify-between transition-all duration-300 shadow-md hover:shadow-xl hover:-translate-y-0.5"
+        className="group relative flex-shrink-0 w-[180px] rounded-2xl bg-white border border-gray-200 hover:border-blue-300 overflow-hidden flex flex-col transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1"
       >
-        {/* 16:9 Thumbnail Poster Area */}
-        <div className="aspect-video w-full bg-adc-dark relative flex items-center justify-center overflow-hidden">
+        {/* Poster tile: full-bleed art, 2:3 like a DVD cover */}
+        <div className="aspect-[2/3] w-full bg-gray-50 relative flex items-center justify-center overflow-hidden">
           {coverImage ? (
             <img
               src={coverImage.startsWith('http') ? coverImage : `file://${coverImage}`}
@@ -320,211 +299,166 @@ export const SimpleMediaView: React.FC = () => {
               }}
             />
           ) : (
-            <div className="flex flex-col items-center justify-center text-adc-cardBorderDark group-hover:text-adc-accent/60 transition space-y-1">
+            <div className="flex flex-col items-center justify-center text-gray-300 group-hover:text-blue-300 transition space-y-1">
               <Disc className="w-12 h-12" />
-              <span className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-                Asian DVD Club
+              <span className="text-[9px] font-mono uppercase tracking-widest text-gray-400">
+                No Art Yet
               </span>
             </div>
           )}
 
-          {/* Hover Overlay Play / Inspect Actions */}
-          <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2.5 transition backdrop-blur-xs p-3">
-            <div className="flex items-center gap-2">
+          {/* Top badges: status left, disc spec right — light pills */}
+          <div className="absolute top-2 left-2 flex items-center gap-1">
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-white/95 border border-gray-200 text-gray-600 font-semibold">
+              {currentItem.status}
+            </span>
+          </div>
+          {discBadge && (
+            <div className="absolute top-2 right-2">
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/95 border border-gray-200 text-blue-700 font-mono font-semibold">
+                {discBadge}
+              </span>
+            </div>
+          )}
+
+          {/* Hover info panel: white, airy, everything extra lives here */}
+          <div className="absolute inset-0 bg-white/97 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2 transition p-3">
+            <p className="text-[11px] font-semibold text-[#2b2f36] text-center line-clamp-2">
+              {group.clean_title}
+            </p>
+            <div className="text-[9px] font-mono text-gray-500 text-center">
+              {group.year ? `${group.year} · ` : ''}
+              {group.items.length} {group.items.length === 1 ? 'disc' : 'discs'}
+              {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
+            </div>
+            {tmdbMap[group.id]?.overview && (
+              <p
+                className="text-[10px] text-gray-500 leading-snug line-clamp-4 text-center"
+                title={tmdbMap[group.id].overview}
+              >
+                {tmdbMap[group.id].overview}
+              </p>
+            )}
+
+            <div className="flex items-center gap-1.5 mt-1">
               <button
                 onClick={() => handlePlayDisc(currentItem, true, group.id)}
-                className="px-3.5 py-2 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white font-semibold text-xs flex items-center gap-1.5 hover:scale-105 transition shadow-lg"
+                className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-semibold text-[11px] flex items-center gap-1 transition shadow-sm"
                 title="Play Interactive Disc Menus (dvdnav/BD-J)"
               >
-                <Play className="w-4 h-4 fill-white" />
-                <span>Disc</span>
+                <Play className="w-3 h-3 fill-white" />
+                <span>Play</span>
               </button>
 
               {isDownloading ? (
                 <button
                   onClick={() => pauseTorrent(currentItem.id)}
-                  className="p-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark transition"
+                  className="p-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"
                   title="Pause"
                 >
-                  <Pause className="w-4 h-4" />
+                  <Pause className="w-3 h-3" />
                 </button>
               ) : lastPlayedDiscs[group.id] ? (
                 // Shown ONLY when there is something to resume (owner rule):
                 // re-open the last-played disc of this boxset.
                 <button
                   onClick={() => handlePlayDisc(currentItem, true, group.id)}
-                  className="px-3 py-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark text-xs font-semibold flex items-center gap-1.5 transition"
+                  className="px-2.5 py-1.5 rounded-full border border-gray-300 text-gray-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-gray-50 transition"
                   title={`Resume from the last disc you played: ${currentItem.name}`}
                 >
-                  <Play className="w-4 h-4 fill-white" />
+                  <Play className="w-3 h-3 fill-current" />
                   <span>Resume</span>
                 </button>
               ) : null}
 
               <button
                 onClick={() => handleOpenFolder(currentItem.save_path)}
-                className="p-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark transition"
+                className="p-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"
                 title="Open Enclosing Folder"
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className="w-3 h-3" />
               </button>
             </div>
 
-            {variant === 'seeding' && (
-              <button
-                onClick={() => {
-                  setOrganizeTargetItem(currentItem);
-                  setOrganizeReport(null);
-                }}
-                className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-adc-gold hover:underline"
-              >
-                <FolderArchive className="w-3.5 h-3.5" />
-                <span>Organize into Library...</span>
-              </button>
-            )}
-          </div>
-
-          {/* Top Badges */}
-          <div className="absolute top-2 left-2 flex items-center gap-1.5">
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/80 border border-adc-cardBorderDark text-white font-semibold">
-              {currentItem.status}
-            </span>
+            {/* Multi-disc selector: tiny pills inside the hover panel */}
             {group.is_boxset && (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-adc-accent/30 border border-adc-accent/50 text-pink-200 font-bold flex items-center gap-1">
-                <Layers className="w-3 h-3" />
-                <span>{group.items.length} DISCS</span>
-              </span>
+              <div className="flex items-center gap-1 flex-wrap justify-center max-w-full">
+                {group.items.map((item, idx) => {
+                  const subDisc = discMetaMap[item.id];
+                  const discNum = subDisc?.disc_number || idx + 1;
+                  const isSelected = idx === effectiveIdx;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() =>
+                        setSelectedDiscs((prev) => ({ ...prev, [group.id]: idx }))
+                      }
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full transition ${
+                        isSelected
+                          ? 'bg-blue-500 text-white font-bold'
+                          : 'bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-800'
+                      }`}
+                    >
+                      {discNum}
+                    </button>
+                  );
+                })}
+              </div>
             )}
-          </div>
 
-          <div className="absolute top-2 right-2">
-            {getDiscBadge(discInfo)}
+            {variant === 'active' && currentItem.eta_seconds != null && (
+              <div className="text-[9px] font-mono text-gray-400">
+                ETA {formatEta(currentItem.eta_seconds)} · {progressPct}%
+              </div>
+            )}
           </div>
 
           {/* Progress bar at bottom of poster */}
-          <div className="absolute bottom-0 inset-x-0 h-1 bg-adc-cardBorderDark">
+          <div className="absolute bottom-0 inset-x-0 h-1 bg-gray-200">
             <div
               className={`h-full transition-all duration-300 ${
-                currentItem.status === 'Seeding' ? 'bg-adc-emerald' : 'bg-adc-accent'
+                currentItem.status === 'Seeding' ? 'bg-emerald-400' : 'bg-blue-500'
               }`}
               style={{ width: `${progressPct}%` }}
             />
           </div>
         </div>
 
-        {/* Card Content & Metadata */}
-        <div className="p-3.5 space-y-2.5">
-          <div>
-            <h4 className="text-xs font-semibold text-white truncate" title={group.clean_title}>
-              {group.clean_title}
-            </h4>
-            <div className="flex flex-wrap items-center gap-1 mt-1">
-              {group.year && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-cardBorderDark text-adc-gold font-mono font-medium">
-                  {group.year}
-                </span>
-              )}
-              {currentItem.media_meta?.resolution && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-adc-cardBorderDark text-adc-cyan font-mono font-medium">
-                  {currentItem.media_meta.resolution}
-                </span>
-              )}
-              {discInfo?.has_menu && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-900/40 border border-purple-500/30 text-purple-300 font-medium">
-                  Menu Navigation
-                </span>
-              )}
-            </div>
+        {/* Below the tile: title + year on the page background (Canva design) */}
+        <div className="px-2.5 py-2">
+          <h4 className="text-[12px] font-medium text-[#2b2f36] truncate" title={group.clean_title}>
+            {group.clean_title}
+          </h4>
+          <div className="text-[10px] text-gray-400 font-mono">
+            {group.year || '—'}
+            {variant === 'watch' && progressPct < 100 ? ` · ${progressPct}% ready` : ''}
+            {variant === 'active' ? ` · ${formatSpeed(currentItem.download_rate)}` : ''}
           </div>
-
-          {/* Multi-Disc Selector Tabs */}
-          {group.is_boxset && (
-            <div className="flex items-center gap-1 overflow-x-auto pb-1 scrollbar-none">
-              {group.items.map((item, idx) => {
-                const subDisc = discMetaMap[item.id];
-                const discNum = subDisc?.disc_number || idx + 1;
-                const isSelected = idx === group.active_index;
-
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() =>
-                      setSelectedDiscs((prev) => ({ ...prev, [group.id]: idx }))
-                    }
-                    className={`text-[10px] font-mono px-2 py-0.5 rounded transition ${
-                      isSelected
-                        ? 'bg-adc-accent text-white font-bold shadow'
-                        : 'bg-adc-dark border border-adc-cardBorderDark text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Disc {discNum}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1 border-t border-adc-cardBorderDark/50">
-            <span>{formatBytes(currentItem.total_bytes)}</span>
-            {variant === 'active' && (
-              <span className="text-adc-cyan font-semibold">
-                {formatSpeed(currentItem.download_rate)}
-              </span>
-            )}
-            {variant === 'watch' && (
-              <span className="text-adc-gold font-medium">
-                {progressPct >= 100 ? 'Ready' : `${progressPct}% ready`}
-              </span>
-            )}
-            {variant === 'seeding' && (
-              <span className="text-adc-emerald font-semibold">
-                Ratio {formatRatio(currentItem.ratio)}
-              </span>
-            )}
-          </div>
-
-          {variant === 'active' && currentItem.eta_seconds != null && (
-            <div className="text-[10px] text-slate-500 font-mono flex justify-between">
-              <span>ETA: {formatEta(currentItem.eta_seconds)}</span>
-              <span>{progressPct}%</span>
-            </div>
-          )}
         </div>
       </div>
     );
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-adc-dark text-white select-none">
-      {/* Header Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-adc-cardBorderDark">
+    <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-[#fafafa] text-[#2b2f36] select-none">
+      {/* Header Bar (light, airy — Canva design) */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-200">
         <div className="flex items-center gap-3">
-          <Disc className="w-7 h-7 text-adc-accent animate-pulse" />
+          <div className="p-2 rounded-xl bg-blue-50">
+            <Disc className="w-5 h-5 text-blue-600" />
+          </div>
           <div>
-            <h2 className="text-base font-bold text-white tracking-tight">
+            <h2 className="text-base font-semibold text-[#2b2f36] tracking-tight">
               Asian DVD Club Cinema
             </h2>
-            <p className="text-xs text-slate-400">
-              Interactive DVD, Blu-ray & 4K UHD menu navigation & optical library organizer
+            <p className="text-xs text-gray-500">
+              DVD, Blu-ray & 4K UHD optical library organizer
             </p>
           </div>
         </div>
 
-        {/* Controls (Add/Manager/Free-space live in the title/status bars —
-            owner removed the duplicates from the media menu) */}
+        {/* Controls (Add/Manager/Free-space live in the title/status bars) */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            onClick={() => {
-              setCleaningReport(null);
-              setShowCleanerModal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-medium transition"
-            title="Prune orphaned piece caches & old watched torrent markers"
-          >
-            <Trash2 className="w-3.5 h-3.5 text-slate-400" />
-            <span>Clean Cache</span>
-          </button>
-
           <button
             onClick={() => {
               // Forget every last-played disc: the Resume buttons vanish
@@ -547,28 +481,27 @@ export const SimpleMediaView: React.FC = () => {
             onClick={() => setGroupBoxsets(!groupBoxsets)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
               groupBoxsets
-                ? 'border-adc-accent/40 bg-adc-accent/10 text-pink-200'
-                : 'border-adc-cardBorderDark bg-adc-cardDark text-slate-400'
+                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                : 'border-gray-200 bg-white text-gray-500 hover:text-gray-800'
             }`}
-            title="Cluster multi-disc releases into unified boxset carousels"
+            title="Cluster multi-disc releases into unified rows"
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Boxsets</span>
           </button>
 
           <button
             onClick={handlePlayExternalDisc}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-semibold transition"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-[#2b2f36] text-xs font-semibold transition"
             title="Play a DVD, Blu-ray, or UHD disc from your optical drive with the bundled Nebulae player"
           >
-            <Disc className="w-4 h-4 text-adc-accent" />
+            <Disc className="w-4 h-4 text-blue-600" />
             <span>Play External Disc</span>
           </button>
         </div>
       </div>
 
       {externalDiscError && (
-        <div className="mt-2 p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
+        <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-700">
           {externalDiscError}
         </div>
       )}
@@ -576,37 +509,39 @@ export const SimpleMediaView: React.FC = () => {
       {torrents.length === 0 ? (
         /* Empty State */
         <div className="flex flex-col items-center justify-center py-24 text-center space-y-4">
-          <div className="p-5 rounded-2xl bg-adc-cardDark border border-adc-cardBorderDark text-slate-400">
-            <Disc className="w-12 h-12 text-adc-accent" />
+          <div className="p-5 rounded-2xl bg-blue-50 border border-blue-100">
+            <Disc className="w-12 h-12 text-blue-400" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-white">Your Optical Cinema is Empty</h3>
-            <p className="text-xs text-slate-400 max-w-sm">
+            <h3 className="text-base font-semibold text-[#2b2f36]">Your Optical Cinema is Empty</h3>
+            <p className="text-xs text-gray-500 max-w-sm">
               Drop any DVD ISO, BDMV Blu-ray folder, or ADC torrent into this window to start
               streaming with interactive menus.
             </p>
           </div>
           <button
             onClick={() => setShowAddTorrent(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white text-xs font-semibold transition shadow-lg"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold transition shadow-md"
           >
             <Plus className="w-4 h-4" />
             <span>Add First Disc</span>
           </button>
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-10">
           {/* Shelf 1: Active Downloads */}
           {activeDownloads.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <ArrowDownCircle className="w-4 h-4 text-adc-cyan" />
-                <h3 className="text-sm font-bold text-white">Active Downloads</h3>
-                <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded-full bg-adc-cardDark border border-adc-cardBorderDark">
+                <ArrowDownCircle className="w-4 h-4 text-blue-500" />
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                  Downloading
+                </h3>
+                <span className="text-[11px] font-mono text-blue-600 px-2 py-0.5 rounded-full bg-blue-50">
                   {activeDownloads.length}
                 </span>
               </div>
-              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin">
+              <div className="flex gap-5 overflow-x-auto pb-3 scrollbar-thin">
                 {groupItems(activeDownloads).map((g) => renderGroupCard(g, 'active'))}
               </div>
             </div>
@@ -615,116 +550,23 @@ export const SimpleMediaView: React.FC = () => {
           {/* Shelf 2: Ready to Watch */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <Play className="w-4 h-4 text-adc-gold fill-current" />
-              <h3 className="text-sm font-bold text-white">Ready to Watch</h3>
-              <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded-full bg-adc-cardDark border border-adc-cardBorderDark">
+              <Play className="w-4 h-4 text-blue-500 fill-current" />
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                Ready to Watch
+              </h3>
+              <span className="text-[11px] font-mono text-blue-600 px-2 py-0.5 rounded-full bg-blue-50">
                 {readyToWatch.length}
               </span>
             </div>
             {readyToWatch.length === 0 ? (
-              <p className="text-xs text-slate-500 italic">
+              <p className="text-xs text-gray-400 italic">
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
             ) : (
-              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin">
+              <div className="flex gap-5 overflow-x-auto pb-3 scrollbar-thin">
                 {groupItems(readyToWatch).map((g) => renderGroupCard(g, 'watch'))}
               </div>
             )}
-          </div>
-
-          {/* Shelf 3: Completed & Seeding */}
-          {completedSeeding.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-adc-emerald" />
-                <h3 className="text-sm font-bold text-white">Completed & Seeding</h3>
-                <span className="text-[11px] font-mono text-slate-400 px-2 py-0.5 rounded-full bg-adc-cardDark border border-adc-cardBorderDark">
-                  {completedSeeding.length}
-                </span>
-              </div>
-              <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin">
-                {groupItems(completedSeeding).map((g) => renderGroupCard(g, 'seeding'))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Modal: Clean Temporary Cache */}
-      {showCleanerModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="w-full max-w-md rounded-2xl bg-adc-cardDark border border-adc-cardBorderDark p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-adc-cardBorderDark">
-              <div className="flex items-center gap-2">
-                <Trash2 className="w-5 h-5 text-adc-accent" />
-                <h3 className="text-sm font-bold text-white">Disk Space Cleaner</h3>
-              </div>
-              <button
-                onClick={() => setShowCleanerModal(false)}
-                className="p-1 rounded hover:bg-adc-cardBorderDark text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-400">
-              Prune orphaned temporary pieces, stale video thumbnails, and completed .loaded
-              markers without touching your downloaded media.
-            </p>
-
-            <div className="space-y-1">
-              <label className="text-xs text-slate-300 font-medium">Remove files older than:</label>
-              <div className="flex gap-2">
-                {[7, 14, 30, 60].map((days) => (
-                  <button
-                    key={days}
-                    onClick={() => setCleanerDays(days)}
-                    className={`flex-1 py-1.5 text-xs font-mono rounded-lg border transition ${
-                      cleanerDays === days
-                        ? 'border-adc-accent bg-adc-accent/20 text-white font-bold'
-                        : 'border-adc-cardBorderDark bg-adc-dark text-slate-400'
-                    }`}
-                  >
-                    {days} days
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {cleaningReport && (
-              <div className="p-3 rounded-lg bg-adc-dark border border-adc-cardBorderDark space-y-1 text-xs font-mono">
-                <div className="flex justify-between text-slate-300">
-                  <span>Files scanned:</span>
-                  <span>{cleaningReport.files_scanned}</span>
-                </div>
-                <div className="flex justify-between text-adc-emerald font-semibold">
-                  <span>Files removed:</span>
-                  <span>{cleaningReport.files_removed}</span>
-                </div>
-                <div className="flex justify-between text-adc-cyan font-semibold">
-                  <span>Bytes reclaimed:</span>
-                  <span>{formatBytes(cleaningReport.bytes_reclaimed)}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => handleCleanCache(true)}
-                disabled={isCleaning}
-                className="px-3.5 py-2 rounded-lg border border-adc-cardBorderDark hover:bg-adc-cardBorderDark text-xs font-medium text-slate-300 transition"
-              >
-                Scan (Dry Run)
-              </button>
-              <button
-                onClick={() => handleCleanCache(false)}
-                disabled={isCleaning}
-                className="px-4 py-2 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white text-xs font-bold transition shadow-md flex items-center gap-1.5"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>{isCleaning ? 'Cleaning...' : 'Clean Now'}</span>
-              </button>
-            </div>
           </div>
         </div>
       )}
