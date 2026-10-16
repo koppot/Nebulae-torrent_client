@@ -544,14 +544,14 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
       : null;
 
     // Aggregated disc badge from the FULL disc set (multi-ISO torrents count
-    // every disc by its own size): uniform sets read "2× DVD-5", mixed sets
-    // read "DVD-9 + DVD-5".
+    // every disc by its own size), owner's mock format: "DVD-9 ×2", mixed
+    // sets read "DVD-9 + DVD-5".
     const setSpecs = set.map((d) => d.layer_spec);
     const groupSpecs = Array.from(new Set(setSpecs));
     const discCount = set.length || group.items.length;
     const discBadge = groupSpecs.length
       ? groupSpecs.length === 1
-        ? `${discCount > 1 ? `${discCount}× ` : ''}${layerLabel(groupSpecs[0])}`
+        ? `${layerLabel(groupSpecs[0])}${discCount > 1 ? ` ×${discCount}` : ''}`
         : groupSpecs.map(layerLabel).join(' + ')
       : null;
 
@@ -595,17 +595,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
             {posterArt}
 
             {/* Hover: the lower HALF of the poster is replaced with the info
-                panel — grayscale only, two action buttons (owner spec). */}
+                panel — grayscale only (owner). NO title (it sits below the
+                poster), nothing extended: just the disc/meta line and the
+                two action buttons. */}
             {hoveredId === group.id && (
-              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-black/90 border-t border-[#3a3a3a] p-3 flex flex-col justify-between">
-                <div className="space-y-1 min-h-0">
-                  <p
-                    className="text-[13px] font-semibold text-white leading-tight line-clamp-2"
-                    title={group.clean_title}
-                  >
-                    {group.clean_title}
-                  </p>
-                  <div className="text-[10px] font-mono text-[#a3a3a3] leading-snug">{hoverMeta}</div>
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-black/90 border-t border-[#3a3a3a] p-3 flex flex-col justify-between gap-2">
+                <div className="text-[11px] font-mono text-[#a3a3a3] leading-snug break-words">
+                  {hoverMeta}
                 </div>
                 <div className="flex items-center gap-1.5">
                   {resumePath && !isDownloading ? (

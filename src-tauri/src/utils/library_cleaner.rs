@@ -484,6 +484,13 @@ impl LibraryCleaner {
                 ss,
                 "-i",
                 &video.to_string_lossy(),
+                // DVDs store anamorphic frames (720x480 stretched to 16:9 or
+                // 4:3 on display). Without this correction the extracted
+                // poster looks horizontally squished ("width and height do
+                // not correspond" — owner). Scale to square pixels; SAR=1
+                // sources pass through unchanged.
+                "-vf",
+                "scale=trunc(iw*sar/2)*2:ih",
                 "-vframes",
                 "1",
                 "-q:v",

@@ -4,7 +4,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Disc,
-  Layers,
   List,
   Pause,
   Play,
@@ -321,12 +320,6 @@ export default function PlayerOverlay() {
             }
           >
             {discLabel}
-            {discChoices && discChoices.length > 1 && (
-              <span className="ml-2 text-[10px] uppercase tracking-wider text-adc-accent inline-flex items-center gap-1">
-                <Layers className="w-3 h-3" />
-                Discs
-              </span>
-            )}
           </button>
 
           {/* Disc Menu: a real button — leaves the feature and re-opens the

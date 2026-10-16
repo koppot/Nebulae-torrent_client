@@ -1630,3 +1630,22 @@ else TMDB/Trakt summary; no duplicate/extra info; SVG icons.
   labels its source; "no summary available" is stated honestly.
 - tmdb.rs: TmdbMatch gains runtime (from /movie/{id}, DB-cached) -> the
   hover meta line shows "4h 12m" when the catalogue provides it.
+
+## Batch: hover slim-down + anamorphic fix + Discs chip removal
+
+Owner (mock + notes): hover slide-up must NOT carry extended info — NO title
+(it lives below the poster), ONLY the disc/meta line ("DVD-9 ×2" count-after
+format per the mock) + Play/Resume + Details. Details summary (TMDB/Trakt)
+was invisible. Banner looked distorted ("width and height do not
+correspond"). Remove the pink "DISCS" chip in the player bar.
+
+- Hover overlay: title removed; meta line only, "DVD-9 ×2" format (also in
+  the Details modal).
+- Anamorphic fix: DVD frames are stored 720x480 with non-square pixels —
+  extract_frame now runs scale=trunc(iw*sar/2)*2:ih so 16:9/4:3 frames get
+  square pixels (no squished subject).
+- Summary invisible root causes: (1) keychain trust reset by the reinstall
+  — needs the owner's Always Allow; (2) fetch_poster searched MOVIES only —
+  now falls back to /search/tv (+ /tv/{id} detail, episode_run_time),
+  Trakt detail tries movie then tv. TV/OVA titles now resolve.
+- PlayerOverlay: DISCS chip removed (Layers icon import dropped).

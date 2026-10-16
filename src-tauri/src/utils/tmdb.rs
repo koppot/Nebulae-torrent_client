@@ -54,8 +54,13 @@ struct TmdbItem {
     overview: Option<String>,
     #[serde(default)]
     release_date: Option<String>,
-    // /movie/{id} detail responses carry the runtime (minutes); search
-    // results do not (defaults to None there).
+    // TV results carry the air date and per-episode runtimes instead.
+    #[serde(default)]
+    first_air_date: Option<String>,
+    #[serde(default)]
+    episode_run_time: Vec<u32>,
+    // /movie/{id} and /tv/{id} detail responses carry the runtime (minutes);
+    // search results do not (defaults to None there).
     #[serde(default)]
     runtime: Option<u32>,
 }
@@ -116,31 +121,42 @@ pub fn fetch_poster(
         }
     };
 
-    // 2. Search (title + optional year).
-    let mut url = url::Url::parse(&format!("{TMDB_BASE}/search/movie"))
-        .map_err(|e| format!("TMDB url: {e}"))?;
-    url.query_pairs_mut()
-        .append_pair("api_key", &api_key)
-        .append_pair("query", title);
-    if let Some(y) = year {
-        url.query_pairs_mut().append_pair("year", &y.to_string());
-    }
+    // 2. Search (title + optional year): movies first, then TV — the library
+    // holds OVAs and series that only match /search/tv (owner's "Foundation"
+    // mock is a show, and a movie-only search never sees it).
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("TMDB client: {e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("TMDB search: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("TMDB search returned {}", resp.status()));
+    let mut item: Option<TmdbItem> = None;
+    let mut is_tv = false;
+    for endpoint in ["search/movie", "search/tv"] {
+        let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
+            .map_err(|e| format!("TMDB url: {e}"))?;
+        url.query_pairs_mut()
+            .append_pair("api_key", &api_key)
+            .append_pair("query", title);
+        if let Some(y) = year {
+            url.query_pairs_mut().append_pair("year", &y.to_string());
+        }
+        let resp = client
+            .get(url)
+            .send()
+            .map_err(|e| format!("TMDB search: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("TMDB search returned {}", resp.status()));
+        }
+        let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
+        if let Some(i) = body.results.into_iter().next().filter(|i| i.poster_path.is_some()) {
+            is_tv = endpoint.ends_with("tv");
+            item = Some(i);
+            break;
+        }
     }
-    let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
-    let item = match body.results.into_iter().next() {
+    let item = match item {
         // A text match with no art falls through to Trakt as well.
-        Some(i) if i.poster_path.is_some() => i,
-        _ => return trakt_fallback(&client, db, &cache_key, title, lookup_key),
+        Some(i) => i,
+        None => return trakt_fallback(&client, db, &cache_key, title, lookup_key),
     };
     let poster = item.poster_path.clone().expect("checked above");
 
@@ -166,13 +182,16 @@ pub fn fetch_poster(
     let year: Option<i32> = item
         .release_date
         .as_deref()
+        .or(item.first_air_date.as_deref())
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
-    // The runtime comes from the /movie/{id} detail response; the search
-    // result doesn't carry it. One bounded extra request, failures skipped.
+    // The runtime comes from the /movie/{id} or /tv/{id} detail response
+    // (TV exposes per-episode runtimes); the search result doesn't carry
+    // it. One bounded extra request, failures skipped.
     let runtime: Option<u32> = match item.id {
         Some(id) => {
-            let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/movie/{id}"))
+            let kind = if is_tv { "tv" } else { "movie" };
+            let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{id}"))
                 .map_err(|e| format!("TMDB url: {e}"))?;
             detail_url.query_pairs_mut().append_pair("api_key", &api_key);
             client
@@ -180,7 +199,7 @@ pub fn fetch_poster(
                 .send()
                 .ok()
                 .and_then(|r| r.json::<TmdbItem>().ok())
-                .and_then(|d| d.runtime)
+                .and_then(|d| d.runtime.or_else(|| d.episode_run_time.first().copied()))
         }
         None => None,
     };
@@ -269,18 +288,33 @@ fn trakt_fallback(
         return Ok(None);
     };
 
-    // Map the Trakt match back to TMDB for art.
+    // Map the Trakt match back to TMDB for art. Trakt matched movie OR show;
+    // try the movie detail first, then the TV detail (same TMDB id space).
     let api_key = get_secret("tmdb:api_key").unwrap_or_default();
-    let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/movie/{tmdb_id}")).unwrap();
-    detail_url
-        .query_pairs_mut()
-        .append_pair("api_key", &api_key);
-    let detail: TmdbItem = client
-        .get(detail_url)
-        .send()
-        .map_err(|e| format!("TMDB detail: {e}"))?
-        .json()
-        .map_err(|e| format!("TMDB detail parse: {e}"))?;
+    let fetch_detail = |kind: &str| -> Result<Option<TmdbItem>, String> {
+        let mut detail_url =
+            url::Url::parse(&format!("{TMDB_BASE}/{kind}/{tmdb_id}")).unwrap();
+        detail_url
+            .query_pairs_mut()
+            .append_pair("api_key", &api_key);
+        let resp = client
+            .get(detail_url)
+            .send()
+            .map_err(|e| format!("TMDB detail: {e}"))?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        resp.json::<TmdbItem>()
+            .map(Some)
+            .map_err(|e| format!("TMDB detail parse: {e}"))
+    };
+    let detail: TmdbItem = match fetch_detail("movie").or_else(|_| fetch_detail("tv"))? {
+        Some(d) => d,
+        None => {
+            let _ = db.set_setting(cache_key, "");
+            return Ok(None);
+        }
+    };
 
     let Some(poster) = detail.poster_path.clone() else {
         let _ = db.set_setting(cache_key, "");
@@ -308,9 +342,10 @@ fn trakt_fallback(
     let year: Option<i32> = detail
         .release_date
         .as_deref()
+        .or(detail.first_air_date.as_deref())
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
-    let runtime = detail.runtime;
+    let runtime = detail.runtime.or_else(|| detail.episode_run_time.first().copied());
     let _ = db.set_setting(cache_key, &webp_path.display().to_string());
     if let Some(ov) = &overview {
         let _ = db.set_setting(&format!("{cache_key}:overview"), ov);
