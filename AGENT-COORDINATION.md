@@ -1530,3 +1530,15 @@ dead, and Canva geometry still not followed.
   path (nebulae_resume_pos:*, >30s, 5s throttle); resumeInPlayer waits for
   the feature title to engage (length > 5 min) then seeks to the position.
 - Gates: tsc/eslint clean, clippy 0, 86 lib tests green.
+
+## Session 2026-10-16 (cont. 2) — exact reference dimensions applied
+
+Owner supplied the design export at full res (Nebulae Media Library.png,
+5280x2970) and asked for THESE dimensions. Measured (x1.25 to the 1280
+window): 160px cards / 20px gaps (7 per row) / poster aspect 4:5 (NOT 2:3)
+/ radius 6 / 14px titles / 5px bar + 12px % / 14px small-caps section
+headers with 22px square chips / ~28px header-to-cards / ~64px section gap
+/ top bar: 22px dot + 24px wordmark, 212px search rounded-lg / hover card
+220px with 4:5 poster + panel below (14px title, 12px meta, Play filled +
+Details outlined-accent) + progress line under the panel. Ready-to-Watch
+faces show title ONLY (no bar), per the reference.

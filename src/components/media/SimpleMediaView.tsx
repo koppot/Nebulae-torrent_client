@@ -118,15 +118,15 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => {
-      const W = 240; // Canva elevated-card weight on our 1280px window
-      const POSTER_H = Math.round((W * 3) / 2);
+      const W = 220; // Canva reference: hover card ≈ 1.4× the 160px card
+      const POSTER_H = Math.round((W * 5) / 4); // 4:5 poster
       const left = Math.max(
         8,
         Math.min(r.left + r.width / 2 - W / 2, window.innerWidth - W - 8),
       );
-      // Attach below the poster like the mock; flip up when it would leave
-      // the viewport (bottom shelf).
-      const est = POSTER_H + 280;
+      // Attach below the poster like the reference; flip up when it would
+      // leave the viewport (bottom shelf).
+      const est = POSTER_H + 300;
       const top =
         r.top + est > window.innerHeight - 8
           ? Math.max(8, window.innerHeight - est - 8)
@@ -532,7 +532,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
     const hoverPanel = (
       <>
-        <div className="aspect-[2/3] w-full bg-[#141414] relative overflow-hidden">
+        <div className="aspect-[4/5] w-full bg-[#141414] relative overflow-hidden">
           {posterArt}
           <div className="absolute top-1.5 left-1.5">
             <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
@@ -548,21 +548,21 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           )}
         </div>
 
-        <div className="p-3.5 space-y-2">
-          <p className="text-[13px] font-semibold text-white leading-tight" title={group.clean_title}>
+        <div className="p-4 space-y-2">
+          <p className="text-[14px] font-semibold text-white leading-tight" title={group.clean_title}>
             {group.clean_title}
           </p>
-          <div className="text-[10px] font-mono text-[#a3a3a3]">
+          <div className="text-[12px] font-mono text-[#a3a3a3]">
             {group.year ? `${group.year} · ` : ''}
             {discCount} {discCount === 1 ? 'disc' : 'discs'}
             {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
           </div>
-          {adcLine && <div className="text-[10px] font-mono text-[#737373]">{adcLine}</div>}
+          {adcLine && <div className="text-[11px] font-mono text-[#737373]">{adcLine}</div>}
 
           {/* Visible folder: the release's own folder, click to open. */}
           <button
             onClick={() => handleRevealRelease(currentItem)}
-            className="w-full flex items-center gap-1.5 text-left text-[10px] font-mono text-[#a3a3a3] hover:text-white transition"
+            className="w-full flex items-center gap-1.5 text-left text-[11px] font-mono text-[#a3a3a3] hover:text-white transition"
             title={`Open ${folderOf(currentItem)}`}
           >
             <FolderOpen className="w-3 h-3 flex-shrink-0" />
@@ -571,7 +571,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
           {tmdbMap[group.id]?.overview && (
             <p
-              className="text-[11px] text-[#a3a3a3] leading-snug line-clamp-4"
+              className="text-[12px] text-[#a3a3a3] leading-snug line-clamp-4"
               title={tmdbMap[group.id].overview}
             >
               {tmdbMap[group.id].overview}
@@ -598,13 +598,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
             </div>
           )}
 
-          <div className="flex items-center gap-1.5 pt-0.5">
+          <div className="flex items-center gap-3 pt-0.5">
             <button
               onClick={() => {
                 closeHover();
                 handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
               }}
-              className="px-4 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[12px] flex items-center gap-1.5 transition"
+              className="px-4 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[13px] flex items-center gap-1.5 transition"
               title="Play Interactive Disc Menus (dvdnav/BD-J)"
             >
               <Play className="w-3.5 h-3.5 fill-white" />
@@ -619,7 +619,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                   closeHover();
                   handleResumeDisc(group.id, resumePath);
                 }}
-                className="px-3 py-1.5 rounded-md border border-[#333333] text-white text-[12px] font-semibold flex items-center gap-1 hover:bg-[#262626] transition"
+                className="px-3.5 py-1.5 rounded-md border border-[#333333] text-white text-[13px] font-semibold flex items-center gap-1 hover:bg-[#262626] transition"
                 title={`Resume the disc you played last: ${resumePath.split('/').pop()}`}
               >
                 <Play className="w-3.5 h-3.5 fill-current" />
@@ -642,7 +642,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 closeHover();
                 openDetails(currentItem.id);
               }}
-              className="px-3 py-1.5 rounded-md border border-[#333333] text-[#a3a3a3] text-[12px] font-medium hover:text-white hover:bg-[#262626] transition"
+              className="px-3.5 py-1.5 rounded-md border border-[#e50914]/50 text-[#e50914] text-[13px] font-medium hover:bg-[#e50914]/10 hover:text-white transition"
               title="Open this release in Nebulae Manager"
             >
               Details
@@ -658,15 +658,15 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           </div>
 
           {variant === 'active' && currentItem.eta_seconds != null && (
-            <div className="text-[10px] font-mono text-[#737373]">
+            <div className="text-[11px] font-mono text-[#737373]">
               ETA {formatEta(currentItem.eta_seconds)} · disc {itemProgressPct}%
             </div>
           )}
         </div>
 
-        {/* Progress line under the panel, like the mock's 79% line */}
-        <div className="px-3.5 pb-3 flex items-center gap-2">
-          <div className="h-1 flex-1 rounded-full bg-[#333333] overflow-hidden">
+        {/* Progress line under the panel, like the reference's 79% line */}
+        <div className="px-4 pb-3 flex items-center gap-2">
+          <div className="h-[5px] flex-1 rounded-full bg-[#333333] overflow-hidden">
             <div
               className={`h-full transition-all duration-300 ${
                 currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
@@ -674,7 +674,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
               style={{ width: `${progressPct}%` }}
             />
           </div>
-          <span className="text-[10px] font-mono text-[#737373]">{progressPct}%</span>
+          <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
         </div>
       </>
     );
@@ -688,21 +688,21 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         }}
         className="group relative rounded-lg cursor-pointer"
       >
-        {/* Canva card face: bare poster, title below, thin bar + % — no card
-            chrome; the elevation happens in the hover portal. */}
+        {/* Canva card face: bare poster (4:5), title below, thin bar + % on
+            downloading rows only; the elevation lives in the hover portal. */}
         <div className="rounded-lg overflow-hidden">
-          <div className="aspect-[2/3] w-full bg-[#141414] relative overflow-hidden">
+          <div className="aspect-[4/5] w-full bg-[#141414] relative overflow-hidden">
             {posterArt}
           </div>
 
           {/* Below the tile (Canva): title, thin progress bar with % */}
           <div className="pt-2">
-            <h4 className="text-[13px] font-medium text-white truncate leading-tight" title={group.clean_title}>
+            <h4 className="text-[14px] font-medium text-white truncate leading-tight" title={group.clean_title}>
               {group.clean_title}
             </h4>
-            {variant !== 'seeding' && (
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <div className="h-1 flex-1 rounded-full bg-[#333333] overflow-hidden">
+            {variant === 'active' && (
+              <div className="flex items-center gap-2 mt-1.5">
+                <div className="h-[5px] flex-1 rounded-full bg-[#333333] overflow-hidden">
                   <div
                     className={`h-full transition-all duration-300 ${
                       currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
@@ -710,7 +710,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                     style={{ width: `${progressPct}%` }}
                   />
                 </div>
-                <span className="text-[11px] font-mono text-[#a3a3a3]">{progressPct}%</span>
+                <span className="text-[12px] font-mono text-[#a3a3a3]">{progressPct}%</span>
               </div>
             )}
           </div>
@@ -720,21 +720,21 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-[#141414] text-white select-none">
+    <div className="flex-1 overflow-y-auto p-5 space-y-16 bg-[#141414] text-white select-none">
       {/* Top bar (Canva): Nebulae wordmark left; search + controls right.
           Dark palette per the owner's override of the Canva background. */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#262626]">
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#e50914]" />
-          <h2 className="text-lg font-bold tracking-tight">Nebulae</h2>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[#262626]">
+        <div className="flex items-center gap-2.5">
+          <span className="w-[22px] h-[22px] rounded-full bg-[#e50914]" />
+          <h2 className="text-2xl font-bold tracking-tight">Nebulae</h2>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <div
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1f1f1f] border border-[#262626] w-56 focus-within:border-[#e50914]/50 transition"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] w-56 focus-within:border-[#e50914]/50 transition"
             title="Search the library by release or folder name"
           >
-            <Search className="w-3.5 h-3.5 text-[#737373]" />
+            <Search className="w-4 h-4 text-[#737373]" />
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -823,30 +823,30 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
         <div className="space-y-10">
           {/* Shelf 1: Active Downloads */}
           {activeDownloads.length > 0 && (
-            <div className="space-y-3">
+            <div className="space-y-7">
               <div className="flex items-center gap-2">
                 <ArrowDownCircle className="w-4 h-4 text-[#a3a3a3]" />
-                <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a3a3a3]">
+                <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                   Downloading
                 </h3>
-                <span className="text-[11px] font-mono text-white px-2 py-0.5 rounded-full bg-[#1f1f1f] border border-[#333333]">
+                <span className="text-[11px] font-mono text-white px-2 rounded-md bg-[#1f1f1f] border border-[#333333] flex items-center h-[22px]">
                   {activeDownloads.length}
                 </span>
               </div>
-              <div className="grid gap-x-[22px] gap-y-6 [grid-template-columns:repeat(auto-fill,112px)]">
+              <div className="grid gap-x-5 gap-y-7 [grid-template-columns:repeat(auto-fill,160px)]">
                 {visibleGroups(groupItems(activeDownloads)).map((g) => renderGroupCard(g, 'active'))}
               </div>
             </div>
           )}
 
           {/* Shelf 2: Ready to Watch */}
-          <div className="space-y-3">
+          <div className="space-y-7">
             <div className="flex items-center gap-2">
               <Play className="w-4 h-4 text-[#e50914] fill-current" />
-              <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a3a3a3]">
+              <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                 Ready to Watch
               </h3>
-              <span className="text-[11px] font-mono text-white px-2 py-0.5 rounded-full bg-[#1f1f1f] border border-[#333333]">
+              <span className="text-[11px] font-mono text-white px-2 rounded-md bg-[#1f1f1f] border border-[#333333] flex items-center h-[22px]">
                 {readyToWatch.length}
               </span>
             </div>
@@ -855,7 +855,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
             ) : (
-              <div className="grid gap-x-[22px] gap-y-6 [grid-template-columns:repeat(auto-fill,112px)]">
+              <div className="grid gap-x-5 gap-y-7 [grid-template-columns:repeat(auto-fill,160px)]">
                 {visibleGroups(groupItems(readyToWatch)).map((g) => renderGroupCard(g, 'watch'))}
               </div>
             )}
