@@ -177,6 +177,17 @@ const trackerHost = (url: string): string => {
   }
 };
 
+/** True when every one of the torrent's trackers reports failure — the
+ * swarm counts (seeds/peers) on display are then a stale snapshot from the
+ * last successful announce, not tracker reality. */
+const trackersAllFailingCheck = (t: TorrentItem): boolean =>
+  (t.trackers?.length ?? 0) > 0 &&
+  t.trackers.every((tr) =>
+    ['fail', 'error', 'not working', 'unreachable'].some((k) =>
+      tr.status.toLowerCase().includes(k),
+    ),
+  );
+
 // qBittorrent-style per-row download progress: a slim monochrome bar
 // (gray fill on a near-black track) with GB and percent next to it.
 // Folders aggregate their subtree by byte weight.
@@ -527,6 +538,30 @@ export const TorrentManagerView: React.FC = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // One-shot re-announce when a torrent's trackers recover after a full
+  // outage: the seeds/peers columns otherwise keep showing the frozen
+  // pre-outage counts until the next scheduled announce. Cooldown per
+  // torrent (10 min) so a flapping tracker is not flooded.
+  const wasFailingRef = useRef<Map<string, boolean>>(new Map());
+  const reannounceAtRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    torrents.forEach((t) => {
+      const failing = trackersAllFailingCheck(t);
+      const was = wasFailingRef.current.get(t.id) ?? false;
+      wasFailingRef.current.set(t.id, failing);
+      if (was && !failing) {
+        const last = reannounceAtRef.current.get(t.id) ?? 0;
+        if (Date.now() - last > 10 * 60 * 1000) {
+          reannounceAtRef.current.set(t.id, Date.now());
+          invoke('reannounce_torrent', { id: t.id }).catch(() => {});
+          invoke('log_frontend', {
+            message: `reannounce: triggered after tracker recovery for "${t.name}"`,
+          }).catch(() => {});
+        }
+      }
+    });
+  }, [torrents]);
 
   const handleContextMenu = (e: React.MouseEvent, torrentId: string) => {
     e.preventDefault();
@@ -1000,13 +1035,7 @@ export const TorrentManagerView: React.FC = () => {
                 // Not connected: the torrent itself errored, or every one of
                 // its trackers reports failure/error. The whole row turns
                 // the app red and reverts once connectivity returns.
-                const trackersAllFailing =
-                  (t.trackers?.length ?? 0) > 0 &&
-                  t.trackers.every((tr) =>
-                    ['fail', 'error', 'not working', 'unreachable'].some((k) =>
-                      tr.status.toLowerCase().includes(k),
-                    ),
-                  );
+                const trackersAllFailing = trackersAllFailingCheck(t);
                 const rowError = t.status === 'Error' || trackersAllFailing;
                 const rowErrorClass = rowError ? 'text-[#e50914] hover:text-[#e50914]' : '';
                 // While downloading the bar carries the downloaded volume;
@@ -1068,9 +1097,9 @@ export const TorrentManagerView: React.FC = () => {
                       {/* Swarm seed count from the engine's tracker scrape.
                           A dash means no successful scrape yet - never fake
                           a zero. */}
-                      {t.seeds ?? '—'}
+                      {trackersAllFailing ? '—' : (t.seeds ?? '—')}
                     </td>
-                    <td className="py-2 px-2.5">{t.peers}</td>
+                    <td className="py-2 px-2.5">{trackersAllFailing ? '—' : t.peers}</td>
                   </tr>
                 );
               })}

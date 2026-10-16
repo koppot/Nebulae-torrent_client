@@ -20,11 +20,20 @@ const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w342";
 const BUNDLED_TMDB_API_KEY: &str = "ec0fadf7fe0d8dcf71b7a1d4d8b6d941";
 
 /// Resolve the effective TMDB key: keychain override first, bundled key
-/// as the always-available fallback.
+/// as the always-available fallback. Under `cfg(test)` the keychain is
+/// never touched (a test binary is not in the item's ACL, so the read
+/// would block on a security prompt mid-test-run).
 fn effective_api_key() -> Option<String> {
-    match get_secret("tmdb:api_key") {
-        Ok(k) if !k.is_empty() => Some(k),
-        _ => Some(BUNDLED_TMDB_API_KEY.to_string()),
+    #[cfg(test)]
+    {
+        Some(BUNDLED_TMDB_API_KEY.to_string())
+    }
+    #[cfg(not(test))]
+    {
+        match get_secret("tmdb:api_key") {
+            Ok(k) if !k.is_empty() => Some(k),
+            _ => Some(BUNDLED_TMDB_API_KEY.to_string()),
+        }
     }
 }
 
@@ -396,11 +405,11 @@ mod tests {
 
     #[test]
     fn missing_key_is_not_an_error() {
-        // With no keychain entry present the fetch degrades to Ok(None)
-        // rather than erroring — the grid just shows its placeholder.
-        // Reaching the assert at all proves no panic/Err propagated.
-        let result = has_api_key();
-        let _ = result;
+        // Owner directive: TMDB works out of the box for ALL downloads —
+        // the bundled key means a missing keychain entry is never an
+        // error; resolution always yields a key (hermetic under test).
+        assert_eq!(effective_api_key(), Some(BUNDLED_TMDB_API_KEY.to_string()));
+        assert!(has_api_key());
     }
 
     #[test]

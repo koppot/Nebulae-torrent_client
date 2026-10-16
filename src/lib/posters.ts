@@ -45,7 +45,74 @@ function loadCache(): AdcPosterCache {
 }
 
 function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, ' ').trim();
+  return name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Release-tag noise that appears on torrent names but never on the ADC
+// titles page (scene/group/region/medium tags).
+const TOKEN_STOPLIST = new Set([
+  'the', 'a', 'an', 'of', 'and', 'ova', 'oad', 'special', 'edition',
+  'limited', 'complete', 'remastered', 'uncut', 'uncensored', 'dub', 'dubbed',
+  'sub', 'subbed', 'dvd', 'bd', 'bluray', 'blu', 'ray', 'ntsc', 'pal',
+  'funimation', 'sentai', 'discotek', 'boxset', 'box', 'set', 'collection',
+  'series', 'season', 'part', 'volume', 'vol', 'disc', 'd1', 'd2', 'd3',
+  'r1', 'r2', 'r2j', 'r3', 'jp', 'jpn', 'us', 'usa', 'uk', 'h264', 'h265',
+  'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts', 'dd2', 'dd51', '576p',
+  '720p', '1080p', '2160p', 'dvdrip', 'webrip', 'webdl', 'mkv', 'iso',
+  'dual', 'audio', 'eng', 'jpn', 'japanese', 'english', 'subs',
+]);
+
+function significantTokens(name: string): string[] {
+  return normalizeName(name)
+    .split(' ')
+    .filter((t) => t.length >= 2 && !TOKEN_STOPLIST.has(t) && !/^\d+$/.test(t));
+}
+
+/**
+ * Match a torrent release name to the ADC torrents.php title.
+ * Exact normalized equality first, then a token-subset rule: the release
+ * name carries extra tags the tracker title lacks ("Fuuka (2017)
+ * Funimation" vs ADC "Fuuka (2017)"), so the ADC title's significant
+ * tokens must all appear in the torrent name (or vice versa). Among
+ * candidates the one with the best coverage wins; ambiguity (e.g. shared
+ * franchise words) is broken by the smallest token difference.
+ */
+function matchAdcTitle(
+  torrentName: string,
+  byName: Record<string, string>,
+): { title: string; url: string } | null {
+  const exact = byName[normalizeName(torrentName)];
+  if (exact) return { title: torrentName, url: exact };
+
+  const torrentTokens = new Set(significantTokens(torrentName));
+  if (torrentTokens.size === 0) return null;
+
+  let best: { title: string; url: string; coverage: number; slack: number } | null = null;
+  for (const [title, url] of Object.entries(byName)) {
+    const adcTokens = significantTokens(title);
+    if (adcTokens.length === 0) continue;
+    const adcSet = new Set(adcTokens);
+    const adcMissing = adcTokens.filter((t) => !torrentTokens.has(t)).length;
+    const torrentMissing = [...torrentTokens].filter((t) => !adcSet.has(t)).length;
+    // One-sided containment: the smaller token set must be fully covered
+    // by the larger (a single stray token on the ADC side breaks it).
+    const covered =
+      adcMissing === 0 || (torrentMissing === 0 && adcTokens.length <= torrentTokens.size);
+    if (!covered) continue;
+    const smaller = Math.min(adcTokens.length, torrentTokens.size);
+    if (smaller < 1) continue;
+    const coverage = smaller / Math.max(adcTokens.length, torrentTokens.size);
+    const slack = adcMissing + torrentMissing;
+    if (!best || coverage > best.coverage || (coverage === best.coverage && slack < best.slack)) {
+      best = { title, url, coverage, slack };
+    }
+  }
+  return best ? { title: best.title, url: best.url } : null;
 }
 
 export function posterForTorrent(infoHash: string): string | null {
@@ -94,11 +161,12 @@ export async function resolvePoster(
   const stale = Date.now() - cache.fetched_at >= CACHE_MAX_AGE_MS;
   const map = stale || Object.keys(cache.by_name).length === 0 ? await fetchAdcMap() : cache;
   if (map) {
-    const direct = map.by_name[normalizeName(torrentName)];
-    if (direct) {
-      const absolute = direct.startsWith('http')
-        ? direct
-        : `https://asiandvdclub.org${direct}`;
+    const match = matchAdcTitle(torrentName, map.by_name);
+    if (match) {
+      const { title, url } = match;
+      const absolute = url.startsWith('http')
+        ? url
+        : `https://asiandvdclub.org${url}`;
       map.by_name[infoHash] = absolute; // per-torrent memo inside the same store
       try {
         localStorage.setItem(CACHE_KEY, JSON.stringify(map));
@@ -106,7 +174,7 @@ export async function resolvePoster(
         /* ignore */
       }
       invoke('log_frontend', {
-        message: `poster: ADC match for "${torrentName}"`,
+        message: `poster: ADC match for "${torrentName}" -> "${title}"`,
       }).catch(() => {});
       // /poster/{id} is hotlink-protected: the webview's <img> would be
       // rejected, so pull the bytes through the authenticated backend and
@@ -135,8 +203,20 @@ export async function resolvePoster(
 
   // 3. Local pipeline (cover scan → ffmpeg frame → TMDB when configured).
   if (map) {
+    // Log the closest ADC titles so a real matching gap is diagnosable
+    // from the session log alone.
+    const torrentTokens = new Set(significantTokens(torrentName));
+    const near = Object.keys(map.by_name)
+      .map((title) => {
+        const adcTokens = significantTokens(title);
+        const overlap = adcTokens.filter((t) => torrentTokens.has(t)).length;
+        return { title, score: overlap / Math.max(1, Math.max(adcTokens.length, torrentTokens.size)) };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map((c) => `${c.title} (${Math.round(c.score * 100)}%)`);
     invoke('log_frontend', {
-      message: `poster: no ADC match for "${torrentName}" — falling back to local pipeline`,
+      message: `poster: no ADC match for "${torrentName}" — falling back to local pipeline (nearest: ${near.join('; ') || 'none'})`,
     }).catch(() => {});
   }
   try {

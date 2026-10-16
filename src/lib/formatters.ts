@@ -26,5 +26,5 @@ export function formatEta(seconds?: number): string {
 }
 
 export function formatRatio(ratio: number): string {
-  return ratio.toFixed(2);
+  return Number.isFinite(ratio) ? ratio.toFixed(2) : '∞';
 }

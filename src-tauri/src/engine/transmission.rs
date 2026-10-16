@@ -1344,12 +1344,17 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 }
             };
 
-            let ratio = if downloaded_ever > 0 {
-                (uploaded_ever as f64 / downloaded_ever as f64) as f32
-            } else if percent_done >= 1.0 {
-                1.0
+            // Honest ratio (owner correction): a torrent whose data was
+            // already on disk at add-time (verified to 100% with zero bytes
+            // downloaded) must NOT display a synthetic ratio of 1. Ratio is
+            // 0 until bytes have actually been uploaded; infinite (shown as
+            // ∞) only when upload happened with no recorded download.
+            let ratio = if uploaded_ever == 0 {
+                0.0f32
+            } else if downloaded_ever > 0 {
+                uploaded_ever as f32 / downloaded_ever as f32
             } else {
-                0.0
+                f32::INFINITY
             };
 
             // Files mapping
