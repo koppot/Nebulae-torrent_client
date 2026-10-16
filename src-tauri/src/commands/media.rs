@@ -5,8 +5,6 @@ use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
 use std::path::{Path, PathBuf};
 use std::ffi::{c_int, c_void};
 use std::sync::Mutex;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-use std::process::Command;
 
 #[tauri::command]
 pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
@@ -185,12 +183,9 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
                 media: *poison(&state.media),
                 media_player: mp,
             };
-            #[cfg(target_os = "macos")]
-            {
-                // The vout renders into our overlay view; hide it before the
-                // player goes away so no stale frame lingers.
-                let _ = player::embed::set_overlay_hidden(app, true);
-            }
+            // The vout renders into our overlay view; hide it before the
+            // player goes away so no stale frame lingers.
+            let _ = player::set_overlay_hidden(app, true);
             session.close(lib);
         }
     }
@@ -201,9 +196,10 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
-/// user's VLC, loaded as a library and rendered into the app's own window
-/// (macOS). Discs start at their root menu; plain files and disc-less
-/// folders play the main feature.
+/// user's VLC, loaded as a library and rendered into the app's own window.
+/// Discs start at their root menu; plain files and disc-less folders play
+/// the main feature. There is no external-player fallback: if the overlay
+/// cannot be created, playback fails with an error.
 #[tauri::command]
 pub fn player_open(
     app: tauri::AppHandle,
@@ -213,53 +209,25 @@ pub fn player_open(
     stop_session(&app, &state);
     let resolved = resolve_playback(&file_path)?;
 
-    #[cfg(target_os = "macos")]
-    {
-        let view = player::embed::ensure_overlay(&app)?;
-        let lib = loaded_lib(&state)?;
-        let session = VlcSession::open(&lib, &resolved.resolved_path, view)?;
-        *poison(&state.instance) = session.instance;
-        *poison(&state.media) = session.media;
-        *poison(&state.media_player) = session.media_player;
-        *poison(&state.started) = true;
-        tracing::info!(
-            "Embedded VLC engine playing '{}' (disc: {})",
-            resolved.resolved_path,
-            resolved.is_disc
-        );
-        Ok(resolved)
+    match player::ensure_overlay(&app) {
+        Ok(view) => {
+            let lib = loaded_lib(&state)?;
+            let session = VlcSession::open(&lib, &resolved.resolved_path, view)?;
+            *poison(&state.instance) = session.instance;
+            *poison(&state.media) = session.media;
+            *poison(&state.media_player) = session.media_player;
+            *poison(&state.started) = true;
+            tracing::info!(
+                "Embedded VLC engine playing '{}' (disc: {})",
+                resolved.resolved_path,
+                resolved.is_disc
+            );
+            Ok(resolved)
+        }
+        Err(embed_err) => Err(format!(
+            "Embedded playback is unavailable: {embed_err}. Playback requires the in-app video overlay - there is no external-player fallback."
+        )),
     }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Embedded overlay is the macOS experience today; other platforms
-        // launch the user's VLC application until the overlay is ported.
-        let _ = &app;
-        let _ = &state;
-        launch_vlc_externally(&resolved.resolved_path)?;
-        Ok(ResolvedPlayback {
-            external: true,
-            ..resolved
-        })
-    }
-}
-
-// Used by the non-macOS `player_open` fallback (external VLC launch).
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-fn launch_vlc_externally(target: &str) -> Result<(), String> {
-    let vlc = find_vlc().ok_or_else(|| {
-        "VLC is required for playback. Install VLC from https://www.videolan.org.".to_string()
-    })?;
-    let mut cmd = Command::new(&vlc);
-    cmd.arg("--deinterlace=-1").arg("--deinterlace-mode=yadif2x");
-    cmd.arg(target);
-    let log_path = std::env::temp_dir().join("nebulae-vlc.log");
-    if let Ok(log) = std::fs::File::create(&log_path) {
-        cmd.stderr(std::process::Stdio::from(log));
-    }
-    cmd.spawn()
-        .map_err(|e| format!("Failed to launch VLC: {e}"))?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -349,31 +317,9 @@ pub fn player_sync_viewport(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        player::embed::sync_frame(&app, x, y, width, height)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (&app, x, y, width, height);
-        Ok(())
-    }
+    player::sync_frame(&app, x, y, width, height)
 }
 
-/// Locate the VLC application binary (used on platforms where playback
-/// still launches VLC externally rather than embedding its engine).
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-fn find_vlc() -> Option<PathBuf> {
-    let mut cands: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        cands.push(PathBuf::from(&home).join("Applications/VLC.app/Contents/MacOS/VLC"));
-    }
-    cands.push(PathBuf::from("/Applications/VLC.app/Contents/MacOS/VLC"));
-    cands.push(PathBuf::from("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"));
-    cands.push(PathBuf::from("/usr/bin/vlc"));
-    cands.push(PathBuf::from("/usr/local/bin/vlc"));
-    cands.into_iter().find(|c| c.is_file())
-}
 
 /// Depth-limited recursive search for a playable disc image or disc folder
 /// structure. A disc image ALWAYS outranks loose episode files - the owner
@@ -657,10 +603,4 @@ mod tests {
         assert!(!status.player_type.is_empty());
     }
 
-    #[test]
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    fn test_vlc_discovery() {
-        // Verify discovery returns without panic (VLC may be absent on CI).
-        let _ = find_vlc();
-    }
 }

@@ -13,8 +13,24 @@
 //! plugins nobody needs duplicated.
 
 pub mod engine;
+
 #[cfg(target_os = "macos")]
-pub mod embed;
+pub use embed_macos::{ensure_overlay, set_overlay_hidden, sync_frame};
+
+#[cfg(target_os = "windows")]
+pub use embed_windows::{ensure_overlay, set_overlay_hidden, sync_frame};
+
+#[cfg(target_os = "linux")]
+pub use embed_linux::{ensure_overlay, set_overlay_hidden, sync_frame};
+
+#[cfg(target_os = "macos")]
+mod embed_macos;
+
+#[cfg(target_os = "windows")]
+mod embed_windows;
+
+#[cfg(target_os = "linux")]
+mod embed_linux;
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;

@@ -14,6 +14,12 @@ pub struct VlcLib {
     // read directly, only held open.
     #[allow(dead_code)]
     lib: Library,
+    // libvlc.dylib/.so/.dll references libvlccore via @rpath (macOS) or a
+    // bare soname; loading it out of VLC.app fails unless libvlccore is
+    // preloaded by absolute path FIRST. These handles must also outlive
+    // `lib`.
+    #[allow(dead_code)]
+    deps: Vec<Library>,
     pub libvlc_new:
         unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
     pub libvlc_release: unsafe extern "C" fn(*mut c_void),
@@ -48,7 +54,7 @@ impl VlcLib {
     /// Locate and load the user's libVLC.
     pub fn load() -> Result<VlcLib, String> {
         let candidates = Self::candidate_paths();
-        let mut last_err = String::new();
+        let mut failures: Vec<String> = Vec::new();
         for path in &candidates {
             // libVLC discovers its module plugins relative to itself, but a
             // dylib loaded out of VLC.app needs the plugin dir pointed at
@@ -59,21 +65,53 @@ impl VlcLib {
                     std::env::set_var("VLC_PLUGIN_PATH", &plugins);
                 }
             }
+            // Preload libvlccore by absolute path: libvlc references it via
+            // @rpath/soname, which does not resolve from a foreign process.
+            let deps = Self::preload_core_deps(path, &mut failures);
             unsafe {
                 match Library::new(path) {
                     Ok(lib) => {
                         if let Ok(mut p) = LOADED_PATH.lock() {
                             *p = Some(path.clone());
                         }
-                        return Ok(Self::bind(lib, path));
+                        return Ok(Self::bind(lib, path, deps));
                     }
-                    Err(e) => last_err = format!("{}: {e}", path.display()),
+                    Err(e) => failures.push(format!("{}: {e}", path.display())),
                 }
             }
         }
         Err(format!(
-            "VLC's playback engine (libvlc) was not found. Install VLC (https://www.videolan.org) and try again. Last failure: {last_err}"
+            "VLC's playback engine (libvlc) was not found. Install VLC (https://www.videolan.org) and try again. Attempts: {}",
+            failures.join(" | ")
         ))
+    }
+
+    /// Preload the libvlccore dependency (same directory as libvlc) so the
+    /// @rpath / soname reference resolves. Best effort: failures are
+    /// reported in `failures` but the main load is still attempted.
+    fn preload_core_deps(lib_path: &Path, failures: &mut Vec<String>) -> Vec<Library> {
+        let Some(dir) = lib_path.parent() else {
+            return Vec::new();
+        };
+        #[cfg(target_os = "macos")]
+        let names = ["libvlccore.9.dylib", "libvlccore.dylib"];
+        #[cfg(target_os = "windows")]
+        let names = ["libvlccore.dll"];
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let names = ["libvlccore.so.9", "libvlccore.so"];
+        let mut out = Vec::new();
+        for name in names {
+            let dep = dir.join(name);
+            if dep.exists() {
+                unsafe {
+                    match Library::new(&dep) {
+                        Ok(l) => out.push(l),
+                        Err(e) => failures.push(format!("preload {}: {e}", dep.display())),
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn candidate_paths() -> Vec<PathBuf> {
@@ -128,7 +166,7 @@ impl VlcLib {
         }
     }
 
-    unsafe fn bind(lib: Library, _path: &Path) -> VlcLib {
+    unsafe fn bind(lib: Library, _path: &Path, deps: Vec<Library>) -> VlcLib {
         macro_rules! sym {
             ($name:literal : $ty:ty) => {{
                 let s: Symbol<$ty> = lib
@@ -156,6 +194,7 @@ impl VlcLib {
             libvlc_audio_set_volume: sym!("libvlc_audio_set_volume": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_video_set_deinterlace: sym!("libvlc_video_set_deinterlace": unsafe extern "C" fn(*mut c_void, *const c_char)),
             lib,
+            deps,
         }
     }
 

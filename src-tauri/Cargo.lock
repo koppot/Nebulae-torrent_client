@@ -2347,6 +2347,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "raw-window-handle",
  "reqwest",
  "roxmltree",
  "rusqlite",
@@ -2366,6 +2367,8 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "windows",
+ "x11-dl",
 ]
 
 [[package]]
