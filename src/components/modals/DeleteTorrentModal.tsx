@@ -93,7 +93,7 @@ export const DeleteTorrentModal: React.FC = () => {
 
         {/* Body Content */}
         <div className="p-5 space-y-4 text-xs">
-          <p className="text-sm text-[#cccccc] leading-relaxed">
+          <p className="text-[13px] text-[#cccccc] leading-relaxed whitespace-nowrap">
             Are you sure you want to remove this torrent from the transfer list?
           </p>
 
@@ -137,7 +137,7 @@ export const DeleteTorrentModal: React.FC = () => {
           <div className="p-2.5 rounded bg-[#1f1f1f] border border-[#262626] flex items-start gap-2 text-[11px] text-[#a3a3a3]">
             <ShieldCheck className="w-4 h-4 text-[#e50914] flex-shrink-0 mt-0.5" />
             <span>
-              <strong className="text-white">Safety Protection:</strong> Directories or files managed by external qBittorrent installations and system directories are strictly safeguarded.
+              <strong className="text-white">Safety Protection:</strong> Torrent data directories and system directories are strictly safeguarded.
             </span>
           </div>
 

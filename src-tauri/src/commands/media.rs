@@ -206,31 +206,66 @@ pub fn player_open(
     state: tauri::State<PlayerState>,
     file_path: String,
 ) -> Result<ResolvedPlayback, String> {
+    tracing::info!("player_open: entry, path='{file_path}'");
     stop_session(&app, &state);
-    let resolved = resolve_playback(&file_path)?;
+    let resolved = match resolve_playback(&file_path) {
+        Ok(r) => {
+            tracing::info!(
+                "player_open: resolved '{}' (disc: {}, external: {})",
+                r.resolved_path,
+                r.is_disc,
+                r.external
+            );
+            r
+        }
+        Err(e) => {
+            tracing::error!("player_open: resolve failed: {e}");
+            return Err(e);
+        }
+    };
 
     match player::ensure_overlay(&app) {
         Ok(view) => {
-            let lib = loaded_lib(&state)?;
+            tracing::info!("player_open: overlay ready (view ptr {view:#x})");
+            let lib = match loaded_lib(&state) {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::error!("player_open: libvlc load failed: {e}");
+                    return Err(e);
+                }
+            };
             // The overlay is created hidden; make it visible BEFORE the vout
             // attaches, or the video renders into a hidden view (a dead
             // black rectangle that receives no clicks).
-            player::set_overlay_hidden(&app, false)?;
-            let session = VlcSession::open(&lib, &resolved.resolved_path, view)?;
-            *poison(&state.instance) = session.instance;
-            *poison(&state.media) = session.media;
-            *poison(&state.media_player) = session.media_player;
-            *poison(&state.started) = true;
-            tracing::info!(
-                "Embedded VLC engine playing '{}' (disc: {})",
-                resolved.resolved_path,
-                resolved.is_disc
-            );
-            Ok(resolved)
+            if let Err(e) = player::set_overlay_hidden(&app, false) {
+                tracing::error!("player_open: overlay unhide failed: {e}");
+                return Err(e);
+            }
+            match VlcSession::open(&lib, &resolved.resolved_path, view) {
+                Ok(session) => {
+                    *poison(&state.instance) = session.instance;
+                    *poison(&state.media) = session.media;
+                    *poison(&state.media_player) = session.media_player;
+                    *poison(&state.started) = true;
+                    tracing::info!(
+                        "player_open: PLAYING '{}' (disc: {})",
+                        resolved.resolved_path,
+                        resolved.is_disc
+                    );
+                    Ok(resolved)
+                }
+                Err(e) => {
+                    tracing::error!("player_open: session open failed: {e}");
+                    Err(e)
+                }
+            }
         }
-        Err(embed_err) => Err(format!(
-            "Embedded playback is unavailable: {embed_err}. Playback requires the in-app video overlay - there is no external-player fallback."
-        )),
+        Err(embed_err) => {
+            tracing::error!("player_open: overlay unavailable: {embed_err}");
+            Err(format!(
+                "Embedded playback is unavailable: {embed_err}. Playback requires the in-app video overlay - there is no external-player fallback."
+            ))
+        }
     }
 }
 
