@@ -188,6 +188,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
       const hasLocalCover =
         discMetaMap[t.id]?.cover_image || (thumbMap[t.id] ?? null) !== null;
       if (hasLocalCover) return;
+      // Reserve the slot IMMEDIATELY: without this, every re-run of the
+      // effect (any map update) re-fires the fetch until the first response
+      // lands — four identical TMDB searches per launch were observed.
+      setTmdbMap((prev) => ({ ...prev, [t.id]: {} }));
       invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: t.name })
         .then((parsed) =>
           invoke<FetchTmdbResult>('fetch_tmdb_release', {

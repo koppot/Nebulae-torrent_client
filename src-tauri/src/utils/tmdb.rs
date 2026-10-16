@@ -89,7 +89,12 @@ pub fn fetch_poster(
 
     let api_key = match get_secret("tmdb:api_key") {
         Ok(k) if !k.is_empty() => k,
-        _ => return Ok(None), // no credentials configured: silent skip
+        _ => {
+            // Distinguish this from a genuine no-match in the log: the owner
+            // needs to know whether credentials or the catalogue came up short.
+            tracing::warn!("[tmdb] no API key readable from the keychain — TMDB disabled for {title:?}");
+            return Ok(None);
+        }
     };
 
     // 2. Search (title + optional year).
@@ -185,6 +190,7 @@ fn trakt_fallback(
         Ok(k) if !k.is_empty() => k,
         _ => {
             // Nothing anywhere: cache the miss so we don't re-search.
+            tracing::warn!("[tmdb] trakt: no client id in the keychain — fallback unavailable for {title:?}");
             let _ = db.set_setting(cache_key, "");
             return Ok(None);
         }
