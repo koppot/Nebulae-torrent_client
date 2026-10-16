@@ -142,7 +142,7 @@ export const StatusBar: React.FC = () => {
           title={
             tailscale?.connected
               ? `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip})`
-              : 'Secure Network (Tailscale) not detected'
+              : 'Secure Network (Tailscale ADC) not detected'
           }
         >
           <span
@@ -151,7 +151,7 @@ export const StatusBar: React.FC = () => {
             }`}
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>
-            Tailscale: {tailscale?.connected ? tailscale.tailnet_ip : '—'}
+            Tailscale ADC: {tailscale?.connected ? tailscale.tailnet_ip : '—'}
           </span>
         </div>
       </div>
