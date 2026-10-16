@@ -3,6 +3,7 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod thumbs;
 pub mod updater;
 pub mod utils;
 

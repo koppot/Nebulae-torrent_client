@@ -41,6 +41,7 @@ base64 = "0.22"
 axum = "0.8"
 tauri-plugin-process = "2"
 libloading = "0.8"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

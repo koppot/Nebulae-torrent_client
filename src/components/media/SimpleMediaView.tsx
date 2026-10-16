@@ -6,9 +6,9 @@ import { errorMessage } from '../../utils/errors';
 import {
   TorrentItem,
   DiscStructureInfo,
-  VolumeSpaceInfo,
   CacheCleanupReport,
   OrganizeMediaReport,
+  ThumbnailResult,
 } from '../../types';
 import {
   Play,
@@ -17,9 +17,7 @@ import {
   FolderOpen,
   ArrowDownCircle,
   CheckCircle2,
-  Eye,
   Disc,
-  HardDrive,
   Trash2,
   Layers,
   FolderArchive,
@@ -42,12 +40,33 @@ interface MediaGroup {
 
 export const SimpleMediaView: React.FC = () => {
   const { torrents, pauseTorrent, resumeTorrent, selectSourceFolder } = useTorrentStore();
-  const { setShowAddTorrent, setViewMode } = useUiStore();
+  const { setShowAddTorrent } = useUiStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
-  const [volumeSpace, setVolumeSpace] = useState<VolumeSpaceInfo | null>(null);
+  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
   const [selectedDiscs, setSelectedDiscs] = useState<Record<string, number>>({});
   const [groupBoxsets, setGroupBoxsets] = useState<boolean>(true);
+
+  // Last-played disc per boxset group: a resume should re-open the disc the
+  // owner watched last, not the group's first item (owner directive).
+  const [lastPlayedDiscs, setLastPlayedDiscs] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('nebulae_last_played_discs') || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const rememberLastDisc = (groupId: string, torrentId: string) => {
+    setLastPlayedDiscs((prev) => {
+      const next = { ...prev, [groupId]: torrentId };
+      try {
+        localStorage.setItem('nebulae_last_played_discs', JSON.stringify(next));
+      } catch {
+        // Storage full/unavailable: in-memory memory still works this session.
+      }
+      return next;
+    });
+  };
 
   // Modals state
   const [showCleanerModal, setShowCleanerModal] = useState<boolean>(false);
@@ -60,13 +79,6 @@ export const SimpleMediaView: React.FC = () => {
   const [organizeReport, setOrganizeReport] = useState<OrganizeMediaReport | null>(null);
   const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
   const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
-
-  // Query disk space info on mount
-  useEffect(() => {
-    invoke<VolumeSpaceInfo>('get_volume_disk_space')
-      .then((space) => setVolumeSpace(space))
-      .catch(() => {});
-  }, []);
 
   // Inspect optical disc format for each media item
   useEffect(() => {
@@ -83,6 +95,21 @@ export const SimpleMediaView: React.FC = () => {
     });
   }, [torrents, discMetaMap]);
 
+  // Poster thumbnails: the WebP pipeline (cover scan → downscale → cache)
+  // runs per item; releases without any art fall back to the ffmpeg frame
+  // extractor inside the same command. Only missing entries are fetched.
+  useEffect(() => {
+    torrents.forEach((t) => {
+      if (!(t.id in thumbMap)) {
+        invoke<ThumbnailResult>('get_media_thumbnail', { mediaPath: t.save_path })
+          .then((res) => {
+            setThumbMap((prev) => ({ ...prev, [t.id]: res.thumbnail_path ?? null }));
+          })
+          .catch(() => setThumbMap((prev) => ({ ...prev, [t.id]: null })));
+      }
+    });
+  }, [torrents, thumbMap]);
+
   const activeDownloads = torrents.filter((t) => t.status === 'Downloading');
   const readyToWatch = torrents.filter(
     (t) =>
@@ -93,10 +120,11 @@ export const SimpleMediaView: React.FC = () => {
     (t) => t.status === 'Seeding' || t.status === 'Completed'
   );
 
-  const handlePlayDisc = async (torrent: TorrentItem, preferMenu: boolean = true) => {
+  const handlePlayDisc = async (torrent: TorrentItem, preferMenu: boolean = true, groupId?: string) => {
     void preferMenu; // the embedded engine always starts discs at their menu
     try {
       await openInPlayer(torrent.save_path);
+      if (groupId) rememberLastDisc(groupId, torrent.id);
       setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
@@ -130,10 +158,6 @@ export const SimpleMediaView: React.FC = () => {
         dryRun,
       });
       setCleaningReport(rep);
-      // Refresh disk space info
-      invoke<VolumeSpaceInfo>('get_volume_disk_space')
-        .then((s) => setVolumeSpace(s))
-        .catch(() => {});
     } catch (e) {
       console.error(e);
     } finally {
@@ -254,16 +278,29 @@ export const SimpleMediaView: React.FC = () => {
   };
 
   const renderGroupCard = (group: MediaGroup, variant: 'active' | 'watch' | 'seeding') => {
-    const currentItem = group.items[group.active_index];
+    // A remembered last-played disc wins as the card's face (and what
+    // "Resume" re-opens) until the owner picks a different disc tab.
+    const rememberedId = lastPlayedDiscs[group.id];
+    const rememberedIdx = rememberedId
+      ? group.items.findIndex((i) => i.id === rememberedId)
+      : -1;
+    const effectiveIdx =
+      selectedDiscs[group.id] ??
+      (rememberedIdx >= 0 ? rememberedIdx : group.active_index);
+    const currentItem = group.items[effectiveIdx] || group.items[group.active_index];
     const discInfo = discMetaMap[currentItem.id];
     const progressPct = Math.round(currentItem.progress * 100);
     const isDownloading = currentItem.status === 'Downloading';
-    const coverImage = discInfo?.cover_image || currentItem.poster_url;
+    const canResumePlayback = rememberedIdx >= 0 || lastPlayedDiscs[group.id] === currentItem.id;
+    // Cover priority: structure-detected scan, then the WebP poster cache,
+    // then any remote poster URL the engine recorded.
+    const coverImage =
+      discInfo?.cover_image || thumbMap[currentItem.id] || currentItem.poster_url;
 
     return (
       <div
         key={group.id}
-        className="group relative flex-shrink-0 w-72 rounded-xl bg-adc-cardDark border border-adc-cardBorderDark hover:border-adc-accent/60 overflow-hidden flex flex-col justify-between transition-all duration-200 shadow-lg hover:shadow-adc-glow"
+        className="group relative flex-shrink-0 w-80 rounded-2xl bg-adc-cardDark/80 border border-adc-cardBorderDark/70 hover:border-adc-accent/50 overflow-hidden flex flex-col justify-between transition-all duration-300 shadow-md hover:shadow-xl hover:-translate-y-0.5"
       >
         {/* 16:9 Thumbnail Poster Area */}
         <div className="aspect-video w-full bg-adc-dark relative flex items-center justify-center overflow-hidden">
@@ -290,21 +327,32 @@ export const SimpleMediaView: React.FC = () => {
           <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2.5 transition backdrop-blur-xs p-3">
             <div className="flex items-center gap-2">
               <button
-                onClick={() => handlePlayDisc(currentItem, true)}
+                onClick={() => handlePlayDisc(currentItem, true, group.id)}
                 className="px-3.5 py-2 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white font-semibold text-xs flex items-center gap-1.5 hover:scale-105 transition shadow-lg"
                 title="Play Interactive Disc Menus (dvdnav/BD-J)"
               >
                 <Play className="w-4 h-4 fill-white" />
-                <span>Play Disc</span>
+                <span>Disc</span>
               </button>
 
-              <button
-                onClick={() => (isDownloading ? pauseTorrent(currentItem.id) : resumeTorrent(currentItem.id))}
-                className="p-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark transition"
-                title={isDownloading ? 'Pause' : 'Resume'}
-              >
-                {isDownloading ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
-              </button>
+              {isDownloading || !canResumePlayback ? (
+                <button
+                  onClick={() => (isDownloading ? pauseTorrent(currentItem.id) : resumeTorrent(currentItem.id))}
+                  className="p-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark transition"
+                  title={isDownloading ? 'Pause' : 'Resume'}
+                >
+                  {isDownloading ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+                </button>
+              ) : (
+                <button
+                  onClick={() => handlePlayDisc(currentItem, true, group.id)}
+                  className="px-3 py-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark text-xs font-semibold flex items-center gap-1.5 transition"
+                  title={`Resume from the last disc you played: ${currentItem.name}`}
+                >
+                  <Play className="w-4 h-4 fill-white" />
+                  <span>Resume</span>
+                </button>
+              )}
 
               <button
                 onClick={() => handleOpenFolder(currentItem.save_path)}
@@ -455,28 +503,9 @@ export const SimpleMediaView: React.FC = () => {
           </div>
         </div>
 
-        {/* Volume Space Info & Controls */}
+        {/* Controls (Add/Manager/Free-space live in the title/status bars —
+            owner removed the duplicates from the media menu) */}
         <div className="flex flex-wrap items-center gap-2.5">
-          {volumeSpace && (
-            <div
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark text-xs font-mono"
-              title={`Mount: ${volumeSpace.mount_point} (${volumeSpace.used_percent}% used)`}
-            >
-              <HardDrive className="w-3.5 h-3.5 text-adc-cyan" />
-              <span className="text-slate-300 font-medium">
-                {formatBytes(volumeSpace.available_bytes)} Free
-              </span>
-              <div className="w-12 h-1.5 bg-adc-dark rounded-full overflow-hidden border border-adc-cardBorderDark">
-                <div
-                  className={`h-full ${
-                    volumeSpace.used_percent > 85 ? 'bg-red-500' : 'bg-adc-cyan'
-                  }`}
-                  style={{ width: `${volumeSpace.used_percent}%` }}
-                />
-              </div>
-            </div>
-          )}
-
           <button
             onClick={() => {
               setCleaningReport(null);
@@ -503,28 +532,12 @@ export const SimpleMediaView: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setViewMode('manager')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-medium transition"
-          >
-            <Eye className="w-3.5 h-3.5 text-adc-accent" />
-            <span>Manager</span>
-          </button>
-
-          <button
             onClick={handlePlayExternalDisc}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-semibold transition"
             title="Play a DVD, Blu-ray, or UHD disc from your optical drive with the bundled Nebulae player"
           >
             <Disc className="w-4 h-4 text-adc-accent" />
             <span>Play External Disc</span>
-          </button>
-
-          <button
-            onClick={() => setShowAddTorrent(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-adc-accent hover:bg-adc-accent/90 text-white text-xs font-semibold transition shadow-md"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Media</span>
           </button>
         </div>
       </div>

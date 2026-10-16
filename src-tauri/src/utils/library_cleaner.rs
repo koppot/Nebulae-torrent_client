@@ -364,13 +364,30 @@ impl LibraryCleaner {
     /// Generates or fetches an authentic thumbnail for a media item.
     /// Checks optical disc artwork scans first, then cached thumbnails, then ffmpeg if installed.
     pub fn get_or_create_thumbnail(media_path: &Path, cache_dir: &Path) -> ThumbnailResult {
-        // 1. Check for optical disc cover artwork scans
+        // 1. Check for optical disc cover artwork scans. The raw scan is
+        // downscaled + re-encoded as WebP into the cache so the media grid
+        // never loads multi-MB originals (owner directive: WebP, small).
         if let Some(cover) = DiscDetector::find_cover_image(media_path) {
-            return ThumbnailResult {
-                thumbnail_path: Some(cover),
-                is_disc_artwork: true,
-                source: "disc_artwork".to_string(),
-            };
+            let cover_path = Path::new(&cover);
+            match crate::thumbs::ensure_thumbnail(cache_dir, cover_path) {
+                Ok(webp_path) => {
+                    return ThumbnailResult {
+                        thumbnail_path: Some(webp_path.display().to_string()),
+                        is_disc_artwork: true,
+                        source: "disc_artwork".to_string(),
+                    };
+                }
+                Err(e) => {
+                    // Non-fatal: fall back to the original scan rather than
+                    // showing no art at all.
+                    eprintln!("thumbnail webp encode failed: {e}");
+                    return ThumbnailResult {
+                        thumbnail_path: Some(cover),
+                        is_disc_artwork: true,
+                        source: "disc_artwork".to_string(),
+                    };
+                }
+            }
         }
 
         // 2. Compute stable cache file path
