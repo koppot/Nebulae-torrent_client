@@ -48,6 +48,7 @@ export const SimpleMediaView: React.FC = () => {
   const { setShowAddTorrent } = useUiStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
+  const [discSetMap, setDiscSetMap] = useState<Record<string, DiscStructureInfo[]>>({});
   const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
   const [tmdbMap, setTmdbMap] = useState<Record<string, { poster?: string; overview?: string }>>({});
   const [selectedDiscs, setSelectedDiscs] = useState<Record<string, number>>({});
@@ -80,20 +81,26 @@ export const SimpleMediaView: React.FC = () => {
   const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
   const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
 
-  // Inspect optical disc format for each media item
+  // Inspect optical disc format for each media item, AND the full disc set
+  // (multi-ISO torrents classify every disc by its own size — the badge and
+  // the hover panel read the set, not just the first image).
   useEffect(() => {
     torrents.forEach((t) => {
-      if (!discMetaMap[t.id]) {
-        invoke<DiscStructureInfo | null>('detect_disc_format', { filePath: t.save_path })
-          .then((info) => {
-            if (info) {
-              setDiscMetaMap((prev) => ({ ...prev, [t.id]: info }));
+      if (!(t.id in discSetMap)) {
+        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: t.save_path })
+          .then((set) => {
+            setDiscSetMap((prev) => ({ ...prev, [t.id]: set }));
+            const primary = set[0];
+            if (primary) {
+              setDiscMetaMap((prev) => ({ ...prev, [t.id]: primary }));
             }
           })
-          .catch(() => {});
+          .catch(() => setDiscSetMap((prev) => ({ ...prev, [t.id]: [] })));
+      } else if (!discMetaMap[t.id] && discSetMap[t.id]?.[0]) {
+        setDiscMetaMap((prev) => ({ ...prev, [t.id]: discSetMap[t.id][0] }));
       }
     });
-  }, [torrents, discMetaMap]);
+  }, [torrents, discSetMap, discMetaMap]);
 
   // Poster thumbnails: the WebP pipeline (cover scan → downscale → cache)
   // runs per item; releases without any art fall back to the ffmpeg frame
@@ -267,27 +274,27 @@ export const SimpleMediaView: React.FC = () => {
     const localCover = discInfo?.cover_image || thumbMap[currentItem.id];
     const coverImage = localCover || tmdbMap[group.id]?.poster || currentItem.poster_url;
 
-    // Aggregated disc badge: a boxset whose discs share one layer spec reads
-    // "2× DVD-9"; mixed specs read "DVD-9 + DVD-5" (owner: a lone DVD-9 badge
-    // on a two-disc set is misleading).
+    // Aggregated disc badge from the FULL disc set (multi-ISO torrents count
+    // every disc by its own size): uniform sets read "2× DVD-5", mixed sets
+    // read "DVD-9 + DVD-5" (owner-reported DVD-9 misrepresentation).
     const layerLabel = (ls?: string) =>
       (({ Dvd5: 'DVD-5', Dvd9: 'DVD-9', Bd25: 'BD-25', Bd50: 'BD-50', UhdBd66: 'UHD-66', UhdBd100: 'UHD-100' }) as Record<string, string>)[ls || ''] || 'Disc';
-    const groupSpecs = Array.from(
-      new Set(group.items.map((i) => discMetaMap[i.id]?.layer_spec).filter(Boolean)),
-    ) as string[];
+    const setSpecs = (discSetMap[currentItem.id] ?? []).map((d) => d.layer_spec);
+    const groupSpecs = Array.from(new Set(setSpecs));
+    const discCount = setSpecs.length || group.items.length;
     const discBadge = groupSpecs.length
       ? groupSpecs.length === 1
-        ? `${group.is_boxset ? `${group.items.length}× ` : ''}${layerLabel(groupSpecs[0])}`
+        ? `${discCount > 1 ? `${discCount}× ` : ''}${layerLabel(groupSpecs[0])}`
         : groupSpecs.map(layerLabel).join(' + ')
       : null;
 
     return (
       <div
         key={group.id}
-        className="group relative flex-shrink-0 w-[180px] rounded-2xl bg-white border border-gray-200 hover:border-blue-300 overflow-hidden flex flex-col transition-all duration-300 shadow-sm hover:shadow-xl hover:-translate-y-1"
+        className="group relative flex-shrink-0 w-[180px] rounded-2xl bg-[#1f1f1f] border border-[#262626] hover:border-[#e50914]/50 overflow-hidden flex flex-col transition-all duration-300 shadow-md hover:shadow-xl hover:-translate-y-1"
       >
         {/* Poster tile: full-bleed art, 2:3 like a DVD cover */}
-        <div className="aspect-[2/3] w-full bg-gray-50 relative flex items-center justify-center overflow-hidden">
+        <div className="aspect-[2/3] w-full bg-[#141414] relative flex items-center justify-center overflow-hidden">
           {coverImage ? (
             <img
               src={coverImage.startsWith('http') ? coverImage : `file://${coverImage}`}
@@ -299,41 +306,41 @@ export const SimpleMediaView: React.FC = () => {
               }}
             />
           ) : (
-            <div className="flex flex-col items-center justify-center text-gray-300 group-hover:text-blue-300 transition space-y-1">
+            <div className="flex flex-col items-center justify-center text-[#333333] group-hover:text-[#e50914]/60 transition space-y-1">
               <Disc className="w-12 h-12" />
-              <span className="text-[9px] font-mono uppercase tracking-widest text-gray-400">
+              <span className="text-[9px] font-mono uppercase tracking-widest text-[#737373]">
                 No Art Yet
               </span>
             </div>
           )}
 
-          {/* Top badges: status left, disc spec right — light pills */}
+          {/* Top badges: status left, disc spec right */}
           <div className="absolute top-2 left-2 flex items-center gap-1">
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-white/95 border border-gray-200 text-gray-600 font-semibold">
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
               {currentItem.status}
             </span>
           </div>
           {discBadge && (
             <div className="absolute top-2 right-2">
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/95 border border-gray-200 text-blue-700 font-mono font-semibold">
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-amber-300 font-mono font-semibold">
                 {discBadge}
               </span>
             </div>
           )}
 
-          {/* Hover info panel: white, airy, everything extra lives here */}
-          <div className="absolute inset-0 bg-white/97 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2 transition p-3">
-            <p className="text-[11px] font-semibold text-[#2b2f36] text-center line-clamp-2">
+          {/* Hover info panel: dark glass, everything extra lives here */}
+          <div className="absolute inset-0 bg-[#141414]/95 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2 transition p-3">
+            <p className="text-[11px] font-semibold text-white text-center line-clamp-2">
               {group.clean_title}
             </p>
-            <div className="text-[9px] font-mono text-gray-500 text-center">
+            <div className="text-[9px] font-mono text-[#a3a3a3] text-center">
               {group.year ? `${group.year} · ` : ''}
-              {group.items.length} {group.items.length === 1 ? 'disc' : 'discs'}
+              {discCount} {discCount === 1 ? 'disc' : 'discs'}
               {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
             </div>
             {tmdbMap[group.id]?.overview && (
               <p
-                className="text-[10px] text-gray-500 leading-snug line-clamp-4 text-center"
+                className="text-[10px] text-[#a3a3a3] leading-snug line-clamp-4 text-center"
                 title={tmdbMap[group.id].overview}
               >
                 {tmdbMap[group.id].overview}
@@ -343,7 +350,7 @@ export const SimpleMediaView: React.FC = () => {
             <div className="flex items-center gap-1.5 mt-1">
               <button
                 onClick={() => handlePlayDisc(currentItem, true, group.id)}
-                className="px-3 py-1.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-semibold text-[11px] flex items-center gap-1 transition shadow-sm"
+                className="px-3 py-1.5 rounded-full bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[11px] flex items-center gap-1 transition"
                 title="Play Interactive Disc Menus (dvdnav/BD-J)"
               >
                 <Play className="w-3 h-3 fill-white" />
@@ -353,7 +360,7 @@ export const SimpleMediaView: React.FC = () => {
               {isDownloading ? (
                 <button
                   onClick={() => pauseTorrent(currentItem.id)}
-                  className="p-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"
+                  className="p-1.5 rounded-full border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
                   title="Pause"
                 >
                   <Pause className="w-3 h-3" />
@@ -363,7 +370,7 @@ export const SimpleMediaView: React.FC = () => {
                 // re-open the last-played disc of this boxset.
                 <button
                   onClick={() => handlePlayDisc(currentItem, true, group.id)}
-                  className="px-2.5 py-1.5 rounded-full border border-gray-300 text-gray-700 text-[11px] font-semibold flex items-center gap-1 hover:bg-gray-50 transition"
+                  className="px-2.5 py-1.5 rounded-full border border-[#333333] text-white text-[11px] font-semibold flex items-center gap-1 hover:bg-[#262626] transition"
                   title={`Resume from the last disc you played: ${currentItem.name}`}
                 >
                   <Play className="w-3 h-3 fill-current" />
@@ -373,7 +380,7 @@ export const SimpleMediaView: React.FC = () => {
 
               <button
                 onClick={() => handleOpenFolder(currentItem.save_path)}
-                className="p-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"
+                className="p-1.5 rounded-full border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
                 title="Open Enclosing Folder"
               >
                 <FolderOpen className="w-3 h-3" />
@@ -395,8 +402,8 @@ export const SimpleMediaView: React.FC = () => {
                       }
                       className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full transition ${
                         isSelected
-                          ? 'bg-blue-500 text-white font-bold'
-                          : 'bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-800'
+                          ? 'bg-[#e50914] text-white font-bold'
+                          : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
                       }`}
                     >
                       {discNum}
@@ -407,29 +414,29 @@ export const SimpleMediaView: React.FC = () => {
             )}
 
             {variant === 'active' && currentItem.eta_seconds != null && (
-              <div className="text-[9px] font-mono text-gray-400">
+              <div className="text-[9px] font-mono text-[#737373]">
                 ETA {formatEta(currentItem.eta_seconds)} · {progressPct}%
               </div>
             )}
           </div>
 
           {/* Progress bar at bottom of poster */}
-          <div className="absolute bottom-0 inset-x-0 h-1 bg-gray-200">
+          <div className="absolute bottom-0 inset-x-0 h-1 bg-[#333333]">
             <div
               className={`h-full transition-all duration-300 ${
-                currentItem.status === 'Seeding' ? 'bg-emerald-400' : 'bg-blue-500'
+                currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
               }`}
               style={{ width: `${progressPct}%` }}
             />
           </div>
         </div>
 
-        {/* Below the tile: title + year on the page background (Canva design) */}
+        {/* Below the tile: title + year */}
         <div className="px-2.5 py-2">
-          <h4 className="text-[12px] font-medium text-[#2b2f36] truncate" title={group.clean_title}>
+          <h4 className="text-[12px] font-medium text-white truncate" title={group.clean_title}>
             {group.clean_title}
           </h4>
-          <div className="text-[10px] text-gray-400 font-mono">
+          <div className="text-[10px] text-[#737373] font-mono">
             {group.year || '—'}
             {variant === 'watch' && progressPct < 100 ? ` · ${progressPct}% ready` : ''}
             {variant === 'active' ? ` · ${formatSpeed(currentItem.download_rate)}` : ''}
@@ -440,18 +447,18 @@ export const SimpleMediaView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-[#fafafa] text-[#2b2f36] select-none">
-      {/* Header Bar (light, airy — Canva design) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-gray-200">
+    <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-[#141414] text-white select-none">
+      {/* Header Bar (same dark palette as Nebulae Manager) */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#262626]">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-blue-50">
-            <Disc className="w-5 h-5 text-blue-600" />
+          <div className="p-2 rounded-xl bg-[#1f1f1f] border border-[#262626]">
+            <Disc className="w-5 h-5 text-[#e50914]" />
           </div>
           <div>
-            <h2 className="text-base font-semibold text-[#2b2f36] tracking-tight">
-              Asian DVD Club Cinema
+            <h2 className="text-base font-semibold text-white tracking-tight">
+              Nebulae Cinema Player
             </h2>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-[#a3a3a3]">
               DVD, Blu-ray & 4K UHD optical library organizer
             </p>
           </div>
@@ -481,8 +488,8 @@ export const SimpleMediaView: React.FC = () => {
             onClick={() => setGroupBoxsets(!groupBoxsets)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
               groupBoxsets
-                ? 'border-blue-300 bg-blue-50 text-blue-700'
-                : 'border-gray-200 bg-white text-gray-500 hover:text-gray-800'
+                ? 'border-[#e50914]/40 bg-[#e50914]/10 text-white'
+                : 'border-[#333333] bg-[#1f1f1f] text-[#a3a3a3] hover:text-white'
             }`}
             title="Cluster multi-disc releases into unified rows"
           >
@@ -491,17 +498,17 @@ export const SimpleMediaView: React.FC = () => {
 
           <button
             onClick={handlePlayExternalDisc}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-[#2b2f36] text-xs font-semibold transition"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs font-semibold transition"
             title="Play a DVD, Blu-ray, or UHD disc from your optical drive with the bundled Nebulae player"
           >
-            <Disc className="w-4 h-4 text-blue-600" />
+            <Disc className="w-4 h-4 text-[#e50914]" />
             <span>Play External Disc</span>
           </button>
         </div>
       </div>
 
       {externalDiscError && (
-        <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-700">
+        <div className="p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
           {externalDiscError}
         </div>
       )}
@@ -509,19 +516,19 @@ export const SimpleMediaView: React.FC = () => {
       {torrents.length === 0 ? (
         /* Empty State */
         <div className="flex flex-col items-center justify-center py-24 text-center space-y-4">
-          <div className="p-5 rounded-2xl bg-blue-50 border border-blue-100">
-            <Disc className="w-12 h-12 text-blue-400" />
+          <div className="p-5 rounded-2xl bg-[#1f1f1f] border border-[#262626]">
+            <Disc className="w-12 h-12 text-[#e50914]" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-semibold text-[#2b2f36]">Your Optical Cinema is Empty</h3>
-            <p className="text-xs text-gray-500 max-w-sm">
+            <h3 className="text-base font-semibold text-white">Your Optical Cinema is Empty</h3>
+            <p className="text-xs text-[#a3a3a3] max-w-sm">
               Drop any DVD ISO, BDMV Blu-ray folder, or ADC torrent into this window to start
               streaming with interactive menus.
             </p>
           </div>
           <button
             onClick={() => setShowAddTorrent(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold transition shadow-md"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-md"
           >
             <Plus className="w-4 h-4" />
             <span>Add First Disc</span>
@@ -533,11 +540,11 @@ export const SimpleMediaView: React.FC = () => {
           {activeDownloads.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <ArrowDownCircle className="w-4 h-4 text-blue-500" />
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+                <ArrowDownCircle className="w-4 h-4 text-[#a3a3a3]" />
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#a3a3a3]">
                   Downloading
                 </h3>
-                <span className="text-[11px] font-mono text-blue-600 px-2 py-0.5 rounded-full bg-blue-50">
+                <span className="text-[11px] font-mono text-white px-2 py-0.5 rounded-full bg-[#1f1f1f] border border-[#333333]">
                   {activeDownloads.length}
                 </span>
               </div>
@@ -550,16 +557,16 @@ export const SimpleMediaView: React.FC = () => {
           {/* Shelf 2: Ready to Watch */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <Play className="w-4 h-4 text-blue-500 fill-current" />
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+              <Play className="w-4 h-4 text-[#e50914] fill-current" />
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#a3a3a3]">
                 Ready to Watch
               </h3>
-              <span className="text-[11px] font-mono text-blue-600 px-2 py-0.5 rounded-full bg-blue-50">
+              <span className="text-[11px] font-mono text-white px-2 py-0.5 rounded-full bg-[#1f1f1f] border border-[#333333]">
                 {readyToWatch.length}
               </span>
             </div>
             {readyToWatch.length === 0 ? (
-              <p className="text-xs text-gray-400 italic">
+              <p className="text-xs text-[#737373] italic">
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
             ) : (

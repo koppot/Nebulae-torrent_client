@@ -20,6 +20,17 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
     Ok(DiscDetector::inspect(path))
 }
 
+/// Every disc inside the release (multi-ISO torrents return one entry per
+/// disc, each classified by its own size) — powers the aggregated badge.
+#[tauri::command]
+pub fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
+    let path = Path::new(&file_path);
+    if !path.exists() {
+        return Err(format!("Media path does not exist: {file_path}"));
+    }
+    Ok(DiscDetector::inspect_all(path))
+}
+
 #[tauri::command]
 pub fn scan_disc_artwork(file_path: String) -> Result<Option<String>, String> {
     let path = Path::new(&file_path);

@@ -267,6 +267,57 @@ impl DiscDetector {
         None
     }
 
+    /// Detect EVERY disc inside a torrent path: each ISO/IMG image plus each
+    /// subfolder carrying its own VIDEO_TS/BDMV structure. A multi-disc
+    /// release in one torrent (DISC_1.ISO + DISC_2.ISO) therefore yields a
+    /// per-disc spec (owner: the single "DVD-9" badge from the first image
+    /// misrepresents the set). Each disc is classified by ITS OWN size.
+    pub fn inspect_all(path: &Path) -> Vec<DiscStructureInfo> {
+        if !path.exists() {
+            return Vec::new();
+        }
+        if path.is_file() {
+            return Self::inspect(path).into_iter().collect();
+        }
+        let mut discs: Vec<DiscStructureInfo> = Vec::new();
+        if let Ok(entries) = fs::read_dir(path) {
+            let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            children.sort();
+            for child in children {
+                if child.is_file() {
+                    let ext = child
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase());
+                    if ext.as_deref() == Some("iso") || ext.as_deref() == Some("img") {
+                        if let Some(info) = Self::inspect(&child) {
+                            discs.push(info);
+                        }
+                    }
+                } else if child.is_dir()
+                    && (Self::find_subpath(&child, "VIDEO_TS").is_some()
+                        || Self::find_subpath(&child, "BDMV").is_some())
+                {
+                    if let Some(info) = Self::inspect(&child) {
+                        discs.push(info);
+                    }
+                }
+            }
+        }
+        if discs.is_empty() {
+            if let Some(info) = Self::inspect(path) {
+                discs.push(info);
+            }
+        }
+        // Number the set 1..n when the detector could not infer numbers.
+        let total = discs.len() as u32;
+        for (idx, d) in discs.iter_mut().enumerate() {
+            d.disc_number = d.disc_number.or(Some(idx as u32 + 1));
+            d.total_discs = d.total_discs.or(Some(total));
+        }
+        discs
+    }
+
     /// Recursively calculate total size in bytes of file or directory.
     fn calculate_total_bytes(path: &Path) -> u64 {
         if path.is_file() {

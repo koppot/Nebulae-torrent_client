@@ -34,10 +34,28 @@ impl SafeLogger {
     }
 
     pub fn init_tracing() {
+        Self::init_tracing_with_file(None);
+    }
+
+    /// Single tracing subscriber writing to BOTH stderr and the session log.
+    /// Without the file leg, `tracing::info!` diagnostics (player stages,
+    /// webview breadcrumbs) vanish to stderr and the log we ship to the
+    /// owner stays empty — which is exactly what hid the playback failure.
+    pub fn init_tracing_with_file(logs_dir: Option<&Path>) {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let file = logs_dir.and_then(|dir| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("nebulae_session.log"))
+                .ok()
+        });
+        let make = DualMakeWriter {
+            file: std::sync::Arc::new(std::sync::Mutex::new(file)),
+        };
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
-            .with_writer(std::io::stderr)
+            .with_writer(make)
             .try_init();
     }
 
@@ -54,6 +72,53 @@ impl SafeLogger {
         {
             let _ = file.write_all(line.as_bytes());
         }
+    }
+}
+
+/// Writer that fans each tracing event out to stderr AND the session log.
+struct DualMakeWriter {
+    file: std::sync::Arc<std::sync::Mutex<Option<std::fs::File>>>,
+}
+
+struct DualGuard<'a> {
+    file: std::sync::Arc<std::sync::Mutex<Option<std::fs::File>>>,
+    _lifetime: std::marker::PhantomData<&'a ()>,
+    line: Vec<u8>,
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for DualMakeWriter {
+    type Writer = DualGuard<'a>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        DualGuard {
+            file: std::sync::Arc::clone(&self.file),
+            _lifetime: std::marker::PhantomData,
+            line: Vec::new(),
+        }
+    }
+}
+
+impl std::io::Write for DualGuard<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // tracing events arrive as complete line-formatted writes; buffer
+        // them so the file gets a timestamped copy while stderr stays raw.
+        self.line.extend_from_slice(buf);
+        std::io::stderr().write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.line.is_empty() {
+            let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let text = String::from_utf8_lossy(&self.line);
+            if let Ok(mut guard) = self.file.lock() {
+                if let Some(f) = guard.as_mut() {
+                    let _ = f.write_all(format!("[{ts}] {text}").as_bytes());
+                }
+            }
+            self.line.clear();
+        }
+        std::io::stderr().flush()
     }
 }
 

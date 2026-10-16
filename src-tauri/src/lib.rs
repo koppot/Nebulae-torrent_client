@@ -15,10 +15,7 @@ use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
 pub fn run() {
-    // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
-    SafeLogger::init_tracing();
-
-    // 1. Initialize isolated internal directory layout: Nebulae/internal/
+    // 0. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
         Err(e) => {
@@ -26,6 +23,12 @@ pub fn run() {
             return;
         }
     };
+
+    // 0b. Initialize privacy-safe tracing subscriber (redacting passkeys and
+    // tracker URLs). The subscriber writes to stderr AND the session log —
+    // the file leg is what makes player-stage diagnostics and webview
+    // breadcrumbs visible in the log we ship (they used to vanish).
+    SafeLogger::init_tracing_with_file(Some(&paths.logs_dir));
 
     // 2. Initialize internal SQLite persistence
     let db = match Database::new(&paths.db_file) {
@@ -507,6 +510,7 @@ pub fn run() {
             commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,
+            commands::media::detect_disc_set,
             commands::media::scan_disc_artwork,
             commands::media::parse_media_title,
             commands::media::get_volume_disk_space,
