@@ -1453,3 +1453,25 @@ both save_path shapes (root + subfolder).
   matching the owner's directive; the "uploaded / of total" progress
   label is centered.
 - Gates: tsc clean, clippy 0 findings, cargo tests green, pushed baaf4a4.
+
+## 2026-10-16 — UI polish + media menu batch (f69fc20, 0cb5b85)
+
+- Mode switcher flips to Expand inside compact mode; the compact bar now
+  counts and highlights errored transfers (owner: "errors pointing out").
+- Traffic lights: 24px hit areas around the 12px dots (the dots were
+  near-unclickable); yellow always minimizes; X minimizes to the dock.
+- Rename Folder/File = icon-only with tooltips. Swarm Controls: 1st/Last
+  and Super-Seed removed (transmission RPC no-ops - they never worked);
+  Sequential kept as an icon toggle with a full tooltip.
+- Media cards: "Disc" wording; labeled Resume re-opens the last-played
+  disc per boxset (localStorage nebulae_last_played_discs, wins as the
+  card face until another disc tab is picked). Media menu decluttered:
+  Add Media / Manager / free-space gauge removed (owner: duplicates).
+- New src/thumbs.rs: disc artwork scans downscale to 360px + WebP cache
+  (image crate, path+size+mtime keyed) wired into
+  LibraryCleaner::get_or_create_thumbnail; the frontend now calls
+  get_media_thumbnail per item and prefers structure cover > WebP cache >
+  poster URL. Cards restyled airier (w-80, rounded-2xl, hover lift).
+- Gates: tsc clean, eslint clean, clippy 0, 91 tests, CI green for both
+  pushes; installed 0cb5b85 arm64 build + deep re-signed (Team 2YJ32CEY87),
+  engine listening on 41413.
