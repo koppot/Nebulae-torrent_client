@@ -12,7 +12,7 @@ use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem}
 use crate::db::{Database, TorrentDbMetadata};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::models::peering::{LocalityTier, PeerTelemetry};
-use crate::utils::network::find_active_vpn_interface;
+use crate::utils::network::{find_active_egress_vpn_interface, find_active_vpn_interface};
 use crate::utils::paths::AppPaths;
 
 /// Expands a leading `~` to the user's home directory. Relative paths resolve
@@ -782,6 +782,18 @@ fn negotiate_reachable_port(
         }
     }
 
+    // None of the candidates was reachable: put the live session back on the
+    // configured port. Without this, the daemon stays on the LAST tried
+    // candidate (e.g. 41424) while settings.json keeps {configured} — a
+    // silent drift that leaves the router's manual forward pointing at a
+    // port nobody listens on. Next launch rebinds correctly anyway, but the
+    // running session should not spend its whole lifetime on the wrong port.
+    if let Err(e) = rpc.session_set(json!({ "peer-port": configured })) {
+        warn!("[port] failed to restore configured port {configured} on the live session: {e}");
+    } else {
+        info!("[port] live session restored to configured port {configured}");
+    }
+
     warn!(
         "[port] none of the tried ports ({}) is externally reachable; keeping {configured}. \
          The router refuses programmatic mappings (NAT-PMP/PCP) — a manual port forward is required.",
@@ -791,6 +803,27 @@ fn negotiate_reachable_port(
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    // Owner directive: when no candidate is externally reachable, surface a
+    // user-facing explanation instead of failing silently. The verdict is
+    // persisted (the engine is built before the Tauri app handle exists, so
+    // there is no event channel here); the front end reads it through
+    // `get_port_negotiation_result` and shows a dialog with router
+    // port-forwarding instructions.
+    let _ = db.set_setting(
+        "port_negotiation_result",
+        json!({
+            "status": "unreachable",
+            "configured_port": configured,
+            "tried_ports": candidates,
+            "checked_at_epoch_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        })
+        .to_string()
+        .as_str(),
+    );
 }
 
 /// Persist the negotiated port everywhere the port is read: the stored user
@@ -798,6 +831,21 @@ fn negotiate_reachable_port(
 /// own settings.json (so a restart rebinds the same port even if the DB
 /// write fails).
 fn persist_negotiated_port(db: &Arc<Database>, engine_dir: &Path, port: u16) {
+    // Clear any prior "unreachable" verdict so the front end does not show a
+    // stale port-forward warning after the port is working.
+    let _ = db.set_setting(
+        "port_negotiation_result",
+        json!({
+            "status": "reachable",
+            "configured_port": port,
+            "checked_at_epoch_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+        })
+        .to_string()
+        .as_str(),
+    );
     if let Ok(Some(raw)) = db.get_setting("user_settings_json") {
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if v.get("listening_port").and_then(|p| p.as_u64()) != Some(port as u64) {
@@ -878,7 +926,12 @@ impl TransmissionTorrentEngine {
         let mut initial_ks_active = false;
 
         if is_vpn_required {
-            if let Some(vpn_iface) = find_active_vpn_interface() {
+            // Bind ONLY to a tunnel that can actually carry internet traffic.
+            // A mesh-VPN interface without egress (Tailscale, no exit node)
+            // accepts the bind but every peer connection then fails with no
+            // error — torrents stall with zero peers while announces still
+            // work. Verified empirically 2026-10-16.
+            if let Some(vpn_iface) = find_active_egress_vpn_interface() {
                 if let Some(vpn_ip) = vpn_iface
                     .ip_addresses
                     .iter()
@@ -887,6 +940,17 @@ impl TransmissionTorrentEngine {
                     bind_ipv4 = vpn_ip.clone();
                     info!("Hardening at spawn: bound transmission-daemon to active tunnel IP {bind_ipv4}");
                 }
+            } else if let Some(any_vpn) = find_active_vpn_interface() {
+                // A VPN-type interface exists but has no internet egress.
+                // Binding peer traffic to it would stall every torrent; the
+                // default route is used instead and the situation is logged
+                // loudly so the connectivity doctor and the user can see it.
+                bind_ipv4 = "0.0.0.0".to_string();
+                warn!(
+                    "[vpn] interface {} is up but has NO internet egress (mesh VPN without exit node?); \
+                     binding engine to the default route instead. Peer traffic is NOT tunneled.",
+                    any_vpn.name
+                );
             } else if kill_switch_armed {
                 warn!("VPN is required and killswitch is armed, but no active tunnel found at engine spawn! Engaging killswitch protection immediately.");
                 bind_ipv4 = "127.0.0.1".to_string();
@@ -1492,14 +1556,19 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn reset_kill_switch(&self) -> Result<(), String> {
         self.kill_switch_active.store(false, Ordering::SeqCst);
 
-        // Check if a VPN tunnel is currently active to restore binding
-        let bind_ip = if let Some(vpn) = find_active_vpn_interface() {
+        // Check if a VPN tunnel with real egress is currently active to
+        // restore binding. A mesh-VPN interface without egress must NOT
+        // receive the peer bind (torrents stall with zero peers).
+        let bind_ip = if let Some(vpn) = find_active_egress_vpn_interface() {
             vpn.ip_addresses
                 .iter()
                 .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
                 .cloned()
                 .unwrap_or_else(|| "0.0.0.0".to_string())
         } else {
+            if find_active_vpn_interface().is_some() {
+                warn!("[vpn] VPN interface present but without internet egress; keeping the default-route binding");
+            }
             "0.0.0.0".to_string()
         };
 
@@ -1788,11 +1857,19 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     timeout_count: 0,
                     choke_events: 0,
                     client_name,
-                    locality_tier: if address.starts_with("192.168.") || address.starts_with("10.")
-                    {
-                        LocalityTier::Lan
-                    } else {
-                        LocalityTier::Global
+                    locality_tier: {
+                        // RFC-1918 private ranges + loopback + IPv6 link-local.
+                        let is_lan = address.starts_with("192.168.")
+                            || address.starts_with("10.")
+                            || address.starts_with("127.")
+                            || address == "::1"
+                            || address.to_lowercase().starts_with("fe80:")
+                            || is_rfc1918_172(&address);
+                        if is_lan {
+                            LocalityTier::Lan
+                        } else {
+                            LocalityTier::Global
+                        }
                     },
                     country_code: None,
                     asn: None,
@@ -1814,6 +1891,22 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn check_port_open(&self) -> Option<bool> {
         self.rpc_client.port_test().ok()
     }
+}
+
+/// Returns true when `addr` is in the RFC-1918 172.16.0.0/12 block
+/// (172.16.x.x – 172.31.x.x). The other two RFC-1918 blocks (10.x and
+/// 192.168.x) are handled inline with `starts_with`.
+fn is_rfc1918_172(addr: &str) -> bool {
+    // Fast prefix check before parsing — avoids allocations for the common case.
+    if !addr.starts_with("172.") {
+        return false;
+    }
+    // Extract the second octet.
+    let second = addr
+        .split('.')
+        .nth(1)
+        .and_then(|s| s.parse::<u8>().ok());
+    matches!(second, Some(16..=31))
 }
 
 #[cfg(test)]

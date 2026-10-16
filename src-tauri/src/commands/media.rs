@@ -320,16 +320,14 @@ pub fn player_return_to_menu(
         tracing::info!("[player] return_to_menu: set_title(0) sent");
     }
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    let at_menu = mp != 0
-        && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0;
+    let at_menu =
+        mp != 0 && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0;
     if at_menu {
         tracing::info!("[player] return_to_menu: now at menu title");
         return Ok(());
     }
     // dvdnav ignored us — restart the disc; a fresh open always shows the menu.
-    let path = poison(&state.current_path)
-        .clone()
-        .unwrap_or_default();
+    let path = poison(&state.current_path).clone().unwrap_or_default();
     if path.is_empty() {
         tracing::warn!("[player] return_to_menu: no current path to restart");
         return Err("no current media to restart".into());
@@ -400,6 +398,29 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
     let lib = loaded_lib(&state)?;
     tracing::info!("[player] set_title({title})");
     unsafe { (lib.libvlc_media_player_set_title)(mp as *mut c_void, title.max(0)) };
+    Ok(())
+}
+
+/// Send a DVD/Blu-ray menu navigation action through libVLC's navigate API.
+///
+/// libvlc_navigate_mode_t: 0 = activate (Enter on the highlighted item),
+/// 1 = up, 2 = down, 3 = left, 4 = right.
+///
+/// This is the deterministic menu input path. Mouse clicks on menu buttons
+/// are NOT delivered to dvdnav when the vout is embedded into an external
+/// NSView (reproduced and measured: synthesized clicks never activate;
+/// navigate(activate) works on the first call), so the overlay wires the
+/// keyboard and the on-screen D-pad to this command instead.
+#[tauri::command]
+pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    let mode = mode.clamp(0, 4);
+    tracing::info!("[player] menu_navigate({mode})");
+    unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }
 
@@ -646,33 +667,47 @@ pub fn get_media_thumbnail(
 /// TMDB poster + metadata for a release (used when the local folder ships no
 /// cover scan). Credentials come from the OS keychain; results are cached in
 /// the DB per title+year. Returns None silently when no match / no key.
+///
+/// This command is `async` because `fetch_poster` uses `reqwest::blocking`
+/// internally. Calling blocking I/O directly inside a Tokio async context
+/// panics with "Cannot start a runtime from within a runtime". The entire
+/// body runs inside `spawn_blocking`, which safely offloads it to the
+/// blocking thread pool.
 #[tauri::command]
-pub fn fetch_tmdb_release(
+pub async fn fetch_tmdb_release(
     title: String,
     year: Option<i32>,
 ) -> Result<Option<crate::utils::tmdb::TmdbMatch>, String> {
-    // The DB lives in the app's own "Nebulae" data dir (AppPaths), NOT under
-    // the bundle identifier dir — resolving it from app.path() produced
-    // org.asiandvdclub.nebulae/internal/db/... which never existed, so every
-    // TMDB fetch died on "unable to open database file" before any lookup.
-    let db_path = crate::utils::paths::AppPaths::init()?.db_file;
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Data dir: {e}"))?;
-    }
-    let db = crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
-    let result = crate::utils::tmdb::fetch_poster(&db, &title, &title, year);
+    // Clone before the closure so we can still log after spawn_blocking consumes `title`.
+    let title_log = title.clone();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<crate::utils::tmdb::TmdbMatch>, String> {
+            // The DB lives in the app's own "Nebulae" data dir (AppPaths), NOT under
+            // the bundle identifier dir — resolving it from app.path() produced
+            // org.asiandvdclub.nebulae/internal/db/... which never existed, so every
+            // TMDB fetch died on "unable to open database file" before any lookup.
+            let db_path = crate::utils::paths::AppPaths::init()?.db_file;
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("Data dir: {e}"))?;
+            }
+            let db = crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
+            crate::utils::tmdb::fetch_poster(&db, &title, &title, year)
+        },
+    )
+    .await
+    .map_err(|e| format!("spawn_blocking join error: {e}"))??;
+
     match &result {
-        Ok(Some(m)) => tracing::info!(
-            "[tmdb] match for {title:?}: poster={} year={:?}",
+        Some(m) => tracing::info!(
+            "[tmdb] match for {title_log:?}: poster={} year={:?}",
             m.poster_webp.display(),
             m.year
         ),
         // Silent-skip (no keychain entry) or genuinely no match: both mean the
         // grid keeps its placeholder — log it so the owner sees WHY.
-        Ok(None) => tracing::warn!("[tmdb] no match or no credentials for {title:?}"),
-        Err(e) => tracing::warn!("[tmdb] fetch failed for {title:?}: {e}"),
+        None => tracing::warn!("[tmdb] no match or no credentials for {title_log:?}"),
     }
-    result
+    Ok(result)
 }
 
 /// Whether TMDB integration is configured (Settings pane indicator).
