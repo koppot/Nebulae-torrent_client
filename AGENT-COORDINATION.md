@@ -1417,3 +1417,17 @@ both save_path shapes (root + subfolder).
   TorrentManagerView route through openInPlayer; Settings pane reports the
   VLC engine. libVLC is NOT bundled (GPL) - it is loaded from the user's VLC.
 - Gates: clippy 0 findings, 80 tests, tsc clean, eslint clean.
+
+## 2026-10-16 — Firewall identity-check prompts: stable signing identity
+
+- Every rebuild was ad-hoc signed, so macOS's application firewall treated
+  each install as a "modified program" and re-prompted (outbound UPnP/LPD
+  multicast + tracker connections from the transmission-daemon sidecar).
+- Fix: the owner's keychain already carries an Apple Development identity
+  (SHA-1 E3A26A990308798F8DE4B7C49A3E27BFEF192623, Team 2YJ32CEY87).
+  The installed app is deep re-signed with it and both binaries are in the
+  firewall allowlist ("Allow incoming connections").
+- INSTALL PROCEDURE ADDITION: after every ditto install run
+  codesign --force --deep --sign E3A26A990308798F8DE4B7C49A3E27BFEF192623
+  /Applications/Nebulae.app
+  so the firewall identity stays stable across rebuilds.
