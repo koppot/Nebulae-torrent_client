@@ -3,8 +3,7 @@
 //! A black X11 subwindow is created inside the main window and raised above
 //! the webkit view; libVLC renders into it via `set_xwindow`. Under native
 //! Wayland there is no X11 drawable and libVLC 3 has no Wayland vout, so
-//! `ensure_overlay` reports failure and playback falls back to launching
-//! the user's VLC application.
+//! `ensure_overlay` reports an error (there is no external-player fallback).
 //!
 //! All X11 work happens on Tauri's main thread so it can never race GTK's
 //! event loop; the Xlib display handle is opened once and intentionally
@@ -17,7 +16,7 @@ use tauri::{AppHandle, Manager};
 struct XHandle {
     xlib: x11_dl::xlib::Xlib,
     display: *mut x11_dl::xlib::Display,
-    overlay: u64, // X11 Window id
+    overlay: usize, // X11 Window id (x11-dl uses usize)
 }
 
 // The raw display pointer is only ever dereferenced inside main-thread
@@ -33,7 +32,7 @@ fn xcell() -> &'static std::sync::Mutex<Option<XHandle>> {
     CELL.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-fn with_x<R>(
+fn with_x<R: Send>(
     app: &AppHandle,
     f: impl FnOnce(&XHandle) -> R + Send + 'static,
 ) -> Result<R, String> {
@@ -41,7 +40,7 @@ fn with_x<R>(
     app.run_on_main_thread(move || {
         let res = match xcell().lock() {
             Ok(guard) => match guard.as_ref() {
-                Some(x) => Ok(f(x)),
+                Some(xh) => Ok(f(xh)),
                 None => Err("X11 overlay not initialized".to_string()),
             },
             Err(_) => Err("X11 overlay state poisoned".to_string()),
@@ -68,34 +67,37 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     let raw = win
         .window_handle()
         .map_err(|e| format!("no raw window handle: {e}"))?;
-    let xid = match raw.as_raw() {
-        raw_window_handle::RawWindowHandle::X11(h) => h.window.get(),
+    let parent_xid = match raw.as_raw() {
+        // raw-window-handle 0.6 names the X11 variant `Xlib`.
+        raw_window_handle::RawWindowHandle::Xlib(h) => h.window.get() as usize,
         raw_window_handle::RawWindowHandle::Wayland(_) => {
-            return Err("Wayland session: embedded overlay unavailable".to_string())
+            return Err(
+                "Wayland session: no X11 drawable for the embedded overlay (use an X11/XWayland session)"
+                    .to_string(),
+            );
         }
         other => {
             return Err(format!("unsupported window handle: {other:?}"));
         }
     };
 
-    let app2 = app.clone();
     let (tx, rx) = mpsc::channel::<Result<usize, String>>();
     app.run_on_main_thread(move || {
-        let res = unsafe { create_overlay(&app2, xid) };
+        let res = unsafe { create_overlay(parent_xid) };
         let _ = tx.send(res);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
-    let xid_overlay = rx
+    let overlay_xid = rx
         .recv()
         .map_err(|_| "main thread callback lost".to_string())??;
 
     app.state::<crate::player::PlayerState>()
         .overlay_view
-        .store(xid_overlay, std::sync::atomic::Ordering::SeqCst);
-    Ok(xid_overlay)
+        .store(overlay_xid, std::sync::atomic::Ordering::SeqCst);
+    Ok(overlay_xid)
 }
 
-unsafe fn create_overlay(_app: &AppHandle, parent_xid: u64) -> Result<usize, String> {
+unsafe fn create_overlay(parent_xid: usize) -> Result<usize, String> {
     let xlib = x11_dl::xlib::Xlib::open()
         .map_err(|e| format!("libX11 unavailable: {e}"))?;
     let display = (xlib.XOpenDisplay)(std::ptr::null());
@@ -134,14 +136,14 @@ unsafe fn create_overlay(_app: &AppHandle, parent_xid: u64) -> Result<usize, Str
 }
 
 pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
-    with_x(app, |x| unsafe {
+    with_x(app, move |xh| unsafe {
         if hidden {
-            (x.xlib.XUnmapWindow)(x.display, x.overlay);
+            (xh.xlib.XUnmapWindow)(xh.display, xh.overlay);
         } else {
-            (x.xlib.XMapWindow)(x.display, x.overlay);
-            (x.xlib.XRaiseWindow)(x.display, x.overlay);
+            (xh.xlib.XMapWindow)(xh.display, xh.overlay);
+            (xh.xlib.XRaiseWindow)(xh.display, xh.overlay);
         }
-        (x.xlib.XFlush)(x.display);
+        (xh.xlib.XFlush)(xh.display);
     })
     .map(|_| ())
 }
@@ -151,16 +153,16 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
         .get_webview_window("main")
         .and_then(|w| w.scale_factor().ok())
         .unwrap_or(1.0);
-    with_x(app, move |x| unsafe {
-        (x.xlib.XMoveResizeWindow)(
-            x.display,
-            x.overlay,
+    with_x(app, move |xh| unsafe {
+        (xh.xlib.XMoveResizeWindow)(
+            xh.display,
+            xh.overlay,
             (x * scale) as i32,
             (y * scale) as i32,
             (w * scale) as i32,
             (h * scale) as i32,
         );
-        (x.xlib.XFlush)(x.display);
+        (xh.xlib.XFlush)(xh.display);
     })
     .map(|_| ())
 }
