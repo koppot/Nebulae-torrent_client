@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Disc,
   Trash2,
+  Eraser,
   Layers,
   FolderArchive,
   X,
@@ -39,7 +40,7 @@ interface MediaGroup {
 }
 
 export const SimpleMediaView: React.FC = () => {
-  const { torrents, pauseTorrent, resumeTorrent, selectSourceFolder } = useTorrentStore();
+  const { torrents, pauseTorrent, selectSourceFolder } = useTorrentStore();
   const { setShowAddTorrent } = useUiStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
@@ -342,28 +343,18 @@ export const SimpleMediaView: React.FC = () => {
                 >
                   <Pause className="w-4 h-4" />
                 </button>
-              ) : (
+              ) : lastPlayedDiscs[group.id] ? (
+                // Shown ONLY when there is something to resume (owner rule):
+                // re-open the last-played disc of this boxset.
                 <button
-                  onClick={() => {
-                    // A last-played disc exists → re-open it; otherwise this
-                    // is a plain transport resume of the paused download.
-                    if (lastPlayedDiscs[group.id]) {
-                      handlePlayDisc(currentItem, true, group.id);
-                    } else {
-                      resumeTorrent(currentItem.id);
-                    }
-                  }}
+                  onClick={() => handlePlayDisc(currentItem, true, group.id)}
                   className="px-3 py-2 rounded-lg bg-adc-dark/90 hover:bg-adc-cardDark text-white border border-adc-cardBorderDark text-xs font-semibold flex items-center gap-1.5 transition"
-                  title={
-                    lastPlayedDiscs[group.id]
-                      ? `Resume from the last disc you played: ${currentItem.name}`
-                      : 'Resume download / seeding'
-                  }
+                  title={`Resume from the last disc you played: ${currentItem.name}`}
                 >
                   <Play className="w-4 h-4 fill-white" />
                   <span>Resume</span>
                 </button>
-              )}
+              ) : null}
 
               <button
                 onClick={() => handleOpenFolder(currentItem.save_path)}
@@ -527,6 +518,24 @@ export const SimpleMediaView: React.FC = () => {
           >
             <Trash2 className="w-3.5 h-3.5 text-slate-400" />
             <span>Clean Cache</span>
+          </button>
+
+          <button
+            onClick={() => {
+              // Forget every last-played disc: the Resume buttons vanish
+              // until new discs are played (owner-requested reset).
+              setLastPlayedDiscs({});
+              try {
+                localStorage.removeItem('nebulae_last_played_discs');
+              } catch {
+                // Nothing to clear if storage is unavailable.
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-adc-cardBorderDark bg-adc-cardDark hover:bg-adc-cardDark/80 text-white text-xs font-medium transition"
+            title="Forget last-played discs — hides the Resume buttons until discs are played again"
+          >
+            <Eraser className="w-3.5 h-3.5 text-slate-400" />
+            <span>Clear Resume Cache</span>
           </button>
 
           <button
