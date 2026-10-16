@@ -45,6 +45,12 @@ pub struct VlcLib {
     pub libvlc_media_player_set_chapter: unsafe extern "C" fn(*mut c_void, c_int),
     pub libvlc_audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     pub libvlc_video_set_deinterlace: unsafe extern "C" fn(*mut c_void, *const c_char),
+    // DVD/BD menu interaction. Mouse events do NOT reach dvdnav when the
+    // vout is embedded into an external NSView (verified empirically: 10
+    // synthesized clicks over 35 s never activated a menu button, while
+    // libvlc_media_player_navigate(activate) switched title 0 -> 1 on the
+    // first call). This API is therefore the ONLY reliable menu input path.
+    pub libvlc_media_player_navigate: unsafe extern "C" fn(*mut c_void, c_int),
 }
 
 // The library handle is process-global and the symbols are plain functions;
@@ -201,6 +207,7 @@ impl VlcLib {
             libvlc_media_player_set_chapter: sym!("libvlc_media_player_set_chapter": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_audio_set_volume: sym!("libvlc_audio_set_volume": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_video_set_deinterlace: sym!("libvlc_video_set_deinterlace": unsafe extern "C" fn(*mut c_void, *const c_char)),
+            libvlc_media_player_navigate: sym!("libvlc_media_player_navigate": unsafe extern "C" fn(*mut c_void, c_int)),
             lib,
             deps,
         }

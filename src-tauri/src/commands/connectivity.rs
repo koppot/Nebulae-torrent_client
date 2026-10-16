@@ -239,6 +239,51 @@ pub async fn run_connectivity_doctor_test(
     })
 }
 
+/// The port negotiator's latest verdict, for the front end's port-forward
+/// warning dialog. Written by `negotiate_reachable_port` at engine spawn.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortNegotiationResult {
+    pub status: String,
+    pub configured_port: u16,
+    pub tried_ports: Vec<u16>,
+    pub checked_at_epoch_ms: u64,
+}
+
+#[tauri::command]
+pub fn get_port_negotiation_result(
+    db: State<'_, Arc<Database>>,
+) -> Result<Option<PortNegotiationResult>, String> {
+    let raw = db.get_setting("port_negotiation_result").ok().flatten();
+    let Some(raw) = raw else { return Ok(None) };
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) => Ok(Some(PortNegotiationResult {
+            status: v
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            configured_port: v
+                .get("configured_port")
+                .and_then(|p| p.as_u64())
+                .unwrap_or(0) as u16,
+            tried_ports: v
+                .get("tried_ports")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_u64().map(|n| n as u16))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            checked_at_epoch_ms: v
+                .get("checked_at_epoch_ms")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0),
+        })),
+        Err(_) => Ok(None),
+    }
+}
+
 #[tauri::command]
 pub fn retest_listening_port(port: u16) -> Result<bool, String> {
     match std::net::TcpListener::bind(("0.0.0.0", port)) {
@@ -263,26 +308,38 @@ pub async fn get_connectivity_certificate(
 }
 
 /// Live Tailscale (Secure Network) detection for the status bar: reports the
-/// tailnet interface and member IP when the VPN data plane is up.
+/// tailnet interface and member IP when the VPN data plane is up, plus a
+/// live probe of the ADC server over the tailnet. When `adc_reachable` is
+/// `false` the tailnet path to ADC is down: the user must be told, since
+/// traffic then falls back to the default connection (or the Nebula VPN).
 #[derive(Debug, Clone, Serialize)]
 pub struct TailscaleStatus {
     pub connected: bool,
     pub interface: Option<String>,
     pub tailnet_ip: Option<String>,
+    pub adc_reachable: Option<bool>,
+    pub adc_node: Option<String>,
 }
 
 #[tauri::command]
 pub fn get_tailscale_status() -> Result<TailscaleStatus, String> {
     Ok(match crate::utils::network::detect_tailscale() {
-        Some((interface, tailnet_ip)) => TailscaleStatus {
-            connected: true,
-            interface: Some(interface),
-            tailnet_ip: Some(tailnet_ip),
-        },
+        Some((interface, tailnet_ip)) => {
+            let probe = crate::utils::network::probe_adc_over_tailnet();
+            TailscaleStatus {
+                connected: true,
+                interface: Some(interface),
+                tailnet_ip: Some(tailnet_ip),
+                adc_reachable: probe.as_ref().map(|(_, r)| *r),
+                adc_node: probe.map(|(n, _)| n),
+            }
+        }
         None => TailscaleStatus {
             connected: false,
             interface: None,
             tailnet_ip: None,
+            adc_reachable: None,
+            adc_node: None,
         },
     })
 }

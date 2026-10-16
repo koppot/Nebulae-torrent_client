@@ -17,6 +17,7 @@ import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
 import { CreateTorrentModal } from './components/modals/CreateTorrentModal';
 import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
+import { PortForwardModal } from './components/modals/PortForwardModal';
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
@@ -264,6 +265,7 @@ export const App: React.FC = () => {
       <AddTorrentModal />
       <CreateTorrentModal />
       <ConnectivityDoctorModal />
+      <PortForwardModal />
       <VpnManagerModal />
       <TrackerModal />
       <DeleteTorrentModal />

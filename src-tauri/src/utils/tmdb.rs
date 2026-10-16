@@ -153,7 +153,12 @@ pub fn fetch_poster(
             return Err(format!("TMDB search returned {}", resp.status()));
         }
         let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
-        if let Some(i) = body.results.into_iter().next().filter(|i| i.poster_path.is_some()) {
+        if let Some(i) = body
+            .results
+            .into_iter()
+            .next()
+            .filter(|i| i.poster_path.is_some())
+        {
             is_tv = endpoint.ends_with("tv");
             item = Some(i);
             break;
@@ -199,7 +204,9 @@ pub fn fetch_poster(
             let kind = if is_tv { "tv" } else { "movie" };
             let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{id}"))
                 .map_err(|e| format!("TMDB url: {e}"))?;
-            detail_url.query_pairs_mut().append_pair("api_key", &api_key);
+            detail_url
+                .query_pairs_mut()
+                .append_pair("api_key", &api_key);
             client
                 .get(detail_url)
                 .send()
@@ -298,8 +305,7 @@ fn trakt_fallback(
     // try the movie detail first, then the TV detail (same TMDB id space).
     let api_key = get_secret("tmdb:api_key").unwrap_or_default();
     let fetch_detail = |kind: &str| -> Result<Option<TmdbItem>, String> {
-        let mut detail_url =
-            url::Url::parse(&format!("{TMDB_BASE}/{kind}/{tmdb_id}")).unwrap();
+        let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{tmdb_id}")).unwrap();
         detail_url
             .query_pairs_mut()
             .append_pair("api_key", &api_key);
@@ -351,7 +357,9 @@ fn trakt_fallback(
         .or(detail.first_air_date.as_deref())
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
-    let runtime = detail.runtime.or_else(|| detail.episode_run_time.first().copied());
+    let runtime = detail
+        .runtime
+        .or_else(|| detail.episode_run_time.first().copied());
     let _ = db.set_setting(cache_key, &webp_path.display().to_string());
     if let Some(ov) = &overview {
         let _ = db.set_setting(&format!("{cache_key}:overview"), ov);

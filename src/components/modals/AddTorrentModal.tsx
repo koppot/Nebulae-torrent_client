@@ -19,6 +19,7 @@ import {
   Link as LinkIcon,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource, addTorrentRejection, setAddTorrentRejection } =
@@ -220,6 +221,56 @@ export const AddTorrentModal: React.FC = () => {
     setRenameInputs({});
   }, [torrentSource, downloadDir]);
 
+  // Native drag-and-drop with REAL absolute paths. The webview strips
+  // File.path from HTML5 drop events, so drops handled only by the inline
+  // onDrop produced a bare filename — "Find My Files" (Rename Existing
+  // Content to Seed) then received a cwd-relative path and could never
+  // match anything, which presented as a dead button. Tauri's webview-level
+  // drag-drop event carries the actual paths.
+  // Dedupe guard: the HTML5 drop fallback may also fire for the same drop.
+  const lastNativeDropRef = useRef(0);
+  useEffect(() => {
+    if (!showAddTorrent) return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop' || !alive) return;
+        const now = Date.now();
+        if (now - lastNativeDropRef.current < 800) return;
+        const paths = (event.payload as { type: string; paths?: string[] }).paths || [];
+        const path = paths.find((p) => isAllowedMetainfoName(p.split('/').pop() || p));
+        if (!path) return;
+        lastNativeDropRef.current = now;
+        const name = path.split('/').pop()?.split('\\').pop() || path;
+        setSelectedFileName(name);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setTorrentSource(path);
+        setInspectLoading(true);
+        inspectTorrent(path)
+          .then((preview) => {
+            if (alive) setInspectPreview(preview);
+          })
+          .catch(() => {
+            if (alive) setInspectPreview(null);
+          })
+          .finally(() => {
+            if (alive) setInspectLoading(false);
+          });
+      })
+      .then((un) => {
+        if (!alive) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (unlisten) unlisten();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddTorrent]);
+
   if (!showAddTorrent) return null;
 
   const formatFileSize = (bytes: number): string => {
@@ -267,6 +318,10 @@ export const AddTorrentModal: React.FC = () => {
       }
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
+      // The HTML5 file-input fallback cannot know the absolute path (the
+      // webview strips File.path). Keep the bare name for the byte-based
+      // inspect flow; "Find My Files" explains itself when the path is
+      // missing instead of failing silently.
       setTorrentSource(file.name);
 
       const reader = new FileReader();
@@ -300,6 +355,9 @@ export const AddTorrentModal: React.FC = () => {
         );
         return;
       }
+      // The webview strips File.path on drops; the native drag-drop event
+      // (handled in the effect below) supplies the real absolute path. This
+      // inline handler stays as a fallback with the bare name only.
       const source = (file as FileWithPath).path || file.name;
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
@@ -367,6 +425,15 @@ export const AddTorrentModal: React.FC = () => {
     const source = (torrentSource || selectedFileName || '').trim();
     const targetDir = (downloadDir || settings.download_directory || '').trim();
     if (!source || !targetDir || matchLoading) return;
+    // A bare filename (no directory component) means the webview could not
+    // give us the absolute path — explain that instead of failing with a
+    // generic scan error.
+    if (!source.includes('/') && !source.includes('\\')) {
+      setErrorMessage(
+        "The torrent file's location isn't available, so existing content can't be matched. Please pick the .torrent again using the file picker."
+      );
+      return;
+    }
     setMatchLoading(true);
     try {
       const match = await matchTorrentContent(source, targetDir);

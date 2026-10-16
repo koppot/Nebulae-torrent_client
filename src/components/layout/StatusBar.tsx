@@ -9,6 +9,8 @@ interface TailscaleStatus {
   connected: boolean;
   interface: string | null;
   tailnet_ip: string | null;
+  adc_reachable?: boolean | null;
+  adc_node?: string | null;
 }
 
 interface VolumeSpace {
@@ -141,17 +143,28 @@ export const StatusBar: React.FC = () => {
           className="flex items-center gap-1.5"
           title={
             tailscale?.connected
-              ? `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip})`
+              ? tailscale.adc_reachable === false
+                ? `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip}), but the ADC server is not reachable through it — traffic is on the default connection`
+                : `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip})`
               : 'Secure Network (Tailscale ADC) not detected'
           }
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              tailscale?.connected ? 'bg-emerald-500' : 'bg-[#333333]'
+              tailscale?.connected
+                ? tailscale.adc_reachable === false
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+                : 'bg-[#333333]'
             }`}
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>
-            Tailscale ADC: {tailscale?.connected ? tailscale.tailnet_ip : '—'}
+            Tailscale ADC:{' '}
+            {tailscale?.connected
+              ? tailscale.adc_reachable === false
+                ? 'ADC 응답 없음'
+                : tailscale.tailnet_ip
+              : '—'}
           </span>
         </div>
       </div>

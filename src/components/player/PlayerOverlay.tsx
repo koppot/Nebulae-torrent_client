@@ -127,6 +127,30 @@ export default function PlayerOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player.open]);
 
+  // DVD menu interaction (keyboard). Mouse clicks on disc menus do NOT
+  // reach dvdnav when the video is embedded into the native overlay view
+  // (reproduced and measured engine-side), so while the menu domain is
+  // active (title 0) the keyboard and the on-screen D-pad drive
+  // libvlc_media_player_navigate instead. Enter activates the highlighted
+  // menu entry ("Play all", etc.) on the FIRST press; the arrow keys move
+  // the highlight.
+  useEffect(() => {
+    if (!player.open || !player.isDisc || poll.title !== 0) return;
+    const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
+    const onKey = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case 'Enter': e.preventDefault(); nav(0); break;
+        case 'ArrowUp': e.preventDefault(); nav(1); break;
+        case 'ArrowDown': e.preventDefault(); nav(2); break;
+        case 'ArrowLeft': e.preventDefault(); nav(3); break;
+        case 'ArrowRight': e.preventDefault(); nav(4); break;
+        default: return;
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [player.open, player.isDisc, poll.title]);
+
   // Disc set of the playing release: names the current disc ("Disc 1") in
   // the control bar and feeds the switcher popup. Refetched when the resolved
   // path changes (after a disc switch) so the label follows the playback.
@@ -282,6 +306,51 @@ export default function PlayerOverlay() {
             >
               Menu
             </button>
+          )}
+
+          {/* Disc-menu D-pad. Mouse clicks on the menu itself are not
+              delivered to dvdnav in the embedded vout, so while the menu
+              domain is active these buttons (and the keyboard) navigate it.
+              Enter activates the highlighted entry on the first press. */}
+          {player.isDisc && poll.title === 0 && (
+            <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
+              {([
+                ['◀', 3, 'Menu: left'],
+                ['▲', 1, 'Menu: up'],
+                ['▼', 2, 'Menu: down'],
+                ['▶', 4, 'Menu: right'],
+              ] as const).map(([glyph, mode, tip]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => invoke('player_menu_navigate', { mode }).catch(() => {})}
+                  className="w-7 h-7 rounded-md border border-[#333333] text-[#a3a3a3] hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
+                  title={tip}
+                >
+                  {glyph}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => invoke('player_menu_navigate', { mode: 0 }).catch(() => {})}
+                className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
+                title="Activate the highlighted menu entry (Enter)"
+              >
+                Select
+              </button>
+              {/* Play All: jumps straight to the first feature title, bypassing
+                  menu navigation entirely — one click, deterministic. */}
+              {poll.title_count > 1 && (
+                <button
+                  type="button"
+                  onClick={() => invoke('player_set_title', { title: 1 }).catch(() => {})}
+                  className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
+                  title="Start playing the feature (title 1) without navigating the menu"
+                >
+                  Play All
+                </button>
+              )}
+            </div>
           )}
 
           {/* Skip controls: single arrows switch chapters, double arrows

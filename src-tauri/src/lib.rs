@@ -488,6 +488,7 @@ pub fn run() {
             // Connectivity Doctor
             commands::connectivity::run_connectivity_doctor_test,
             commands::connectivity::retest_listening_port,
+            commands::connectivity::get_port_negotiation_result,
             commands::connectivity::get_connectivity_certificate,
             commands::connectivity::get_tailscale_status,
             // VPN
@@ -509,6 +510,7 @@ pub fn run() {
             commands::media::player_poll,
             commands::media::player_set_title,
             commands::media::player_set_chapter,
+            commands::media::player_menu_navigate,
             commands::media::player_return_to_menu,
             commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
