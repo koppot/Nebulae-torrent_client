@@ -538,6 +538,15 @@ pub struct TransmissionTorrentEngine {
     /// Per-peer EMA rate state, keyed by `"<torrent_hash>:<peer_ip>"`.
     /// Cleared when a torrent is removed to prevent unbounded growth.
     peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>>,
+    /// Offline IP geolocation resolver. `None` when .mmdb files are absent.
+    geo_resolver: Option<Arc<crate::utils::geo::GeoResolver>>,
+    /// Background TCP RTT prober. Always present; probing is opt-in per peer.
+    rtt_prober: Arc<crate::utils::rtt_prober::RttProber>,
+    /// Shared flag: set to true when peer-remove RPC is confirmed unsupported
+    /// by the bundled daemon. Shared between enforcement and quality_eviction.
+    /// Kept on the struct to ensure the Arc outlives all background tasks.
+    #[allow(dead_code)]
+    peer_remove_unsupported: Arc<AtomicBool>,
 }
 
 /// Builds the transmission-daemon `settings.json` configuration structure with
@@ -1132,6 +1141,14 @@ impl TransmissionTorrentEngine {
         // 9. Spawn tracker-enforcement poller (peer-remove for banned leechers).
         //    The passkey lives in the OS keychain — the same credential that the
         //    announce URL uses. If no account is linked yet, we skip silently.
+        //
+        //    The `peer_remove_unsupported` flag is shared between the enforcement
+        //    poller and the quality-eviction task so both go idle together if the
+        //    bundled daemon doesn't support the RPC.
+        let peer_remove_unsupported = Arc::new(AtomicBool::new(false));
+        let peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
         {
             match get_secret(&passkey_secret_target()) {
                 Ok(passkey) if !passkey.is_empty() => {
@@ -1151,6 +1168,50 @@ impl TransmissionTorrentEngine {
             }
         }
 
+        // 10. Spawn quality-based peer eviction task (Phase 5A).
+        crate::engine::quality_eviction::spawn(
+            Arc::clone(&rpc_client),
+            Arc::clone(&peer_ema_cache),
+            Arc::clone(&db),
+            Arc::clone(&peer_remove_unsupported),
+        );
+        info!("[quality_eviction] quality-based peer eviction task spawned");
+
+        // 11. Load GeoLite2 resolver (graceful degradation if .mmdb absent).
+        let geo_resolver = match resource_dir {
+            Some(rdir) => {
+                match crate::utils::geo::GeoResolver::from_resource_dir(rdir) {
+                    Ok(Some(resolver)) => {
+                        // Set host egress IP for relative locality classification.
+                        let host_ip = find_active_egress_vpn_interface()
+                            .or_else(find_active_vpn_interface)
+                            .and_then(|iface| iface.ip_addresses.into_iter().next());
+                        let with_host = if let Some(ip) = host_ip {
+                            resolver.with_host_ip(&ip)
+                        } else {
+                            resolver
+                        };
+                        info!(
+                            "[geo] GeoLite2 resolver loaded — full locality classification active"
+                        );
+                        Some(Arc::new(with_host))
+                    }
+                    Ok(None) => {
+                        info!("[geo] GeoLite2 .mmdb absent — locality classification: LAN/Global only");
+                        None
+                    }
+                    Err(e) => {
+                        warn!("[geo] Failed to load GeoLite2 resolver: {e}");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // 12. RTT prober (always created; probing is opt-in per settings).
+        let rtt_prober = Arc::new(crate::utils::rtt_prober::RttProber::new());
+
         Ok(Self {
             rpc_client,
             child_process: child_arc,
@@ -1164,7 +1225,10 @@ impl TransmissionTorrentEngine {
                 None
             })),
             metadata_cache: Arc::new(Mutex::new(cached_meta)),
-            peer_ema_cache: Arc::new(Mutex::new(HashMap::new())),
+            peer_ema_cache,
+            geo_resolver,
+            rtt_prober,
+            peer_remove_unsupported,
         })
     }
 
@@ -2004,28 +2068,53 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     0.5 // both zero — neutral
                 };
 
-                // ── Locality tier (RFC-1918 + loopback + link-local) ─────────
-                let locality_tier = {
-                    let is_lan = address.starts_with("192.168.")
-                        || address.starts_with("10.")
-                        || address.starts_with("127.")
-                        || address == "::1"
-                        || address.to_lowercase().starts_with("fe80:")
-                        || is_rfc1918_172(&address);
-                    if is_lan {
-                        LocalityTier::Lan
-                    } else {
-                        LocalityTier::Global
-                    }
+                // ── Geo + locality tier ──────────────────────────────────────
+                let (locality_tier, country_code, peer_asn) = if let Some(geo) = &self.geo_resolver
+                {
+                    let tier = geo.classify_locality(&address);
+                    let cc = geo.country_code(&address);
+                    let asn = geo.asn(&address);
+                    (tier, cc, asn)
+                } else {
+                    // Graceful degradation: LAN/Global only
+                    let is_lan = crate::utils::geo::is_local_ip(&address);
+                    (
+                        if is_lan {
+                            LocalityTier::Lan
+                        } else {
+                            LocalityTier::Global
+                        },
+                        None,
+                        None,
+                    )
                 };
+
+                // ── RTT prober ───────────────────────────────────────────────
+                // Trigger an async probe (fire-and-forget, rate-limited).
+                // The result is available on the *next* call once the probe
+                // completes. First call for a new peer returns rtt_ms=0.
+                let rtt_ms = self.rtt_prober.get_rtt(&address, port).unwrap_or(0);
+                // Read probe_rtt_enabled from DB at call time (cheap: single
+                // SQLite read, cached behind the DB mutex).
+                let probe_enabled = self
+                    .db
+                    .get_setting("peering_settings_json")
+                    .ok()
+                    .flatten()
+                    .and_then(|j| {
+                        serde_json::from_str::<crate::models::peering::PeeringSettings>(&j).ok()
+                    })
+                    .map(|s| s.probe_rtt_enabled)
+                    .unwrap_or(false);
+                if probe_enabled {
+                    self.rtt_prober.probe(&address, port);
+                }
 
                 result.push(PeerTelemetry {
                     peer_id: format!("peer-{idx}-{address}"),
                     ip: address.clone(),
                     port,
-                    // rtt_ms: Phase 3 will wire real TCP RTT from the RTT prober.
-                    // Until then, 0 indicates "not measured" to the frontend.
-                    rtt_ms: 0,
+                    rtt_ms,
                     req_resp_latency_ms: 0,
                     sustained_dl_bps: sustained_dl * 8, // bytes → bits per second
                     sustained_ul_bps: sustained_ul * 8,
@@ -2036,8 +2125,8 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     choke_events: 0,
                     client_name,
                     locality_tier,
-                    country_code: None, // Phase 3: MaxMind geo
-                    asn: None,          // Phase 3: MaxMind ASN
+                    country_code,
+                    asn: peer_asn,
                     utp: is_utp,
                     encryption: is_encrypted,
                     ipv6: address.contains(':'),
@@ -2089,35 +2178,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 }
 
-/// Returns true when `addr` is in the RFC-1918 172.16.0.0/12 block
-/// (172.16.x.x – 172.31.x.x). The other two RFC-1918 blocks (10.x and
-/// 192.168.x) are handled inline with `starts_with`.
-fn is_rfc1918_172(addr: &str) -> bool {
-    // Fast prefix check before parsing — avoids allocations for the common case.
-    if !addr.starts_with("172.") {
-        return false;
-    }
-    // Extract the second octet.
-    let second = addr.split('.').nth(1).and_then(|s| s.parse::<u8>().ok());
-    matches!(second, Some(16..=31))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_rfc1918_172_boundaries() {
-        assert!(is_rfc1918_172("172.16.0.1"));
-        assert!(is_rfc1918_172("172.31.255.255"));
-        assert!(!is_rfc1918_172("172.15.255.255"));
-        assert!(!is_rfc1918_172("172.32.0.1"));
-        assert!(!is_rfc1918_172("10.172.16.1"));
-        assert!(!is_rfc1918_172("::1"));
-        // Note: a malformed fragment like "172.16" classifies as Lan — peer
-        // addresses from transmission are always full dotted quads, so this
-        // never matters in practice.
-    }
 
     #[test]
     fn test_csrf_session_id_negotiation_logic() {

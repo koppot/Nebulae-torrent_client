@@ -51,6 +51,12 @@ impl AppPaths {
             debug_dir,
         })
     }
+
+    /// Returns (and does not create) the poster image cache directory.
+    /// Callers are responsible for calling `fs::create_dir_all` before writing.
+    pub fn poster_cache_dir(&self) -> PathBuf {
+        self.cache_dir.join("posters")
+    }
 }
 
 /// Decodes standard base64 data into raw bytes.

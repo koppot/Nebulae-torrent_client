@@ -116,6 +116,10 @@ pub struct PeeringSettings {
     pub max_global_peers: u32,
     pub prefer_utp: bool,
     pub require_encryption: bool,
+    /// Opt-in TCP RTT probing. Disabled by default because it makes outbound
+    /// TCP connections to every connected peer's port (privacy consideration).
+    #[serde(default)]
+    pub probe_rtt_enabled: bool,
 }
 
 impl Default for PeeringSettings {
@@ -127,6 +131,7 @@ impl Default for PeeringSettings {
             max_global_peers: 500,
             prefer_utp: true,
             require_encryption: true,
+            probe_rtt_enabled: false,
         }
     }
 }

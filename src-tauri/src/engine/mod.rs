@@ -3,6 +3,7 @@ pub mod failed;
 pub mod killswitch;
 pub mod metainfo;
 pub mod mock;
+pub mod quality_eviction;
 pub mod remote;
 pub mod rss;
 pub mod rtorrent;
