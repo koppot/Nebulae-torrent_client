@@ -1374,3 +1374,23 @@ both save_path shapes (root + subfolder).
 - Still awaiting OWNER decision: delete test_upload.torrent /
   test_www_data.torrent on the ADC server; delete the stale
   ~/Desktop/Nebulae.app; Headscale/Secure Network authorization.
+
+## 2026-10-15 — Disc menu playback via VLC (cc4acff)
+
+- mpv has had NO DVD menu support in any modern release (removed upstream
+  in 2015; the marker string exists in 0.39/0.40/0.41). The 0.39 pin and
+  menu-first lua were dead ends; both reverted (mpv 0.41 + brew ffmpeg,
+  lua deleted, impossible menu gate removed).
+- Menu playback now goes through the owner's VLC 3.0.23 (real dvdnav
+  menus from ISO images; libbluray simple menus for BD/UHD). Launcher
+  prefers VLC for discs when menu mode is on; mpv stays the fallback and
+  the plain-file player (deinterlace=auto, gpu-next unchanged).
+- Disc image ALWAYS wins over loose episode files: depth-4 recursive
+  resolution (ISO/IMG anywhere under the save folder, VIDEO_TS/BDMV
+  roots resolve to their disc root, disc-1 ranked first, name tie-break).
+  Folder without any disc plays the largest video file instead of mpv
+  enqueueing every episode.
+- CI green on all 4 platforms for cc4acff (the previous red run was the
+  0.39 bundler left unstaged). arm64 build installed to /Applications,
+  mpv v0.41.0 verified in-bundle, 46 dylibs zero external refs, BD-J
+  present, daemon on 41413.
