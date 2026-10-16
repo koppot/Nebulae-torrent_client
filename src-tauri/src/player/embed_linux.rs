@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 struct XHandle {
     xlib: x11_dl::xlib::Xlib,
     display: *mut x11_dl::xlib::Display,
-    overlay: usize, // X11 Window id (x11-dl uses usize)
+    overlay: u64, // X11 Window id (x11-dl uses u64)
 }
 
 // The raw display pointer is only ever dereferenced inside main-thread
@@ -69,7 +69,7 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
         .map_err(|e| format!("no raw window handle: {e}"))?;
     let parent_xid = match raw.as_raw() {
         // raw-window-handle 0.6 names the X11 variant `Xlib`.
-        raw_window_handle::RawWindowHandle::Xlib(h) => h.window.get() as usize,
+        raw_window_handle::RawWindowHandle::Xlib(h) => h.window,
         raw_window_handle::RawWindowHandle::Wayland(_) => {
             return Err(
                 "Wayland session: no X11 drawable for the embedded overlay (use an X11/XWayland session)"
@@ -97,7 +97,7 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     Ok(overlay_xid)
 }
 
-unsafe fn create_overlay(parent_xid: usize) -> Result<usize, String> {
+unsafe fn create_overlay(parent_xid: u64) -> Result<usize, String> {
     let xlib = x11_dl::xlib::Xlib::open()
         .map_err(|e| format!("libX11 unavailable: {e}"))?;
     let display = (xlib.XOpenDisplay)(std::ptr::null());
@@ -132,7 +132,7 @@ unsafe fn create_overlay(parent_xid: usize) -> Result<usize, String> {
         }
         Err(_) => return Err("X11 overlay state poisoned".into()),
     }
-    Ok(overlay)
+    Ok(overlay as usize)
 }
 
 pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
