@@ -212,6 +212,10 @@ pub fn player_open(
     match player::ensure_overlay(&app) {
         Ok(view) => {
             let lib = loaded_lib(&state)?;
+            // The overlay is created hidden; make it visible BEFORE the vout
+            // attaches, or the video renders into a hidden view (a dead
+            // black rectangle that receives no clicks).
+            player::set_overlay_hidden(&app, false)?;
             let session = VlcSession::open(&lib, &resolved.resolved_path, view)?;
             *poison(&state.instance) = session.instance;
             *poison(&state.media) = session.media;
