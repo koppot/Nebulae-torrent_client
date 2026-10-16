@@ -426,6 +426,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Diagnostics & Recovery
             commands::diagnostics::get_engine_init_error,
+            commands::diagnostics::log_frontend,
             commands::diagnostics::open_logs_folder,
             commands::diagnostics::get_diagnostic_summary,
             commands::diagnostics::clear_cache,

@@ -123,13 +123,18 @@ export const SimpleMediaView: React.FC = () => {
 
   const handlePlayDisc = async (torrent: TorrentItem, preferMenu: boolean = true, groupId?: string) => {
     void preferMenu; // the embedded engine always starts discs at their menu
+    invoke('log_frontend', {
+      message: `disc button clicked: id=${torrent.id} path=${torrent.save_path}`,
+    }).catch(() => {});
     try {
       await openInPlayer(torrent.save_path);
       if (groupId) rememberLastDisc(groupId, torrent.id);
       setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
-      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+      const msg = errorMessage(err, 'Could not launch the disc.');
+      invoke('log_frontend', { message: `disc open failed: ${msg}` }).catch(() => {});
+      setExternalDiscError(msg);
     }
   };
 
