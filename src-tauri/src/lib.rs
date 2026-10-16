@@ -172,6 +172,22 @@ pub fn run() {
         }
 
         if let Some(real_engine) = real_engine_opt {
+            // Re-apply saved peering settings (peer limits) to the newly-started
+            // Transmission session. Settings are persisted in DB; this restores
+            // them across app restarts without requiring the user to re-save.
+            if let Ok(Some(json)) = db.get_setting("peering_settings_json") {
+                if let Ok(peering) =
+                    serde_json::from_str::<crate::models::peering::PeeringSettings>(&json)
+                {
+                    if let Err(e) = real_engine.apply_peering_settings(&peering) {
+                        SafeLogger::log_to_file(
+                            &paths.logs_dir,
+                            "WARN",
+                            &format!("Could not apply saved peering settings at startup: {e}"),
+                        );
+                    }
+                }
+            }
             real_engine
         } else {
             let err_msg = init_error

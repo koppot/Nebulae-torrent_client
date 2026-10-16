@@ -80,4 +80,15 @@ pub trait TorrentEngine: Send + Sync {
     fn check_port_open(&self) -> Option<bool> {
         None
     }
+
+    /// Push peer limit settings to the engine session.
+    ///
+    /// Called whenever `PeeringSettings` are saved. Engines that do not
+    /// support session-level peer limits may leave this as the default no-op.
+    fn apply_peering_settings(
+        &self,
+        _settings: &crate::models::peering::PeeringSettings,
+    ) -> Result<(), String> {
+        Ok(()) // default: no-op
+    }
 }

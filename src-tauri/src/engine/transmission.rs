@@ -2056,6 +2056,37 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn check_port_open(&self) -> Option<bool> {
         self.rpc_client.port_test().ok()
     }
+
+    fn apply_peering_settings(
+        &self,
+        settings: &crate::models::peering::PeeringSettings,
+    ) -> Result<(), String> {
+        // Push peer connection limits to the running Transmission session.
+        // These are session-level settings — they persist until the daemon
+        // restarts and are re-applied on engine startup via saved PeeringSettings.
+        let result = self.rpc_client.session_set(json!({
+            "peer-limit-per-torrent": settings.max_peers_per_torrent,
+            "peer-limit-global":      settings.max_global_peers,
+        }));
+        match result {
+            Ok(()) => {
+                info!(
+                    "[peering] applied peer limits to Transmission session: \
+                     per-torrent={}, global={}",
+                    settings.max_peers_per_torrent, settings.max_global_peers
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // Non-fatal: DB is already updated. Log and return error so
+                // the frontend can show a partial-success notification.
+                warn!("[peering] session-set peer limits failed: {e}");
+                Err(format!(
+                    "Peer limits saved but could not be applied to engine: {e}"
+                ))
+            }
+        }
+    }
 }
 
 /// Returns true when `addr` is in the RFC-1918 172.16.0.0/12 block
