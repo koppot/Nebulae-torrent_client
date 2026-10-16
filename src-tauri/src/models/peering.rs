@@ -47,6 +47,25 @@ pub struct PeerTelemetry {
     pub total_uploaded_bytes: u64,
 }
 
+/// Per-peer exponential moving average state persisted across `get_peer_telemetry` calls.
+///
+/// The EMA smoothing factor α = 0.3 means each new sample contributes 30% and
+/// the history contributes 70%, giving a ~3-sample rolling window. This is a
+/// reasonable balance between responsiveness and noise rejection for a 2-second
+/// polling interval.
+#[derive(Debug, Clone)]
+pub struct PeerEmaState {
+    /// EMA of `rateToClient` in bytes/s (download from peer).
+    pub ema_dl_bps: f64,
+    /// EMA of `rateToPeer` in bytes/s (upload to peer).
+    pub ema_ul_bps: f64,
+    /// Cumulative variance proxy: tracks how much DL rate fluctuates cycle-over-cycle.
+    /// Encoded as the EMA of |current - previous|. Higher value = less stable peer.
+    pub ema_dl_variance: f64,
+    /// How many consecutive polling cycles this peer has been seen.
+    pub observation_count: u32,
+}
+
 impl PeerTelemetry {
     pub fn compute_quality_score(&self, mode: PeeringMode) -> f32 {
         // Normalize throughput: 10 MiB/s = 1.0

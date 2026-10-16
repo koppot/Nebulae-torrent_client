@@ -402,6 +402,7 @@ impl TransmissionRpcClient {
             "files",
             "fileStats",
             "peers",
+            "peerStats",
         ];
 
         let mut args = json!({ "fields": fields });
@@ -534,6 +535,9 @@ pub struct TransmissionTorrentEngine {
     kill_switch_active: Arc<AtomicBool>,
     bound_interface: Arc<Mutex<Option<String>>>,
     metadata_cache: Arc<Mutex<HashMap<String, TorrentDbMetadata>>>,
+    /// Per-peer EMA rate state, keyed by `"<torrent_hash>:<peer_ip>"`.
+    /// Cleared when a torrent is removed to prevent unbounded growth.
+    peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>>,
 }
 
 /// Builds the transmission-daemon `settings.json` configuration structure with
@@ -1160,6 +1164,7 @@ impl TransmissionTorrentEngine {
                 None
             })),
             metadata_cache: Arc::new(Mutex::new(cached_meta)),
+            peer_ema_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1560,7 +1565,14 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
-        self.rpc_client.torrent_remove(id, delete_files)
+        self.rpc_client.torrent_remove(id, delete_files)?;
+        // Clear EMA state for all peers that belonged to this torrent.
+        // Keys have the form "<torrent_hash>:<peer_ip>" so a prefix match suffices.
+        let prefix = format!("{id}:");
+        if let Ok(mut cache) = self.peer_ema_cache.lock() {
+            cache.retain(|k, _| !k.starts_with(&prefix));
+        }
+        Ok(())
     }
 
     fn pause_torrent(&self, id: &str) -> Result<(), String> {
@@ -1856,14 +1868,40 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn get_peer_telemetry(&self, id: &str) -> Result<Vec<PeerTelemetry>, String> {
+        use crate::models::peering::PeerEmaState;
+
+        const EMA_ALPHA: f64 = 0.3; // smoothing factor — 30% new sample, 70% history
+        const MIN_OBSERVATIONS_FOR_STABILITY: u32 = 3;
+
         let torrents = self.rpc_client.torrent_get(Some(vec![json!(id)]))?;
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
 
+        // torrent hash is used to namespace EMA cache keys so entries don't
+        // collide across different torrents that happen to have the same peer IP.
+        let torrent_hash = torrent
+            .get("hashString")
+            .and_then(|h| h.as_str())
+            .unwrap_or(id);
+
+        // `peerStats` is an array parallel to `peers`, indexed identically.
+        // Each entry has { "toClientBytes": u64, "toPeerBytes": u64, ... }.
+        // Fall back gracefully to zero if the daemon doesn't provide it.
+        let peer_stats_arr: Vec<&Value> = torrent
+            .get("peerStats")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default();
+
         let mut result = Vec::new();
 
         if let Some(peers) = torrent.get("peers").and_then(|v| v.as_array()) {
+            let mut ema_cache = self
+                .peer_ema_cache
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+
             for (idx, p) in peers.iter().enumerate() {
                 let address = p
                     .get("address")
@@ -1876,52 +1914,138 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     .and_then(|c| c.as_str())
                     .unwrap_or("Unknown")
                     .to_string();
-                let rate_to_client = p.get("rateToClient").and_then(|r| r.as_u64()).unwrap_or(0);
-                let rate_to_peer = p.get("rateToPeer").and_then(|r| r.as_u64()).unwrap_or(0);
+
+                // ── Instantaneous rates (bytes/s) ────────────────────────────
+                let raw_dl = p.get("rateToClient").and_then(|r| r.as_u64()).unwrap_or(0) as f64;
+                let raw_ul = p.get("rateToPeer").and_then(|r| r.as_u64()).unwrap_or(0) as f64;
+
+                // ── flagStr — Transmission peer connection flags ──────────────
+                // Common flags (case-sensitive):
+                //   D  = currently downloading (interested+unchoked)
+                //   d  = peer interested but we are choking them
+                //   E  = encrypted connection (from flagStr; isEncrypted may differ)
+                //   H  = peer was discovered via DHT
+                //   X  = peer was discovered via PEX
+                //   T  = connection is uTP (micro-transport protocol)
+                //   K  = peer is not interested in us (not choking)
+                //   O  = optimistic-unchoked
+                //   U  = uploading to peer
+                let flag_str = p.get("flagStr").and_then(|f| f.as_str()).unwrap_or("");
+                let flag_dht = flag_str.contains('H');
+                let flag_pex = flag_str.contains('X');
+                // isEncrypted / isUTP are more reliable than flagStr on older
+                // daemons; use them as primary source and fall back to flags.
                 let is_encrypted = p
                     .get("isEncrypted")
                     .and_then(|e| e.as_bool())
-                    .unwrap_or(false);
-                let is_utp = p.get("isUTP").and_then(|u| u.as_bool()).unwrap_or(false);
+                    .unwrap_or_else(|| flag_str.contains('E'));
+                let is_utp = p
+                    .get("isUTP")
+                    .and_then(|u| u.as_bool())
+                    .unwrap_or_else(|| flag_str.contains('T'));
+
+                // ── Cumulative bytes from peerStats ──────────────────────────
+                let stats = peer_stats_arr.get(idx).copied();
+                let total_dl = stats
+                    .and_then(|s| s.get("toClientBytes"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let total_ul = stats
+                    .and_then(|s| s.get("toPeerBytes"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                // ── EMA update ───────────────────────────────────────────────
+                let cache_key = format!("{torrent_hash}:{address}");
+                let ema = ema_cache.entry(cache_key).or_insert(PeerEmaState {
+                    ema_dl_bps: raw_dl,
+                    ema_ul_bps: raw_ul,
+                    ema_dl_variance: 0.0,
+                    observation_count: 0,
+                });
+
+                let prev_dl = ema.ema_dl_bps;
+                ema.ema_dl_bps = EMA_ALPHA * raw_dl + (1.0 - EMA_ALPHA) * ema.ema_dl_bps;
+                ema.ema_ul_bps = EMA_ALPHA * raw_ul + (1.0 - EMA_ALPHA) * ema.ema_ul_bps;
+                // Variance proxy: EMA of |new_sample - previous_ema|
+                let dl_delta = (raw_dl - prev_dl).abs();
+                ema.ema_dl_variance =
+                    EMA_ALPHA * dl_delta + (1.0 - EMA_ALPHA) * ema.ema_dl_variance;
+                ema.observation_count = ema.observation_count.saturating_add(1);
+
+                let sustained_dl = ema.ema_dl_bps as u64;
+                let sustained_ul = ema.ema_ul_bps as u64;
+
+                // ── Stability score ──────────────────────────────────────────
+                // Encode as 1.0 - normalized_variance. Variance is normalized
+                // against the sustained DL rate so a peer with very low DL is
+                // not penalized harshly for small absolute fluctuations.
+                // After MIN_OBSERVATIONS_FOR_STABILITY cycles we have enough
+                // history; before that we default to neutral 0.5.
+                let stability_score = if ema.observation_count >= MIN_OBSERVATIONS_FOR_STABILITY {
+                    let norm_variance = if sustained_dl > 0 {
+                        (ema.ema_dl_variance / ema.ema_dl_bps.max(1.0)).clamp(0.0, 1.0) as f32
+                    } else {
+                        0.0 // peer with zero DL has no measurable variance
+                    };
+                    (1.0 - norm_variance).clamp(0.0, 1.0)
+                } else {
+                    0.5 // not enough history yet
+                };
+
+                // ── Upload reciprocity ───────────────────────────────────────
+                // Ratio of peer's upload-to-us relative to our upload-to-peer.
+                // 1.0 = purely seeding to us. 0.0 = we upload only, they never do.
+                let upload_reciprocity = if sustained_ul > 0 {
+                    (sustained_dl as f32 / (sustained_dl + sustained_ul) as f32).clamp(0.0, 1.0)
+                } else if sustained_dl > 0 {
+                    1.0 // they upload to us and we upload nothing — perfect leech
+                } else {
+                    0.5 // both zero — neutral
+                };
+
+                // ── Locality tier (RFC-1918 + loopback + link-local) ─────────
+                let locality_tier = {
+                    let is_lan = address.starts_with("192.168.")
+                        || address.starts_with("10.")
+                        || address.starts_with("127.")
+                        || address == "::1"
+                        || address.to_lowercase().starts_with("fe80:")
+                        || is_rfc1918_172(&address);
+                    if is_lan {
+                        LocalityTier::Lan
+                    } else {
+                        LocalityTier::Global
+                    }
+                };
 
                 result.push(PeerTelemetry {
                     peer_id: format!("peer-{idx}-{address}"),
                     ip: address.clone(),
                     port,
-                    rtt_ms: 50,
-                    req_resp_latency_ms: 60,
-                    sustained_dl_bps: rate_to_client * 8,
-                    sustained_ul_bps: rate_to_peer * 8,
-                    upload_reciprocity: 0.5,
-                    stability_score: 0.9,
+                    // rtt_ms: Phase 3 will wire real TCP RTT from the RTT prober.
+                    // Until then, 0 indicates "not measured" to the frontend.
+                    rtt_ms: 0,
+                    req_resp_latency_ms: 0,
+                    sustained_dl_bps: sustained_dl * 8, // bytes → bits per second
+                    sustained_ul_bps: sustained_ul * 8,
+                    upload_reciprocity,
+                    stability_score,
                     disconnect_count: 0,
                     timeout_count: 0,
                     choke_events: 0,
                     client_name,
-                    locality_tier: {
-                        // RFC-1918 private ranges + loopback + IPv6 link-local.
-                        let is_lan = address.starts_with("192.168.")
-                            || address.starts_with("10.")
-                            || address.starts_with("127.")
-                            || address == "::1"
-                            || address.to_lowercase().starts_with("fe80:")
-                            || is_rfc1918_172(&address);
-                        if is_lan {
-                            LocalityTier::Lan
-                        } else {
-                            LocalityTier::Global
-                        }
-                    },
-                    country_code: None,
-                    asn: None,
+                    locality_tier,
+                    country_code: None, // Phase 3: MaxMind geo
+                    asn: None,          // Phase 3: MaxMind ASN
                     utp: is_utp,
                     encryption: is_encrypted,
                     ipv6: address.contains(':'),
-                    dht: false,
-                    pex: false,
-                    connection_age_seconds: 300,
-                    total_downloaded_bytes: 0,
-                    total_uploaded_bytes: 0,
+                    dht: flag_dht,
+                    pex: flag_pex,
+                    connection_age_seconds: 0, // not exposed by Transmission RPC
+                    total_downloaded_bytes: total_dl,
+                    total_uploaded_bytes: total_ul,
                 });
             }
         }
