@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useConnectivityStore } from '../../stores/connectivityStore';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
@@ -27,6 +28,11 @@ export const StatusBar: React.FC = () => {
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
   const [disk, setDisk] = useState<VolumeSpace | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('');
+
+  useEffect(() => {
+    getVersion().then((v) => setAppVersion(v)).catch(() => {});
+  }, []);
 
   const totalDlSpeed = torrents.reduce((acc, t) => acc + (t.download_rate || 0), 0);
   const totalUlSpeed = torrents.reduce((acc, t) => acc + (t.upload_rate || 0), 0);
@@ -190,6 +196,12 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
           uTP + TCP
+        </span>
+
+        <span className="text-[#333333]">|</span>
+
+        <span className="text-[#a3a3a3]" title="Nebulae application version">
+          Nebulae v{appVersion || '…'}
         </span>
       </div>
     </footer>

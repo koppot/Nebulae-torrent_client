@@ -154,11 +154,6 @@ function countFilesInNode(node: FileTreeNode): number {
   return node.children.reduce((acc, c) => acc + countFilesInNode(c), 0);
 }
 
-function countFoldersInNode(node: FileTreeNode): number {
-  if (!node.isFolder) return 0;
-  return 1 + node.children.reduce((acc, c) => acc + countFoldersInNode(c), 0);
-}
-
 function nodeMatchesFilter(node: FileTreeNode, query: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
@@ -504,11 +499,6 @@ export const TorrentManagerView: React.FC = () => {
     }
     return buildFileTree(selectedTorrent.files);
   }, [selectedTorrent?.files]);
-
-  const totalFoldersCount = useMemo(() => {
-    if (!fileTree) return 0;
-    return Math.max(0, countFoldersInNode(fileTree) - 1);
-  }, [fileTree]);
 
   const filteredFlatFiles = useMemo(() => {
     if (!selectedTorrent?.files) return [];
@@ -892,7 +882,7 @@ export const TorrentManagerView: React.FC = () => {
                             {progressPct}%
                           </span>
                         </div>
-                        <span className="text-[9px] font-mono text-[#737373] text-right leading-tight">
+                        <span className="text-[9px] font-mono text-[#737373] text-center leading-tight">
                           {isComplete
                             ? `${formatBytes(t.uploaded_bytes)} uploaded`
                             : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)}`}
@@ -1214,12 +1204,6 @@ export const TorrentManagerView: React.FC = () => {
                             <X className="w-3 h-3" />
                           </button>
                         )}
-                      </div>
-
-                      <div className="text-[11px] text-[#a3a3a3] font-mono whitespace-nowrap">
-                        {selectedTorrent.files?.length || 0} files
-                        {totalFoldersCount > 0 ? ` · ${totalFoldersCount} folders` : ''} ·{' '}
-                        {formatBytes(selectedTorrent.total_bytes)}
                       </div>
                     </div>
                   </div>
@@ -1582,16 +1566,24 @@ export const TorrentManagerView: React.FC = () => {
             <Sliders className="w-3.5 h-3.5" />
             <span>Set Speed Limits...</span>
           </button>
-          <button
-            onClick={() => {
-              toggleSequential(contextMenu.torrentId);
-              setContextMenu((prev) => ({ ...prev, visible: false }));
-            }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
-          >
-            <Zap className="w-3.5 h-3.5" />
-            <span>Toggle Sequential Download</span>
-          </button>
+          {(() => {
+            // Sequential download only makes sense mid-download; hide the
+            // toggle for completed/seeding/error/stopped torrents.
+            const t = torrents.find((item) => item.id === contextMenu.torrentId);
+            if (t?.status !== 'Downloading') return null;
+            return (
+              <button
+                onClick={() => {
+                  toggleSequential(contextMenu.torrentId);
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Toggle Sequential Download</span>
+              </button>
+            );
+          })()}
           <div className="h-[1px] bg-[#333333] my-1" />
           <button
             onClick={() => {

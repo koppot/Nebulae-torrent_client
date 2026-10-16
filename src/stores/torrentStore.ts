@@ -185,45 +185,50 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   pauseTorrent: async (id: string) => {
     try {
       await invoke('pause_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('pause_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
         t.id === id ? { ...t, status: 'Paused', download_rate: 0, upload_rate: 0 } : t
       ),
     });
+    // Pull engine truth immediately so the optimistic state is never
+    // reverted by the next telemetry/poll tick (owner-reported 5-10s lag).
+    await get().fetchTorrents();
   },
 
   resumeTorrent: async (id: string) => {
     try {
       await invoke('resume_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('resume_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
         t.id === id ? { ...t, status: t.progress >= 1.0 ? 'Seeding' : 'Downloading' } : t
       ),
     });
+    await get().fetchTorrents();
   },
 
   pauseAll: async () => {
     try {
       await invoke('pause_all_torrents');
-    } catch {
-      //
+    } catch (err) {
+      console.warn('pause_all_torrents failed:', err);
     }
     set({
       torrents: get().torrents.map((t) => ({ ...t, status: 'Paused', download_rate: 0, upload_rate: 0 })),
     });
+    await get().fetchTorrents();
   },
 
   resumeAll: async () => {
     try {
       await invoke('resume_all_torrents');
-    } catch {
-      //
+    } catch (err) {
+      console.warn('resume_all_torrents failed:', err);
     }
     set({
       torrents: get().torrents.map((t) => ({
@@ -231,6 +236,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         status: t.progress >= 1.0 ? 'Seeding' : 'Downloading',
       })),
     });
+    await get().fetchTorrents();
   },
 
   removeTorrent: async (id: string, deleteFiles?: boolean) => {
@@ -267,19 +273,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   forceRecheck: async (id: string) => {
     try {
       await invoke('force_recheck_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('force_recheck_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) => (t.id === id ? { ...t, status: 'Checking' } : t)),
     });
+    // Verify flips the daemon into a checking state; refresh so the row and
+    // the inspector show the real verifying progress instead of a guess.
+    await get().fetchTorrents();
   },
 
   reannounce: async (id: string) => {
     try {
       await invoke('reannounce_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('reannounce_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
@@ -295,6 +304,9 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           : t
       ),
     });
+    // next-announce times only move once the tracker answers; refresh now
+    // and let the next poll pick up the final scheduled time.
+    await get().fetchTorrents();
   },
 
   setLocation: async (id: string, newPath: string) => {
@@ -387,9 +399,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   setFilePriority: async (id: string, fileIndex: number, priority: number) => {
     try {
       await invoke('set_file_priority', { id, fileIndex, priority });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('set_file_priority failed:', err);
     }
+    // The dropdown reads the mapped file priority from the engine; without
+    // this refresh it keeps showing the old bucket forever.
+    await get().fetchTorrents();
+    // Mirror the change locally too so the dropdown updates even before the
+    // refreshed engine payload lands.
     set({
       torrents: get().torrents.map((t) =>
         t.id === id

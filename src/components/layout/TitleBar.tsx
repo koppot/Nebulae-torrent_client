@@ -120,7 +120,9 @@ export const TitleBar: React.FC = () => {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const win = getCurrentWindow();
       if (settings.close_to_tray) {
-        await win.hide();
+        // Owner directive: the X button minimizes to the taskbar/dock (the
+        // engine keeps running); only explicit Quit ends the session.
+        await win.minimize();
       } else {
         await win.close();
       }

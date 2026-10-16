@@ -1106,12 +1106,28 @@ impl TorrentEngine for TransmissionTorrentEngine {
                         .and_then(|w| w.as_bool())
                         .unwrap_or(true);
 
+                    // Transmission file priority: -1 low, 0 normal, 1 high.
+                    // UI scale: 0 = do not download, 1 = normal, 2 = high
+                    // (low displays as normal — the UI has no low bucket).
+                    let raw_prio = file_stats
+                        .and_then(|fs| fs.get(idx))
+                        .and_then(|s| s.get("priority"))
+                        .and_then(|p| p.as_i64())
+                        .unwrap_or(0);
+                    let ui_prio = if !wanted {
+                        0
+                    } else if raw_prio == 1 {
+                        2
+                    } else {
+                        1
+                    };
+
                     files.push(TorrentFileItem {
                         index: idx as u32,
                         name: fname,
                         size_bytes: fsize,
                         progress: fprog,
-                        priority: if wanted { 1 } else { 0 },
+                        priority: ui_prio,
                     });
                 }
             }
@@ -1528,13 +1544,22 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {
+        // UI scale: 0 = do not download, 1 = normal, 2 = high, 3 = max.
+        // Transmission RPC has three wanted-file priority buckets
+        // (priority-low / priority-normal / priority-high); "maximum"
+        // collapses into priority-high.
         let args = if priority == 0 {
             json!({ "files-unwanted": [file_index] })
         } else {
-            json!({
-                "files-wanted": [file_index],
-                "priority-normal": [file_index]
-            })
+            let bucket = match priority {
+                1 => "priority-normal",
+                2 | 3 => "priority-high",
+                _ => "priority-normal",
+            };
+            let mut map = serde_json::Map::new();
+            map.insert("files-wanted".to_string(), json!([file_index]));
+            map.insert(bucket.to_string(), json!([file_index]));
+            Value::Object(map)
         };
         self.rpc_client.torrent_set(id, args)
     }
