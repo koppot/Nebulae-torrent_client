@@ -1902,16 +1902,26 @@ fn is_rfc1918_172(addr: &str) -> bool {
         return false;
     }
     // Extract the second octet.
-    let second = addr
-        .split('.')
-        .nth(1)
-        .and_then(|s| s.parse::<u8>().ok());
+    let second = addr.split('.').nth(1).and_then(|s| s.parse::<u8>().ok());
     matches!(second, Some(16..=31))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_rfc1918_172_boundaries() {
+        assert!(is_rfc1918_172("172.16.0.1"));
+        assert!(is_rfc1918_172("172.31.255.255"));
+        assert!(!is_rfc1918_172("172.15.255.255"));
+        assert!(!is_rfc1918_172("172.32.0.1"));
+        assert!(!is_rfc1918_172("10.172.16.1"));
+        assert!(!is_rfc1918_172("::1"));
+        // Note: a malformed fragment like "172.16" classifies as Lan — peer
+        // addresses from transmission are always full dotted quads, so this
+        // never matters in practice.
+    }
 
     #[test]
     fn test_csrf_session_id_negotiation_logic() {
