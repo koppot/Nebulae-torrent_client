@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { formatBytes, formatEta } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { openInPlayer, resumeInPlayer, savedPositionMs } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -32,7 +34,6 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { openInPlayer } from '../../lib/playerStore';
 
 interface MediaGroup {
   id: string;
@@ -90,6 +91,49 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
   const [selectedDiscs, setSelectedDiscs] = useState<Record<string, number>>({});
   const [groupBoxsets, setGroupBoxsets] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Hover panel portal (Canva): a fixed-position panel attached below the
+  // hovered card's poster. Rendered through a portal so the scroll container
+  // can never clip it (the in-flow version is why hover appeared dead).
+  const [hoverPortal, setHoverPortal] = useState<{
+    left: number;
+    top: number;
+    content: React.ReactNode;
+  } | null>(null);
+  const hoverTimer = useRef<number | null>(null);
+  const closeHover = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+    setHoverPortal(null);
+  };
+  // The panel is viewport-anchored: any scroll closes it.
+  useEffect(() => {
+    if (!hoverPortal) return;
+    const onScroll = () => setHoverPortal(null);
+    window.addEventListener('scroll', onScroll, true);
+    return () => window.removeEventListener('scroll', onScroll, true);
+  }, [hoverPortal]);
+
+  const openHoverFor = (e: React.MouseEvent, content: React.ReactNode) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => {
+      const W = 240; // Canva elevated-card weight on our 1280px window
+      const POSTER_H = Math.round((W * 3) / 2);
+      const left = Math.max(
+        8,
+        Math.min(r.left + r.width / 2 - W / 2, window.innerWidth - W - 8),
+      );
+      // Attach below the poster like the mock; flip up when it would leave
+      // the viewport (bottom shelf).
+      const est = POSTER_H + 280;
+      const top =
+        r.top + est > window.innerHeight - 8
+          ? Math.max(8, window.innerHeight - est - 8)
+          : r.top;
+      setHoverPortal({ left, top, content });
+    }, 250);
+  };
 
   // Last-played disc per group: a resume should re-open the disc the owner
   // watched last, not the group's first item (owner directive). The stored
@@ -234,13 +278,35 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
     }).catch(() => {});
     try {
-      await openInPlayer(playPath);
-      if (groupId) rememberLastDisc(groupId, targetPath || torrent.id);
+      const info = await openInPlayer(playPath);
+      if (groupId) {
+        // Remember the RESOLVED path (the actual ISO/VIDEO_TS) — the resume
+        // position map and the disc pills key off exactly this path.
+        rememberLastDisc(groupId, info.resolved_path || playPath);
+      }
       setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
       const msg = errorMessage(err, 'Could not launch the disc.');
       invoke('log_frontend', { message: `disc open failed: ${msg}` }).catch(() => {});
+      setExternalDiscError(msg);
+    }
+  };
+
+  // Resume = skip the disc menu and continue the feature where the poller
+  // saved it (owner: "Resume forwards me to the disc menu again").
+  const handleResumeDisc = async (groupId: string, resumePath: string) => {
+    const savedMs = savedPositionMs(resumePath);
+    invoke('log_frontend', {
+      message: `resume clicked: path=${resumePath} savedMs=${savedMs}`,
+    }).catch(() => {});
+    try {
+      const info = await resumeInPlayer(resumePath, savedMs);
+      rememberLastDisc(groupId, info.resolved_path || resumePath);
+      setExternalDiscError(null);
+    } catch (err: unknown) {
+      const msg = errorMessage(err, 'Could not resume the disc.');
+      invoke('log_frontend', { message: `resume failed: ${msg}` }).catch(() => {});
       setExternalDiscError(msg);
     }
   };
@@ -444,85 +510,59 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
     const folderName = folderOf(currentItem).split('/').filter(Boolean).pop() || currentItem.save_path;
 
-    return (
-      <div
-        key={group.id}
-        className="group relative rounded-lg bg-[#1f1f1f] border border-[#262626] hover:border-[#3f3f3f] overflow-visible transition-all duration-200 hover:z-30 hover:shadow-2xl hover:shadow-black/60"
-      >
-        <div className="rounded-lg overflow-hidden bg-[#1f1f1f]">
-          {/* Poster tile: full-bleed art, 2:3 like a DVD cover (Canva grid) */}
-          <div className="aspect-[2/3] w-full bg-[#141414] relative flex items-center justify-center overflow-hidden">
-            {coverImage ? (
-              <img
-                src={localSrc(coverImage)}
-                alt={currentItem.name}
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  // Calm fallback: hide broken thumbnail
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center text-[#333333] group-hover:text-[#e50914]/60 transition space-y-1">
-                <Disc className="w-10 h-10" />
-                <span className="text-[9px] font-mono uppercase tracking-widest text-[#737373]">
-                  No Art Yet
-                </span>
-              </div>
-            )}
+    // The Canva hover panel: poster on top, then title/meta/ADC/folder/
+    // synopsis/pills/actions, progress line last. Built per card and shown
+    // through the fixed portal below (an in-flow absolute panel gets clipped
+    // by the scroll container at the bottom shelf — hover appeared dead).
+    const posterArt = coverImage ? (
+      <img
+        src={localSrc(coverImage)}
+        alt={currentItem.name}
+        className="w-full h-full object-cover"
+        onError={(e) => (e.target as HTMLElement).style.display = 'none'}
+      />
+    ) : (
+      <div className="flex flex-col items-center justify-center text-[#333333] space-y-1 h-full">
+        <Disc className="w-10 h-10" />
+        <span className="text-[9px] font-mono uppercase tracking-widest text-[#737373]">
+          No Art Yet
+        </span>
+      </div>
+    );
 
-            {/* Top badges: status left, disc spec right */}
-            <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-              <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
-                {currentItem.status}
+    const hoverPanel = (
+      <>
+        <div className="aspect-[2/3] w-full bg-[#141414] relative overflow-hidden">
+          {posterArt}
+          <div className="absolute top-1.5 left-1.5">
+            <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-white font-semibold">
+              {currentItem.status}
+            </span>
+          </div>
+          {discBadge && (
+            <div className="absolute top-1.5 right-1.5">
+              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-amber-300 font-mono font-semibold">
+                {discBadge}
               </span>
             </div>
-            {discBadge && (
-              <div className="absolute top-1.5 right-1.5">
-                <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-black/80 border border-[#333333] text-amber-300 font-mono font-semibold">
-                  {discBadge}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Below the tile (Canva): title, thin progress bar with % */}
-          <div className="px-2 pt-1.5 pb-2">
-            <h4 className="text-[11px] font-medium text-white truncate" title={group.clean_title}>
-              {group.clean_title}
-            </h4>
-            <div className="flex items-center gap-1.5 mt-1">
-              <div className="h-[3px] flex-1 rounded-full bg-[#333333] overflow-hidden">
-                <div
-                  className={`h-full transition-all duration-300 ${
-                    currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
-                  }`}
-                  style={{ width: `${progressPct}%` }}
-                />
-              </div>
-              <span className="text-[9px] font-mono text-[#737373]">{progressPct}%</span>
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Hover panel (Canva): appears BELOW the poster while the card
-            elevates — title, year·discs·spec·size, ADC seed line, the release
-            folder, synopsis, disc pills, and the action row. */}
-        <div className="absolute inset-x-0 top-full z-30 rounded-b-lg bg-[#1c1c1c] border border-t-0 border-[#262626] shadow-2xl p-3 space-y-2 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150">
-          <p className="text-[11px] font-semibold text-white line-clamp-2" title={group.clean_title}>
+        <div className="p-3.5 space-y-2">
+          <p className="text-[13px] font-semibold text-white leading-tight" title={group.clean_title}>
             {group.clean_title}
           </p>
-          <div className="text-[9px] font-mono text-[#a3a3a3]">
+          <div className="text-[10px] font-mono text-[#a3a3a3]">
             {group.year ? `${group.year} · ` : ''}
             {discCount} {discCount === 1 ? 'disc' : 'discs'}
             {discBadge ? ` · ${discBadge}` : ''} · {formatBytes(group.total_bytes)}
           </div>
-          {adcLine && <div className="text-[9px] font-mono text-[#737373]">{adcLine}</div>}
+          {adcLine && <div className="text-[10px] font-mono text-[#737373]">{adcLine}</div>}
 
           {/* Visible folder: the release's own folder, click to open. */}
           <button
             onClick={() => handleRevealRelease(currentItem)}
-            className="w-full flex items-center gap-1.5 text-left text-[9px] font-mono text-[#a3a3a3] hover:text-white transition"
+            className="w-full flex items-center gap-1.5 text-left text-[10px] font-mono text-[#a3a3a3] hover:text-white transition"
             title={`Open ${folderOf(currentItem)}`}
           >
             <FolderOpen className="w-3 h-3 flex-shrink-0" />
@@ -531,7 +571,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
           {tmdbMap[group.id]?.overview && (
             <p
-              className="text-[10px] text-[#a3a3a3] leading-snug line-clamp-4"
+              className="text-[11px] text-[#a3a3a3] leading-snug line-clamp-4"
               title={tmdbMap[group.id].overview}
             >
               {tmdbMap[group.id].overview}
@@ -546,7 +586,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                   key={d.key}
                   onClick={() => setSelectedDiscs((prev) => ({ ...prev, [group.id]: idx }))}
                   title={d.title}
-                  className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full transition ${
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full transition ${
                     idx === effIdx
                       ? 'bg-[#e50914] text-white font-bold'
                       : 'bg-[#1f1f1f] border border-[#333333] text-[#a3a3a3] hover:text-white'
@@ -560,23 +600,29 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
 
           <div className="flex items-center gap-1.5 pt-0.5">
             <button
-              onClick={() => handlePlayDisc(effDisc.torrent, group.id, effDisc.path)}
-              className="px-3 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[11px] flex items-center gap-1 transition"
+              onClick={() => {
+                closeHover();
+                handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
+              }}
+              className="px-4 py-1.5 rounded-md bg-[#e50914] hover:bg-[#f40612] text-white font-semibold text-[12px] flex items-center gap-1.5 transition"
               title="Play Interactive Disc Menus (dvdnav/BD-J)"
             >
-              <Play className="w-3 h-3 fill-white" />
+              <Play className="w-3.5 h-3.5 fill-white" />
               <span>Play</span>
             </button>
 
             {!isDownloading && resumePath && (
               // Shown ONLY when there is something to resume (owner rule):
-              // re-open the last-played disc of this release.
+              // continues the last-played disc PAST the menu at its position.
               <button
-                onClick={() => handlePlayDisc(effDisc.torrent, group.id, resumePath)}
-                className="px-2.5 py-1.5 rounded-md border border-[#333333] text-white text-[11px] font-semibold flex items-center gap-1 hover:bg-[#262626] transition"
+                onClick={() => {
+                  closeHover();
+                  handleResumeDisc(group.id, resumePath);
+                }}
+                className="px-3 py-1.5 rounded-md border border-[#333333] text-white text-[12px] font-semibold flex items-center gap-1 hover:bg-[#262626] transition"
                 title={`Resume the disc you played last: ${resumePath.split('/').pop()}`}
               >
-                <Play className="w-3 h-3 fill-current" />
+                <Play className="w-3.5 h-3.5 fill-current" />
                 <span>Resume</span>
               </button>
             )}
@@ -587,13 +633,16 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 className="p-1.5 rounded-md border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
                 title="Pause"
               >
-                <Pause className="w-3 h-3" />
+                <Pause className="w-3.5 h-3.5" />
               </button>
             )}
 
             <button
-              onClick={() => openDetails(currentItem.id)}
-              className="px-2.5 py-1.5 rounded-md border border-[#333333] text-[#a3a3a3] text-[11px] font-medium hover:text-white hover:bg-[#262626] transition"
+              onClick={() => {
+                closeHover();
+                openDetails(currentItem.id);
+              }}
+              className="px-3 py-1.5 rounded-md border border-[#333333] text-[#a3a3a3] text-[12px] font-medium hover:text-white hover:bg-[#262626] transition"
               title="Open this release in Nebulae Manager"
             >
               Details
@@ -604,15 +653,67 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
               className="p-1.5 rounded-md border border-[#333333] text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
               title="Open Enclosing Folder"
             >
-              <FolderOpen className="w-3 h-3" />
+              <FolderOpen className="w-3.5 h-3.5" />
             </button>
           </div>
 
           {variant === 'active' && currentItem.eta_seconds != null && (
-            <div className="text-[9px] font-mono text-[#737373]">
+            <div className="text-[10px] font-mono text-[#737373]">
               ETA {formatEta(currentItem.eta_seconds)} · disc {itemProgressPct}%
             </div>
           )}
+        </div>
+
+        {/* Progress line under the panel, like the mock's 79% line */}
+        <div className="px-3.5 pb-3 flex items-center gap-2">
+          <div className="h-1 flex-1 rounded-full bg-[#333333] overflow-hidden">
+            <div
+              className={`h-full transition-all duration-300 ${
+                currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
+              }`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <span className="text-[10px] font-mono text-[#737373]">{progressPct}%</span>
+        </div>
+      </>
+    );
+
+    return (
+      <div
+        key={group.id}
+        onMouseEnter={(e) => openHoverFor(e, hoverPanel)}
+        onMouseLeave={() => {
+          if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+        }}
+        className="group relative rounded-lg cursor-pointer"
+      >
+        {/* Canva card face: bare poster, title below, thin bar + % — no card
+            chrome; the elevation happens in the hover portal. */}
+        <div className="rounded-lg overflow-hidden">
+          <div className="aspect-[2/3] w-full bg-[#141414] relative overflow-hidden">
+            {posterArt}
+          </div>
+
+          {/* Below the tile (Canva): title, thin progress bar with % */}
+          <div className="pt-2">
+            <h4 className="text-[13px] font-medium text-white truncate leading-tight" title={group.clean_title}>
+              {group.clean_title}
+            </h4>
+            {variant !== 'seeding' && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <div className="h-1 flex-1 rounded-full bg-[#333333] overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      currentItem.status === 'Seeding' ? 'bg-emerald-500' : 'bg-white'
+                    }`}
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+                <span className="text-[11px] font-mono text-[#a3a3a3]">{progressPct}%</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -732,7 +833,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                   {activeDownloads.length}
                 </span>
               </div>
-              <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))]">
+              <div className="grid gap-x-[22px] gap-y-6 [grid-template-columns:repeat(auto-fill,112px)]">
                 {visibleGroups(groupItems(activeDownloads)).map((g) => renderGroupCard(g, 'active'))}
               </div>
             </div>
@@ -754,7 +855,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
             ) : (
-              <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(150px,1fr))]">
+              <div className="grid gap-x-[22px] gap-y-6 [grid-template-columns:repeat(auto-fill,112px)]">
                 {visibleGroups(groupItems(readyToWatch)).map((g) => renderGroupCard(g, 'watch'))}
               </div>
             )}
@@ -837,6 +938,23 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, pauseTorrent
           </div>
         </div>
       )}
+
+      {/* Canva hover panel: fixed-position portal — attached below the
+          hovered card's poster, never clipped by the scroll container. */}
+      {hoverPortal &&
+        createPortal(
+          <div
+            className="fixed z-[90] w-60 rounded-xl bg-[#1c1c1c] border border-[#2f2f2f] shadow-2xl shadow-black/70 overflow-hidden"
+            style={{ left: hoverPortal.left, top: hoverPortal.top }}
+            onMouseEnter={() => {
+              if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+            }}
+            onMouseLeave={closeHover}
+          >
+            {hoverPortal.content}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 };

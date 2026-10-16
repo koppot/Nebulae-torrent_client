@@ -305,6 +305,12 @@ pub struct PlayerPoll {
     pub time_ms: i64,
     pub length_ms: i64,
     pub playing: bool,
+    // Disc navigation state (0 / -1 for plain files): the overlay's chapter
+    // bar and the Disc Menu button read these from the same poll.
+    pub title: i32,
+    pub title_count: i32,
+    pub chapter: i32,
+    pub chapter_count: i32,
 }
 
 #[tauri::command]
@@ -315,6 +321,10 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             time_ms: 0,
             length_ms: 0,
             playing: false,
+            title: 0,
+            title_count: 0,
+            chapter: 0,
+            chapter_count: 0,
         });
     }
     let lib = loaded_lib(&state)?;
@@ -324,8 +334,41 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             time_ms: (lib.libvlc_media_player_get_time)(m),
             length_ms: (lib.libvlc_media_player_get_length)(m),
             playing: (lib.libvlc_media_player_is_playing)(m) != 0,
+            title: (lib.libvlc_media_player_get_title)(m),
+            title_count: (lib.libvlc_media_player_get_title_count)(m),
+            chapter: (lib.libvlc_media_player_get_chapter)(m),
+            chapter_count: (lib.libvlc_media_player_get_chapter_count)(m),
         })
     }
+}
+
+/// Jump to a disc TITLE. Title 0 is the DVD menu domain (dvdnav) — the
+/// control bar's "Disc Menu" button uses this to leave the feature and
+/// return to the interactive menu.
+#[tauri::command]
+pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    tracing::info!("[player] set_title({title})");
+    unsafe { (lib.libvlc_media_player_set_title)(mp as *mut c_void, title.max(0)) };
+    Ok(())
+}
+
+/// Jump to a CHAPTER of the current title (0-based; the overlay renders
+/// 1-based labels). The chapters popover's grid wires each cell to this.
+#[tauri::command]
+pub fn player_set_chapter(state: tauri::State<PlayerState>, chapter: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    tracing::info!("[player] set_chapter({chapter})");
+    unsafe { (lib.libvlc_media_player_set_chapter)(mp as *mut c_void, chapter.max(0)) };
+    Ok(())
 }
 
 #[tauri::command]

@@ -1506,3 +1506,27 @@ are two discs", "no visible folder", "did not follow the Canva proportions",
   boxsets and single-torrent multi-ISO sets (individually playable),
   Play/Resume/Pause/Details/Open-Folder (Details jumps to Manager, selected).
 - Gates: tsc clean, eslint clean, clippy 0, 86 lib tests green.
+
+## Session 2026-10-16 (cont.) — hover/disc/chapters/resume batch
+
+Owner reports that drove this batch: hover dead, Details dead, Resume
+re-drops at the disc menu, no disc picker, no chapters, "Disc Menu" label
+dead, and Canva geometry still not followed.
+
+- HOVER ROOT CAUSE: the hover panel was absolutely positioned INSIDE the
+  scroll container — clipped at the bottom shelf and pointer-events-none
+  while invisible, so Details could never be clicked either. Rebuilt as a
+  fixed-position createPortal panel (240px, attached below the poster,
+  flips up at the viewport bottom, closes on scroll, 250ms hover delay).
+- Canva geometry applied from a full-res export: 112px cards, 22px column
+  gaps, poster radius 8, 13px titles, 4px progress bar + %, small-caps
+  headers, bare card faces (elevation lives in the portal).
+- Disc picker: the control-bar title is a button — popup lists every disc
+  of the playing release (detect_disc_set) with size, click switches discs.
+- Chapters: player_chapters state joined the poll (title/chapter counts);
+  chapters popover grid + prev/next wire to new player_set_chapter;
+  "Disc Menu" is a real button (player_set_title(0) = dvdnav menu domain).
+- Resume past the menu: the overlay poller persists position per resolved
+  path (nebulae_resume_pos:*, >30s, 5s throttle); resumeInPlayer waits for
+  the feature title to engage (length > 5 min) then seeks to the position.
+- Gates: tsc/eslint clean, clippy 0, 86 lib tests green.
