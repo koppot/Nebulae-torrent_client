@@ -125,6 +125,134 @@ pub fn launch_disc_player(
     launch_disc_player_impl(resource_dir.as_deref(), &file_path, prefer_menu)
 }
 
+/// Locate VLC for disc playback. mpv has no DVD menu support (removed
+/// upstream years ago: "DVD menu support has been removed."); VLC renders
+/// the disc's own menus from ISO images, VIDEO_TS and BDMV folders.
+fn find_vlc() -> Option<PathBuf> {
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        cands.push(PathBuf::from(&home).join("Applications/VLC.app/Contents/MacOS/VLC"));
+    }
+    cands.push(PathBuf::from("/Applications/VLC.app/Contents/MacOS/VLC"));
+    cands.push(PathBuf::from("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"));
+    cands.push(PathBuf::from("/usr/bin/vlc"));
+    cands.push(PathBuf::from("/usr/local/bin/vlc"));
+    cands.into_iter().find(|c| c.is_file())
+}
+
+/// Depth-limited recursive search for a playable disc image or disc folder
+/// structure. A disc image ALWAYS outranks loose episode files - the owner
+/// wants the menu-driven disc, never extracted episodes. Returns the disc
+/// root: the ISO/IMG file, or the folder containing VIDEO_TS / BDMV.
+fn collect_disc_candidates(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if name == "video_ts" || name == "bdmv" {
+                // Hand players the disc ROOT (parent of VIDEO_TS/BDMV);
+                // both VLC and libdvdnav/libbluray expect that layout.
+                if let Some(root) = p.parent() {
+                    out.push(root.to_path_buf());
+                } else {
+                    out.push(p);
+                }
+            } else {
+                subdirs.push(p);
+            }
+        } else if p.is_file()
+            && matches!(
+                p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
+                Some(ref ext) if ext == "iso" || ext == "img"
+            )
+        {
+            out.push(p);
+        }
+    }
+    for d in subdirs {
+        collect_disc_candidates(&d, depth + 1, out);
+    }
+}
+
+/// Pick the disc root to play from a directory: disc-1 images first, then
+/// other disc-N images, then VIDEO_TS/BDMV roots, then any other image.
+/// Name tie-break keeps multi-disc torrents deterministic.
+fn resolve_disc_target(dir: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    collect_disc_candidates(dir, 0, &mut candidates);
+    if candidates.is_empty() {
+        return None;
+    }
+    let rank = |p: &Path| -> u8 {
+        if p.is_dir() {
+            return 2;
+        }
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if name.contains("disc") && (name.contains('1') || name.contains("one")) {
+            0
+        } else if name.contains("disc") {
+            1
+        } else {
+            3
+        }
+    };
+    candidates.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.cmp(b)));
+    Some(candidates.remove(0))
+}
+
+/// Largest video file under a directory (recursive) - the main feature
+/// when no disc image exists.
+fn find_main_video(dir: &Path) -> Option<PathBuf> {
+    let mut best: Option<(u64, PathBuf)> = None;
+    let mut stack = vec![dir.to_path_buf()];
+    let mut depth = 0;
+    while let Some(d) = stack.pop() {
+        depth += 1;
+        if depth > 64 {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.is_file()
+                && matches!(
+                    p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
+                    Some(ref ext) if matches!(
+                        ext.as_str(),
+                        "mkv" | "mp4" | "avi" | "mov" | "m2ts" | "ts" | "wmv" | "flv" | "webm"
+                            | "mpg" | "mpeg" | "m4v"
+                    )
+                )
+            {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if best.as_ref().map(|(s, _)| size > *s).unwrap_or(true) {
+                    best = Some((size, p));
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 /// Core launcher, separated from the Tauri command so it stays testable
 /// without an AppHandle.
 pub fn launch_disc_player_impl(
@@ -140,85 +268,73 @@ pub fn launch_disc_player_impl(
     let disc_info = DiscDetector::inspect(path);
     let use_menu = prefer_menu.unwrap_or(true);
 
-    // A torrent's save_path is frequently a plain folder (multi-disc torrents
-    // store loose disc images, e.g. DISC_1.ISO / DISC_2.ISO) or a download
-    // root that contains a titled subfolder with the actual images. Handing
-    // a bare directory to the player makes it exit silently. Resolve the
-    // actual disc image instead: search the folder and one level of
-    // subfolders, preferring "disc 1" style names so an unrelated image in
-    // the download root (e.g. an OS installer ISO) never wins.
+    // A torrent's save_path is frequently a plain folder. Loose episode
+    // files often sit NEXT TO a nested disc image (or several levels deep).
+    // The disc image ALWAYS wins: resolve it anywhere under the folder
+    // (depth 4) so playback starts on the disc's own menu, never on
+    // extracted episodes.
     let disc_info = disc_info.or_else(|| {
         if !path.is_dir() {
             return None;
         }
-        let mut images: Vec<PathBuf> = Vec::new();
-        let mut scan = |dir: &Path| {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_file()
-                        && matches!(
-                            p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
-                            Some(ext) if ext == "iso" || ext == "img"
-                        )
-                    {
-                        images.push(p);
-                    }
-                }
-            }
-        };
-        scan(path);
-        if let Ok(subdirs) = std::fs::read_dir(path) {
-            for entry in subdirs.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    scan(&p);
-                }
-            }
-        }
-        if images.is_empty() {
-            return None;
-        }
-        // Rank: DISC 1 first, then other disc-N images, then anything else.
-        let disc_rank = |p: &Path| {
-            let name = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if name.contains("disc") && (name.contains('1') || name.contains("one")) {
-                0
-            } else if name.contains("disc") {
-                1
-            } else {
-                2
-            }
-        };
-        images.sort_by(|a, b| disc_rank(a).cmp(&disc_rank(b)).then(a.cmp(b)));
-        let image = images.first()?;
+        let target = resolve_disc_target(path)?;
         tracing::info!(
-            "Save destination is a folder; resolved disc image '{}' for playback",
-            image.display()
+            "Save destination is a folder; resolved disc target '{}' for playback",
+            target.display()
         );
-        DiscDetector::inspect(image)
+        DiscDetector::inspect(&target)
     });
 
     // Locate preferred disc player (bundled mpv -> system mpv -> VLC -> IINA -> system default)
     if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
-        let mut cmd = Command::new(&player_bin);
-
-        // Disc playback must START ON THE ROOT MENU (owner requirement):
-        // some discs auto-run a first-play chain that jumps straight into
-        // the feature. The bundled lua returns to the menu the moment the
-        // disc loads; it is a harmless no-op for non-dvdnav playback.
-        let menu_script = player_bin
-            .parent()
-            .map(|d| d.join("scripts").join("menu-first.lua"));
-        if let Some(script) = menu_script {
-            if script.exists() {
-                cmd.arg(format!("--script={}", script.display()));
+        // Disc playback must show the disc's OWN menu (owner requirement).
+        // mpv cannot: DVD menu support was removed upstream years ago and
+        // no navigation command exists in any modern release. VLC renders
+        // the real menus (dvdnav for DVDs, libbluray simple menus for
+        // BD/UHD) straight from ISO images and disc folders. mpv stays as
+        // the fallback and the plain-file player.
+        if use_menu {
+            if let Some(disc) = disc_info.as_ref() {
+                if let Some(vlc) = find_vlc() {
+                    let mut vcmd = Command::new(&vlc);
+                    vcmd.arg(&disc.root_path);
+                    let vlog_path = std::env::temp_dir().join("nebulae-vlc.log");
+                    if let Ok(vlog) = std::fs::File::create(&vlog_path) {
+                        vcmd.stderr(std::process::Stdio::from(vlog));
+                    }
+                    match vcmd.spawn() {
+                        Ok(mut vchild) => {
+                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                            if let Some(status) = vchild.try_wait().ok().flatten() {
+                                if !status.success() {
+                                    let said = std::fs::read_to_string(&vlog_path)
+                                        .unwrap_or_default();
+                                    let tail: String = said.chars().rev().take(300)
+                                        .collect::<Vec<_>>().into_iter().rev().collect();
+                                    return Err(format!(
+                                        "VLC exited immediately ({status}). VLC output: {}",
+                                        tail.trim()
+                                    ));
+                                }
+                            }
+                            tracing::info!(
+                                "Disc menu playback via VLC; diagnostics at {}",
+                                vlog_path.display()
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "VLC launch failed ({}); falling back to bundled mpv",
+                                e
+                            );
+                        }
+                    }
+                }
             }
         }
+
+        let mut cmd = Command::new(&player_bin);
 
         // DVDs and many Blu-rays are interlaced. Auto deinterlacing (via
         // the libplacebo-based gpu-next renderer) restores smooth picture
@@ -306,6 +422,25 @@ pub fn launch_disc_player_impl(
                             cmd.arg(target);
                         }
                     }
+                }
+            }
+        } else if path.is_dir() {
+            // No disc image anywhere under the folder. Handing mpv a bare
+            // directory makes it enqueue and play every loose episode;
+            // play the largest video file (the main feature) instead.
+            match find_main_video(path) {
+                Some(video) => {
+                    tracing::info!(
+                        "No disc image found; playing main video file '{}'",
+                        video.display()
+                    );
+                    cmd.arg(video);
+                }
+                None => {
+                    return Err(format!(
+                        "No playable media found in {}",
+                        path.display()
+                    ));
                 }
             }
         } else {
@@ -550,6 +685,51 @@ mod tests {
         let res = launch_disc_player_impl(None, "/nonexistent/movie/file.mkv", Some(true));
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("does not exist"));
+    }
+
+    #[test]
+    fn test_resolve_disc_target_deep_iso_beats_episodes() {
+        let base = std::env::temp_dir().join(format!("neb-disc-{}", std::process::id()));
+        let nested = base.join("Season 1").join("Discs");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(base.join("episode01.mkv"), b"x").unwrap();
+        std::fs::write(nested.join("DISC_1.ISO"), b"x").unwrap();
+        let got = resolve_disc_target(&base).unwrap();
+        assert!(got.ends_with("DISC_1.ISO"), "got {got:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_disc_target_prefers_disc_one() {
+        let base = std::env::temp_dir().join(format!("neb-disc2-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("DISC_2.ISO"), b"x").unwrap();
+        std::fs::write(base.join("DISC_1.ISO"), b"x").unwrap();
+        let got = resolve_disc_target(&base).unwrap();
+        assert!(got.ends_with("DISC_1.ISO"), "got {got:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_disc_target_video_ts_root() {
+        let base = std::env::temp_dir().join(format!("neb-disc3-{}", std::process::id()));
+        let dvd = base.join("My Movie").join("VIDEO_TS");
+        std::fs::create_dir_all(&dvd).unwrap();
+        std::fs::write(dvd.join("VIDEO_TS.IFO"), b"x").unwrap();
+        let got = resolve_disc_target(&base).unwrap();
+        assert!(got.ends_with("My Movie"), "got {got:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_find_main_video_picks_largest() {
+        let base = std::env::temp_dir().join(format!("neb-vid-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("small.mp4"), vec![0u8; 10]).unwrap();
+        std::fs::write(base.join("feature.mp4"), vec![0u8; 999]).unwrap();
+        let got = find_main_video(&base).unwrap();
+        assert!(got.ends_with("feature.mp4"), "got {got:?}");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
