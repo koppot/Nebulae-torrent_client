@@ -35,21 +35,44 @@ mkdir -p "${GEO_DIR}"
 download_db() {
     local edition="$1"
     local dest="${GEO_DIR}/${edition}.mmdb"
-    local url="https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
+    local tmp_tar="/tmp/${edition}.tar.gz"
 
     echo "Downloading ${edition}..."
-    curl -fsSL "${url}" -o "/tmp/${edition}.tar.gz"
-    tar -xzf "/tmp/${edition}.tar.gz" -C /tmp
-    # Extracted directory name contains a date stamp; use find to locate the mmdb
-    local mmdb_path
-    mmdb_path=$(find /tmp -name "${edition}.mmdb" -newer "/tmp/${edition}.tar.gz" | head -1)
-    if [[ -z "${mmdb_path}" ]]; then
-        echo "ERROR: ${edition}.mmdb not found after extraction." >&2
+    rm -f "${tmp_tar}"
+
+    local status_code
+    if [[ -n "${MAXMIND_ACCOUNT_ID:-}" ]]; then
+        status_code=$(curl -s -L -w "%{http_code}" -u "${MAXMIND_ACCOUNT_ID}:${MAXMIND_LICENSE_KEY}" \
+            "https://download.maxmind.com/geoip/databases/${edition}/download?suffix=tar.gz" \
+            -o "${tmp_tar}")
+    else
+        status_code=$(curl -s -L -w "%{http_code}" \
+            "https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz" \
+            -o "${tmp_tar}")
+    fi
+
+    if [[ "${status_code}" != "200" ]]; then
+        local err_msg
+        err_msg=$(cat "${tmp_tar}" 2>/dev/null || echo "HTTP ${status_code}")
+        echo "ERROR: Download failed for ${edition} (HTTP ${status_code}): ${err_msg}" >&2
+        rm -f "${tmp_tar}"
         exit 1
     fi
+
+    local tmp_extract
+    tmp_extract=$(mktemp -d)
+    tar -xzf "${tmp_tar}" -C "${tmp_extract}"
+    local mmdb_path
+    mmdb_path=$(find "${tmp_extract}" -name "${edition}.mmdb" | head -1)
+
+    if [[ -z "${mmdb_path}" ]]; then
+        echo "ERROR: ${edition}.mmdb not found after extraction." >&2
+        rm -rf "${tmp_extract}" "${tmp_tar}"
+        exit 1
+    fi
+
     mv "${mmdb_path}" "${dest}"
-    rm -f "/tmp/${edition}.tar.gz"
-    find /tmp -name "${edition}_*" -type d -exec rm -rf {} + 2>/dev/null || true
+    rm -rf "${tmp_extract}" "${tmp_tar}"
     echo "  → ${dest}"
 }
 
