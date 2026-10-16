@@ -1394,3 +1394,26 @@ both save_path shapes (root + subfolder).
   0.39 bundler left unstaged). arm64 build installed to /Applications,
   mpv v0.41.0 verified in-bundle, 46 dylibs zero external refs, BD-J
   present, daemon on 41413.
+
+## 2026-10-15 — ONE player, embedded: libVLC inside Nebulae (owner decision)
+
+- Owner verdict: no two-player split, no mpv at all, and the player must live
+  inside Nebulae's window with Nebulae's own appearance.
+- mpv FULLY REMOVED: bundler scripts (macOS/Linux/Windows + AppImage inject),
+  JRE bundling, CI steps, .gitignore entries, third-party notices, and the
+  whole bundled-player path in commands/media.rs are gone.
+- New `src-tauri/src/player/`: `engine.rs` = runtime loader for the user's
+  installed libVLC (VLC.app / Windows / Linux paths, VLC_PLUGIN_PATH set for
+  VLC.app) + minimal VLC 3 FFI; `embed.rs` = macOS NSView overlay layered
+  above the WKWebView via objc2-app-kit (0.3/0.6 already in the tree),
+  positioned from a frontend-reported viewport rect, main-thread only.
+- Commands: player_open/close/toggle_pause/seek/set_volume/poll/
+  sync_viewport. Disc-first resolution retained (deep ISO/VIDEO_TS/BDMV
+  scan, disc-1 rank, largest-video fallback). Deinterlace = libvlc args
+  --deinterlace=-1 --deinterlace-mode=yadif2x. Non-macOS: launches the
+  user's VLC binary until the overlay is ported.
+- Frontend: PlayerOverlay theater (Nebulae-styled control bar) + playerStore
+  (useSyncExternalStore); Play buttons in SimpleMediaView and
+  TorrentManagerView route through openInPlayer; Settings pane reports the
+  VLC engine. libVLC is NOT bundled (GPL) - it is loaded from the user's VLC.
+- Gates: clippy 0 findings, 80 tests, tsc clean, eslint clean.

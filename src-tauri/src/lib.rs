@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod engine;
 pub mod models;
+pub mod player;
 pub mod updater;
 pub mod utils;
 
@@ -233,6 +234,7 @@ pub fn run() {
         .manage(engine_mode)
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
+        .manage(player::PlayerState::default())
         .setup(move |app| {
             use tauri::Manager;
 
@@ -492,9 +494,15 @@ pub fn run() {
             commands::vpn::list_vpn_profiles,
             commands::vpn::delete_vpn_profile,
             commands::vpn::get_network_interfaces,
-            // Media Station & Optical Disc Cinema
-            commands::media::launch_media_player,
-            commands::media::launch_disc_player,
+            // Media Station & Optical Disc Cinema — ONE engine: the user's
+            // VLC, loaded as a library and embedded in the app window.
+            commands::media::player_open,
+            commands::media::player_close,
+            commands::media::player_toggle_pause,
+            commands::media::player_seek,
+            commands::media::player_set_volume,
+            commands::media::player_poll,
+            commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,
             commands::media::scan_disc_artwork,

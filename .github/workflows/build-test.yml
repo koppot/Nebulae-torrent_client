@@ -72,10 +72,7 @@ jobs:
             dpkg \
             binutils \
             xvfb \
-            desktop-file-utils \
-            mpv \
-            libdvdnav4 \
-            libbluray2
+            desktop-file-utils
 
       - name: Cache cargo dependencies
         uses: swatinem/rust-cache@v2
@@ -84,33 +81,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Setup Temurin JDK 21 (bundled JRE for BD-J/UHD menus)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Bundle optical disc player (Windows x64)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          ./scripts/bundle-windows-mpv.ps1
-
-      - name: Bundle optical disc player (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          ./scripts/bundle-linux-mpv.sh
-
-      - name: Install mpv on macOS runner
-        if: runner.os == 'macOS'
-        run: |
-          brew install mpv || brew upgrade mpv || true
-
-      - name: Bundle optical disc player (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          ./scripts/bundle-macos-mpv.sh
 
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
@@ -134,23 +104,20 @@ jobs:
           ./scripts/bundle-macos-transmission.sh
 
       # --- Linux split build ------------------------------------------------
-      - name: Build Linux packages with bundled player (deb, rpm)
+      - name: Build Linux packages with bundled engine (deb, rpm)
         if: runner.os == 'Linux'
         run: pnpm tauri build --bundles deb,rpm
 
-      - name: Build Linux AppImage without player/engine resources
+      - name: Build Linux AppImage without engine resources
         if: runner.os == 'Linux'
         run: |
-          rm -rf src-tauri/player-staging
-          mv src-tauri/resources/player src-tauri/player-staging
           rm -rf src-tauri/transmission-staging-appimage
           mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
           pnpm tauri build --bundles appimage
 
-      - name: Inject bundled player + engine into AppImage
+      - name: Inject bundled engine into AppImage
         if: runner.os == 'Linux'
         run: |
-          ./scripts/appimage-inject-player.sh
           APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
           OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
           dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
@@ -169,9 +136,8 @@ jobs:
           mv "$APPIMAGE_PATH.new" "$APPIMAGE_PATH"
           rm -rf squashfs-root
           LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
-          printf '%s\n' "$LISTING" | grep -q "resources/player/mpv" || { echo "ERROR: mpv missing from repacked AppImage"; exit 1; }
           printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
-          echo "SUCCESS: player + engine injected into $APPIMAGE_PATH"
+          echo "SUCCESS: engine injected into $APPIMAGE_PATH"
 
       # --- macOS / Windows Build --------------------------------------------
       - name: Build Tauri Application

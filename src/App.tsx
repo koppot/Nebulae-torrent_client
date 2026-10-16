@@ -21,6 +21,7 @@ import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
 import { RecoveryScreen } from './components/recovery/RecoveryScreen';
+import PlayerOverlay from './components/player/PlayerOverlay';
 import { FileUp } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -259,6 +260,7 @@ export const App: React.FC = () => {
       {/* 5. Modals */}
       <SettingsModal />
       <HelpModal />
+      <PlayerOverlay />
       <AddTorrentModal />
       <CreateTorrentModal />
       <ConnectivityDoctorModal />

@@ -1,8 +1,12 @@
-use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo, DiscType};
+use crate::player::{self, PlayerState};
+use crate::player::engine::VlcSession;
+use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
 use std::path::{Path, PathBuf};
+use std::ffi::{c_int, c_void};
+use std::sync::Mutex;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::process::Command;
-use tauri::Manager;
 
 #[tauri::command]
 pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
@@ -29,11 +33,9 @@ pub fn scan_disc_artwork(file_path: String) -> Result<Option<String>, String> {
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlayerEngine {
-    BundledMpv,
-}
-
+/// What the Settings → Media pane shows about the playback engine.
+/// The engine is the user's own VLC (loaded as a library and embedded in
+/// the app window); there is no bundled player anymore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscPlayerStatus {
     pub player_type: String,
@@ -48,86 +50,319 @@ pub struct DiscPlayerStatus {
 }
 
 #[tauri::command]
-pub fn get_disc_player_status(app: tauri::AppHandle) -> Result<DiscPlayerStatus, String> {
-    let resource_dir = app.path().resource_dir().ok();
-    get_disc_player_status_impl(resource_dir.as_deref())
-}
-
-fn get_disc_player_status_impl(resource_dir: Option<&Path>) -> Result<DiscPlayerStatus, String> {
-    let player_info = find_optical_disc_player(resource_dir);
-    let java_home = detect_java_home(resource_dir).map(|p| p.to_string_lossy().to_string());
-    let has_jvm = java_home.is_some();
-
-    match player_info {
-        Some((path, engine)) => {
-            let path_str = path.to_string_lossy().to_string();
-            let mut version_str = String::new();
-            if let Ok(output) = Command::new(&path).arg("--version").output() {
-                if let Ok(s) = String::from_utf8(output.stdout) {
-                    if let Some(first_line) = s.lines().next() {
-                        version_str = first_line.trim().to_string();
-                    }
-                }
-            }
-
-            let (p_type, p_name) = match engine {
-                PlayerEngine::BundledMpv => (
-                    "bundled_mpv".to_string(),
-                    if !version_str.is_empty() {
-                        format!("Bundled mpv ({version_str})")
-                    } else {
-                        "Bundled mpv (Isolated)".to_string()
-                    },
-                ),
-            };
-
-            let note = if !has_jvm {
-                Some("Bundled Java runtime (JRE) not found in this installation. BD-J interactive menus may have limited navigation; standard Blu-ray and DVD menus are fully supported.".to_string())
+pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
+    match crate::player::engine::VlcLib::load() {
+        Ok(lib) => {
+            let version = lib.version();
+            let name = if version.is_empty() {
+                "VLC (embedded engine)".to_string()
             } else {
-                Some("Full DVD, Blu-ray, and BD-J interactive menu navigation supported.".to_string())
+                format!("VLC {version} (embedded engine)")
             };
-
             Ok(DiscPlayerStatus {
-                player_type: p_type,
-                player_name: p_name,
-                player_path: Some(path_str),
+                player_type: "vlc".to_string(),
+                player_name: name,
+                player_path: player::engine::VlcLib::last_loaded_path()
+                    .map(|p| p.display().to_string()),
                 supports_dvd_menu: true,
                 supports_bluray_menu: true,
-                java_home,
-                has_jvm,
-                bd_j_supported: has_jvm,
-                note,
+                java_home: None,
+                has_jvm: false,
+                // VLC 3 renders Blu-ray standard menus; BD-J interactive
+                // menus need a JVM VLC doesn't ship on this platform.
+                bd_j_supported: false,
+                note: Some(
+                    "Playback runs inside Nebulae on VLC's engine: full DVD menus, Blu-ray standard menus, and automatic high-quality deinterlacing. BD-J interactive Blu-ray menus are not available in VLC 3."
+                        .to_string(),
+                ),
             })
         }
-        None => Ok(DiscPlayerStatus {
+        Err(e) => Ok(DiscPlayerStatus {
             player_type: "none".to_string(),
-            player_name: "Bundled Nebulae player not found in this installation".to_string(),
+            player_name: "VLC not found".to_string(),
             player_path: None,
             supports_dvd_menu: false,
             supports_bluray_menu: false,
-            java_home,
-            has_jvm,
+            java_home: None,
+            has_jvm: false,
             bd_j_supported: false,
-            note: Some(
-                "The bundled disc player is missing from this installation. Reinstall the official Nebulae package - no system media player is used.".to_string(),
-            ),
+            note: Some(e),
         }),
     }
 }
 
-#[tauri::command]
-pub fn launch_disc_player(
-    app: tauri::AppHandle,
-    file_path: String,
-    prefer_menu: Option<bool>,
-) -> Result<(), String> {
-    let resource_dir = app.path().resource_dir().ok();
-    launch_disc_player_impl(resource_dir.as_deref(), &file_path, prefer_menu)
+/// What `player_open` resolved and whether playback runs embedded.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedPlayback {
+    pub resolved_path: String,
+    pub title: String,
+    pub is_disc: bool,
+    pub external: bool,
 }
 
-/// Locate VLC for disc playback. mpv has no DVD menu support (removed
-/// upstream years ago: "DVD menu support has been removed."); VLC renders
-/// the disc's own menus from ISO images, VIDEO_TS and BDMV folders.
+/// Resolve what to play for a save path / file / folder. A disc image or
+/// disc folder ALWAYS wins over loose episode files; a disc-less folder
+/// plays its largest video file (the main feature).
+fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
+    let path = Path::new(file_path);
+    if !path.exists() {
+        return Err(format!("Media path does not exist: {file_path}"));
+    }
+    if let Some(disc) = DiscDetector::inspect(path) {
+        let title = disc.title.clone();
+        return Ok(ResolvedPlayback {
+            resolved_path: disc.root_path.clone(),
+            title,
+            is_disc: true,
+            external: false,
+        });
+    }
+    if path.is_dir() {
+        if let Some(target) = resolve_disc_target(path) {
+            if let Some(disc) = DiscDetector::inspect(&target) {
+                let title = disc.title.clone();
+                return Ok(ResolvedPlayback {
+                    resolved_path: disc.root_path.clone(),
+                    title,
+                    is_disc: true,
+                    external: false,
+                });
+            }
+        }
+        return match find_main_video(path) {
+            Some(video) => {
+                let title = video
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Video")
+                    .to_string();
+                Ok(ResolvedPlayback {
+                    resolved_path: video.display().to_string(),
+                    title,
+                    is_disc: false,
+                    external: false,
+                })
+            }
+            None => Err(format!("No playable media found in {}", path.display())),
+        };
+    }
+    let title = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Video")
+        .to_string();
+    Ok(ResolvedPlayback {
+        resolved_path: file_path.to_string(),
+        title,
+        is_disc: false,
+        external: false,
+    })
+}
+
+fn loaded_lib(
+    state: &PlayerState,
+) -> Result<std::sync::Arc<player::engine::VlcLib>, String> {
+    let mut guard = state.lib.lock().map_err(|_| "player state poisoned")?;
+    if guard.is_none() {
+        *guard = Some(std::sync::Arc::new(player::engine::VlcLib::load()?));
+    }
+    Ok(guard.as_ref().unwrap().clone())
+}
+
+fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    g.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return;
+    }
+    if let Ok(lib_guard) = state.lib.lock() {
+        if let Some(lib) = lib_guard.as_ref() {
+            let session = VlcSession {
+                instance: *poison(&state.instance),
+                media: *poison(&state.media),
+                media_player: mp,
+            };
+            #[cfg(target_os = "macos")]
+            {
+                // The vout renders into our overlay view; hide it before the
+                // player goes away so no stale frame lingers.
+                let _ = player::embed::set_overlay_hidden(app, true);
+            }
+            session.close(lib);
+        }
+    }
+    *poison(&state.instance) = 0;
+    *poison(&state.media) = 0;
+    *poison(&state.media_player) = 0;
+    *poison(&state.started) = false;
+}
+
+/// Open playback inside Nebulae. Everything goes through ONE engine: the
+/// user's VLC, loaded as a library and rendered into the app's own window
+/// (macOS). Discs start at their root menu; plain files and disc-less
+/// folders play the main feature.
+#[tauri::command]
+pub fn player_open(
+    app: tauri::AppHandle,
+    state: tauri::State<PlayerState>,
+    file_path: String,
+) -> Result<ResolvedPlayback, String> {
+    stop_session(&app, &state);
+    let resolved = resolve_playback(&file_path)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let view = player::embed::ensure_overlay(&app)?;
+        let lib = loaded_lib(&state)?;
+        let session = VlcSession::open(&lib, &resolved.resolved_path, view)?;
+        *poison(&state.instance) = session.instance;
+        *poison(&state.media) = session.media;
+        *poison(&state.media_player) = session.media_player;
+        *poison(&state.started) = true;
+        tracing::info!(
+            "Embedded VLC engine playing '{}' (disc: {})",
+            resolved.resolved_path,
+            resolved.is_disc
+        );
+        Ok(resolved)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Embedded overlay is the macOS experience today; other platforms
+        // launch the user's VLC application until the overlay is ported.
+        let _ = &app;
+        let _ = &state;
+        launch_vlc_externally(&resolved.resolved_path)?;
+        Ok(ResolvedPlayback {
+            external: true,
+            ..resolved
+        })
+    }
+}
+
+// Used by the non-macOS `player_open` fallback (external VLC launch).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn launch_vlc_externally(target: &str) -> Result<(), String> {
+    let vlc = find_vlc().ok_or_else(|| {
+        "VLC is required for playback. Install VLC from https://www.videolan.org.".to_string()
+    })?;
+    let mut cmd = Command::new(&vlc);
+    cmd.arg("--deinterlace=-1").arg("--deinterlace-mode=yadif2x");
+    cmd.arg(target);
+    let log_path = std::env::temp_dir().join("nebulae-vlc.log");
+    if let Ok(log) = std::fs::File::create(&log_path) {
+        cmd.stderr(std::process::Stdio::from(log));
+    }
+    cmd.spawn()
+        .map_err(|e| format!("Failed to launch VLC: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn player_close(
+    app: tauri::AppHandle,
+    state: tauri::State<PlayerState>,
+) -> Result<(), String> {
+    stop_session(&app, &state);
+    Ok(())
+}
+
+/// Position snapshot for the control bar; the frontend polls this.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerPoll {
+    pub time_ms: i64,
+    pub length_ms: i64,
+    pub playing: bool,
+}
+
+#[tauri::command]
+pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(PlayerPoll {
+            time_ms: 0,
+            length_ms: 0,
+            playing: false,
+        });
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        Ok(PlayerPoll {
+            time_ms: (lib.libvlc_media_player_get_time)(m),
+            length_ms: (lib.libvlc_media_player_get_length)(m),
+            playing: (lib.libvlc_media_player_is_playing)(m) != 0,
+        })
+    }
+}
+
+#[tauri::command]
+pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        let playing = (lib.libvlc_media_player_is_playing)(m) != 0;
+        (lib.libvlc_media_player_pause)(m, if playing { 1 } else { 0 });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0)) };
+    Ok(())
+}
+
+#[tauri::command]
+pub fn player_set_volume(state: tauri::State<PlayerState>, volume: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        (lib.libvlc_audio_set_volume)(mp as *mut c_void, volume.clamp(0, 100) as c_int);
+    }
+    Ok(())
+}
+
+/// Keep the native video overlay aligned with the frontend placeholder.
+/// Coordinates are CSS pixels relative to the top-left of the window.
+#[tauri::command]
+pub fn player_sync_viewport(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        player::embed::sync_frame(&app, x, y, width, height)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, x, y, width, height);
+        Ok(())
+    }
+}
+
+/// Locate the VLC application binary (used on platforms where playback
+/// still launches VLC externally rather than embedding its engine).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn find_vlc() -> Option<PathBuf> {
     let mut cands: Vec<PathBuf> = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
@@ -253,376 +488,6 @@ fn find_main_video(dir: &Path) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
-/// Core launcher, separated from the Tauri command so it stays testable
-/// without an AppHandle.
-pub fn launch_disc_player_impl(
-    resource_dir: Option<&Path>,
-    file_path: &str,
-    prefer_menu: Option<bool>,
-) -> Result<(), String> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(format!("Media path does not exist: {file_path}"));
-    }
-
-    let disc_info = DiscDetector::inspect(path);
-    let use_menu = prefer_menu.unwrap_or(true);
-
-    // A torrent's save_path is frequently a plain folder. Loose episode
-    // files often sit NEXT TO a nested disc image (or several levels deep).
-    // The disc image ALWAYS wins: resolve it anywhere under the folder
-    // (depth 4) so playback starts on the disc's own menu, never on
-    // extracted episodes.
-    let disc_info = disc_info.or_else(|| {
-        if !path.is_dir() {
-            return None;
-        }
-        let target = resolve_disc_target(path)?;
-        tracing::info!(
-            "Save destination is a folder; resolved disc target '{}' for playback",
-            target.display()
-        );
-        DiscDetector::inspect(&target)
-    });
-
-    // Locate preferred disc player (bundled mpv -> system mpv -> VLC -> IINA -> system default)
-    if let Some((player_bin, engine)) = find_optical_disc_player(resource_dir) {
-        // Disc playback must show the disc's OWN menu (owner requirement).
-        // mpv cannot: DVD menu support was removed upstream years ago and
-        // no navigation command exists in any modern release. VLC renders
-        // the real menus (dvdnav for DVDs, libbluray simple menus for
-        // BD/UHD) straight from ISO images and disc folders. mpv stays as
-        // the fallback and the plain-file player.
-        if use_menu {
-            if let Some(disc) = disc_info.as_ref() {
-                if let Some(vlc) = find_vlc() {
-                    let mut vcmd = Command::new(&vlc);
-                    vcmd.arg(&disc.root_path);
-                    let vlog_path = std::env::temp_dir().join("nebulae-vlc.log");
-                    if let Ok(vlog) = std::fs::File::create(&vlog_path) {
-                        vcmd.stderr(std::process::Stdio::from(vlog));
-                    }
-                    match vcmd.spawn() {
-                        Ok(mut vchild) => {
-                            std::thread::sleep(std::time::Duration::from_millis(1500));
-                            if let Some(status) = vchild.try_wait().ok().flatten() {
-                                if !status.success() {
-                                    let said = std::fs::read_to_string(&vlog_path)
-                                        .unwrap_or_default();
-                                    let tail: String = said.chars().rev().take(300)
-                                        .collect::<Vec<_>>().into_iter().rev().collect();
-                                    return Err(format!(
-                                        "VLC exited immediately ({status}). VLC output: {}",
-                                        tail.trim()
-                                    ));
-                                }
-                            }
-                            tracing::info!(
-                                "Disc menu playback via VLC; diagnostics at {}",
-                                vlog_path.display()
-                            );
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "VLC launch failed ({}); falling back to bundled mpv",
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut cmd = Command::new(&player_bin);
-
-        // DVDs and many Blu-rays are interlaced. Auto deinterlacing (via
-        // the libplacebo-based gpu-next renderer) restores smooth picture
-        // without combing and never touches progressive content: only
-        // frames actually flagged (or detected) as interlaced are
-        // processed.
-        cmd.arg("--vo=gpu-next");
-        cmd.arg("--deinterlace=auto");
-
-        // Ensure a Java runtime is accessible to libbluray for BD-J and 4K UHD
-        // menus. The bundled JRE ships inside the package and is preferred over
-        // any system JVM; its bin directory is also prepended to PATH so the
-        // JVM can locate its own companion executables.
-        let java_home = detect_java_home(resource_dir);
-        if let Some(ref jh) = java_home {
-            cmd.env("JAVA_HOME", jh);
-            if let Some(java_bin) = jh.join("bin").to_str() {
-                if let Ok(path_value) =
-                    std::env::join_paths(std::iter::once(PathBuf::from(java_bin)).chain(
-                        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-                    ))
-                {
-                    cmd.env("PATH", path_value);
-                }
-            }
-        }
-
-        if let Some(disc) = &disc_info {
-            let target = &disc.play_target;
-            let title = format!("Nebulae Cinema — {}", disc.title);
-
-            // Log if launching Blu-ray/UHD without JVM
-            if (disc.disc_type == DiscType::BluRay || disc.disc_type == DiscType::UhdBluRay)
-                && use_menu
-                && java_home.is_none()
-            {
-                tracing::info!(
-                    "Launching Blu-ray/UHD menu without detected JVM. Standard menus active; BD-J interactive features require JRE."
-                );
-            }
-
-            match engine {
-                PlayerEngine::BundledMpv => {
-                    cmd.arg(format!("--title={title}"));
-                    match disc.disc_type {
-                        DiscType::DvdVideo | DiscType::DvdAudio => {
-                            if use_menu {
-                                cmd.arg(format!("--dvd-device={target}"));
-                                cmd.arg("dvdnav://");
-                            } else {
-                                cmd.arg(target);
-                            }
-                        }
-                        DiscType::BluRay | DiscType::UhdBluRay => {
-                            if use_menu {
-                                cmd.arg(format!("--bluray-device={target}"));
-                                cmd.arg("bd://");
-                                cmd.arg("--demuxer-lavf-o=bluray_menu=1");
-                            } else {
-                                cmd.arg(target);
-                            }
-                        }
-                        DiscType::IsoImage => {
-                            let lower = target.to_lowercase();
-                            let is_bd = lower.contains("bd")
-                                || lower.contains("bluray")
-                                || lower.contains("uhd")
-                                || disc.total_bytes > 9_500_000_000;
-                            if is_bd {
-                                if use_menu {
-                                    cmd.arg(format!("--bluray-device={target}"));
-                                    cmd.arg("bd://");
-                                    cmd.arg("--demuxer-lavf-o=bluray_menu=1");
-                                } else {
-                                    cmd.arg(target);
-                                }
-                            } else if use_menu {
-                                cmd.arg(format!("--dvd-device={target}"));
-                                cmd.arg("dvdnav://");
-                            } else {
-                                cmd.arg(target);
-                            }
-                        }
-                        DiscType::Unknown => {
-                            cmd.arg(target);
-                        }
-                    }
-                }
-            }
-        } else if path.is_dir() {
-            // No disc image anywhere under the folder. Handing mpv a bare
-            // directory makes it enqueue and play every loose episode;
-            // play the largest video file (the main feature) instead.
-            match find_main_video(path) {
-                Some(video) => {
-                    tracing::info!(
-                        "No disc image found; playing main video file '{}'",
-                        video.display()
-                    );
-                    cmd.arg(video);
-                }
-                None => {
-                    return Err(format!(
-                        "No playable media found in {}",
-                        path.display()
-                    ));
-                }
-            }
-        } else {
-            cmd.arg(file_path);
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // Detach on Windows without popup terminal window
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        // Capture the player's stderr so a fast failure carries its actual
-        // diagnostic (dyld errors, bad options, disc open failures) instead
-        // of a bare exit status. GUI launches send stderr to /dev/null.
-        let mpv_log_path = std::env::temp_dir().join("nebulae-mpv.log");
-        if let Ok(log_file) = std::fs::File::create(&mpv_log_path) {
-            cmd.stderr(std::process::Stdio::from(log_file));
-        }
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                // A player that dies immediately (missing libraries, dyld
-                // abort, damaged disc image) used to look like a dead
-                // button: the spawn succeeded and the process vanished.
-                // Give it a moment and surface an immediate non-zero exit
-                // as an error so the UI banner explains the failure.
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                if let Some(status) = child.try_wait().ok().flatten() {
-                    if !status.success() {
-                        let said = std::fs::read_to_string(&mpv_log_path).unwrap_or_default();
-                        let tail: String = said
-                            .chars()
-                            .rev()
-                            .take(300)
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect();
-                        return Err(format!(
-                            "The bundled player exited immediately ({status}). Player output: {}",
-                            tail.trim()
-                        ));
-                    }
-                }
-                tracing::info!(
-                    "Player launch healthy; diagnostics at {}",
-                    mpv_log_path.display()
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to launch the bundled Nebulae player ({engine:?}): {e}. The bundled player requires no external software; if it is missing the installation may be incomplete - reinstall Nebulae or check Settings > Media."
-                ));
-            }
-        }
-    }
-
-    // Bundled player is the only supported engine; without it the
-    // installation is incomplete.
-    Err(
-        "The bundled Nebulae disc player is missing from this installation. Reinstall the official Nebulae package - no system media player is used. Check Settings > Media for details."
-            .to_string(),
-    )
-}
-
-#[tauri::command]
-pub fn launch_media_player(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
-    launch_disc_player(app, file_path, Some(true))
-}
-
-/// Candidate directories for the bundled player across every package layout.
-/// `resource_dir` is Tauri's canonical resource directory and is probed
-/// first; the remaining entries cover installer layouts (NSIS, .app bundle,
-/// deb/rpm filesystem paths), the AppImage runtime environment, and
-/// development checkouts. The bundled tree is fully self-contained: it
-/// carries its own shared libraries and JRE, so no OS-installed player or
-/// third-party library is ever required.
-fn bundled_player_dir_candidates(resource_dir: Option<&Path>) -> Vec<PathBuf> {
-    let mut cands: Vec<PathBuf> = Vec::new();
-    if let Some(rd) = resource_dir {
-        // Tauri v2 preserves the path relative to src-tauri/ inside the
-        // resource directory (e.g. Contents/Resources/resources/player on
-        // macOS, $INSTDIR/resources/player on Windows).
-        cands.push(rd.join("resources").join("player"));
-        cands.push(rd.join("player"));
-        cands.push(rd.to_path_buf());
-    }
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            cands.push(exe_dir.join("resources").join("player"));
-            cands.push(exe_dir.join("resources"));
-            cands.push(exe_dir.join("player"));
-            cands.push(exe_dir.to_path_buf());
-            // deb/rpm layout: /usr/bin/nebulae -> /usr/lib/nebulae/resources/player
-            if let Some(prefix) = exe_dir.parent().and_then(|p| p.parent()) {
-                cands.push(
-                    prefix
-                        .join("lib")
-                        .join("nebulae")
-                        .join("resources")
-                        .join("player"),
-                );
-                cands.push(
-                    prefix
-                        .join("share")
-                        .join("nebulae")
-                        .join("resources")
-                        .join("player"),
-                );
-            }
-        }
-    }
-    if let Ok(appdir) = std::env::var("APPDIR") {
-        let appdir = PathBuf::from(appdir);
-        cands.push(appdir.join("resources").join("player"));
-        cands.push(
-            appdir
-                .join("usr")
-                .join("lib")
-                .join("nebulae")
-                .join("resources")
-                .join("player"),
-        );
-        cands.push(appdir.join("usr").join("bin"));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        cands.push(PathBuf::from("/usr/lib/nebulae/resources/player"));
-        cands.push(PathBuf::from("/usr/share/nebulae/resources/player"));
-    }
-    cands
-}
-
-/// Discovers the player used for DVD/Blu-ray/UHD menu navigation.
-/// Locates the bundled Nebulae disc player. This is the only supported
-/// engine: the package ships a self-contained mpv together with its complete
-/// shared-library tree and JRE, so a clean machine needs nothing installed
-/// and no system player is ever probed or used.
-pub fn find_optical_disc_player(resource_dir: Option<&Path>) -> Option<(PathBuf, PlayerEngine)> {
-    let mpv_binary = if cfg!(windows) { "mpv.exe" } else { "mpv" };
-    for dir in bundled_player_dir_candidates(resource_dir) {
-        let cand = dir.join(mpv_binary);
-        if cand.is_file() {
-            return Some((cand, PlayerEngine::BundledMpv));
-        }
-    }
-
-    // Development checkout fallbacks (cargo tauri dev runs from src-tauri/)
-    let dev_candidates = [
-        PathBuf::from("resources/player/mpv.exe"),
-        PathBuf::from("src-tauri/resources/player/mpv.exe"),
-        PathBuf::from("resources/player/mpv"),
-        PathBuf::from("src-tauri/resources/player/mpv"),
-    ];
-    for cand in &dev_candidates {
-        if cand.is_file() {
-            return Some((cand.clone(), PlayerEngine::BundledMpv));
-        }
-    }
-
-    None
-}
-
-/// Locate the Java runtime used by libbluray for BD-J and UHD menus.
-/// Only the JRE bundled inside the package is used; no system JVM is
-/// detected or consulted.
-fn detect_java_home(resource_dir: Option<&Path>) -> Option<PathBuf> {
-    let java_binary = if cfg!(windows) { "java.exe" } else { "java" };
-    for player_dir in bundled_player_dir_candidates(resource_dir) {
-        let jre_home = player_dir.join("jre");
-        if jre_home.join("bin").join(java_binary).is_file() {
-            return Some(jre_home);
-        }
-    }
-
-    None
-}
-
 #[tauri::command]
 pub fn get_volume_disk_space(
     target_path: Option<String>,
@@ -682,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_launch_nonexistent_media() {
-        let res = launch_disc_player_impl(None, "/nonexistent/movie/file.mkv", Some(true));
+        let res = resolve_playback("/nonexistent/movie/file.mkv");
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("does not exist"));
     }
@@ -787,14 +652,15 @@ mod tests {
 
     #[test]
     fn test_get_disc_player_status_command() {
-        let status = get_disc_player_status_impl(None).expect("get_disc_player_status failed");
+        let status = get_disc_player_status().expect("get_disc_player_status failed");
         assert!(!status.player_name.is_empty());
         assert!(!status.player_type.is_empty());
     }
 
     #[test]
-    fn test_disc_player_discovery() {
-        // Just verify discovery returns without panic
-        let _ = find_optical_disc_player(None);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn test_vlc_discovery() {
+        // Verify discovery returns without panic (VLC may be absent on CI).
+        let _ = find_vlc();
     }
 }

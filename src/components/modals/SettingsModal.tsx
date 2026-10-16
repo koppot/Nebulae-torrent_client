@@ -1351,7 +1351,7 @@ export const SettingsModal: React.FC = () => {
                     </button>
                   </div>
                   <p className="text-[11px] text-[#8c8c8c] mb-4">
-                    Nebulae features an isolated optical disc engine capable of navigating DVD menus (VIDEO_TS, ISO) and Blu-ray menus (BDMV, ISO) without third-party installations.
+                    Playback runs inside Nebulae on VLC's embedded engine: DVD menus (VIDEO_TS, ISO), Blu-ray menus (BDMV, ISO), and automatic high-quality deinterlacing. Video renders in Nebulae's own window with Nebulae's own controls.
                   </p>
                 </div>
 
@@ -1361,18 +1361,14 @@ export const SettingsModal: React.FC = () => {
                     <span className="text-xs font-semibold text-white">Detected Disc Player</span>
                     <span
                       className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
-                        discPlayerStatus?.player_type === 'bundled_mpv'
+                        discPlayerStatus?.player_type === 'vlc'
                           ? 'bg-green-950/80 border border-green-700/60 text-green-300'
-                          : discPlayerStatus?.player_type === 'none'
-                          ? 'bg-amber-950/80 border border-amber-700/60 text-amber-300'
-                          : 'bg-blue-950/80 border border-blue-700/60 text-blue-300'
+                          : 'bg-amber-950/80 border border-amber-700/60 text-amber-300'
                       }`}
                     >
-                      {discPlayerStatus?.player_type === 'bundled_mpv'
-                        ? 'Bundled (Isolated)'
-                        : discPlayerStatus?.player_type === 'none'
-                        ? 'System Default Only'
-                        : 'System Player'}
+                      {discPlayerStatus?.player_type === 'vlc'
+                        ? 'Embedded (In-App)'
+                        : 'VLC Not Found'}
                     </span>
                   </div>
 

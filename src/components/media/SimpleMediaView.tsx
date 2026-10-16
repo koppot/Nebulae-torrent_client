@@ -27,6 +27,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { openInPlayer } from '../../lib/playerStore';
 
 interface MediaGroup {
   id: string;
@@ -93,11 +94,9 @@ export const SimpleMediaView: React.FC = () => {
   );
 
   const handlePlayDisc = async (torrent: TorrentItem, preferMenu: boolean = true) => {
+    void preferMenu; // the embedded engine always starts discs at their menu
     try {
-      await invoke('launch_disc_player', {
-        filePath: torrent.save_path,
-        preferMenu,
-      });
+      await openInPlayer(torrent.save_path);
       setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
@@ -110,14 +109,14 @@ export const SimpleMediaView: React.FC = () => {
   };
 
   // Play an external/internal optical disc: the user points Nebulae at the
-  // mounted DVD/Blu-ray/UHD volume; the bundled Nebulae engine plays it with
-  // full menu navigation. No system player is used.
+  // mounted DVD/Blu-ray/UHD volume; the embedded VLC engine plays it with
+  // full menu navigation inside Nebulae's own window.
   const handlePlayExternalDisc = async () => {
     setExternalDiscError(null);
     try {
       const folder = await selectSourceFolder();
       if (!folder) return;
-      await invoke('launch_disc_player', { filePath: folder, preferMenu: true });
+      await openInPlayer(folder);
     } catch (err: unknown) {
       setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
     }
