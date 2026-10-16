@@ -4,13 +4,13 @@ import { useUiStore } from '../../stores/uiStore';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
+import { resolvePoster } from '../../lib/posters';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openInPlayer, resumeInPlayer, savedPositionMs } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
   OrganizeMediaReport,
-  ThumbnailResult,
   ParsedMediaMetadata,
 } from '../../types';
 
@@ -193,23 +193,17 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
     });
   }, [torrents, discSetMap, discMetaMap]);
 
-  // Poster thumbnails: the WebP pipeline (cover scan → downscale → cache)
-  // runs per item; releases without any art fall back to the ffmpeg frame
-  // extractor inside the same command. Only missing entries are fetched.
+  // Poster resolution (approved chain): 1) ADC poster (the artwork the
+  // tracker already shows on torrents.php, matched by name and cached
+  // locally per info-hash), 2) the WebP pipeline (cover scan → downscale →
+  // cache → ffmpeg frame → TMDB when a key exists). Only missing entries
+  // are fetched.
   useEffect(() => {
     torrents.forEach((t) => {
-      if (!(t.id in thumbMap)) {
-        invoke<ThumbnailResult>('get_media_thumbnail', { mediaPath: contentPath(t) })
-          .then((res) => {
-            setThumbMap((prev) => ({ ...prev, [t.id]: res.thumbnail_path ?? null }));
-          })
-          .catch((err) => {
-            invoke('log_frontend', {
-              message: `thumbnail failed for ${contentPath(t)}: ${errorMessage(err, 'unknown')}`,
-            }).catch(() => {});
-            setThumbMap((prev) => ({ ...prev, [t.id]: null }));
-          });
-      }
+      if (t.id in thumbMap) return;
+      resolvePoster(t.info_hash, t.name, contentPath(t))
+        .then((src) => setThumbMap((prev) => ({ ...prev, [t.id]: src })))
+        .catch(() => setThumbMap((prev) => ({ ...prev, [t.id]: null })));
     });
   }, [torrents, thumbMap]);
 

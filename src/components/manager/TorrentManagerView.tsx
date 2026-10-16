@@ -175,6 +175,54 @@ const trackerHost = (url: string): string => {
   }
 };
 
+// qBittorrent-style per-row download progress: a slim monochrome bar
+// (gray fill on a near-black track) with GB and percent next to it.
+// Folders aggregate their subtree by byte weight.
+const nodeProgress = (node: FileTreeNode): number => {
+  if (!node.isFolder) return node.file?.progress ?? 0;
+  let done = 0;
+  let total = 0;
+  for (const child of node.children) {
+    if (child.isFolder) {
+      done += nodeProgress(child) * child.size_bytes;
+      total += child.size_bytes;
+    } else if (child.file) {
+      done += child.file.progress * child.file.size_bytes;
+      total += child.file.size_bytes;
+    }
+  }
+  return total > 0 ? done / total : 0;
+};
+
+const ProgressBars = { track: '#111111', fill: '#9ca3af', fillDone: '#d4d4d4' };
+
+const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
+  progress,
+  sizeBytes,
+}) => {
+  const pct = Math.round(progress * 100);
+  const done = pct >= 100;
+  return (
+    <div className="flex items-center gap-2 flex-shrink-0" style={{ width: 180 }}>
+      <div
+        className="flex-1 h-2 rounded-sm overflow-hidden"
+        style={{ backgroundColor: ProgressBars.track }}
+      >
+        <div
+          className="h-full rounded-sm transition-[width] duration-500"
+          style={{
+            width: `${pct}%`,
+            backgroundColor: done ? ProgressBars.fillDone : ProgressBars.fill,
+          }}
+        />
+      </div>
+      <span className={`text-[10px] font-mono whitespace-nowrap ${done ? 'text-white' : 'text-[#a3a3a3]'}`}>
+        {formatBytes(sizeBytes)} · {pct}%
+      </span>
+    </div>
+  );
+};
+
 export const TorrentManagerView: React.FC = () => {
   const {
     torrents,
@@ -640,6 +688,8 @@ export const TorrentManagerView: React.FC = () => {
               </span>
             </div>
 
+            <FileProgressBar progress={nodeProgress(node)} sizeBytes={node.size_bytes} />
+
             <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
               {!isRemoteServer && (
                 isTransmission || !node.path.includes('/') ? (
@@ -698,6 +748,8 @@ export const TorrentManagerView: React.FC = () => {
             ({formatBytes(file.size_bytes)})
           </span>
         </div>
+
+        <FileProgressBar progress={file.progress} sizeBytes={file.size_bytes} />
 
         <div className="flex items-center gap-2 flex-shrink-0 opacity-90 group-hover:opacity-100 transition">
           <select

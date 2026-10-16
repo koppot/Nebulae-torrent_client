@@ -538,6 +538,8 @@ pub fn run() {
             commands::media::clean_cache_files,
             commands::media::organize_completed_media,
             commands::media::get_media_thumbnail,
+            commands::posters::fetch_adc_poster_map,
+            commands::posters::download_adc_poster,
             commands::media::fetch_tmdb_release,
             commands::media::fetch_adc_page,
             commands::media::tmdb_configured,

@@ -3,6 +3,7 @@ pub mod connectivity;
 pub mod diagnostics;
 pub mod media;
 pub mod peering;
+pub mod posters;
 pub mod settings;
 pub mod torrent;
 pub mod tracker;
