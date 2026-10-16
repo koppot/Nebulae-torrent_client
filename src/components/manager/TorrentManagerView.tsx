@@ -164,6 +164,17 @@ function nodeMatchesFilter(node: FileTreeNode, query: string): boolean {
   return false;
 }
 
+// qBittorrent-style tracker grouping: collapse each announce URL to its
+// hostname so the sidebar lists trackers the way qBittorrent does
+// ("tracker.example.org" with a torrent count and health dot).
+const trackerHost = (url: string): string => {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+};
+
 export const TorrentManagerView: React.FC = () => {
   const {
     torrents,
@@ -186,6 +197,8 @@ export const TorrentManagerView: React.FC = () => {
     setActiveManagerTab,
     managerCategoryFilter,
     setManagerCategoryFilter,
+    managerTrackerFilter,
+    setManagerTrackerFilter,
     searchQuery,
     setDeleteModalTarget,
   } = useUiStore();
@@ -290,8 +303,31 @@ export const TorrentManagerView: React.FC = () => {
     if (managerCategoryFilter === 'completed') return t.status === 'Completed';
     if (managerCategoryFilter === 'paused') return t.status === 'Paused';
     if (managerCategoryFilter === 'media') return t.is_media;
+    if (managerTrackerFilter) {
+      const hosts = (t.trackers ?? []).map((tr) => trackerHost(tr.url));
+      return hosts.includes(managerTrackerFilter);
+    }
     return true;
   });
+
+  // qBittorrent-style tracker list for the left sidebar: unique tracker
+  // hosts across all torrents, with torrent counts and aggregate health.
+  const trackerEntries = (() => {
+    const map = new Map<string, { count: number; healthy: number }>();
+    for (const t of torrents) {
+      const hosts = new Set((t.trackers ?? []).map((tr) => trackerHost(tr.url)).filter(Boolean));
+      for (const host of hosts) {
+        const entry = map.get(host) ?? { count: 0, healthy: 0 };
+        entry.count += 1;
+        const allWorking = (t.trackers ?? []).every((tr) => tr.status === 'Working');
+        if (allWorking) entry.healthy += 1;
+        map.set(host, entry);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([host, { count, healthy }]) => ({ host, count, healthy }))
+      .sort((a, b) => b.count - a.count);
+  })();
 
   // Keyboard navigation & actions
   useEffect(() => {
@@ -746,7 +782,10 @@ export const TorrentManagerView: React.FC = () => {
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => setManagerCategoryFilter(item.id)}
+                onClick={() => {
+                  setManagerCategoryFilter(item.id);
+                  setManagerTrackerFilter(null);
+                }}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left transition ${
                   managerCategoryFilter === item.id
                     ? 'bg-[#e50914] text-white font-semibold'
@@ -774,7 +813,10 @@ export const TorrentManagerView: React.FC = () => {
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => setManagerCategoryFilter(item.id)}
+                onClick={() => {
+                  setManagerCategoryFilter(item.id);
+                  setManagerTrackerFilter(null);
+                }}
                 className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left transition ${
                   managerCategoryFilter === item.id
                     ? 'bg-[#e50914] text-white font-semibold'
@@ -787,6 +829,43 @@ export const TorrentManagerView: React.FC = () => {
             ))}
           </div>
         </div>
+
+        {/* qBittorrent-style Trackers list: unique tracker hosts across all
+            torrents; click filters the grid to that tracker, click again to
+            clear. Health dot aggregates per-torrent tracker status. */}
+        {trackerEntries.length > 0 && (
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#a3a3a3] px-2 block mb-1">
+              Trackers
+            </span>
+            <div className="space-y-0.5">
+              {trackerEntries.map(({ host, count, healthy }) => (
+                <button
+                  key={host}
+                  onClick={() =>
+                    setManagerTrackerFilter(managerTrackerFilter === host ? null : host)
+                  }
+                  title={host}
+                  className={`w-full flex items-center justify-between gap-1 px-2.5 py-1.5 rounded text-left transition ${
+                    managerTrackerFilter === host
+                      ? 'bg-[#e50914] text-white font-semibold'
+                      : 'text-[#a3a3a3] hover:text-white hover:bg-[#1f1f1f]'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                        healthy === count ? 'bg-emerald-500' : 'bg-amber-500'
+                      }`}
+                    />
+                    <span className="truncate">{host}</span>
+                  </span>
+                  <span className="text-[10px] font-mono opacity-80">{count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* 2. Main Right Area: Dense Transfer Grid + Inspector */}
