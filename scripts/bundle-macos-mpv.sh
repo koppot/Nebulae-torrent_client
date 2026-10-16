@@ -293,7 +293,9 @@ echo "==> Running smoke test on bundled macOS mpv binary..."
 # from the host brew; assert the copied one actually has BD-J/JVM support,
 # otherwise the bundled JRE has nothing to drive.
 if [ -f "$TARGET_DIR/lib/libbluray.4.dylib" ]; then
-    strings "$TARGET_DIR/lib/libbluray.4.dylib" 2>/dev/null | grep -qi "bd-j" || {
+    # Binary grep for libbluray's JVM-boot runtime string: only compiled in
+    # when BD-J support is. (strings output varies across Xcode versions.)
+    grep -aqc "Failed to load JVM library" "$TARGET_DIR/lib/libbluray.4.dylib" >/dev/null 2>&1 || {
         echo "ERROR: bundled libbluray lacks BD-J support - interactive Blu-ray/UHD menus would be dead!"
         exit 1
     }
