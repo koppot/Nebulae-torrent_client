@@ -29,6 +29,7 @@ export const usePeeringStore = create<PeeringState>((set) => ({
           max_global_peers: 500,
           prefer_utp: true,
           require_encryption: true,
+          probe_rtt_enabled: false,
         },
       });
     }

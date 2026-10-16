@@ -41,4 +41,10 @@ export interface PeeringSettings {
   prefer_utp: boolean;
   /** Mirrors Rust PeeringSettings::require_encryption */
   require_encryption: boolean;
+  /**
+   * Opt-in TCP RTT probing. Default false — enabling makes outbound TCP
+   * connections to every connected peer (privacy consideration).
+   */
+  probe_rtt_enabled: boolean;
 }
+

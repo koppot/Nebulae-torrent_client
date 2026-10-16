@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
 import { TorrentFileItem, TorrentItem } from '../../types';
 import PosterHoverPopup, { PosterPopupTarget } from './PosterHoverPopup';
+import { PeersTabPanel } from './PeersTabPanel';
 import {
   Play,
   Pause,
@@ -252,7 +253,7 @@ export const TorrentManagerView: React.FC = () => {
     setDeleteModalTarget,
   } = useUiStore();
 
-  const { peers, fetchPeers } = usePeeringStore();
+  const { peers, fetchPeers, settings: peeringSettings, fetchSettings, saveSettings } = usePeeringStore();
   const { engineMode, settings } = useSettingsStore();
   // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
   // fulfill instead of offering actions that only produce errors.
@@ -1473,47 +1474,14 @@ export const TorrentManagerView: React.FC = () => {
                   )}
                 </div>
               ) : activeManagerTab === 'peers' ? (
-                /* Peers Tab */
-                <div className="overflow-x-auto border border-[#262626] rounded">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead className="bg-[#1f1f1f] border-b border-[#262626] text-[10px] uppercase font-mono text-[#a3a3a3]">
-                      <tr>
-                        <th className="py-1 px-2">Client</th>
-                        <th className="py-1 px-2">IP & Port</th>
-                        <th className="py-1 px-2">Down Speed</th>
-                        <th className="py-1 px-2">Up Speed</th>
-                        <th className="py-1 px-2">Score</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#262626] font-mono text-[11px]">
-                      {peers.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="py-4 text-center text-[#a3a3a3]">
-                            No active peers connected yet
-                          </td>
-                        </tr>
-                      ) : (
-                        peers.map((p) => (
-                          <tr key={p.peer_id} className="hover:bg-[#1f1f1f]">
-                            <td className="py-1 px-2 text-white font-sans">{p.client_name}</td>
-                            <td className="py-1 px-2 text-[#a3a3a3]">
-                              {p.ip}:{p.port}
-                            </td>
-                            <td className="py-1 px-2 text-white">
-                              {formatSpeed(p.sustained_dl_bps)}
-                            </td>
-                            <td className="py-1 px-2 text-[#a3a3a3]">
-                              {formatSpeed(p.sustained_ul_bps)}
-                            </td>
-                            <td className="py-1 px-2 text-white font-semibold">
-                              {(p.stability_score * 100).toFixed(0)}%
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                /* ── Peers Tab ─────────────────────────────────────────── */
+                <PeersTabPanel
+                  peers={peers}
+                  settings={peeringSettings}
+                  fetchSettings={fetchSettings}
+                  saveSettings={saveSettings}
+                  isTransmission={isTransmission}
+                />
               ) : (
                 /* Speed Graph Tab */
                 <div className="flex flex-col h-full space-y-2">
