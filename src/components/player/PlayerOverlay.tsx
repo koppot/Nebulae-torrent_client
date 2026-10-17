@@ -874,14 +874,27 @@ export default function PlayerOverlay() {
           {fmt(dur)}
         </span>
 
-        {/* Volume (owner): only the speaker sits in the bar; the slider
-            appears on click. */}
-        <div className="relative shrink-0">
+        {/* Volume (owner): hover the speaker to reveal the slider; clicking
+            the speaker toggles mute. */}
+        <div
+          className="relative shrink-0"
+          onMouseEnter={() => setShowVolume(true)}
+          onMouseLeave={() => setShowVolume(false)}
+        >
           <button
             type="button"
-            onClick={() => setShowVolume((v) => !v)}
+            onClick={() => {
+              // Mute toggle: mute saves the current level, unmute restores it.
+              if (mutedRef.current) {
+                setMuted(false);
+                invoke('player_set_volume', { volume: volumeRef.current }).catch(() => {});
+              } else {
+                setMuted(true);
+                invoke('player_set_volume', { volume: 0 }).catch(() => {});
+              }
+            }}
             className="p-1.5 rounded hover:bg-[#262626] text-white transition"
-            title="Volume"
+            title={muted ? 'Unmute' : 'Mute'}
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
