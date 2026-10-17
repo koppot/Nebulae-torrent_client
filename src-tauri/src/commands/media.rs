@@ -433,9 +433,21 @@ pub fn player_open(
     *poison(&state.current_path) = Some(file_path.clone());
     let resolved = start_playback(&app, &state, &file_path)?;
     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
+    // Programmatic opens (diagnostics, autoplay) must reach the frontend so
+    // the overlay mounts and the shell clears away from the video. The
+    // webview may still be loading when the open happens, so the event is
+    // repeated a few times; the frontend's playerStore.open is idempotent.
+    use tauri::Emitter;
+    let emitter = app.clone();
+    let payload = resolved.clone();
+    std::thread::spawn(move || {
+        for delay in [0, 1500, 4000, 8000] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let _ = emitter.emit("player-opened", &payload);
+        }
+    });
     Ok(resolved)
 }
-
 /// Return DVD/BD playback to its interactive menu.
 ///
 /// `set_title(0)` is the textbook way to jump to the dvdnav menu domain, but
@@ -857,8 +869,9 @@ pub fn player_sync_viewport(
     y: f64,
     width: f64,
     height: f64,
+    bar_height: Option<f64>,
 ) -> Result<(), String> {
-    player::sync_frame(&app, x, y, width, height)
+    player::sync_frame(&app, x, y, width, height, bar_height.unwrap_or(0.0))
 }
 
 /// Depth-limited recursive search for a playable disc image or disc folder

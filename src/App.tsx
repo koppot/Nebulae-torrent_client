@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
-import { usePlayerStore } from './lib/playerStore';
+import { usePlayerStore, playerStore, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
@@ -31,6 +31,23 @@ import { listen } from '@tauri-apps/api/event';
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
+
+  // The webview itself must go transparent while the player is up — the
+  // native video view sits BELOW it (see embed_macos.rs).
+  useEffect(() => {
+    document.body.classList.toggle('player-active', playerOpen);
+  }, [playerOpen]);
+
+  // Programmatic playback (engine-side autoplay, diagnostics) opens the
+  // player via a backend event rather than a frontend invoke.
+  useEffect(() => {
+    const un = listen<PlayerOpenInfo>('player-opened', (e) => {
+      if (!e.payload.external) playerStore.open(e.payload);
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
   const { loadSettings, fetchEngineMode } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();

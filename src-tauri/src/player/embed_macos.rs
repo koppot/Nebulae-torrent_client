@@ -1,10 +1,15 @@
-//! macOS: native video overlay layered above the webview.
+//! macOS: native video overlay layered BELOW the webview.
 //!
 //! The overlay is a plain black NSView added to the main window's content
-//! view positioned above the WKWebView. libVLC renders the video INTO this
+//! view positioned below the WKWebView. libVLC renders the video INTO this
 //! view (`libvlc_media_player_set_nsobject`), so playback happens inside
-//! Nebulae's own window. Menu clicks on DVDs/Blu-rays land on the video
-//! view itself and are handled by dvdnav/libbluray natively.
+//! Nebulae's own window. The window and webview are transparent while the
+//! player is up (the frontend unmounts its opaque shell), so the video
+//! shows through and the frontend's floating control bar draws over it.
+//!
+//! NOTE: the view must NOT be layer-backed — libVLC's `caopengllayer` vout
+//! attaches its own layer to the view and refuses/breaks on views that
+//! already manage a layer (observed: video renders black).
 //!
 //! All view work happens on the main thread (Tauri's `run_on_main_thread`);
 //! the frontend drives position/size with `player_sync_viewport`.
@@ -16,16 +21,10 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 
-// The overlay NSView sits ABOVE the webview, so mouse and keyboard events
-// over the video never reach the frontend (owner-reported: dragging,
-// double-click fullscreen and keyboard controls were all dead). The view
-// is therefore a real subclass:
-//   - single click-drag  -> native window drag (performWindowDragWithEvent,
-//     the standard borderless-window mechanism);
-//   - double click       -> toggle macOS fullscreen;
-//   - keyDown            -> forwarded to the frontend ("player-native-key"
-//     event) where one unified handler applies the shortcuts (menu
-//     navigation, pause, seek, volume, fullscreen).
+// The overlay NSView sits BELOW the webview, so mouse and keyboard events
+// reach the frontend first; the native subclass stays as a fallback for
+// first-responder keyboard input and provides native drag/fullscreen when
+// the video view is the responder (e.g. after a menu-click handoff).
 objc2::define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
@@ -64,6 +63,14 @@ objc2::define_class!(
         unsafe fn accepts_first_responder(this: &VideoOverlayView) -> bool {
             let _ = this;
             true // receive keyDown when the user interacts with the video
+        }
+
+        #[unsafe(method(hitTest:))]
+        unsafe fn hit_test(this: &VideoOverlayView, point: NSPoint) -> *mut NSView {
+            let _ = this;
+            let _ = point;
+            // The view sits BELOW the webview; webview hit-testing wins.
+            objc2::msg_send![this, self]
         }
     }
 );
@@ -143,12 +150,11 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         let view: Retained<VideoOverlayView> =
             objc2::msg_send![VideoOverlayView::alloc(mtm), init];
         view.setFrame(bounds);
-        view.setWantsLayer(true);
         view.setHidden(true);
         // The video view sits BELOW the webview (owner: controls must float
-        // OVER the video). The webview is transparent, so the video shows
-        // through wherever the DOM paints nothing; controls and popovers
-        // render and stay clickable above it.
+        // OVER the video). The window and webview are transparent while the
+        // player is up, so the video shows through and the frontend's
+        // floating control bar draws on top.
         let webview_ptr = webview_raw as *mut NSView;
         assert!(!webview_ptr.is_null(), "webview NSView is null");
         let webview = &*webview_ptr;
@@ -203,6 +209,15 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
             (*view).setHidden(hidden);
             // Player window: 3 px corners; back to 1.5 px for the media UI.
             apply_window_corner_radius(&app2, if hidden { 1.5 } else { 3.0 });
+            // The video view always covers the whole window; the frontend's
+            // floating bar draws above it. Full-window frame here guarantees
+            // sane geometry even before the first frontend sync arrives.
+            if let Some(win) = (*view).window() {
+                if let Some(content) = win.contentView() {
+                    let b = content.bounds();
+                    (*view).setFrame(b);
+                }
+            }
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
@@ -212,8 +227,10 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 ///
 /// `x`/`y` are CSS-pixel (logical point) coordinates relative to the TOP of
 /// the window viewport, as reported by the frontend; Cocoa wants bottom-left
-/// origin, so flip using the superview (content view) height.
-pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+/// origin, so flip using the superview (content view) height. `bar_height`
+/// is accepted for API compatibility; the floating control bar is webview
+/// content drawn above the video, so no native cutout is needed.
+pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64, _bar_height: f64) -> Result<(), String> {
     let view_ptr = app
         .state::<crate::player::PlayerState>()
         .overlay_view
@@ -233,6 +250,13 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
         let content_height = superview.frame().size.height;
         let rect = NSRect::new(NSPoint::new(x, content_height - y - h), NSSize::new(w, h));
         (*view).setFrame(rect);
+        tracing::debug!(
+            "sync_frame: viewport=({x},{y},{w}x{h}) -> rect=({:?},{:?},{:?}x{:?})",
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height
+        );
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }

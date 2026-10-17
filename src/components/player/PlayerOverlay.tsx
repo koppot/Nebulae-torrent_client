@@ -150,11 +150,17 @@ export default function PlayerOverlay() {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
+    // The floating control bar must be excluded from the video overlay so
+    // it stays visible and clickable over the video.
+    let barHeight = 0;
+    const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
+    if (bar) barHeight = Math.max(0, window.innerHeight - bar.getBoundingClientRect().top);
     invoke('player_sync_viewport', {
       x: r.left,
       y: r.top,
       width: r.width,
       height: r.height,
+      barHeight,
     }).catch(() => {});
   }, []);
 
@@ -182,10 +188,15 @@ export default function PlayerOverlay() {
     invoke<Poll>('player_poll').then(apply).catch(() => {});
     const iv = window.setInterval(() => {
       invoke<Poll>('player_poll').then(apply).catch(() => {});
+      // Keep the control-bar cutout in sync (bar grows when a popover
+      // opens, shrinks when the disc list closes).
+      syncViewport();
     }, 500);
     syncViewport();
     const ro = new ResizeObserver(syncViewport);
     if (holderRef.current) ro.observe(holderRef.current);
+    const bar = document.querySelector('[data-player-bar]');
+    if (bar) ro.observe(bar);
     window.addEventListener('resize', syncViewport);
     return () => {
       window.clearInterval(iv);
@@ -579,6 +590,7 @@ export default function PlayerOverlay() {
           view sits BELOW the transparent webview, so the bar, its popovers
           and track menus all render above the video and stay clickable. */}
       <div
+        data-player-bar
         className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
@@ -821,12 +833,13 @@ export default function PlayerOverlay() {
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
           {showVolume && (
-            <div className="absolute bottom-9 right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-32">
+            <div className="absolute bottom-9 right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-24">
               {/* Thin vertical track (owner): white line filled with grey,
-                  same styling as the seek bar. Drag / click to set. */}
+                  same styling as the seek bar; one horizontal tick marks the
+                  halfway level. */}
               <div
                 data-testid="volume-track"
-                className="relative w-[3px] h-24 rounded-full bg-white/25 cursor-pointer"
+                className="relative w-[3px] h-16 rounded-full bg-white/25 cursor-pointer"
                 onPointerDown={(e) => {
                   e.currentTarget.setPointerCapture(e.pointerId);
                   volumeFromPointer(e.clientY);
@@ -835,6 +848,7 @@ export default function PlayerOverlay() {
                   if (e.buttons & 1) volumeFromPointer(e.clientY);
                 }}
               >
+                <span className="absolute left-1/2 -translate-x-1/2 w-[9px] h-[2px] rounded bg-white/80 pointer-events-none" style={{ bottom: '50%' }} />
                 <div
                   className="absolute bottom-0 left-0 w-full rounded-full bg-[#9a9a9a]"
                   style={{ height: `${volume}%` }}
