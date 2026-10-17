@@ -141,29 +141,83 @@ export const TitleBar: React.FC = () => {
         }
       }}
       onDoubleClick={handleToggleMaximize}
-      className="relative h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
+      className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
-      {/* Centered application name (owner: Movist Pro-style top bar),
-          with the full client name on its own line BELOW the bar. */}
-      {/* Brand inline after the traffic lights (owner) - manager only. */}
-      {viewMode !== 'media' && (
-        <div className="flex items-baseline gap-1.5 flex-shrink-0 mr-1" data-tauri-drag-region>
+      <div className="flex items-center justify-between px-3 h-10" data-tauri-drag-region>
+        <div className="flex items-baseline gap-1.5 flex-shrink-0" data-tauri-drag-region>
           <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
           <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
             — Client by Asian DVD Club
           </span>
         </div>
-      )}
-      {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
-      {/* Middle: Expansive Draggable Region */}
-      <div
-        data-tauri-drag-region
-        onDoubleClick={handleToggleMaximize}
-        className="flex-1 h-full min-w-4 cursor-default"
-      />
+        <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+        {/* Single Mode Toggle (owner): the button shows the mode it
+            switches TO. Manager -> "Media", Media -> "Manager". */}
+        <button
+          type="button"
+          onClick={() => setViewMode(viewMode === 'media' ? 'manager' : 'media')}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] text-[11px] font-semibold text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
+          title={viewMode === 'media' ? 'Switch to the Torrent Manager' : 'Switch to the Media Center'}
+        >
+          {viewMode === 'media' ? (
+            <LayoutGrid className="w-3 h-3" />
+          ) : (
+            <Film className="w-3 h-3" />
+          )}
+          <span>{viewMode === 'media' ? 'Manager' : 'Media'}</span>
+        </button>
 
-      {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
-      <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+          <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
+            {/* Minimize */}
+            <button
+              type="button"
+              onClick={handleMinimize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Maximize / Restore */}
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title={isMaximized ? 'Restore' : 'Maximize'}
+            >
+              {isMaximized ? (
+                <Copy className="w-3 h-3 rotate-180" />
+              ) : (
+                <Square className="w-3 h-3" />
+              )}
+            </button>
+
+            {/* Compact mini-bar (owner): icon-only, left of the close X. */}
+            <button
+              type="button"
+              onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
+              title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
+            >
+              {viewMode === 'compact' ? (
+                <Maximize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Minimize2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+
+            {/* Close */}
+            <button
+              type="button"
+              onClick={handleClose}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#e81123] transition"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 px-3 h-10" data-tauri-drag-region>
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
             the Media Center. */}
@@ -270,9 +324,6 @@ export const TitleBar: React.FC = () => {
             <HelpCircle className="w-3.5 h-3.5" />
           </button>
         </div>
-        {/* Right-side controls (owner): Search library + Player preferences
-            on manager AND media; the folder-open (Add Movie) sits in the
-            corner. SimpleMediaView receives its events via window events. */}
         {viewMode !== 'compact' && (
           <>
             <button
@@ -299,22 +350,6 @@ export const TitleBar: React.FC = () => {
             </button>
           </>
         )}
-        {/* Single Mode Toggle (owner): the button shows the mode it
-            switches TO. Manager -> "Media", Media -> "Manager". */}
-        <button
-          type="button"
-          onClick={() => setViewMode(viewMode === 'media' ? 'manager' : 'media')}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] text-[11px] font-semibold text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
-          title={viewMode === 'media' ? 'Switch to the Torrent Manager' : 'Switch to the Media Center'}
-        >
-          {viewMode === 'media' ? (
-            <LayoutGrid className="w-3 h-3" />
-          ) : (
-            <Film className="w-3 h-3" />
-          )}
-          <span>{viewMode === 'media' ? 'Manager' : 'Media'}</span>
-        </button>
-
         {/* Compact Quick Filter — transfers only (manager/compact); the
             media mode uses the Search library box instead. */}
         {viewMode !== 'media' && (
@@ -339,59 +374,6 @@ export const TitleBar: React.FC = () => {
         </div>
         )}
 
-        {/* Desktop Window Control Buttons (owner): traffic lights are
-            gone; these apply on every platform. */}
-        {(
-          <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
-            {/* Minimize */}
-            <button
-              type="button"
-              onClick={handleMinimize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title="Minimize"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-
-            {/* Maximize / Restore */}
-            <button
-              type="button"
-              onClick={handleToggleMaximize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title={isMaximized ? 'Restore' : 'Maximize'}
-            >
-              {isMaximized ? (
-                <Copy className="w-3 h-3 rotate-180" />
-              ) : (
-                <Square className="w-3 h-3" />
-              )}
-            </button>
-
-            {/* Compact mini-bar (owner): icon-only, left of the close X. */}
-            <button
-              type="button"
-              onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
-              title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
-            >
-              {viewMode === 'compact' ? (
-                <Maximize2 className="w-3.5 h-3.5" />
-              ) : (
-                <Minimize2 className="w-3.5 h-3.5" />
-              )}
-            </button>
-
-            {/* Close */}
-            <button
-              type="button"
-              onClick={handleClose}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#e81123] transition"
-              title="Close"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
       </div>
     </header>
   );
