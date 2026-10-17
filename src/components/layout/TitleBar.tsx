@@ -21,7 +21,6 @@ import {
   Copy,
   LayoutGrid,
   Film,
-  FolderOpen,
   Minimize2,
   Maximize2,
 } from 'lucide-react';
@@ -168,16 +167,6 @@ export const TitleBar: React.FC = () => {
         </button>
 
           <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
-            {/* Minimize */}
-            <button
-              type="button"
-              onClick={handleMinimize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title="Minimize"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-
             {/* Maximize / Restore */}
             <button
               type="button"
@@ -337,17 +326,6 @@ export const TitleBar: React.FC = () => {
             >
               <Settings className="w-3.5 h-3.5" />
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
-              }}
-              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-              title="Add Movie — pick the release root folder (all discs) or an ISO image"
-            >
-              <FolderOpen className="w-4 h-4" />
-            </button>
           </>
         )}
         {/* Compact Quick Filter — transfers only (manager/compact); the
@@ -374,6 +352,19 @@ export const TitleBar: React.FC = () => {
         </div>
         )}
 
+        {/* Minimize (owner): second row, right end. */}
+        <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10">
+            {/* Minimize */}
+            <button
+              type="button"
+              onClick={handleMinimize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+
+        </div>
       </div>
     </header>
   );
