@@ -49,7 +49,7 @@ jobs:
             - `Nebulae-macOS-x64.dmg-app.tar.gz` (silent auto-update payload)
 
           ### Embedded Optical Disc Cinema Engine
-          - Bundled self-contained media player (`mpv` + `libbluray` + `libdvdnav` + bundled JRE) with native DVD, Blu-ray, and 4K UHD interactive menu playback.
+          - Embedded VLC player with native DVD, Blu-ray, and 4K UHD interactive menu playback.
           - Zero third-party player dependencies required on a clean OS; Nebulae uses only its bundled engine.
           - Commercial encrypted discs (AACS/BD+) require prior decryption; raw image dumps and unprotected disc structures are fully supported.
 
@@ -161,27 +161,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Bundle optical disc player (Windows x64)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          ./scripts/bundle-windows-mpv.ps1
-
-      - name: Bundle optical disc player (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          ./scripts/bundle-linux-mpv.sh
-
-      - name: Install mpv on macOS runner
-        if: runner.os == 'macOS'
-        run: |
-          brew install mpv || brew upgrade mpv || true
-
-      - name: Bundle optical disc player (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          ./scripts/bundle-macos-mpv.sh
 
       # --- Transmission-daemon sidecar bundling (Phase A1) ------------------
       # Follows the exact mpv precedent: staging dir outside target/, pinned
