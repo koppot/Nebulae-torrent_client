@@ -68,4 +68,9 @@ pub struct PlayerState {
     /// program chain) and would otherwise run straight into playback.
     /// Cleared when the frontend wants playback (resume / menu Play).
     pub menu_watch: std::sync::atomic::AtomicBool,
+    /// Guard around every VLC call that uses the media-player pointer and
+    /// around the session teardown that releases it: background helpers
+    /// (menu watcher) must never call into a released player. Held for the
+    /// duration of each call, never across waits.
+    pub media_player_cell: std::sync::Mutex<()>,
 }

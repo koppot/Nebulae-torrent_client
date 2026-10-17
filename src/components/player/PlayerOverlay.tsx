@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ChevronLeft,
@@ -123,6 +123,11 @@ export default function PlayerOverlay() {
   const [showAudio, setShowAudio] = useState(false);
   const [subTracks, setSubTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
+
+  // Per-disc cache of the libbluray language probe (module level so it
+  // survives menu→feature transitions within a session).
+  const trackLangsCacheRef = useMemo(() => new Map<string, { audio: string[]; subs: string[] }>(), []);
+  const trackLangsCache = trackLangsCacheRef;
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Auto-hide (owner): controls fade out during playback and return on any
   // mouse movement. Kept visible while paused, at the disc menu, on the
@@ -308,15 +313,35 @@ export default function PlayerOverlay() {
   useEffect(() => {
     if (!player.open || !player.isDisc || poll.title === 0 || poll.length_ms <= 0) return;
     let alive = true;
-    invoke<[string[], string[]]>('player_track_languages', { durationMs: Math.round(poll.length_ms) })
-      .then(([a, s]) => {
-        if (alive) setTrackLangs({ audio: a, subs: s });
-      })
-      .catch(() => {});
+    const tryFetch = (retriesLeft: number) => {
+      invoke<[string[], string[]]>('player_track_languages', { durationMs: Math.round(poll.length_ms) })
+        .then(([a, s]) => {
+          if (!alive) return;
+          // Only overwrite when the probe actually identified the title;
+          // keep the previous (correct) labels otherwise.
+          if (a.length > 0 || s.length > 0) {
+            trackLangsCache.set(player.resolvedPath, { audio: a, subs: s });
+            setTrackLangs({ audio: a, subs: s });
+          } else if (retriesLeft > 0) {
+            window.setTimeout(() => tryFetch(retriesLeft - 1), 2000);
+          }
+        })
+        .catch(() => {});
+    };
+    tryFetch(2);
     return () => {
       alive = false;
     };
-  }, [player.open, player.isDisc, poll.title, poll.length_ms]);
+  }, [player.open, player.isDisc, poll.title, poll.length_ms, player.resolvedPath]);
+
+  // Popover labels fall back to the last successful probe for this disc, so
+  // the Audio menu doesn't flash wrong VLC names while a fresh probe runs.
+  useEffect(() => {
+    if (!player.open || !player.isDisc) return;
+    const cached = trackLangsCache.get(player.resolvedPath);
+    if (cached) setTrackLangs(cached);
+    else setTrackLangs({ audio: [], subs: [] });
+  }, [player.open, player.isDisc, player.resolvedPath]);
 
   // Disc set of the playing release: names the current disc ("Disc 1") in
   // the control bar and feeds the switcher popup. The set may live several

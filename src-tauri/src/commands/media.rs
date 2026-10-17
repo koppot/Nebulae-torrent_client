@@ -255,7 +255,7 @@ pub fn maybe_autoplay(app: &tauri::AppHandle) {
                 tracing::error!("autoplay diag: no player state");
                 return;
             };
-            match start_playback(&app, &state, &path) {
+            match start_playback(&app, &state, &path, false) {
                 Ok(resolved) => {
                     // Record the same session bookkeeping player_open does,
                     // so the frontend's engine poll can adopt the session.
@@ -287,6 +287,13 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     if mp == 0 {
         return;
     }
+    // Take the player-pointer guard for the whole teardown so background
+    // helpers (menu watcher) can never call into the player while (or after)
+    // it is released.
+    let cell = match state.media_player_cell.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
     if let Ok(lib_guard) = state.lib.lock() {
         if let Some(lib) = lib_guard.as_ref() {
             let session = VlcSession {
@@ -304,6 +311,7 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
     *poison(&state.started) = false;
+    drop(cell);
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
@@ -315,6 +323,7 @@ fn start_playback(
     app: &tauri::AppHandle,
     state: &PlayerState,
     file_path: &str,
+    resume: bool,
 ) -> Result<ResolvedPlayback, String> {
     let resolved = match resolve_playback(file_path) {
         Ok(r) => {
@@ -418,12 +427,14 @@ fn start_playback(
                         resolved.resolved_path,
                         resolved.is_disc
                     );
-                    if resolved.is_disc {
+                    if resolved.is_disc && !resume {
                         // Enforce MENU-FIRST from the engine side: the Blu-ray
                         // demuxer boots into the disc's first-play flow (FBI
                         // warning → straight into the program chain). Keep
-                        // selecting the menu title until it reports 0. The
-                        // frontend cancels this when a resume is wanted.
+                        // selecting the menu title until it reports 0. An
+                        // explicit resume (frontend passes resume:true) skips
+                        // the watcher so the first-play flow engages the
+                        // feature directly for the deferred seek.
                         state.menu_watch.store(true, std::sync::atomic::Ordering::SeqCst);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
@@ -435,6 +446,15 @@ fn start_playback(
                                     tracing::info!("[player] menu watcher cancelled (resume wanted)");
                                     return;
                                 }
+                                // Hold the player pointer guard across the VLC
+                                // calls: stop_session closes the session under
+                                // the same guard, so the watcher can never call
+                                // into a released media player (use-after-free
+                                // crash on close).
+                                let mp_guard = match state.media_player_cell.lock() {
+                                    Ok(g) => g,
+                                    Err(_) => return,
+                                };
                                 let mp = *poison(&state.media_player);
                                 if mp == 0 {
                                     return; // session closed
@@ -480,11 +500,13 @@ pub async fn player_open(
     app: tauri::AppHandle,
     state: tauri::State<'_, PlayerState>,
     file_path: String,
+    resume: Option<bool>,
 ) -> Result<ResolvedPlayback, String> {
-    tracing::info!("player_open: entry, path='{file_path}'");
+    let resume = resume.unwrap_or(false);
+    tracing::info!("player_open: entry, path='{file_path}' (resume={resume})");
     stop_session(&app, &state);
     *poison(&state.current_path) = Some(file_path.clone());
-    let resolved = start_playback(&app, &state, &file_path)?;
+    let resolved = start_playback(&app, &state, &file_path, resume)?;
     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
@@ -588,7 +610,7 @@ pub async fn player_return_to_menu(
     }
     tracing::info!("[player] return_to_menu: restarting '{path}'");
     stop_session(&app, &state);
-    start_playback(&app, &state, &path).map(|_| ())
+    start_playback(&app, &state, &path, false).map(|_| ())
 }
 
 /// Stop the post-open menu watcher: the user explicitly wants playback

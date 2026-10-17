@@ -66,23 +66,23 @@ export function usePlayerStore(): PlayerStoreState {
  * VLC engine. Returns what was resolved so the caller can open the overlay
  * (embedded) or show nothing (external VLC on other platforms).
  */
-export async function openInPlayer(filePath: string): Promise<PlayerOpenInfo> {
-  // Decide the start mode BEFORE opening: the engine enforces the disc menu
-  // after open (cancellable) — a resume must cancel that watcher so the
-  // disc's own first-play flow can engage the feature for the seek.
-  const savedMs = savedPositionMs(filePath);
-  const startMode = localStorage.getItem('nebulae_pref_start_mode') || 'resume';
-  const wantsResume = savedMs >= 10000 && startMode === 'resume';
-  const info = await invoke<PlayerOpenInfo>('player_open', { filePath });
+export async function openInPlayer(
+  filePath: string,
+  opts?: { resume?: boolean; seekTo?: number },
+): Promise<PlayerOpenInfo> {
+  // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
+  // interactive menu and stays there. Only an explicit resume skips the
+  // menu (engine flag, no race) and seeks once the feature engages.
+  const resume = !!opts?.resume;
+  const seekTo = opts?.seekTo ?? 0;
+  const info = await invoke<PlayerOpenInfo>('player_open', {
+    filePath,
+    resume,
+  });
   if (!info.external) {
     playerStore.open(info);
-    if (info.is_disc) {
-      if (wantsResume) {
-        invoke('player_cancel_menu_watch').catch(() => {});
-        void resumeInPlayer(info.resolved_path, savedMs);
-      }
-      // Menu-first (no save): the engine's menu watcher lands the disc on
-      // its interactive menu — nothing else to do here.
+    if (info.is_disc && resume && seekTo >= 10000) {
+      void seekWhenFeatureStarts(seekTo);
     }
   }
   return info;
@@ -129,25 +129,32 @@ export async function resumeInPlayer(
   filePath: string,
   timeMs: number,
 ): Promise<PlayerOpenInfo> {
-  const info = await openInPlayer(filePath);
-  if (info.external || !timeMs || timeMs < 10000) return info;
-  void (async () => {
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
-      try {
-        const p = await invoke<PlayerPollShape>('player_poll');
-        // Feature title engaged: non-trivial length and actually playing.
-        if (p.length_ms > 300_000 && p.playing) {
-          await invoke('player_seek', { positionMs: timeMs });
-          return;
-        }
-      } catch {
-        return; // player closed meanwhile
+  // Explicit resume: skip the menu entirely (engine flag) and continue the
+  // feature at the saved position.
+  return openInPlayer(filePath, { resume: true, seekTo: timeMs });
+}
+
+/**
+ * Wait for the feature title to engage (a real runtime length is reported —
+ * menus never have one), then seek to the given position. Must NOT open
+ * anything itself — openInPlayer owns the open; routing back through it
+ * caused an open/stop recursion that kept destroying the fresh session.
+ */
+async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const p = await invoke<PlayerPollShape>('player_poll');
+      // Feature title engaged: non-trivial length and actually playing.
+      if (p.length_ms > 300_000 && p.playing) {
+        await invoke('player_seek', { positionMs: timeMs });
+        return;
       }
+    } catch {
+      return; // player closed meanwhile
     }
-  })();
-  return info;
+  }
 }
 
 /** Saved playback position for a disc (the overlay poller persists it). */
