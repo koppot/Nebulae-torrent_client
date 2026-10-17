@@ -262,6 +262,17 @@ pub struct TransmissionRpcClient {
     client: reqwest::blocking::Client,
 }
 
+/// `ids` in Transmission RPC accepts NUMBERS (session ids) or strings
+/// (info-hash). A numeric STRING like "3" is parsed as an info-hash and
+/// silently matches NOTHING - the call "succeeds" while doing nothing.
+/// Normalize: numeric ids go over the wire as JSON numbers.
+fn rpc_id(id: &str) -> serde_json::Value {
+    match id.parse::<i64>() {
+        Ok(n) => json!(n),
+        Err(_) => json!(id),
+    }
+}
+
 impl TransmissionRpcClient {
     pub fn new(port: u16, username: &str, password: &str) -> Self {
         let auth = if !username.is_empty() || !password.is_empty() {
@@ -439,9 +450,20 @@ impl TransmissionRpcClient {
         )
     }
 
+
+/// `ids` in Transmission RPC accepts NUMBERS (session ids) or strings
+/// (info-hash). A numeric STRING like "3" is parsed as an info-hash and
+/// silently matches NOTHING - the call "succeeds" while doing nothing.
+/// Normalize: numeric ids go over the wire as JSON numbers.
+fn rpc_id(id: &str) -> serde_json::Value {
+    match id.parse::<i64>() {
+        Ok(n) => json!(n),
+        Err(_) => json!(id),
+    }
+}
     pub fn torrent_remove(&self, id: &str, delete_data: bool) -> Result<(), String> {
         let args = json!({
-            "ids": [id],
+            "ids": [rpc_id(id)],
             "delete-local-data": delete_data
         });
         self.request("torrent-remove", Some(args))?;
@@ -449,25 +471,25 @@ impl TransmissionRpcClient {
     }
 
     pub fn torrent_start(&self, id: Option<&str>) -> Result<(), String> {
-        let args = id.map(|i| json!({ "ids": [i] }));
+        let args = id.map(|i| json!({ "ids": [rpc_id(i)] }));
         self.request("torrent-start", args)?;
         Ok(())
     }
 
     pub fn torrent_stop(&self, id: Option<&str>) -> Result<(), String> {
-        let args = id.map(|i| json!({ "ids": [i] }));
+        let args = id.map(|i| json!({ "ids": [rpc_id(i)] }));
         self.request("torrent-stop", args)?;
         Ok(())
     }
 
     pub fn torrent_verify(&self, id: &str) -> Result<(), String> {
-        let args = json!({ "ids": [id] });
+        let args = json!({ "ids": [rpc_id(id)] });
         self.request("torrent-verify", Some(args))?;
         Ok(())
     }
 
     pub fn torrent_reannounce(&self, id: &str) -> Result<(), String> {
-        let args = json!({ "ids": [id] });
+        let args = json!({ "ids": [rpc_id(id)] });
         self.request("torrent-reannounce", Some(args))?;
         Ok(())
     }
@@ -479,7 +501,7 @@ impl TransmissionRpcClient {
         move_data: bool,
     ) -> Result<(), String> {
         let args = json!({
-            "ids": [id],
+            "ids": [rpc_id(id)],
             "location": location,
             "move": move_data
         });
@@ -545,7 +567,7 @@ impl TransmissionRpcClient {
 
     pub fn torrent_set(&self, id: &str, mut args: Value) -> Result<(), String> {
         if let Some(map) = args.as_object_mut() {
-            map.insert("ids".to_string(), json!([id]));
+            map.insert("ids".to_string(), json!([rpc_id(id)]));
         }
         self.request("torrent-set", Some(args))?;
         Ok(())
@@ -553,7 +575,7 @@ impl TransmissionRpcClient {
 
     pub fn torrent_rename_path(&self, id: &str, path: &str, name: &str) -> Result<(), String> {
         let args = json!({
-            "ids": [id],
+            "ids": [rpc_id(id)],
             "path": path,
             "name": name
         });
