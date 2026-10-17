@@ -795,7 +795,7 @@ export const SplashScreen: React.FC = () => {
           style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}
         >
           <p className="m-0 text-[18px] md:text-[20px] leading-[1.8] font-light">
-            <span className="text-white">Experience</span>
+            <span className="text-white">Welcome to</span>
             <span style={{ color: '#d4af37' }} className="font-normal">
               :NEBULAE
             </span>

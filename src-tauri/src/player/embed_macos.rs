@@ -127,35 +127,35 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
 
 /// Saved window frame for leaving fullscreen (boxed NSRect pointer).
 static SAVED_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Whether the player window is currently in our manual fullscreen.
+static FULLSCREEN_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Enter/leave fullscreen for the borderless player window. The native
-/// toggleFullScreen: animation ignores borderless windows, so the frame
-/// and style mask are toggled manually.
+/// Enter/leave fullscreen for the borderless player window by moving the
+/// frame only. The native toggleFullScreen: animation ignores borderless
+/// windows, and setting NSWindowStyleMaskFullScreen on one aborts the
+/// process (NSPerformVisuallyAtomicChange) — so never touch the style mask.
 unsafe fn toggle_fullscreen_win(win: &NSWindow) {
-    let mask: u64 = objc2::msg_send![win, styleMask];
-    if mask & NS_WINDOW_STYLE_FULLSCREEN != 0 {
+    if FULLSCREEN_ON.load(Ordering::SeqCst) {
+        FULLSCREEN_ON.store(false, Ordering::SeqCst);
         // Leaving fullscreen: restore the saved frame.
         let raw = SAVED_BOX.load(Ordering::SeqCst) as *mut NSRect;
         if !raw.is_null() {
             let f = *raw;
             let _: () = objc2::msg_send![win, setFrame:f display:true];
         }
-        let _: () = objc2::msg_send![win, setStyleMask: mask & !NS_WINDOW_STYLE_FULLSCREEN];
     } else {
         let ptr = Box::into_raw(Box::new(win.frame()));
         let old = SAVED_BOX.swap(ptr as usize, Ordering::SeqCst) as *mut NSRect;
         if !old.is_null() {
             let _ = Box::from_raw(old);
         }
-        let _: () = objc2::msg_send![win, setStyleMask: mask | NS_WINDOW_STYLE_FULLSCREEN];
         if let Some(screen) = win.screen() {
             let f = screen.frame();
             let _: () = objc2::msg_send![win, setFrame:f display:true];
         }
+        FULLSCREEN_ON.store(true, Ordering::SeqCst);
     }
 }
-
-const NS_WINDOW_STYLE_FULLSCREEN: u64 = 1 << 14;
 
 /// Toggle fullscreen for the player window (F key / fullscreen button /
 /// double-click). Sets the corner radius to 0 in fullscreen, 3 px out.
@@ -174,8 +174,7 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             toggle_fullscreen_win(&*ns_win);
-            let mask: u64 = objc2::msg_send![ns_win, styleMask];
-            let radius = if mask & NS_WINDOW_STYLE_FULLSCREEN != 0 { 0.0 } else { 3.0 };
+            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) { 0.0 } else { 3.0 };
             apply_window_corner_radius(&app2, radius);
         }
     })

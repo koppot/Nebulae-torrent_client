@@ -283,17 +283,17 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+    let mp_guard = match state.media_player_cell.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return;
     }
-    // Take the player-pointer guard for the whole teardown so background
+    // mp_guard IS the player-pointer guard for the whole teardown: background
     // helpers (menu watcher) can never call into the player while (or after)
     // it is released.
-    let cell = match state.media_player_cell.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
     if let Ok(lib_guard) = state.lib.lock() {
         if let Some(lib) = lib_guard.as_ref() {
             let session = VlcSession {
@@ -311,7 +311,7 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
     *poison(&state.started) = false;
-    drop(cell);
+    drop(mp_guard);
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
@@ -577,6 +577,10 @@ pub async fn player_return_to_menu(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     tracing::info!("[player] return_to_menu: requested");
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     let lib = loaded_lib(&state)?;
     // On Blu-ray title 0 is the FIRST-PLAY playlist (the whole disc), not
@@ -609,6 +613,8 @@ pub async fn player_return_to_menu(
         return Err("no current media to restart".into());
     }
     tracing::info!("[player] return_to_menu: restarting '{path}'");
+    // Release the guard before teardown takes it (stop_session).
+    drop(mp_guard);
     stop_session(&app, &state);
     start_playback(&app, &state, &path, false).map(|_| ())
 }
@@ -665,6 +671,10 @@ pub struct PlayerPoll {
 
 #[tauri::command]
 pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(PlayerPoll {
@@ -697,6 +707,10 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
 /// return to the interactive menu.
 #[tauri::command]
 pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -719,6 +733,10 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
 pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -734,6 +752,10 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
 /// 1-based labels). The chapters popover's grid wires each cell to this.
 #[tauri::command]
 pub fn player_set_chapter(state: tauri::State<PlayerState>, chapter: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -756,6 +778,10 @@ pub struct ChapterMark {
 
 #[tauri::command]
 pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<ChapterMark>, String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(Vec::new());
@@ -833,6 +859,10 @@ unsafe fn tracks_from_list(
 
 #[tauri::command]
 pub fn player_list_tracks(state: tauri::State<PlayerState>, kind: String) -> Result<Vec<TrackInfo>, String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(Vec::new());
@@ -858,6 +888,10 @@ pub fn player_list_tracks(state: tauri::State<PlayerState>, kind: String) -> Res
 
 #[tauri::command]
 pub fn player_set_track(state: tauri::State<PlayerState>, kind: String, id: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -881,6 +915,10 @@ pub fn player_set_track(state: tauri::State<PlayerState>, kind: String, id: i32)
 /// cannot enumerate titles, falls back to plain set_title.
 #[tauri::command]
 pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -950,6 +988,10 @@ pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -965,6 +1007,10 @@ pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
@@ -976,6 +1022,10 @@ pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result
 
 #[tauri::command]
 pub fn player_set_volume(state: tauri::State<PlayerState>, volume: i32) -> Result<(), String> {
+    let mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
     let mp = *poison(&state.media_player);
     if mp == 0 {
         return Ok(());
