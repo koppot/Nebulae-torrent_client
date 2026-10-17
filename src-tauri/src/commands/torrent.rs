@@ -1465,45 +1465,58 @@ mod tests {
 /// One dialog for external playback: accepts a release ROOT folder
 /// (containing all disc folders, like a torrent download) or an ISO
 /// disc image. Files and folders must both be selectable, so a plain
-/// `choose folder`/`choose file` pair cannot be used — NSOpenPanel with
-/// both flags (via JXA) presents a single panel, no extra dialogs.
+/// `choose folder`/`choose file` pair cannot be used. The panel is
+/// presented NATIVELY on the app's main thread: an osascript-hosted
+/// panel opens beneath the app window (invisible), which read as
+/// "nothing happens".
 #[tauri::command]
-pub async fn select_disc_source() -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(|| {
-        #[cfg(target_os = "macos")]
-        {
-            let script = r#"
-            ObjC.import('AppKit');
-            // Come to the front: the panel belongs to osascript, which
-            // otherwise opens BENEATH the app's window (invisible).
-            $.NSRunningApplication.currentApplication
-              .activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
-            const panel = $.NSOpenPanel.openPanel;
-            panel.setCanChooseFiles(true);
-            panel.setCanChooseDirectories(true);
-            panel.setAllowsMultipleSelection(false);
-            panel.setPrompt('Add Movie');
-            panel.setMessage('Select the release root folder that holds ALL of its disc folders (like a torrent download) — or an ISO disc image. Picking a single disc folder plays only that disc.');
-            if (panel.runModal() === $.NSModalResponseOK) {
-                const p = panel.URLs.anyObject().path;
-                return p ? ObjC.unwrap(p) : '';
-            }
-            return '';
-            "#;
-            let output = std::process::Command::new("osascript")
-                .arg("-l").arg("JavaScript")
-                .arg("-e")
-                .arg(script)
-                .output()
-                .map_err(|e| format!("Failed to open picker: {e}"))?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(None)
-        }
+pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    app.run_on_main_thread(move || {
+        let picked = unsafe { present_disc_panel() };
+        let _ = tx.send(picked);
     })
-    .await
-    .map_err(|e| format!("picker join error: {e}"))?
+    .map_err(|e| format!("main thread unavailable: {e}"))?;
+    Ok(rx.recv().map_err(|_| "panel channel lost".to_string())?)
 }
+
+unsafe fn present_disc_panel() -> Option<String> {
+    use objc2::runtime::{Class, Object};
+    let cstr_cls = |name: &str| Class::get(std::ffi::CString::new(name).unwrap().as_c_str());
+    let cls = cstr_cls("NSOpenPanel")?;
+    let panel: *mut Object = objc2::msg_send![cls, openPanel];
+    if panel.is_null() {
+        return None;
+    }
+    let ns_string = cstr_cls("NSString").unwrap();
+    let ns_str = |s: &str| -> *mut Object {
+        let c = std::ffi::CString::new(s).unwrap();
+        objc2::msg_send![ns_string, stringWithUTF8String: c.as_ptr()]
+    };
+    let _: () = objc2::msg_send![panel, setCanChooseFiles: true];
+    let _: () = objc2::msg_send![panel, setCanChooseDirectories: true];
+    let _: () = objc2::msg_send![panel, setAllowsMultipleSelection: false];
+    let _: () = objc2::msg_send![panel, setPrompt: ns_str("Add Movie")];
+    let _: () = objc2::msg_send![panel, setMessage: ns_str(
+        "Select the release ROOT folder that holds ALL of its disc folders (like a torrent download) — or an ISO disc image. Picking a single disc folder plays only that disc."
+    )];
+    let rc: i64 = objc2::msg_send![panel, runModal];
+    if rc != 1000 {
+        return None; // NSModalResponseOK
+    }
+    let url: *mut Object = objc2::msg_send![panel, URL];
+    if url.is_null() {
+        return None;
+    }
+    let path: *mut Object = objc2::msg_send![url, path];
+    if path.is_null() {
+        return None;
+    }
+    let cstr: *const std::os::raw::c_char = objc2::msg_send![path, UTF8String];
+    if cstr.is_null() {
+        return None;
+    }
+    Some(std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned())
+}
+
