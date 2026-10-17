@@ -59,6 +59,11 @@ pub struct PlayerState {
     pub media_player: Mutex<usize>,
     /// Set once playback starts; lets `player_poll` report "ended" exactly once.
     pub started: Mutex<bool>,
+    /// ONE libvlc instance shared by every session for the app's lifetime:
+    /// releasing an instance (old behavior) runs libxml2's global
+    /// xmlCleanupParser, which races the next session's metadata parsing
+    /// and aborts (malloc "pointer being freed was not allocated" on Play).
+    pub shared_instance: AtomicUsize,
     /// What the owner asked to play (may be a folder) — kept so "return to
     /// disc menu" can restart playback fresh when dvdnav ignores set_title.
     pub current_path: Mutex<Option<String>>,

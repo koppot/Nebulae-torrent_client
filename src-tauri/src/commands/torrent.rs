@@ -1461,3 +1461,45 @@ mod tests {
         assert!(res.unwrap_err().contains("zenity: command not found"));
     }
 }
+
+/// One dialog for external playback: accepts a release ROOT folder
+/// (containing all disc folders, like a torrent download) or an ISO
+/// disc image. Files and folders must both be selectable, so a plain
+/// `choose folder`/`choose file` pair cannot be used — NSOpenPanel with
+/// both flags (via JXA) presents a single panel, no extra dialogs.
+#[tauri::command]
+pub async fn select_disc_source() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            ObjC.import('AppKit');
+            const panel = $.NSOpenPanel.openPanel;
+            panel.setCanChooseFiles(true);
+            panel.setCanChooseDirectories(true);
+            panel.setAllowsMultipleSelection(false);
+            panel.setPrompt('Add Movie');
+            panel.setMessage('Select the release root folder that holds ALL of its disc folders (like a torrent download) — or an ISO disc image. Picking a single disc folder plays only that disc.');
+            if (panel.runModal() === $.NSModalResponseOK) {
+                const p = panel.URLs.anyObject().path;
+                return p ? ObjC.unwrap(p) : '';
+            }
+            return '';
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-l").arg("JavaScript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| format!("picker join error: {e}"))?
+}

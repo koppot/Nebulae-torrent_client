@@ -380,6 +380,20 @@ impl VlcSession {
     /// to the target BEFORE `play()` so the vout lands in our view instead
     /// of spawning VLC's own window.
     pub fn open(lib: &VlcLib, path: &str, video_target: usize) -> Result<VlcSession, String> {
+        // Standalone constructor: instance created here is kept for the
+        // process lifetime (never released — see close()).
+        let shared = std::sync::atomic::AtomicUsize::new(0);
+        Self::open_shared(lib, &shared, path, video_target)
+    }
+
+    /// Shared-instance variant: the instance is created once and kept for
+    /// the app's lifetime (never released) — see PlayerState::shared_instance.
+    pub fn open_shared(
+        lib: &VlcLib,
+        shared: &std::sync::atomic::AtomicUsize,
+        path: &str,
+        video_target: usize,
+    ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
         let args = [
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
@@ -398,9 +412,13 @@ impl VlcSession {
         ];
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
-            let instance = (lib.libvlc_new)(argv.len() as c_int, argv.as_ptr());
+            let mut instance = shared.load(std::sync::atomic::Ordering::SeqCst) as *mut c_void;
             if instance.is_null() {
-                return Err("libvlc_new failed".into());
+                instance = (lib.libvlc_new)(argv.len() as c_int, argv.as_ptr());
+                if instance.is_null() {
+                    return Err("libvlc_new failed".into());
+                }
+                shared.store(instance as usize, std::sync::atomic::Ordering::SeqCst);
             }
             // Folder-based disc images must be opened through a disc MRL:
             // libvlc_media_new_path on a directory plays it as a plain
@@ -439,7 +457,6 @@ impl VlcSession {
             let mp = (lib.libvlc_media_player_new_from_media)(media);
             if mp.is_null() {
                 (lib.libvlc_media_release)(media);
-                (lib.libvlc_release)(instance);
                 return Err("media player creation failed".into());
             }
             if video_target != 0 {
@@ -449,7 +466,7 @@ impl VlcSession {
             if rc != 0 {
                 (lib.libvlc_media_player_release)(mp);
                 (lib.libvlc_media_release)(media);
-                (lib.libvlc_release)(instance);                return Err(format!("libvlc refused to play {path} (rc={rc})"));
+                return Err(format!("libvlc refused to play {path} (rc={rc})"));
             }
             Ok(VlcSession {
                 instance: instance as usize,
@@ -466,7 +483,10 @@ impl VlcSession {
             (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
             (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
             (lib.libvlc_media_release)(self.media as *mut c_void);
-            (lib.libvlc_release)(self.instance as *mut c_void);
+            // The libvlc instance is SHARED (PlayerState::shared_instance):
+            // releasing it runs libxml2's global xmlCleanupParser, which
+            // races the next session's metadata parsing and aborts the
+            // process. Keep it for the app's lifetime.
         }
     }
 }

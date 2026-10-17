@@ -934,7 +934,7 @@ export default function PlayerOverlay() {
             {chapterMarks.slice(1).map((mk, i) => (
               <span
                 key={i}
-                className="absolute top-1/2 -translate-y-1/2 w-px h-[10px] bg-white/70 pointer-events-none"
+                className="absolute top-1/2 -translate-y-1/2 w-px h-[5px] bg-white/70 pointer-events-none"
                 style={{ left: `${dur > 0 ? Math.min(100, (mk.offset_ms / dur) * 100) : 0}%` }}
                 title={mk.name}
               />

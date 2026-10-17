@@ -939,11 +939,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
             </div>
           )}
 
-          {/* Shelf 2: Ready (owner: no icon, no count). */}
+          {/* Shelf 2: Library (owner: no icon, no count). */}
           <div className="space-y-7">
             <div className="flex items-center gap-2">
               <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
-                Ready
+                Library
               </h3>
             </div>
             {readyToWatch.length === 0 ? (
