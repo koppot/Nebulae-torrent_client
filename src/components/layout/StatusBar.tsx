@@ -137,13 +137,20 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#333333]">|</span>
 
-        <span
+        <button
+          type="button"
+          onClick={() => {
+            // Owner: the Connectivity Doctor / port window opens ONLY from
+            // this click — never automatically on a closed port.
+            window.dispatchEvent(new CustomEvent('nebulae:port-closed-info'));
+          }}
+          className="flex items-center hover:text-white transition cursor-pointer"
           title={`Inbound Listening Port ${port} — ${
             reportFresh
               ? portState === 'Open'
                 ? 'verified reachable'
-                : 'verified closed'
-              : 'not verified yet (doctor runs every 10 min)'
+                : 'verified closed — click for port help'
+              : 'not verified yet (doctor runs every 10 min) — click for port help'
           }`}
         >
           <span
@@ -156,7 +163,7 @@ export const StatusBar: React.FC = () => {
             }`}
           />
           Port: {port}
-        </span>
+        </button>
 
         <span className="text-[#333333]">|</span>
 

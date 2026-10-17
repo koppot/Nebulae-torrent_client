@@ -24,6 +24,10 @@ export function PortForwardModal() {
     () => localStorage.getItem('port_forward_dismissed') || ''
   );
 
+  // Owner: this modal must NEVER open by itself. It shows only when the
+  // user clicks the red (closed) port dot in the status bar, which
+  // dispatches 'nebulae:port-closed-info'. The verdict is re-read after
+  // the doctor modal closes in case the user fixed the forward.
   useEffect(() => {
     let alive = true;
     const check = async () => {
@@ -31,19 +35,16 @@ export function PortForwardModal() {
         const r = await invoke<PortNegotiationResult | null>('get_port_negotiation_result');
         if (alive && r && r.status === 'unreachable') setVerdict(r);
       } catch {
-        // engine not ready yet — retried below
+        // engine not ready yet
       }
     };
-    // The negotiator probes one candidate every ~2-3 s at engine spawn;
-    // give it time to finish before the first read.
-    const t0 = window.setTimeout(check, 20_000);
-    const t1 = window.setTimeout(check, 45_000);
+    const onOpen = () => check();
+    window.addEventListener('nebulae:port-closed-info', onOpen);
     return () => {
       alive = false;
-      window.clearTimeout(t0);
-      window.clearTimeout(t1);
+      window.removeEventListener('nebulae:port-closed-info', onOpen);
     };
-  }, [showConnectivityDoctor]); // re-check after the doctor modal closes (user may have fixed the forward)
+  }, [showConnectivityDoctor]);
 
   if (!verdict) return null;
   const key = `${verdict.configured_port}:${verdict.checked_at_epoch_ms}`;
