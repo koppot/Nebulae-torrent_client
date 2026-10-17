@@ -1474,6 +1474,10 @@ pub async fn select_disc_source() -> Result<Option<String>, String> {
         {
             let script = r#"
             ObjC.import('AppKit');
+            // Come to the front: the panel belongs to osascript, which
+            // otherwise opens BENEATH the app's window (invisible).
+            $.NSRunningApplication.currentApplication
+              .activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
             const panel = $.NSOpenPanel.openPanel;
             panel.setCanChooseFiles(true);
             panel.setCanChooseDirectories(true);
