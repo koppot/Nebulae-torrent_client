@@ -656,7 +656,10 @@ export default function PlayerOverlay() {
       let idx = chapterMarks.findIndex((m) => m.offset_ms > Math.max(poll.time_ms - 2000, 0));
       if (idx < 0) idx = chapterMarks.length;
       const target = dir > 0 ? Math.min(idx, chapterMarks.length - 1) : Math.max(idx - 2, 0);
-      invoke('player_seek', { positionMs: Math.max(chapterMarks[target].offset_ms + 1, 0) }).catch(() => {});
+      const mk = chapterMarks[target];
+      const base = mk.duration_ms > 0 ? mk.duration_ms : dur;
+      const seekMs = base > 0 ? Math.round((mk.offset_ms * dur) / base) : mk.offset_ms;
+      invoke('player_seek', { positionMs: Math.max(seekMs + 1, 0) }).catch(() => {});
     } else {
       const next = dir > 0 ? ch + 1 : Math.max(ch - 1, 0);
       invoke('player_set_chapter', { chapter: next }).catch(() => {});
@@ -934,14 +937,22 @@ export default function PlayerOverlay() {
               style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
             {/* Chapter marks: vertical ticks at the real chapter offsets */}
-            {chapterMarks.slice(1).map((mk, i) => (
-              <span
-                key={i}
-                className="absolute top-1/2 -translate-y-1/2 w-px h-[5px] bg-white/70 pointer-events-none"
-                style={{ left: `${dur > 0 ? Math.min(100, (mk.offset_ms / dur) * 100) : 0}%` }}
-                title={mk.name}
-              />
-            ))}
+            {chapterMarks.slice(1).map((mk, i) => {
+              // The probe reads a PLAYLIST whose duration can differ from
+              // VLC's media (external Blu-ray opens resolve to a different
+              // playlist). Map each offset proportionally onto the FULL
+              // bar using the playlist's own duration, not VLC's.
+              const base = mk.duration_ms > 0 ? mk.duration_ms : dur;
+              const leftPct = base > 0 ? Math.min(100, (mk.offset_ms / base) * 100) : 0;
+              return (
+                <span
+                  key={i}
+                  className="absolute top-1/2 -translate-y-1/2 w-px h-[5px] bg-white/70 pointer-events-none"
+                  style={{ left: `${leftPct}%` }}
+                  title={mk.name}
+                />
+              );
+            })}
             {/* Playhead */}
             <span
               className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
