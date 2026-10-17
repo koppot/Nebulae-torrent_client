@@ -1029,7 +1029,7 @@ export default function PlayerOverlay() {
                 button into the list never crosses a closing gap; styled like
                 the play bar: semi-transparent, white hairline, black glow. */
             <div
-              className="absolute bottom-full right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {subTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1044,7 +1044,7 @@ export default function PlayerOverlay() {
                     setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowSubs(false);
                   }}
-                  className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition ${
+                  className={`w-full whitespace-nowrap text-left px-2 py-1 rounded text-xs font-medium transition ${
                     t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
@@ -1082,7 +1082,7 @@ export default function PlayerOverlay() {
           </button>
           {showAudio && (
             <div
-              className="absolute bottom-full right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {audioTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1097,7 +1097,7 @@ export default function PlayerOverlay() {
                     setAudioTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowAudio(false);
                   }}
-                  className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition ${
+                  className={`w-full whitespace-nowrap text-left px-2 py-1 rounded text-xs font-medium transition ${
                     t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
@@ -1142,6 +1142,7 @@ export default function PlayerOverlay() {
         className={`absolute top-3 right-4 z-20 p-1.5 rounded-md text-white hover:bg-white/15 transition ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
         title="Stop and close"
       >
         <X className="w-5 h-5" />
