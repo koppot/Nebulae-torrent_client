@@ -33,10 +33,10 @@ function emit() {
 }
 
 export const playerStore = {
-  open(info: PlayerOpenInfo) {
+  open(info: PlayerOpenInfo, displayTitle?: string) {
     state = {
       open: true,
-      title: info.title,
+      title: displayTitle || info.title,
       resolvedPath: info.resolved_path,
       isDisc: info.is_disc,
     };
@@ -68,7 +68,7 @@ export function usePlayerStore(): PlayerStoreState {
  */
 export async function openInPlayer(
   filePath: string,
-  opts?: { resume?: boolean; seekTo?: number },
+  opts?: { resume?: boolean; seekTo?: number; displayTitle?: string },
 ): Promise<PlayerOpenInfo> {
   // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
   // interactive menu and stays there. Only an explicit resume skips the
@@ -80,7 +80,7 @@ export async function openInPlayer(
     resume,
   });
   if (!info.external) {
-    playerStore.open(info);
+    playerStore.open(info, opts?.displayTitle);
     if (info.is_disc && resume && seekTo >= 10000) {
       void seekWhenFeatureStarts(seekTo);
     }
@@ -128,10 +128,11 @@ export async function resumeFromMenu(
 export async function resumeInPlayer(
   filePath: string,
   timeMs: number,
+  displayTitle?: string,
 ): Promise<PlayerOpenInfo> {
   // Explicit resume: skip the menu entirely (engine flag) and continue the
   // feature at the saved position.
-  return openInPlayer(filePath, { resume: true, seekTo: timeMs });
+  return openInPlayer(filePath, { resume: true, seekTo: timeMs, displayTitle });
 }
 
 /**

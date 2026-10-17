@@ -285,17 +285,25 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
   // why posters never rendered). Remote URLs pass through untouched.
   const localSrc = (p: string) => (p.startsWith('http') ? p : convertFileSrc(p));
 
+  // Feature label exactly as the card shows it: clean title + optional year.
+  const featureLabel = (gid?: string) => {
+    const g = groupItems([...activeDownloads, ...readyToWatch]).find((x) => x.id === gid);
+    if (!g) return undefined;
+    return g.year ? `${g.clean_title} (${g.year})` : g.clean_title;
+  };
+
   const handlePlayDisc = async (
     torrent: TorrentItem,
     groupId?: string,
     targetPath?: string,
+    displayTitle?: string,
   ) => {
     const playPath = targetPath || contentPath(torrent);
     invoke('log_frontend', {
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
     }).catch(() => {});
     try {
-      const info = await openInPlayer(playPath);
+      const info = await openInPlayer(playPath, { displayTitle });
       if (groupId) {
         // Remember the RESOLVED path (the actual ISO/VIDEO_TS) — the resume
         // position map and the disc pills key off exactly this path.
@@ -312,13 +320,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
 
   // Resume = skip the disc menu and continue the feature where the poller
   // saved it (owner: "Resume forwards me to the disc menu again").
-  const handleResumeDisc = async (groupId: string, resumePath: string) => {
+  const handleResumeDisc = async (groupId: string, resumePath: string, displayTitle?: string) => {
     const savedMs = savedPositionMs(resumePath);
     invoke('log_frontend', {
       message: `resume clicked: path=${resumePath} savedMs=${savedMs}`,
     }).catch(() => {});
     try {
-      const info = await resumeInPlayer(resumePath, savedMs);
+      const info = await resumeInPlayer(resumePath, savedMs, displayTitle);
       rememberLastDisc(groupId, info.resolved_path || resumePath);
       setExternalDiscError(null);
     } catch (err: unknown) {
@@ -613,9 +621,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                   const onPrimary = () => {
                     if (!canResume) {
                       if (resumePath) savePositionMs(resumePath, 0);
-                      handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
+                      handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id));
                     } else {
-                      handleResumeDisc(group.id, resumePath as string);
+                      handleResumeDisc(group.id, resumePath as string, featureLabel(group.id));
                     }
                   };
                   return (
@@ -941,7 +949,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                     className={act}
                     onClick={() => {
                       setCtxMenu(null);
-                      handlePlayDisc(item, group.id);
+                      handlePlayDisc(item, group.id, undefined, featureLabel(group.id));
                     }}
                   >
                     <Play className="w-3.5 h-3.5" /> Play
@@ -951,7 +959,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                       className={act}
                       onClick={() => {
                         setCtxMenu(null);
-                        handleResumeDisc(group.id, resumeTarget);
+                        handleResumeDisc(group.id, resumeTarget, featureLabel(group.id));
                       }}
                     >
                       <Play className="w-3.5 h-3.5" /> Resume

@@ -819,7 +819,7 @@ export default function PlayerOverlay() {
             </button>
           )}
 
-        <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
+        <span className="text-[11px] font-mono text-white tabular-nums">
           {fmt(pos)}
         </span>
 
@@ -827,30 +827,6 @@ export default function PlayerOverlay() {
             progresses, with real chapter offsets drawn as vertical ticks.
             Click / drag anywhere on the track to seek. */}
         <div className="relative flex-1 flex items-center group/bar">
-          {/* Skip-10 buttons (owner): small round graphics right above the
-              progress bar — rotate-left/right arrows with the seconds
-              marked inside. They float above the line so the track shares
-              the bar's midline with the buttons. */}
-          <div className="absolute right-0 bottom-full flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
-              className="relative p-1 rounded-full text-[#d4d4d4] hover:text-white hover:bg-white/10 transition"
-              title="Back 10 seconds"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => invoke('player_seek', { positionMs: dur > 0 ? Math.min(pos + 10000, dur) : pos + 10000 }).catch(() => {})}
-              className="relative p-1 rounded-full text-[#d4d4d4] hover:text-white hover:bg-white/10 transition"
-              title="Forward 10 seconds"
-            >
-              <RotateCw className="w-4 h-4" />
-              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
-            </button>
-          </div>
           <div
             className="relative flex items-center h-3 cursor-pointer"
             onPointerDown={(e) => {
@@ -863,7 +839,7 @@ export default function PlayerOverlay() {
         >
           <div
             data-testid="seek-track"
-            className="relative w-full h-[3px] rounded-full bg-white/40 overflow-visible"
+            className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible"
           >
             {/* Gradual fill (owner: grey, not red) */}
             <div
@@ -886,8 +862,30 @@ export default function PlayerOverlay() {
             />
           </div>
           </div>
+          {/* Skip-10 buttons (owner): sit on the right side of the progress
+              bar, on the same midline. */}
+          <div className="shrink-0 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
+              className="relative p-1 rounded-full text-white hover:bg-white/10 transition"
+              title="Back 10 seconds"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => invoke('player_seek', { positionMs: dur > 0 ? Math.min(pos + 10000, dur) : pos + 10000 }).catch(() => {})}
+              className="relative p-1 rounded-full text-white hover:bg-white/10 transition"
+              title="Forward 10 seconds"
+            >
+              <RotateCw className="w-4 h-4" />
+              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
+            </button>
+          </div>
         </div>
-        <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
+        <span className="text-[11px] font-mono text-white tabular-nums">
           {fmt(dur)}
         </span>
 

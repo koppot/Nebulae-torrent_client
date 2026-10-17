@@ -506,7 +506,30 @@ pub async fn player_open(
     tracing::info!("player_open: entry, path='{file_path}' (resume={resume})");
     stop_session(&app, &state);
     *poison(&state.current_path) = Some(file_path.clone());
-    let resolved = start_playback(&app, &state, &file_path, resume)?;
+    // An explicit resume must not sit through the disc's first-play flow
+    // (FBI warning → menu chain): resolve the disc's main feature file and
+    // open it as a plain file instead. The Menu button can still return to
+    // the interactive menu, which restarts from `current_path` (the disc).
+    let open_target = if resume {
+        match resolve_playback(&file_path) {
+            Ok(r) if r.is_disc && !r.external => {
+                match find_main_video(Path::new(&r.resolved_path)) {
+                    Some(feature) => {
+                        tracing::info!(
+                            "player_open: resume targets feature file '{}'",
+                            feature.display()
+                        );
+                        feature.display().to_string()
+                    }
+                    None => file_path.clone(),
+                }
+            }
+            _ => file_path.clone(),
+        }
+    } else {
+        file_path.clone()
+    };
+    let resolved = start_playback(&app, &state, &open_target, resume)?;
     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
