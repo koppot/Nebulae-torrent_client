@@ -144,7 +144,6 @@ jobs:
             binutils \
             xvfb \
             desktop-file-utils \
-            mpv \
             libdvdnav4 \
             libbluray2
 
@@ -197,23 +196,25 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm tauri build --bundles deb,rpm
 
-      - name: Build Linux AppImage without player/engine resources
+      - name: Build Linux AppImage without engine resources
         if: runner.os == 'Linux'
         run: |
           # Stage OUTSIDE target/: rust-cache restores target/ between runs and
           # strips the non-cargo blobs, which would nest the move and break
           # the injection probe (squashfs nesting incident, engine parallel).
-          rm -rf src-tauri/player-staging
-          mv src-tauri/resources/player src-tauri/player-staging
+          # The player is the user's VLC (libVLC loads at runtime) - no mpv
+          # staging anymore.
           rm -rf src-tauri/transmission-staging-appimage
-          mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          if [ -d src-tauri/resources/engine ]; then
+            mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          fi
           pnpm tauri build --bundles appimage
 
       - name: Inject bundled player + engine into AppImage (and refresh updater bundle)
         if: runner.os == 'Linux'
         run: |
-          ./scripts/appimage-inject-player.sh
-          # Also inject the transmission engine resources
+          # The player is libVLC (user's VLC) - only the transmission
+          # engine is injected into the AppImage squashfs.
           APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
           OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
           dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
@@ -234,9 +235,8 @@ jobs:
           rm -rf squashfs-root
           # Verify both player and engine in final image
           LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
-          printf '%s\n' "$LISTING" | grep -q "resources/player/mpv" || { echo "ERROR: mpv missing from repacked AppImage"; exit 1; }
           printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
-          echo "SUCCESS: player + engine injected into $APPIMAGE_PATH"
+          echo "SUCCESS: engine injected into $APPIMAGE_PATH"
           cd "$(dirname "$APPIMAGE_PATH")"
           NAME="$(basename "$APPIMAGE_PATH")"
           # Regenerate the updater payload from the INJECTED AppImage so
