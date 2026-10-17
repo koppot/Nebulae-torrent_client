@@ -197,14 +197,16 @@ export const TitleBar: React.FC = () => {
           {/* Help (?) (owner): top bar, right before Settings — it carries
             the installation/documentation info. Manager-only row gating
             keeps it off the Media Center. */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Documentation & Keyboard Shortcuts"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-          </button>
+          {viewMode !== 'media' && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
+              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+              title="Documentation & Keyboard Shortcuts"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {/* Settings on the top bar (owner): no need to bury it in row 2. */}
           <button

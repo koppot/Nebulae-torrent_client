@@ -1919,6 +1919,12 @@ pub fn add_external_media(
         Some(i) if year.is_some() => clean[..i].trim().to_string(),
         _ => clean,
     };
+    // One poster per movie (owner): the same title can arrive twice -
+    // auto-adopted on play AND added manually - at different folder
+    // levels. Keep the FIRST entry; later duplicates are dropped.
+    if items.iter().any(|m| m.title.eq_ignore_ascii_case(&title_clean) && m.year == year) {
+        return Ok(());
+    }
     items.push(ExternalMedia {
         path: path.clone(),
         title: title_clean,
