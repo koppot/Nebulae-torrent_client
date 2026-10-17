@@ -128,6 +128,7 @@ export default function PlayerOverlay() {
   // survives menu→feature transitions within a session).
   const trackLangsCacheRef = useMemo(() => new Map<string, { audio: string[]; subs: string[] }>(), []);
   const trackLangsCache = trackLangsCacheRef;
+  const lastLangProbeRef = useRef('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Auto-hide (owner): controls fade out during playback and return on any
   // mouse movement. Kept visible while paused, at the disc menu, on the
@@ -311,10 +312,16 @@ export default function PlayerOverlay() {
     subs: [],
   });
   useEffect(() => {
-    // A resume opens the feature FILE directly (isDisc false), so the gate
-    // must not require a disc - only the disc's menu title (0) is skipped,
-    // because a menu has no duration to match against the playlists.
-    if (!player.open || (player.isDisc && poll.title === 0) || poll.length_ms <= 0) return;
+    // Fetch for every session state, including the disc's menu title: the
+    // backend falls back to the feature playlist (most distinct audio
+    // languages) when the reported duration matches nothing, so the Audio
+    // popover shows real languages even before playback starts.
+    if (!player.open) return;
+    // The poll fires every second; only re-probe when the session or title
+    // actually changed (the menu→feature transition changes the answer).
+    const probeKey = `${player.resolvedPath}:${poll.title}`;
+    if (probeKey === lastLangProbeRef.current) return;
+    lastLangProbeRef.current = probeKey;
     let alive = true;
     const tryFetch = (retriesLeft: number) => {
       invoke<[string[], string[]]>('player_track_languages', {
@@ -919,7 +926,10 @@ export default function PlayerOverlay() {
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
           {showVolume && (
-            <div className="absolute bottom-9 right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-24">
+            /* Sits flush against the button's hover box (bottom-full): a gap
+               here fires mouseleave while travelling to the slider and
+               closes it before the pointer arrives. */
+            <div className="absolute bottom-full right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-24">
               {/* Thin vertical track (owner): white line filled with grey,
                   same styling as the seek bar; one horizontal tick marks the
                   halfway level. */}

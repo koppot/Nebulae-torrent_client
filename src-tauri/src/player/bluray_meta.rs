@@ -149,7 +149,12 @@ pub fn disc_stream_languages(
         let count = bd_get_titles(bd, 0, 999);
         let mut audio: Vec<String> = Vec::new();
         let mut subs: Vec<String> = Vec::new();
-        let mut best: Option<(i64, *mut BdTitleInfo)> = None;
+        // Candidates: the title whose duration matches the playback
+        // (duration_ms); for menu titles — which report a bogus/zero
+        // duration — the title with the MOST audio streams (the feature;
+        // menu and duplicate-audio playlists carry fewer or wrong ones).
+        let mut best_match: Option<(i64, *mut BdTitleInfo)> = None;
+        let mut most_audio: Option<(u8, *mut BdTitleInfo)> = None;
         for i in 0..count {
             let info = bd_get_title_info(bd, i as c_uint, 0);
             if info.is_null() {
@@ -159,12 +164,48 @@ pub fn disc_stream_languages(
             // Playlist duration is 90 kHz ticks → ms.
             let dur_ms = (ti.duration / 90) as i64;
             let diff = (dur_ms - duration_ms).abs();
-            if best.map(|(b, _)| diff < b).unwrap_or(true) {
-                best = Some((diff, info));
+            if best_match.map(|(b, _)| diff < b).unwrap_or(true) {
+                best_match = Some((diff, info));
+            }
+            if !ti.clips.is_null() && ti.clip_count > 0 {
+                // Score = distinct audio languages on the best clip: the
+                // feature carries en+ja, while duplicate-audio and menu
+                // playlists repeat one language.
+                let mut best_clip = (0u8, 0usize); // (distinct, streams)
+                for k in 0..ti.clip_count {
+                    let c = &*ti.clips.add(k as usize);
+                    let mut codes: Vec<String> = Vec::new();
+                    for j in 0..c.audio_stream_count as usize {
+                        let st = &*c.audio_streams.add(j);
+                        codes.push(lang_name(&st.lang));
+                    }
+                    codes.sort();
+                    codes.dedup();
+                    let distinct = codes.len() as u32;
+                    if distinct as u64 > best_clip.0 as u64
+                        || (distinct as u64 == best_clip.0 as u64
+                            && c.audio_stream_count as usize > best_clip.1)
+                    {
+                        best_clip = (distinct as u8, c.audio_stream_count as usize);
+                    }
+                }
+                if most_audio
+                    .map(|(m, _)| best_clip.0 > m || (best_clip.0 == m && best_clip.1 > 0))
+                    .unwrap_or(true)
+                {
+                    most_audio = Some((best_clip.0, info));
+                }
             }
         }
-        if let Some((diff, info)) = best {
-            if diff <= 5000 {
+        let chosen: Option<*mut BdTitleInfo> = if duration_ms > 0 {
+            best_match
+                .filter(|(diff, _)| *diff <= 5000)
+                .map(|(_, i)| i)
+                .or_else(|| most_audio.map(|(_, i)| i))
+        } else {
+            most_audio.map(|(_, i)| i)
+        };
+        if let Some(info) = chosen {
                 let ti = &*info;
                 if !ti.clips.is_null() && ti.clip_count > 0 {
                     // Use the clip with the MOST audio streams (menus carry
@@ -185,8 +226,7 @@ pub fn disc_stream_languages(
                         subs.push(lang_name(&s.lang));
                     }
                 }
-            }
-            bd_free_title_info(info);
+        bd_free_title_info(info);
         }
         bd_close(bd);
         Ok((audio, subs))
