@@ -129,6 +129,8 @@ export default function PlayerOverlay() {
   const trackLangsCacheRef = useMemo(() => new Map<string, { audio: string[]; subs: string[] }>(), []);
   const trackLangsCache = trackLangsCacheRef;
   const lastLangProbeRef = useRef('');
+  // Single-click vs double-click disambiguation on the video surface.
+  const clickTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Auto-hide (owner): controls fade out during playback and return on any
   // mouse movement. Kept visible while paused, at the disc menu, on the
@@ -659,11 +661,26 @@ export default function PlayerOverlay() {
     dragArmedRef.current = true;
     invoke('window_begin_drag').catch(() => {});
   };
+  // Single left click on the video pauses/resumes (owner). A double click
+  // also fires click, so the pause toggle waits 250 ms and is cancelled by
+  // the double-click handler.
+  const onVideoClick = () => {    if (clickTimerRef.current !== null) return;
+    clickTimerRef.current = window.setTimeout(() => {
+      clickTimerRef.current = null;
+      if (player.isDisc && pollRef.current.title === 0) return;
+      togglePause();
+    }, 250);
+  };
   const onVideoDoubleClick = () => {
+    if (clickTimerRef.current !== null) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
     if (dragArmedRef.current) {
       dragArmedRef.current = false;
       return;
     }
+    // Toggles both ways: window → fullscreen, fullscreen → window.
     const win = getCurrentWindow();
     win
       .isFullscreen()
@@ -681,6 +698,7 @@ export default function PlayerOverlay() {
         ref={holderRef}
         className="absolute inset-0"
         onMouseDown={onVideoPointerDown}
+        onClick={onVideoClick}
         onDoubleClick={onVideoDoubleClick}
       />
 
@@ -981,7 +999,17 @@ export default function PlayerOverlay() {
             Subtitles pill is hidden entirely when the current title has
             no subtitle streams. */}
         {subTracks.length > 0 && (
-        <div className="relative shrink-0">
+        <div
+          className="relative shrink-0"
+          onMouseEnter={async () => {
+            setShowAudio(false);
+            if (!showSubs) {
+              try { setSubTracks(await invoke('player_list_tracks', { kind: 'subtitle' })); } catch {}
+            }
+            setShowSubs(true);
+          }}
+          onMouseLeave={() => setShowSubs(false)}
+        >
           <button
             type="button"
             onClick={async () => {
@@ -997,11 +1025,17 @@ export default function PlayerOverlay() {
             Subtitles
           </button>
           {showSubs && (
-            <div className="absolute bottom-9 right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 space-y-0.5">
-              {subTracks.length === 0 && (
-                <span className="block px-2 py-1 text-[11px] text-[#666666]">No subtitle tracks</span>
+            /* Flush against the pill (bottom-full) so hovering from the
+                button into the list never crosses a closing gap; styled like
+                the play bar: semi-transparent, white hairline, black glow. */
+            <div
+              className="absolute bottom-full right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
+            >
+              {subTracks.filter((x) => x.id >= 0).length === 0 && (
+                <span className="block px-2 py-1 text-xs text-white/60">No subtitle tracks</span>
               )}
-              {subTracks.map((t) => (
+              {subTracks.filter((x) => x.id >= 0).map((t) => (
                 <button
                   key={t.id}
                   type="button"
@@ -1010,8 +1044,8 @@ export default function PlayerOverlay() {
                     setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowSubs(false);
                   }}
-                  className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
-                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
+                  className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition ${
+                    t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
                   {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
@@ -1021,7 +1055,17 @@ export default function PlayerOverlay() {
           )}
         </div>
         )}
-        <div className="relative shrink-0">
+        <div
+          className="relative shrink-0"
+          onMouseEnter={async () => {
+            setShowSubs(false);
+            if (!showAudio) {
+              try { setAudioTracks(await invoke('player_list_tracks', { kind: 'audio' })); } catch {}
+            }
+            setShowAudio(true);
+          }}
+          onMouseLeave={() => setShowAudio(false)}
+        >
           <button
             type="button"
             onClick={async () => {
@@ -1037,11 +1081,14 @@ export default function PlayerOverlay() {
             Audio
           </button>
           {showAudio && (
-            <div className="absolute bottom-9 right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 space-y-0.5">
-              {audioTracks.length === 0 && (
-                <span className="block px-2 py-1 text-[11px] text-[#666666]">No audio tracks</span>
+            <div
+              className="absolute bottom-full right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
+            >
+              {audioTracks.filter((x) => x.id >= 0).length === 0 && (
+                <span className="block px-2 py-1 text-xs text-white/60">No audio tracks</span>
               )}
-              {audioTracks.map((t) => (
+              {audioTracks.filter((x) => x.id >= 0).map((t) => (
                 <button
                   key={t.id}
                   type="button"
@@ -1050,11 +1097,11 @@ export default function PlayerOverlay() {
                     setAudioTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowAudio(false);
                   }}
-                  className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
-                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
+                  className={`w-full text-left px-2 py-1 rounded text-xs font-medium transition ${
+                    t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
-                  {trackLabel('audio', audioTracks.indexOf(t), t)}
+                  {trackLabel('audio', audioTracks.filter((x) => x.id >= 0).indexOf(t), t)}
                 </button>
               ))}
             </div>
