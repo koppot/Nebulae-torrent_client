@@ -30,8 +30,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy,
-} from 'lucide-react';
+  Copy, Trash2 } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -180,6 +179,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   const [externalTitlePrompt, setExternalTitlePrompt] = useState<{ path: string; guess: string } | null>(null);
   const [externalTitleInput, setExternalTitleInput] = useState('');
   const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string }[]>([]);
+  const [extHovered, setExtHovered] = useState<string | null>(null);
+  const [extCtx, setExtCtx] = useState<{ x: number; y: number; path: string; title: string } | null>(null);
   const refreshExternalMedia = useCallback(async () => {
     try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
   }, []);
@@ -800,45 +801,64 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       {externalMedia.length > 0 && (
         <div className="mt-8">
           <h3 className="text-sm font-semibold text-white/80 mb-3">External Media</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          {/* Same card geometry and options as the Library shelf (owner):
+              150px posters, hover Play, right-click menu. */}
+          <div className="flex flex-wrap gap-4">
             {externalMedia.map((m) => (
-              <div key={m.path} className="group relative">
-                <button
-                  onClick={async () => {
-                    try {
-                      await openInPlayer(m.path, { displayTitle: m.title });
-                      void refreshExternalMedia();
-                    } catch (err) {
-                      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
-                    }
-                  }}
-                  onContextMenu={async (e) => {
-                    e.preventDefault();
-                    try {
-                      await invoke('remove_external_media', { path: m.path });
-                      void refreshExternalMedia();
-                    } catch { /* best-effort */ }
-                  }}
-                  className="w-full text-left rounded-lg overflow-hidden bg-[#141414] border border-[#262626] hover:border-[#e50914]/50 transition"
-                  title={`${m.title} — ${m.kind} (right-click to remove)`}
-                >
-                  <div className="aspect-[2/3] flex items-center justify-center bg-[#0d0d0d] overflow-hidden">
+              <div
+                key={m.path}
+                className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
+                onMouseEnter={() => setExtHovered(m.path)}
+                onMouseLeave={() => setExtHovered((prev) => (prev === m.path ? null : prev))}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setExtCtx({ x: e.clientX, y: e.clientY, path: m.path, title: m.title });
+                }}
+              >
+                <div className="rounded-lg overflow-hidden">
+                  <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
                     {externalPosterMap[m.path] ? (
                       <img
                         src={localSrc(externalPosterMap[m.path] as string)}
                         alt={m.title}
-                        className="w-full h-full object-cover rounded-lg"
+                        className="w-full h-full object-cover"
                         draggable={false}
                       />
                     ) : (
-                      <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                      <div className="w-full h-full flex items-center justify-center bg-[#0d0d0d]">
+                        <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                      </div>
+                    )}
+                    {extHovered === m.path && (
+                      <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
+                        <button
+                          onClick={async () => {
+                            try {
+                              await openInPlayer(m.path, { displayTitle: m.title });
+                              void refreshExternalMedia();
+                            } catch (err) {
+                              setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                            }
+                          }}
+                          className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                          title="Play (interactive disc menus)"
+                        >
+                          <Play className="w-3 h-3 fill-black" />
+                          <span>Play</span>
+                        </button>
+                      </div>
                     )}
                   </div>
-                  <div className="p-2">
-                    <div className="text-[11px] font-medium text-white truncate">{m.title}</div>
-                    <div className="text-[10px] text-[#a3a3a3]">{m.kind}</div>
-                  </div>
-                </button>
+                </div>
+                <div className="pt-2">
+                  <h4
+                    className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
+                    title={m.title}
+                  >
+                    {m.title}
+                    {m.year ? <span className="text-[#a3a3a3]"> ({m.year})</span> : null}
+                  </h4>
+                </div>
               </div>
             ))}
           </div>
@@ -978,6 +998,71 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 {isOrganizing ? 'Moving Files...' : 'Organize'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Right-click menu on an EXTERNAL poster: same options as the
+          library where they apply (Show in Finder, Play) + Remove. */}
+      {extCtx && (
+        <div
+          className="fixed inset-0 z-[190]"
+          onClick={() => setExtCtx(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setExtCtx(null);
+          }}
+        >
+          <div
+            className="absolute w-44 rounded-lg bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 py-1.5"
+            style={{
+              left: Math.min(extCtx.x, window.innerWidth - 190),
+              top: Math.min(extCtx.y, window.innerHeight - 210),
+            }}
+          >
+            {(() => {
+              const act =
+                'w-full text-left px-3 py-1.5 text-[11px] text-[#d4d4d4] hover:bg-[#262626] hover:text-white flex items-center gap-2 transition';
+              return (
+                <>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setExtCtx(null);
+                      invoke('open_torrent_folder', { path: extCtx.path }).catch(() => {});
+                    }}
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
+                  </button>
+                  <button
+                    className={act}
+                    onClick={async () => {
+                      setExtCtx(null);
+                      try {
+                        await openInPlayer(extCtx.path, { displayTitle: extCtx.title });
+                        void refreshExternalMedia();
+                      } catch (err) {
+                        setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                      }
+                    }}
+                  >
+                    <Play className="w-3.5 h-3.5" /> Play
+                  </button>
+                  <button
+                    className={act}
+                    onClick={async () => {
+                      setExtCtx(null);
+                      try {
+                        await invoke('remove_external_media', { path: extCtx.path });
+                        void refreshExternalMedia();
+                      } catch { /* best-effort */ }
+                    }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Remove from Library
+                  </button>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
