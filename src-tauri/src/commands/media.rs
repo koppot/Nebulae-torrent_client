@@ -667,18 +667,32 @@ pub async fn player_track_languages(
     if path.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let video_ts_ifo = std::path::Path::new(&path).join("VIDEO_TS").join("VIDEO_TS.IFO");
-    let is_dvd = video_ts_ifo.is_file()
-        || std::path::Path::new(&path).join("VIDEO_TS.IFO").is_file();
+    // current_path can be the feature FILE (resume flow) rather than the
+    // disc folder: walk up until a BDMV/VIDEO_TS parent is found so the
+    // probe always sees the disc root.
+    let mut probe_path = std::path::PathBuf::from(&path);
+    for _ in 0..4 {
+        if probe_path.join("BDMV").is_dir()
+            || probe_path.join("VIDEO_TS").is_dir()
+            || probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO").is_file()
+        {
+            break;
+        }
+        if !probe_path.pop() {
+            break;
+        }
+    }
+    let video_ts_ifo = probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO");
+    let is_dvd = video_ts_ifo.is_file() || probe_path.join("VIDEO_TS.IFO").is_file();
     if is_dvd {
         let t = title.unwrap_or(1);
         tracing::info!("[player] track languages (dvd, title {t})");
-        player::dvd_meta::disc_stream_languages_dvd(&path, t)
+        player::dvd_meta::disc_stream_languages_dvd(&probe_path.to_string_lossy(), t)
     } else {
         // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
         // falls back to the feature playlist (most distinct audio
         // languages) and returns the real track names.
-        let r = player::bluray_meta::disc_stream_languages(&path, duration_ms);
+        let r = player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
         tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
         r
     }
