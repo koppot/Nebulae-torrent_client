@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import AppInfoModal from './AppInfoModal';
+import brandLogo from '../../assets/brand-logo.png';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -45,6 +47,7 @@ export const TitleBar: React.FC = () => {
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
 
   const [isMaximized, setIsMaximized] = useState(false);
+  const [showAppInfo, setShowAppInfo] = useState(false);
   const [, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
 
   useEffect(() => {
@@ -143,30 +146,59 @@ export const TitleBar: React.FC = () => {
       className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
       <div className="flex items-center justify-between px-3 h-10" data-tauri-drag-region>
-        <div className="flex items-baseline gap-1.5 flex-shrink-0" data-tauri-drag-region>
+        {/* Mode toggle (owner): centered on the top row on BOTH views,
+            bigger than the other controls but the same design. */}
+        <button
+          type="button"
+          onClick={() => setViewMode(viewMode === 'media' ? 'manager' : 'media')}
+          className="absolute left-1/2 -translate-x-1/2 top-0 h-10 flex items-center gap-2 px-4 rounded-b-lg bg-[#1f1f1f] border border-t-0 border-[#333333] text-sm font-semibold text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
+          title={viewMode === 'media' ? 'Switch to the Torrent Manager' : 'Switch to the Media Center'}
+        >
+          {viewMode === 'media' ? (
+            <LayoutGrid className="w-4 h-4" />
+          ) : (
+            <Film className="w-4 h-4" />
+          )}
+          <span>{viewMode === 'media' ? 'Manager' : 'Media'}</span>
+        </button>
+        <div className="flex items-center gap-2.5 flex-shrink-0" data-tauri-drag-region>
+          {/* Nebula icon (owner): visible on BOTH views; opens the
+              release/app info popup with the Update button. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowAppInfo(true); }}
+            className="flex-shrink-0 rounded-full hover:ring-2 hover:ring-[#e50914]/50 transition"
+            title="About this release"
+          >
+            <img src={brandLogo} alt="Nebulae" className="w-7 h-7 rounded-full" draggable={false} />
+          </button>
           <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
           <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
             — Client by Asian DVD Club
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
-        {/* Single Mode Toggle (owner): the button shows the mode it
-            switches TO. Manager -> "Media", Media -> "Manager". */}
-        <button
-          type="button"
-          onClick={() => setViewMode(viewMode === 'media' ? 'manager' : 'media')}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] text-[11px] font-semibold text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
-          title={viewMode === 'media' ? 'Switch to the Torrent Manager' : 'Switch to the Media Center'}
-        >
-          {viewMode === 'media' ? (
-            <LayoutGrid className="w-3 h-3" />
-          ) : (
-            <Film className="w-3 h-3" />
-          )}
-          <span>{viewMode === 'media' ? 'Manager' : 'Media'}</span>
-        </button>
+          {/* Settings on the top bar (owner): no need to bury it in row 2. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowSettings(true); }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title="Preferences & Torrent Engine Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
 
           <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
+            {/* Minimize */}
+            <button
+              type="button"
+              onClick={handleMinimize}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title="Minimize"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+
             {/* Maximize / Restore */}
             <button
               type="button"
@@ -178,20 +210,6 @@ export const TitleBar: React.FC = () => {
                 <Copy className="w-3 h-3 rotate-180" />
               ) : (
                 <Square className="w-3 h-3" />
-              )}
-            </button>
-
-            {/* Compact mini-bar (owner): icon-only, left of the close X. */}
-            <button
-              type="button"
-              onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
-              title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
-            >
-              {viewMode === 'compact' ? (
-                <Maximize2 className="w-3.5 h-3.5" />
-              ) : (
-                <Minimize2 className="w-3.5 h-3.5" />
               )}
             </button>
 
@@ -298,15 +316,6 @@ export const TitleBar: React.FC = () => {
 
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); setShowSettings(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Preferences & Torrent Engine Settings"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
             onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
             className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
             title="Documentation & Keyboard Shortcuts"
@@ -356,20 +365,23 @@ export const TitleBar: React.FC = () => {
 
         </div>
 
-        {/* Minimize (owner): second row, right end. */}
-        <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10">
-            {/* Minimize */}
+        {viewMode !== 'media' && (
             <button
               type="button"
-              onClick={handleMinimize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title="Minimize"
+              onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
+              title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
             >
-              <Minus className="w-3.5 h-3.5" />
+              {viewMode === 'compact' ? (
+                <Maximize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Minimize2 className="w-3.5 h-3.5" />
+              )}
             </button>
 
-        </div>
+        )}
       </div>
+      {showAppInfo && <AppInfoModal onClose={() => setShowAppInfo(false)} />}
     </header>
   );
 };

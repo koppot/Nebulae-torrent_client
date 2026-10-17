@@ -199,6 +199,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   });
   // Library banners for external titles: same TMDB pipeline as downloads.
   const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
+  // TMDB metadata per external path: overview / runtime / canonical year —
+  // the SAME source the library Details popup uses.
+  const [externalMetaMap, setExternalMetaMap] = useState<
+    Record<string, { overview: string | null; runtime: number | null; year: number | null }>
+  >({});
   useEffect(() => {
     externalMedia.forEach((m) => {
       if (m.path in externalPosterMap) return;
@@ -209,12 +214,31 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       })
         .then((res) => {
           setExternalPosterMap((prev) => ({ ...prev, [m.path]: res?.poster_webp ?? undefined }));
+          if (res) {
+            setExternalMetaMap((prev) => ({
+              ...prev,
+              [m.path]: {
+                overview: res.overview ?? null,
+                runtime: res.runtime ?? null,
+                year: res.year ?? m.year ?? null,
+              },
+            }));
+          }
         })
         .catch(() => {
           setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
         });
     });
   }, [externalMedia, externalPosterMap]);
+  // Details popup for an external title (owner: same options/details as
+  // the library).
+  const [extDetails, setExtDetails] = useState<
+    { path: string; title: string; year: number | null; kind: string } | null
+  >(null);
+  const extYear = extDetails
+    ? externalMetaMap[extDetails.path]?.year ?? extDetails.year
+    : null;
+  const extMeta = extDetails ? externalMetaMap[extDetails.path] : undefined;
 
   // ADC seed-time records power the hover line ("ADC: 2.48 · Seed time: 2d 14h").
   useEffect(() => {
@@ -726,7 +750,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           Dark palette per the owner's override of the Canva background. */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[#262626]">
         <div className="flex items-center gap-2.5">
-          <h2 className="text-2xl font-bold tracking-tight">Media Center</h2>
+          <h2 className="text-2xl font-bold tracking-tight">Media</h2>
         </div>
 
       </div>
@@ -800,7 +824,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           entries persist while their source path exists. */}
       {externalMedia.length > 0 && (
         <div className="mt-8">
-          <h3 className="text-sm font-semibold text-white/80 mb-3">External Media</h3>
+          <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3] mb-3">
+            External
+          </h3>
           {/* Same card geometry and options as the Library shelf (owner):
               150px posters, hover Play, right-click menu. */}
           <div className="flex flex-wrap gap-4">
@@ -821,7 +847,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       <img
                         src={localSrc(externalPosterMap[m.path] as string)}
                         alt={m.title}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover scale-[0.78] rounded-lg"
+                        style={{ objectPosition: 'center' }}
                         draggable={false}
                       />
                     ) : (
@@ -846,6 +873,15 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                           <Play className="w-3 h-3 fill-black" />
                           <span>Play</span>
                         </button>
+                        <button
+                          onClick={() =>
+                            setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
+                          }
+                          className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
+                          title="Detailed movie information"
+                        >
+                          Details
+                        </button>
                       </div>
                     )}
                   </div>
@@ -856,7 +892,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                     title={m.title}
                   >
                     {m.title}
-                    {m.year ? <span className="text-[#a3a3a3]"> ({m.year})</span> : null}
+                    {(externalMetaMap[m.path]?.year ?? m.year) ? (
+                      <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
+                    ) : null}
                   </h4>
                 </div>
               </div>
@@ -996,6 +1034,87 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 className="px-4 py-2 rounded-lg bg-adc-gold hover:bg-adc-gold/90 text-black text-xs font-bold transition shadow-md disabled:opacity-50"
               >
                 {isOrganizing ? 'Moving Files...' : 'Organize'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EXTERNAL details popup (owner): detailed movie information from
+          TMDB - the same source the library Details uses. */}
+      {extDetails && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60"
+          onClick={() => setExtDetails(null)}
+        >
+          <div
+            className="w-[420px] rounded-xl bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex gap-4 p-4">
+              <div className="w-[110px] flex-shrink-0">
+                {externalPosterMap[extDetails.path] ? (
+                  <img
+                    src={localSrc(externalPosterMap[extDetails.path] as string)}
+                    alt={extDetails.title}
+                    className="w-full rounded-lg"
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="aspect-[2/3] rounded-lg bg-[#0d0d0d] flex items-center justify-center">
+                    <Disc className="w-8 h-8 text-[#333333]" />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-sm font-bold text-white leading-tight">
+                  {extDetails.title}
+                  {extYear ? <span className="text-[#a3a3a3] font-normal"> ({extYear})</span> : null}
+                </h4>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                    {extDetails.kind}
+                  </span>
+                  {extMeta?.runtime ? (
+                    <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                      {extMeta.runtime} min
+                    </span>
+                  ) : null}
+                </div>
+                {extMeta?.overview ? (
+                  <p className="mt-2 text-[11px] leading-relaxed text-[#d4d4d4] line-clamp-6">
+                    {extMeta.overview}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[11px] text-[#737373] italic">
+                    No TMDB summary available for this title.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="px-4 pb-4 flex gap-2">
+              <button
+                onClick={async () => {
+                  setExtDetails(null);
+                  try {
+                    await openInPlayer(extDetails.path, { displayTitle: extDetails.title });
+                    void refreshExternalMedia();
+                  } catch (err) {
+                    setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                  }
+                }}
+                className="flex-1 px-3 py-2 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition"
+              >
+                Play
+              </button>
+              <button
+                onClick={() => {
+                  setExtDetails(null);
+                  invoke('open_torrent_folder', { path: extDetails.path }).catch(() => {});
+                }}
+                className="flex-1 px-3 py-2 rounded-lg bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5e5e5] text-xs font-medium transition"
+              >
+                Show in Finder
               </button>
             </div>
           </div>
