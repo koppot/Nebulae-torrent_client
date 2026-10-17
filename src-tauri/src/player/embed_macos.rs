@@ -36,10 +36,15 @@ objc2::define_class!(
         #[unsafe(method(mouseDown:))]
         unsafe fn mouse_down(this: &VideoOverlayView, event: &NSEvent) {
             if event.clickCount() >= 2 {
-                if let Some(app) = overlay_app() {
-                    toggle_fullscreen(app);
+                // Native fullscreen toggle — works for borderless windows,
+                // unlike the window-manager route that failed in testing.
+                if let Some(win) = this.window() {
+                    let _: () = objc2::msg_send![&*win, toggleFullScreen: std::ptr::null::<objc2::runtime::AnyObject>()];
                 }
             } else if let Some(win) = this.window() {
+                // Become first responder so keyDown reaches us (keyboard
+                // controls).
+                let _: bool = objc2::msg_send![&*win, makeFirstResponder: this];
                 let _: () = objc2::msg_send![&*win, performWindowDragWithEvent: event];
             }
         }
@@ -71,13 +76,6 @@ fn overlay_app() -> Option<&'static AppHandle> {
 fn overlay_app_init(app: AppHandle) {
     static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
     let _ = APP.set(app);
-}
-
-fn toggle_fullscreen(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let fs = win.is_fullscreen().unwrap_or(false);
-        let _ = win.set_fullscreen(!fs);
-    }
 }
 
 /// Translate a native key event into the frontend's key-name vocabulary.
@@ -158,6 +156,13 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
             (*view).setHidden(hidden);
+            if !hidden {
+                // Take keyboard focus so arrow keys / space / F / M reach
+                // the overlay's keyDown handler (keyboard controls).
+                if let Some(win) = (*view).window() {
+                    let _: bool = objc2::msg_send![&*win, makeFirstResponder: view];
+                }
+            }
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))

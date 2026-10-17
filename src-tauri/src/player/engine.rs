@@ -79,6 +79,37 @@ fn encode_mrl_path(path: &str) -> String {
     out
 }
 
+type VlcLogEmit = extern "C" fn(c_int, *const c_char);
+
+/// Load the diagnostic log shim and attach it to `instance`.
+unsafe fn install_vlc_log_shim(shim_path: &std::path::Path, instance: *mut c_void) {
+    match Library::new(shim_path) {
+        Ok(lib) => {
+            let install: Symbol<unsafe extern "C" fn(*mut c_void, VlcLogEmit)> =
+                lib.get(b"install_vlc_logger").expect("shim symbol");
+            install(instance, vlc_log_emit);
+            // The shim must outlive every VLC instance.
+            std::mem::forget(lib);
+        }
+        Err(e) => eprintln!("vlc log shim load failed: {e}"),
+    }
+}
+
+extern "C" fn vlc_log_emit(level: c_int, msg: *const c_char) {
+    if msg.is_null() {
+        return;
+    }
+    let msg = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/nebulae-vlc-cb.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "[{level}] {msg}");
+    }
+}
+
 impl VlcLib {
     /// Locate and load the user's libVLC.
     pub fn load() -> Result<VlcLib, String> {
@@ -115,27 +146,50 @@ impl VlcLib {
         ))
     }
 
-    /// Preload the libvlccore dependency (same directory as libvlc) so the
-    /// @rpath / soname reference resolves. Best effort: failures are
-    /// reported in `failures` but the main load is still attempted.
+    /// Preload VLC's support dylibs by absolute path. Disc plugins (bluray,
+    /// dvdnav) link against @rpath dylibs like libbluray.2.dylib which cannot
+    /// resolve from a foreign process; preloading registers each image under
+    /// its install name so plugin dlopen calls match the already-loaded
+    /// libraries. Failures are reported but the main load is still attempted.
     fn preload_core_deps(lib_path: &Path, failures: &mut Vec<String>) -> Vec<Library> {
         let Some(dir) = lib_path.parent() else {
             return Vec::new();
         };
-        #[cfg(target_os = "macos")]
-        let names = ["libvlccore.9.dylib", "libvlccore.dylib"];
-        #[cfg(target_os = "windows")]
-        let names = ["libvlccore.dll"];
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let names = ["libvlccore.so.9", "libvlccore.so"];
         let mut out = Vec::new();
-        for name in names {
-            let dep = dir.join(name);
-            if dep.exists() {
-                unsafe {
-                    match Library::new(&dep) {
-                        Ok(l) => out.push(l),
-                        Err(e) => failures.push(format!("preload {}: {e}", dep.display())),
+        // All dylibs in the lib dir (skip libvlc itself, loaded separately).
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let dep = entry.path();
+                let is_dylib = dep.extension().and_then(|e| e.to_str()) == Some("dylib");
+                let is_libvlc = dep
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("libvlc."))
+                    .unwrap_or(false);
+                if is_dylib && !is_libvlc {
+                    unsafe {
+                        match Library::new(&dep) {
+                            Ok(l) => out.push(l),
+                            Err(e) => failures.push(format!("preload {}: {e}", dep.display())),
+                        }
+                    }
+                }
+            }
+        }
+        // Frameworks dir may hold additional dependencies (e.g. libbluray).
+        if let Some(fw) = dir.parent().map(|p| p.join("Frameworks")) {
+            if let Ok(entries) = std::fs::read_dir(&fw) {
+                for entry in entries.flatten() {
+                    let dep = entry.path();
+                    if dep.extension().and_then(|e| e.to_str()) == Some("dylib") {
+                        unsafe {
+                            match Library::new(&dep) {
+                                Ok(l) => out.push(l),
+                                Err(e) => {
+                                    failures.push(format!("preload {}: {e}", dep.display()))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -273,6 +327,16 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
+            // Route VLC's internal log to a file — the embedded player's
+            // stderr is invisible when launched from Finder, and demux
+            // failures (e.g. bluray://) otherwise fail silently.
+            CString::new("--verbose=2").unwrap(),
+            CString::new("--file-logging").unwrap(),
+            CString::new(format!(
+                "--logfile={}",
+                std::env::temp_dir().join("nebulae-vlc.log").display()
+            ))
+            .unwrap(),
         ];
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
@@ -286,9 +350,20 @@ impl VlcSession {
             // menu), which is why folder Blu-ray showed no Menu button and
             // no chapter controls. VLC 3 exposes both via bluray:// /
             // dvd://.
+            // Diagnostic: route VLC's internal log into a file via a C shim
+            // (libvlc_log_set needs a variadic C callback, which stable Rust
+            // cannot express). NEBULAE_VLC_LOG=<path to shim dylib>.
+            if let Some(shim) = std::env::var_os("NEBULAE_VLC_LOG") {
+                install_vlc_log_shim(std::path::Path::new(&shim), instance);
+            }
             let is_dir = std::path::Path::new(path).is_dir();
             let media = if is_dir {
-                let scheme = if path.to_ascii_lowercase().contains("bdmv") {
+                // Scheme follows the folder CONTENTS: a BDMV child means
+                // Blu-ray, a VIDEO_TS child means DVD. The path string alone
+                // is misleading — "Blu-ray" in a folder name does not imply
+                // a BDMV under the disc root.
+                let root = std::path::Path::new(path);
+                let scheme = if root.join("BDMV").exists() || root.join("bdmv").exists() {
                     "bluray"
                 } else {
                     "dvd"
@@ -316,8 +391,7 @@ impl VlcSession {
             if rc != 0 {
                 (lib.libvlc_media_player_release)(mp);
                 (lib.libvlc_media_release)(media);
-                (lib.libvlc_release)(instance);
-                return Err(format!("libvlc refused to play {path} (rc={rc})"));
+                (lib.libvlc_release)(instance);                return Err(format!("libvlc refused to play {path} (rc={rc})"));
             }
             Ok(VlcSession {
                 instance: instance as usize,

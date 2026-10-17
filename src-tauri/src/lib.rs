@@ -257,6 +257,7 @@ pub fn run() {
         .manage(player::PlayerState::default())
         .setup(move |app| {
             use tauri::Manager;
+            commands::media::maybe_autoplay(app.handle());
 
             // Diagnostics for the reported white-screen-on-launch: log the
             // URL the main window was actually pointed at.

@@ -241,6 +241,28 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     })
 }
 
+/// Diagnostic helper (env-gated): NEBULAE_AUTOPLAY=<path> starts playback
+/// automatically once the app launches, letting the player be exercised
+/// from a terminal where VLC's stderr is visible.
+pub fn maybe_autoplay(app: &tauri::AppHandle) {
+    if let Ok(path) = std::env::var("NEBULAE_AUTOPLAY") {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            use tauri::Manager;
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            tracing::info!("autoplay diag: opening {path}");
+            let Some(state) = app.try_state::<player::PlayerState>() else {
+                tracing::error!("autoplay diag: no player state");
+                return;
+            };
+            match start_playback(&app, &state, &path) {
+                Ok(_) => {}
+                Err(e) => tracing::error!("autoplay diag failed: {e}"),
+            }
+        });
+    }
+}
+
 fn loaded_lib(state: &PlayerState) -> Result<std::sync::Arc<player::engine::VlcLib>, String> {
     let mut guard = state.lib.lock().map_err(|_| "player state poisoned")?;
     if guard.is_none() {
@@ -322,6 +344,56 @@ fn start_playback(
             }
             match VlcSession::open(&lib, &resolved.resolved_path, view) {
                 Ok(session) => {
+                    // Disc-mode liveness check: bluray:// (and dvd://) MRLs
+                    // can fail inside the demuxer while libvlc_media_player_play
+                    // still reports success (reproduced: black screen, no
+                    // playback on the Fuuka folder Blu-ray). If the disc
+                    // demuxer produced no titles shortly after start, fall
+                    // back to the main feature as a plain file so playback
+                    // never silently dies.
+                    if resolved.is_disc {
+                        // Poll patiently: standalone probes show titles appear
+                        // within 1 s, but the embedded instance may initialize
+                        // the bluray demuxer later. Log every reading so the
+                        // session log records the demux timeline.
+                        let mut title_count = 0;
+                        for attempt in 0..16u32 {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            title_count = unsafe {
+                                (lib.libvlc_media_player_get_title_count)(session.media_player as *mut c_void)
+                            };
+                            tracing::info!(
+                                "player_open: disc probe {attempt}: titles={title_count}"
+                            );
+                            if title_count > 0 {
+                                break;
+                            }
+                        }
+                        if title_count <= 0 {
+                            session.close(&lib);
+                            tracing::warn!(
+                                "player_open: disc demux produced no titles for '{}'; falling back to main feature",
+                                resolved.resolved_path
+                            );
+                            let fallback = find_main_video(Path::new(&resolved.resolved_path))
+                            .ok_or_else(|| "disc demux failed and no feature found".to_string())?;
+                            let fb_session = VlcSession::open(&lib, &fallback.display().to_string(), view)?;
+                            *poison(&state.instance) = fb_session.instance;
+                            *poison(&state.media) = fb_session.media;
+                            *poison(&state.media_player) = fb_session.media_player;
+                            *poison(&state.started) = true;
+                            tracing::info!(
+                                "player_open: PLAYING '{}' (disc: false, feature fallback)",
+                                fallback.display()
+                            );
+                            return Ok(ResolvedPlayback {
+                                resolved_path: fallback.display().to_string(),
+                                title: resolved.title,
+                                is_disc: false,
+                                external: false,
+                            });
+                        }
+                    }
                     *poison(&state.instance) = session.instance;
                     *poison(&state.media) = session.media;
                     *poison(&state.media_player) = session.media_player;
