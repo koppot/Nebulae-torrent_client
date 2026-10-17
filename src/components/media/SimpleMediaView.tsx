@@ -1347,7 +1347,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           onClick={() => setDetailsFor(null)}
         >
           <div
-            className="w-full max-w-md rounded-xl bg-[#161616] border border-[#333333] shadow-2xl p-5 space-y-3"
+            className="w-full max-w-[460px] rounded-xl bg-[#1c1c1c] border border-[#333333] shadow-2xl p-5 space-y-3"
             onClick={(e) => e.stopPropagation()}
           >
             {(() => {
@@ -1368,21 +1368,48 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
               const seed = seedTimeRecords.find((r) => r.info_hash === item.info_hash);
               return (
                 <>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1 min-w-0">
-                      <h3 className="text-[16px] font-semibold text-white leading-tight">
-                        {group.clean_title}
-                      </h3>
-                      {group.year && (
-                        <span className="text-[11px] font-mono text-[#a3a3a3]">{group.year}</span>
-                      )}
+                  <div className="flex gap-4">
+                    <div className="w-[110px] flex-shrink-0">
+                      {(() => {
+                        const cover =
+                          (discMetaMap[item.id]?.cover_image) ||
+                          tmdbMap[group.id]?.poster ||
+                          item.poster_url;
+                        return cover ? (
+                          <img
+                            src={localSrc(cover)}
+                            alt={group.clean_title}
+                            className="w-full rounded-lg"
+                            draggable={false}
+                          />
+                        ) : (
+                          <div className="aspect-[2/3] rounded-lg bg-[#0d0d0d] flex items-center justify-center">
+                            <Disc className="w-8 h-8 text-[#333333]" />
+                          </div>
+                        );
+                      })()}
                     </div>
-                    <button
-                      onClick={() => setDetailsFor(null)}
-                      className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
+                      <div className="space-y-1 min-w-0">
+                        <h3 className="text-[16px] font-semibold text-white leading-tight">
+                          {group.clean_title}
+                        </h3>
+                        {group.year && (
+                          <span className="text-[11px] font-mono text-[#a3a3a3]">{group.year}</span>
+                        )}
+                        {badge && (
+                          <span className="block w-max px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                            {badge}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setDetailsFor(null)}
+                        className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Facts grid (owner: data moved here from the hover card,
