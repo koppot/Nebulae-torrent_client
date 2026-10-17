@@ -566,7 +566,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
       <img
         src={localSrc(coverImage)}
         alt={currentItem.name}
-        className="w-full h-full object-cover"
+        className="w-full h-full object-cover rounded-lg"
         onError={(e) => (e.target as HTMLElement).style.display = 'none'}
       />
     ) : (
@@ -594,7 +594,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
         className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
       >
         <div className="rounded-lg overflow-hidden">
-          <div className="aspect-[660/800] w-full bg-[#141414] relative overflow-hidden">
+          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden">
             {posterArt}
 
             {/* Hover: only Play (or Resume) + Details, floating on the

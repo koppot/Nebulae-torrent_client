@@ -711,7 +711,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => invoke('player_return_to_menu').catch(() => {})}
-              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition"
+              className="shrink-0 text-xs text-white font-medium px-2 py-1 rounded-md border border-white hover:text-white hover:border-white transition text-left"
               title="Return to the disc's interactive menu"
             >
               Menu
