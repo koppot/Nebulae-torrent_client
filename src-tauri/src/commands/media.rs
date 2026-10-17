@@ -1886,6 +1886,21 @@ fn read_external_store(app: &tauri::AppHandle) -> Vec<ExternalMedia> {
 }
 
 fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Result<(), String> {
+    // Collapse legacy duplicates on every write: one entry per title+year
+    // (owner: "we do not need 2 separate entries"). Keeps the FIRST.
+    let mut seen: Vec<(String, Option<i32>)> = Vec::new();
+    let items: Vec<ExternalMedia> = items
+        .iter()
+        .filter(|m| {
+            let key = (m.title.to_ascii_lowercase(), m.year);
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        })
+        .cloned()
+        .collect();
     let store = external_media_path(app)?;
     let data = serde_json::to_vec_pretty(items).map_err(|e| e.to_string())?;
     std::fs::write(store, data).map_err(|e| e.to_string())
