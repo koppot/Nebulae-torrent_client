@@ -119,7 +119,9 @@ pub fn fetch_poster(
     // v2: the search pipeline gained suffix-stripping retries and the
     // first_air_date_year fix (owner: "Banner of the Stars III OVA" never
     // matched); bump so previously cached misses re-search.
-    let cache_key = format!("tmdb_poster:v2:{}", lookup_key.to_lowercase());
+    // v3: the TV total-duration fix (episodes × runtime). v2 cached the
+    // single-episode runtime before that fix, so bump to recompute.
+    let cache_key = format!("tmdb_poster:v3:{}", lookup_key.to_lowercase());
     if let Ok(Some(cached)) = db.get_setting(&cache_key) {
         let p = PathBuf::from(&cached);
         if p.exists() {

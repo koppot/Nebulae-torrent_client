@@ -515,7 +515,8 @@ export default function PlayerOverlay() {
   const switchDisc = async (path: string) => {
     console.log('[player] switchDisc click:', path);
     try {
-      await openInPlayer(path);
+      // Keep the feature label when cycling discs of the same release.
+      await openInPlayer(path, { displayTitle: player.title });
     } catch (err) {
       console.error('[player] switchDisc failed:', err);
     }

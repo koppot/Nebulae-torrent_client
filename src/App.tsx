@@ -40,10 +40,25 @@ export const App: React.FC = () => {
 
   // Programmatic playback (engine-side autoplay, diagnostics) opens the
   // player via a backend event rather than a frontend invoke.
+  // Feature label (clean title + year) for engine-adopted sessions: the
+  // engine only knows the disc folder name, so look the torrent up by the
+  // session path and use its media metadata.
+  const featureLabelForPath = (p: string): string | undefined => {
+    const torrents = useTorrentStore.getState().torrents;
+    for (const t of torrents) {
+      const root = t.save_path?.replace(/\/+$/, '');
+      if (root && p.startsWith(root)) {
+        const mm = t.media_meta;
+        if (mm?.clean_title) return mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title;
+        return t.name;
+      }
+    }
+    return undefined;
+  };
   useEffect(() => {
     const un = listen<PlayerOpenInfo>('player-opened', (e) => {
       invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
-      if (!e.payload.external) playerStore.open(e.payload);
+      if (!e.payload.external) playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
     });
     // Belt-and-braces: poll the engine for a live session while the player
     // UI is closed. Event delivery raced the webview's own loading in the
@@ -55,12 +70,15 @@ export const App: React.FC = () => {
       )
         .then((s) => {
           if (s && !playerStore.get().open) {
-            playerStore.open({
-              resolved_path: s.resolved_path,
-              title: s.title,
-              is_disc: s.is_disc,
-              external: false,
-            });
+            playerStore.open(
+              {
+                resolved_path: s.resolved_path,
+                title: s.title,
+                is_disc: s.is_disc,
+                external: false,
+              },
+              featureLabelForPath(s.resolved_path),
+            );
           }
         })
         .catch(() => {});
