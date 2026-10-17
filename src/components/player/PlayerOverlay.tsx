@@ -468,7 +468,8 @@ export default function PlayerOverlay() {
         /* ticks are best-effort */
       }
     })();
-  }, [player.open, poll.title, poll.title_count]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.open, poll.title, poll.title_count, Math.round(poll.length_ms / 30000)]);
 
   // Fullscreen state mirror for the button's icon.
   useEffect(() => {
@@ -1063,7 +1064,7 @@ export default function PlayerOverlay() {
                 button into the list never crosses a closing gap; styled like
                 the play bar: semi-transparent, white hairline, black glow. */
             <div
-              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {subTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1079,7 +1080,7 @@ export default function PlayerOverlay() {
                     setShowSubs(false);
                   }}
                   className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
-                    t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
+                    t.active ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white hover:bg-white/10'
                   }`}
                 >
                   {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
@@ -1116,7 +1117,7 @@ export default function PlayerOverlay() {
           </button>
           {showAudio && (
             <div
-              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {audioTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1132,7 +1133,7 @@ export default function PlayerOverlay() {
                     setShowAudio(false);
                   }}
                   className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
-                    t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
+                    t.active ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white hover:bg-white/10'
                   }`}
                 >
                   {trackLabel('audio', audioTracks.filter((x) => x.id >= 0).indexOf(t), t)}

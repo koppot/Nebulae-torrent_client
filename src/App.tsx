@@ -45,20 +45,32 @@ export const App: React.FC = () => {
   // session path and use its media metadata.
   const featureLabelForPath = (p: string): string | undefined => {
     const torrents = useTorrentStore.getState().torrents;
+    // MOST-SPECIFIC match wins: a torrent saved at a broad parent (e.g. a
+    // whole volume) must not label every external disc under it with its
+    // own title - the longest save_path that still contains the session
+    // path identifies the release.
+    let best: { root: string; label: string } | null = null;
     for (const t of torrents) {
       const root = t.save_path?.replace(/\/+$/, '');
-      if (root && p.startsWith(root)) {
-        const mm = t.media_meta;
-        if (mm?.clean_title) return mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title;
-        return t.name;
-      }
+      if (!root || !p.startsWith(root)) continue;
+      const mm = t.media_meta;
+      const label = mm?.clean_title
+        ? mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title
+        : t.name;
+      if (!best || root.length > best.root.length) best = { root, label };
     }
-    return undefined;
+    return best?.label;
   };
   useEffect(() => {
     const un = listen<PlayerOpenInfo>('player-opened', (e) => {
       invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
-      if (!e.payload.external) playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
+      if (e.payload.external) return;
+      // The event repeats several times per open; an explicit open already
+      // set the correct display title for THIS path (e.g. the import
+      // prompt's "Name (Year)") - don't overwrite it with a torrent guess.
+      const cur = playerStore.get();
+      if (cur.open && cur.resolvedPath === e.payload.resolved_path) return;
+      playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
     });
     // Belt-and-braces: poll the engine for a live session while the player
     // UI is closed. Event delivery raced the webview's own loading in the
