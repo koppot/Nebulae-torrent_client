@@ -56,11 +56,17 @@ function readLanguagePrefs(): { audio: string | null; subs: string | null } {
 }
 
 /**
- * Best track whose name matches one of the preferred codes (either the raw
- * code, e.g. "en", or the full language name, e.g. "English 5.1"). Returns
- * the track id or null when nothing matches.
+ * Best track for the preferred languages: VLC's own track names are wrong
+ * on poorly-authored discs, so match the libbluray probe languages by
+ * index FIRST (langs[i] is the language of the i-th real track), and fall
+ * back to name matching only when the probe has no data.
  */
-function bestTrackFor(tracks: { id: number; name: string }[], prefCsv: string): number | null {
+function pickTrackFor(
+  tracks: { id: number; name: string }[],
+  prefCsv: string,
+  langs: string[],
+): number | null {
+  const real = tracks.filter((t) => t.id >= 0);
   const codes = prefCsv
     .split(',')
     .map((c) => c.trim().toLowerCase())
@@ -68,7 +74,14 @@ function bestTrackFor(tracks: { id: number; name: string }[], prefCsv: string): 
   if (codes.length === 0) return null;
   for (const code of codes) {
     const name = LANG_NAMES[code] ?? code;
-    const hit = tracks.find((t) => {
+    // 1) Probe languages by index (authoritative for discs).
+    const idx = langs.findIndex((l) => {
+      const l0 = l.toLowerCase();
+      return l0 === name || l0.startsWith(name);
+    });
+    if (idx >= 0 && idx < real.length) return real[idx].id;
+    // 2) VLC name fallback (plain files).
+    const hit = real.find((t) => {
       const n = (t.name || '').toLowerCase();
       return n.includes(code) || n.includes(name);
     });
@@ -429,15 +442,32 @@ export default function PlayerOverlay() {
   // changes (each disc feature has its own chapter layout).
   useEffect(() => {
     if (!player.open) return;
-    invoke<{ offset_ms: number; duration_ms: number; name: string }[]>('player_chapter_marks')
-      .then((marks) => {
-        setChapterMarks(marks);
-        if (marks.length > 0) {
-          console.log(`[player] chapter marks: ${marks.length} on title ${poll.title}`);
+    (async () => {
+      // For discs, the playlist chapters (libbluray) are the source of
+      // truth: VLC's own chapter marks for Blu-ray titles carry offsets
+      // that only cover the head of the timeline. VLC's marks are used
+      // only when the disc probe yields nothing (plain video files).
+      try {
+        const disc = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
+          'player_disc_chapters',
+          { durationMs: Math.round(poll.length_ms) },
+        );
+        if (disc.length > 1) {
+          setChapterMarks(disc);
+          return;
         }
-      })
-      .catch(() => {});
-     
+      } catch {
+        /* fall through to VLC marks */
+      }
+      try {
+        const marks = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
+          'player_chapter_marks',
+        );
+        setChapterMarks(marks);
+      } catch {
+        /* ticks are best-effort */
+      }
+    })();
   }, [player.open, poll.title, poll.title_count]);
 
   // Fullscreen state mirror for the button's icon.
@@ -508,12 +538,14 @@ export default function PlayerOverlay() {
         try {
           if (prefs.audio) {
             const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'audio' });
-            const pick = bestTrackFor(tracks, prefs.audio);
+            const langs = trackLangsCache.get(player.resolvedPath)?.audio ?? [];
+            const pick = pickTrackFor(tracks, prefs.audio, langs);
             if (pick != null) await invoke('player_set_track', { kind: 'audio', id: pick });
           }
           if (prefs.subs) {
             const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' });
-            const pick = bestTrackFor(tracks, prefs.subs);
+            const langs = trackLangsCache.get(player.resolvedPath)?.subs ?? [];
+            const pick = pickTrackFor(tracks, prefs.subs, langs);
             if (pick != null) await invoke('player_set_track', { kind: 'subtitle', id: pick });
           }
           return;
@@ -553,13 +585,13 @@ export default function PlayerOverlay() {
     }
   };
 
-  // Track display name: prefer the language read from the disc playlists
+  // Track display name: the language read from the disc playlists
   // (libbluray) — VLC's own label can be wrong on poorly-authored discs.
+  // Just the language (owner): no "Track N" prefix.
   const trackLabel = (kind: 'audio' | 'subtitle', index: number, t: { id: number; name: string }) => {
     const langs = kind === 'audio' ? trackLangs.audio : trackLangs.subs;
     const lang = index >= 0 && index < langs.length ? langs[index] : null;
-    const base = lang ? `Track ${index + 1} (${lang})` : t.name || `Track ${t.id}`;
-    return base;
+    return lang || t.name || `Track ${t.id}`;
   };
 
   const togglePause = () => {
@@ -639,12 +671,12 @@ export default function PlayerOverlay() {
     window.setTimeout(() => setSeeking(null), 400);
   };
 
-  // Volume from a pointer position on the custom vertical track.
-  const volumeFromPointer = (clientY: number) => {
+  // Volume from a pointer position on the horizontal track.
+  const volumeFromPointer = (clientX: number) => {
     const el = document.querySelector('[data-testid="volume-track"]') as HTMLElement | null;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const v = Math.round(frac * 100);
     setVolume(v);
     setMuted(false);
@@ -901,7 +933,7 @@ export default function PlayerOverlay() {
             {chapterMarks.slice(1).map((mk, i) => (
               <span
                 key={i}
-                className="absolute top-1/2 -translate-y-1/2 w-[2px] h-[10px] rounded bg-white/80 pointer-events-none"
+                className="absolute top-1/2 -translate-y-1/2 w-px h-[10px] bg-white/70 pointer-events-none"
                 style={{ left: `${dur > 0 ? Math.min(100, (mk.offset_ms / dur) * 100) : 0}%` }}
                 title={mk.name}
               />
@@ -966,28 +998,30 @@ export default function PlayerOverlay() {
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
           {showVolume && (
-            /* Sits flush against the button's hover box (bottom-full): a gap
-               here fires mouseleave while travelling to the slider and
-               closes it before the pointer arrives. */
-            <div className="absolute bottom-full right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-24">
-              {/* Thin vertical track (owner): white line filled with grey,
-                  same styling as the seek bar; one horizontal tick marks the
-                  halfway level. */}
+            /* Horizontal slider, flush against the button's hover box
+               (bottom-full): a gap here fires mouseleave while travelling
+               to the slider and closes it before the pointer arrives.
+               Same style as the bar: semi-transparent, white hairline,
+               black glow; round thumb riding the track. */
+            <div className="absolute bottom-full right-0 p-2 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm flex items-center" style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}>
               <div
                 data-testid="volume-track"
-                className="relative w-[3px] h-16 rounded-full bg-white/40 cursor-pointer"
+                className="relative w-24 h-[3px] rounded-full bg-white/40 cursor-pointer"
                 onPointerDown={(e) => {
                   e.currentTarget.setPointerCapture(e.pointerId);
-                  volumeFromPointer(e.clientY);
+                  volumeFromPointer(e.clientX);
                 }}
                 onPointerMove={(e) => {
-                  if (e.buttons & 1) volumeFromPointer(e.clientY);
+                  if (e.buttons & 1) volumeFromPointer(e.clientX);
                 }}
               >
-                <span className="absolute left-1/2 -translate-x-1/2 w-[9px] h-[2px] rounded bg-white/80 pointer-events-none" style={{ bottom: '50%' }} />
                 <div
-                  className="absolute bottom-0 left-0 w-full rounded-full bg-white"
-                  style={{ height: `${volume}%` }}
+                  className="absolute left-0 top-0 h-full rounded-full bg-white"
+                  style={{ width: `${volume}%` }}
+                />
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white pointer-events-none"
+                  style={{ left: `${volume}%` }}
                 />
               </div>
             </div>
@@ -1029,7 +1063,7 @@ export default function PlayerOverlay() {
                 button into the list never crosses a closing gap; styled like
                 the play bar: semi-transparent, white hairline, black glow. */
             <div
-              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {subTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1044,7 +1078,7 @@ export default function PlayerOverlay() {
                     setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowSubs(false);
                   }}
-                  className={`w-full whitespace-nowrap text-left px-2 py-1 rounded text-xs font-medium transition ${
+                  className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
                     t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
@@ -1082,7 +1116,7 @@ export default function PlayerOverlay() {
           </button>
           {showAudio && (
             <div
-              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto p-1.5 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
+              className="absolute bottom-full right-0 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/50 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {audioTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1097,7 +1131,7 @@ export default function PlayerOverlay() {
                     setAudioTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
                     setShowAudio(false);
                   }}
-                  className={`w-full whitespace-nowrap text-left px-2 py-1 rounded text-xs font-medium transition ${
+                  className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
                     t.active ? 'bg-white/15 text-white' : 'text-white hover:bg-white/10'
                   }`}
                 >
@@ -1138,7 +1172,15 @@ export default function PlayerOverlay() {
           player window, above the control bar's auto-hide. */}
       <button
         type="button"
-        onClick={() => closePlayer()}
+        onClick={() => {
+          // Persist the final position no matter the throttle/pause state:
+          // quitting mid-feature must always leave a resume point.
+          const p = pollRef.current;
+          if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+            savePositionMs(player.resolvedPath, p.time_ms);
+          }
+          void closePlayer();
+        }}
         className={`absolute top-3 right-4 z-20 p-1.5 rounded-md text-white hover:bg-white/15 transition ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}

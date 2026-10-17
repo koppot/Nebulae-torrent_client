@@ -233,6 +233,101 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         }
     }
 
+    // A folder holding one or more DISC FOLDERS (a multi-disc release
+    // imported from disk): resolve to the first disc folder; the player's
+    // disc switcher discovers the siblings by walking up from there.
+    if path.is_dir() {
+        let mut disc_dirs: Vec<PathBuf> = std::fs::read_dir(path)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|d| d.is_dir())
+                    .filter(|d| {
+                        d.join("BDMV").is_dir()
+                            || d.join("bdmv").is_dir()
+                            || d.join("VIDEO_TS").is_dir()
+                            || d.join("video_ts").is_dir()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        disc_dirs.sort();
+        if let Some(disc) = disc_dirs.first() {
+            let title = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(title.as_str())
+                .to_string();
+            tracing::info!(
+                "resolve_playback: multi-disc folder {} -> first disc {}",
+                path.display(),
+                disc.display()
+            );
+            return Ok(ResolvedPlayback {
+                resolved_path: disc.display().to_string(),
+                title,
+                is_disc: true,
+                external: false,
+            });
+        }
+    }
+
+    // ISO disc image: a file that CONTAINS a disc. VLC's demuxers detect
+    // the image themselves (media_new_path is enough); marking it as a disc
+    // gives it menu handling and the demux liveness check. A folder that
+    // holds a single ISO resolves to that ISO (the folder picker only
+    // chooses folders).
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if path.is_file() && ext == "iso" {
+        let title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(title.as_str())
+            .to_string();
+        tracing::info!("resolve_playback: ISO image {} treated as disc", path.display());
+        return Ok(ResolvedPlayback {
+            resolved_path: file_path.to_string(),
+            title,
+            is_disc: true,
+            external: false,
+        });
+    }
+    if path.is_dir() {
+        let isos: Vec<PathBuf> = std::fs::read_dir(path)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.eq_ignore_ascii_case("iso"))
+                                .unwrap_or(false)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if isos.len() == 1 {
+            let iso = &isos[0];
+            let title = iso
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(title.as_str())
+                .to_string();
+            tracing::info!("resolve_playback: folder {} holds one ISO, using {}", path.display(), iso.display());
+            return Ok(ResolvedPlayback {
+                resolved_path: iso.display().to_string(),
+                title,
+                is_disc: true,
+                external: false,
+            });
+        }
+    }
+
     Ok(ResolvedPlayback {
         resolved_path: file_path.to_string(),
         title,
@@ -289,6 +384,10 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     };
     let mp = *poison(&state.media_player);
     if mp == 0 {
+        // No live player, but clear the liveness flag anyway: a stale
+        // `started` here would let the engine poll adopt a dead session.
+        *poison(&state.started) = false;
+        *poison(&state.current_resolved) = None;
         return;
     }
     // mp_guard IS the player-pointer guard for the whole teardown: background
@@ -372,10 +471,14 @@ fn start_playback(
                         // to, and killing the session would kill a demuxer
                         // that may still be initializing (observed: "disc
                         // demux failed and no feature found" on ISOs).
-                        let is_iso = Path::new(&resolved.resolved_path)
-                            .extension()
-                            .map(|e| e.eq_ignore_ascii_case("iso"))
-                            .unwrap_or(false);
+                        let is_iso = [resolved.resolved_path.as_str(), file_path]
+                            .iter()
+                            .any(|p| {
+                                Path::new(p)
+                                    .extension()
+                                    .map(|e| e.eq_ignore_ascii_case("iso"))
+                                    .unwrap_or(false)
+                            });
                         // Poll patiently: standalone probes show titles appear
                         // within 1 s, but the embedded instance may initialize
                         // the bluray demuxer later. Log every reading so the
@@ -529,7 +632,18 @@ pub async fn player_open(
     } else {
         file_path.clone()
     };
-    let resolved = start_playback(&app, &state, &open_target, resume)?;
+    let resolved = match start_playback(&app, &state, &open_target, resume) {
+        Ok(r) => r,
+        Err(e) => {
+            // Failed open: clear the session bookkeeping so the frontend's
+            // engine poll cannot adopt a dead/stale session and present the
+            // LAST played disc on a blank overlay.
+            *poison(&state.current_path) = None;
+            *poison(&state.current_resolved) = None;
+            *poison(&state.started) = false;
+            return Err(e);
+        }
+    };
     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
@@ -907,6 +1021,40 @@ unsafe fn tracks_from_list(
     }
     (lib.libvlc_track_description_list_release)(list);
     out
+}
+
+
+#[tauri::command]
+pub fn player_disc_chapters(
+    state: tauri::State<'_, PlayerState>,
+    duration_ms: i64,
+) -> Result<Vec<ChapterMark>, String> {
+    // VLC's chapter API reports nothing for Blu-ray titles; read the
+    // chapter starts straight from the disc's playlists via libbluray.
+    let path = poison(&state.current_path).clone().unwrap_or_default();
+    if path.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut probe_path = std::path::PathBuf::from(&path);
+    for _ in 0..4 {
+        if probe_path.join("BDMV").is_dir() {
+            break;
+        }
+        if !probe_path.pop() {
+            break;
+        }
+    }
+    let offsets = player::bluray_meta::disc_chapter_offsets(&probe_path.to_string_lossy(), duration_ms)?;
+    tracing::info!("[player] disc chapters for dur {duration_ms}: {} marks", offsets.len());
+    Ok(offsets
+        .into_iter()
+        .enumerate()
+        .map(|(i, off)| ChapterMark {
+            offset_ms: off,
+            duration_ms: 0,
+            name: format!("Chapter {}", i + 1),
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1540,4 +1688,114 @@ mod tests {
         assert!(!status.player_name.is_empty());
         assert!(!status.player_type.is_empty());
     }
+}
+
+/// One externally-opened media item in the persistent collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalMedia {
+    pub path: String,
+    pub title: String,
+    /// "Blu-ray UHD" | "Blu-ray" | "DVD" | "ISO" | "File"
+    pub kind: String,
+    pub added_ms: i64,
+}
+
+fn external_media_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("app data dir: {e}"))?;
+    Ok(dir.join("external_media.json"))
+}
+
+fn classify_external(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let lower_name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase())
+        .unwrap_or_default();
+    if p.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("iso"))
+        .unwrap_or(false)
+    {
+        return "ISO".into();
+    }
+    if p.join("BDMV").is_dir() || p.join("bdmv").is_dir() {
+        // UHD Blu-ray is also a BDMV tree; the release name is the only
+        // reliable hint at this layer.
+        if lower_name.contains("uhd") || lower_name.contains("2160") {
+            return "Blu-ray UHD".into();
+        }
+        return "Blu-ray".into();
+    }
+    if p.join("VIDEO_TS").is_dir() || p.join("video_ts").is_dir() {
+        return "DVD".into();
+    }
+    "File".into()
+}
+
+fn read_external_store(app: &tauri::AppHandle) -> Vec<ExternalMedia> {
+    let Ok(store) = external_media_path(app) else {
+        return Vec::new();
+    };
+    std::fs::read(&store)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Result<(), String> {
+    let store = external_media_path(app)?;
+    let data = serde_json::to_vec_pretty(items).map_err(|e| e.to_string())?;
+    std::fs::write(store, data).map_err(|e| e.to_string())
+}
+
+/// Record an externally-opened item (file / disc folder / ISO) in the
+/// persistent media collection. Idempotent on `path`.
+#[tauri::command]
+pub fn add_external_media(
+    app: tauri::AppHandle,
+    path: String,
+    title: String,
+) -> Result<(), String> {
+    let mut items = read_external_store(&app);
+    if items.iter().any(|m| m.path == path) {
+        return Ok(());
+    }
+    items.push(ExternalMedia {
+        path: path.clone(),
+        title: title.trim().to_string(),
+        kind: classify_external(&path),
+        added_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    });
+    write_external_store(&app, &items)
+}
+
+/// List the collection; entries whose source path no longer exists are
+/// pruned on read ("saved as long as it's present in the original
+/// directory").
+#[tauri::command]
+pub fn list_external_media(app: tauri::AppHandle) -> Result<Vec<ExternalMedia>, String> {
+    let items = read_external_store(&app);
+    let live: Vec<ExternalMedia> = items
+        .into_iter()
+        .filter(|m| std::path::Path::new(&m.path).exists())
+        .collect();
+    let _ = write_external_store(&app, &live);
+    Ok(live)
+}
+
+/// Remove an entry explicitly (owner-initiated delete in the collection).
+#[tauri::command]
+pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let mut items = read_external_store(&app);
+    items.retain(|m| m.path != path);
+    write_external_store(&app, &items)
 }

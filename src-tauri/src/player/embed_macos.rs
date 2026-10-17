@@ -355,6 +355,22 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     let b = content.bounds();
                     (*view).setFrame(b);
                 }
+                if !hidden {
+                    // Bring the player window to key status: without this
+                    // the traffic lights render grayed out and the FIRST
+                    // click (which macOS spends on activating a
+                    // non-key window) never reaches the ✕/bar buttons.
+                    let _: () = objc2::msg_send![&*win, makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::Object>()];
+                    let app_class = objc2::runtime::Class::get(
+                        std::ffi::CString::new("NSApplication").unwrap().as_c_str(),
+                    )
+                    .unwrap();
+                    let shared: *mut objc2::runtime::Object =
+                        objc2::msg_send![app_class, sharedApplication];
+                    if !shared.is_null() {
+                        let _: () = objc2::msg_send![shared, activateIgnoringOtherApps: true];
+                    }
+                }
                 // The player window opens at 16:9 so the video fills it
                 // edge to edge; the manager/media UI restores its frame.
                 if !FULLSCREEN_ON.load(Ordering::SeqCst) {

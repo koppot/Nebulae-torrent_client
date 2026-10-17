@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { useTrackerStore } from '../../stores/trackerStore';
@@ -181,6 +181,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
   const [organizeReport, setOrganizeReport] = useState<OrganizeMediaReport | null>(null);
   const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
   const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
+  const [externalTitlePrompt, setExternalTitlePrompt] = useState<{ path: string; guess: string } | null>(null);
+  const [externalTitleInput, setExternalTitleInput] = useState('');
+  const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; kind: string }[]>([]);
+  const refreshExternalMedia = useCallback(async () => {
+    try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
+  }, []);
+  useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia]);
 
   // ADC seed-time records power the hover line ("ADC: 2.48 · Seed time: 2d 14h").
   useEffect(() => {
@@ -406,14 +413,39 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
   // Play an external/internal optical disc: the user points Nebulae at the
   // mounted DVD/Blu-ray/UHD volume; the embedded VLC engine plays it with
   // full menu navigation inside Nebulae's own window.
+  // Import asks for the title when the folder/ISO name doesn't already
+  // carry a "Name (Year)" pattern - metadata needs it (owner).
+  const titleFromName = (p: string): string | null => {
+    const name = p.split('/').filter(Boolean).pop() || p;
+    const m = name.match(/^(.+?)\s*\((\d{4})\)\s*$/);
+    return m ? `${m[1]} (${m[2]})` : null;
+  };
+  const importExternal = async (p: string) => {
+    const known = titleFromName(p);
+    if (known) {
+      await openInPlayer(p, { displayTitle: known });
+    } else {
+      setExternalTitlePrompt({ path: p, guess: (p.split('/').filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
+    }
+  };
   const handlePlayExternalDisc = async () => {
     setExternalDiscError(null);
     try {
       const folder = await selectSourceFolder();
       if (!folder) return;
-      await openInPlayer(folder);
+      await importExternal(folder);
     } catch (err: unknown) {
       setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+    }
+  };
+  const handlePlayExternalIso = async () => {
+    setExternalDiscError(null);
+    try {
+      const iso = await invoke<string | null>('select_iso_file');
+      if (!iso) return;
+      await importExternal(iso);
+    } catch (err: unknown) {
+      setExternalDiscError(errorMessage(err, 'Could not launch the disc image.'));
     }
   };
 
@@ -748,12 +780,121 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
             <Disc className="w-4 h-4 text-[#e50914]" />
             <span>Play External Disc</span>
           </button>
+
+          <button
+            onClick={handlePlayExternalIso}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs font-semibold transition"
+            title="Play a DVD/Blu-ray ISO disc image with the bundled Nebulae player"
+          >
+            <Disc className="w-4 h-4 text-[#e50914]" />
+            <span>Play ISO</span>
+          </button>
         </div>
       </div>
 
       {externalDiscError && (
         <div className="p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
           {externalDiscError}
+        </div>
+      )}
+
+      {/* Import title prompt (owner): asked when the imported folder/ISO
+          name carries no "Name (Year)" pattern, so metadata resolves. */}
+      {externalTitlePrompt && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70">
+          <div className="w-[380px] p-5 rounded-xl bg-[#141414] border border-[#333333] shadow-2xl space-y-3">
+            <h3 className="text-sm font-semibold text-white">Name this title</h3>
+            <p className="text-[11px] text-[#a3a3a3]">
+              The folder name does not contain a movie name and year. Enter it as
+              <span className="text-white"> Name (Year)</span> so metadata is imported correctly.
+            </p>
+            <input
+              autoFocus
+              value={externalTitleInput || externalTitlePrompt.guess}
+              onChange={(e) => setExternalTitleInput(e.target.value)}
+              placeholder="e.g. Fuuka (2017)"
+              className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#333333] text-xs text-white focus:outline-none focus:border-[#e50914]/60"
+              onKeyDown={async (e) => {
+                if (e.key !== 'Enter') return;
+                const title = (externalTitleInput || externalTitlePrompt.guess).trim();
+                const { path } = externalTitlePrompt;
+                setExternalTitlePrompt(null);
+                setExternalTitleInput('');
+                try {
+                  await openInPlayer(path, { displayTitle: title || undefined });
+                  void refreshExternalMedia();
+                } catch (err) {
+                  setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                }
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setExternalTitlePrompt(null); setExternalTitleInput(''); }}
+                className="px-3 py-1.5 rounded-lg text-xs text-[#a3a3a3] hover:text-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const title = (externalTitleInput || externalTitlePrompt.guess).trim();
+                  const { path } = externalTitlePrompt;
+                  setExternalTitlePrompt(null);
+                  setExternalTitleInput('');
+                  try {
+                    await openInPlayer(path, { displayTitle: title || undefined });
+                    void refreshExternalMedia();
+                  } catch (err) {
+                    setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#e50914]/90 text-xs font-semibold text-white transition"
+              >
+                Play
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* External media collection (owner): below the downloaded section;
+          entries persist while their source path exists. */}
+      {externalMedia.length > 0 && (
+        <div className="mt-8">
+          <h3 className="text-sm font-semibold text-white/80 mb-3">External Media</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {externalMedia.map((m) => (
+              <div key={m.path} className="group relative">
+                <button
+                  onClick={async () => {
+                    try {
+                      await openInPlayer(m.path, { displayTitle: m.title });
+                      void refreshExternalMedia();
+                    } catch (err) {
+                      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                    }
+                  }}
+                  onContextMenu={async (e) => {
+                    e.preventDefault();
+                    try {
+                      await invoke('remove_external_media', { path: m.path });
+                      void refreshExternalMedia();
+                    } catch { /* best-effort */ }
+                  }}
+                  className="w-full text-left rounded-lg overflow-hidden bg-[#141414] border border-[#262626] hover:border-[#e50914]/50 transition"
+                  title={`${m.title} — ${m.kind} (right-click to remove)`}
+                >
+                  <div className="aspect-[2/3] flex items-center justify-center bg-[#0d0d0d]">
+                    <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                  </div>
+                  <div className="p-2">
+                    <div className="text-[11px] font-medium text-white truncate">{m.title}</div>
+                    <div className="text-[10px] text-[#a3a3a3]">{m.kind}</div>
+                  </div>
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

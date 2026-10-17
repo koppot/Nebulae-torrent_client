@@ -70,6 +70,15 @@ struct BdTitleInfo {
     sdr_conversion_notification_flag: c_uchar,
 }
 
+/// libbluray's BLURAY_TITLE_CHAP: one chapter of a playlist. `start` is
+/// 90 kHz ticks from the title start.
+#[repr(C)]
+struct BdTitleChap {
+    clip_ref: c_uint,
+    start: u64,
+    duration: u64,
+}
+
 /// Locate and open the libbluray dylib (bundled first, then Homebrew).
 unsafe fn open_bluray_lib() -> Result<Library, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -230,5 +239,104 @@ pub fn disc_stream_languages(
         }
         bd_close(bd);
         Ok((audio, subs))
+    }
+}
+
+
+/// Chapter start offsets (ms from title start) for the title whose
+/// duration matches `duration_ms` — same title selection as
+/// `disc_stream_languages`. VLC's own chapter API reports nothing for
+/// Blu-ray titles, so the seek bar's chapter ticks come from here.
+pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64>, String> {
+    unsafe {
+        let lib = open_bluray_lib()?;
+        let bd_open: Symbol<
+            unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void,
+        > = lib.get(b"bd_open").map_err(|e| e.to_string())?;
+        let bd_get_titles: Symbol<
+            unsafe extern "C" fn(*mut c_void, c_uchar, c_uint) -> c_int,
+        > = lib.get(b"bd_get_titles").map_err(|e| e.to_string())?;
+        let bd_get_title_info: Symbol<
+            unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut BdTitleInfo,
+        > = lib.get(b"bd_get_title_info").map_err(|e| e.to_string())?;
+        let bd_free_title_info: Symbol<unsafe extern "C" fn(*mut BdTitleInfo)> =
+            lib.get(b"bd_free_title_info").map_err(|e| e.to_string())?;
+        let bd_close: Symbol<unsafe extern "C" fn(*mut c_void)> = lib.get(b"bd_close").map_err(|e| e.to_string())?;
+
+        let cpath = std::ffi::CString::new(disc_path).map_err(|e| e.to_string())?;
+        let bd = bd_open(cpath.as_ptr(), std::ptr::null());
+        if bd.is_null() {
+            return Err("bd_open failed".into());
+        }
+        let count = bd_get_titles(bd, 0, 999);
+        let mut best_match: Option<(i64, *mut BdTitleInfo)> = None;
+        let mut most_audio: Option<(u8, *mut BdTitleInfo)> = None;
+        for i in 0..count {
+            let info = bd_get_title_info(bd, i as c_uint, 0);
+            if info.is_null() {
+                continue;
+            }
+            let ti = &*info;
+            // Playlist duration is 90 kHz ticks → ms.
+            let dur_ms = (ti.duration / 90) as i64;
+            let diff = (dur_ms - duration_ms).abs();
+            if best_match.map(|(b, _)| diff < b).unwrap_or(true) {
+                best_match = Some((diff, info));
+            }
+            if !ti.clips.is_null() && ti.clip_count > 0 {
+                // Same feature-identification scoring as the language
+                // probe: distinct audio languages on the best clip.
+                let mut best_clip = (0u8, 0usize);
+                for k in 0..ti.clip_count {
+                    let c = &*ti.clips.add(k as usize);
+                    let mut codes: Vec<String> = Vec::new();
+                    for j in 0..c.audio_stream_count as usize {
+                        let st = &*c.audio_streams.add(j);
+                        codes.push(lang_name(&st.lang));
+                    }
+                    codes.sort();
+                    codes.dedup();
+                    let distinct = codes.len() as u32;
+                    if distinct as u64 > best_clip.0 as u64
+                        || (distinct as u64 == best_clip.0 as u64
+                            && c.audio_stream_count as usize > best_clip.1)
+                    {
+                        best_clip = (distinct as u8, c.audio_stream_count as usize);
+                    }
+                }
+                if most_audio
+                    .map(|(m, _)| best_clip.0 > m || (best_clip.0 == m && best_clip.1 > 0))
+                    .unwrap_or(true)
+                {
+                    most_audio = Some((best_clip.0, info));
+                }
+            } else {
+                bd_free_title_info(info);
+            }
+        }
+        let chosen: Option<*mut BdTitleInfo> = if duration_ms > 0 {
+            best_match
+                .filter(|(diff, _)| *diff <= 5000)
+                .map(|(_, i)| i)
+                .or_else(|| most_audio.map(|(_, i)| i))
+        } else {
+            most_audio.map(|(_, i)| i)
+        };
+        let mut offsets: Vec<i64> = Vec::new();
+        if let Some(info) = chosen {
+            let ti = &*info;
+            if !ti.chapters.is_null() && ti.chapter_count > 0 {
+                for k in 0..ti.chapter_count as usize {
+                    let ch = &*(ti.chapters as *const BdTitleChap).add(k);
+                    // 90 kHz ticks → ms.
+                    offsets.push((ch.start / 90) as i64);
+                }
+                offsets.sort_unstable();
+                offsets.dedup();
+            }
+            bd_free_title_info(info);
+        }
+        bd_close(bd);
+        Ok(offsets)
     }
 }

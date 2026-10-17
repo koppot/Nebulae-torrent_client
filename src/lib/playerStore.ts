@@ -81,6 +81,23 @@ export async function openInPlayer(
   });
   if (!info.external) {
     playerStore.open(info, opts?.displayTitle);
+    // Media collection (owner): every externally-opened item is saved as a
+    // persistent title, EXCEPT anything inside a downloaded torrent's
+    // folder - those already appear as downloaded cards.
+    try {
+      const { useTorrentStore } = await import('../stores/torrentStore');
+      const inDownload = useTorrentStore
+        .getState()
+        .torrents.some((t) => t.save_path && info.resolved_path.startsWith(t.save_path));
+      if (!inDownload) {
+        invoke('add_external_media', {
+          path: info.resolved_path,
+          title: opts?.displayTitle || info.title,
+        }).catch(() => {});
+      }
+    } catch {
+      /* collection is best-effort */
+    }
     if (info.is_disc && resume && seekTo >= 10000) {
       void seekWhenFeatureStarts(seekTo);
     }

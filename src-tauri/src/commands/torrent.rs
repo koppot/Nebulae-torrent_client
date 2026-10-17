@@ -850,6 +850,49 @@ pub async fn reset_kill_switch_command(engine: State<'_, SharedEngine>) -> Resul
     engine.reset_kill_switch()
 }
 
+/// Pick a disc image (ISO) for external playback. Any file can be chosen;
+/// the caller validates the extension.
+#[tauri::command]
+pub async fn select_iso_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose file with prompt "Select a disc image (ISO)")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| format!("picker join error: {e}"))?
+    .map(|v: Option<String>| v.filter(|p| {
+        std::path::Path::new(p)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("iso"))
+            .unwrap_or(false)
+    }))
+}
+
 #[tauri::command]
 pub async fn select_source_folder() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(|| {
