@@ -314,7 +314,10 @@ export default function PlayerOverlay() {
     if (!player.open || !player.isDisc || poll.title === 0 || poll.length_ms <= 0) return;
     let alive = true;
     const tryFetch = (retriesLeft: number) => {
-      invoke<[string[], string[]]>('player_track_languages', { durationMs: Math.round(poll.length_ms) })
+      invoke<[string[], string[]]>('player_track_languages', {
+        durationMs: Math.round(poll.length_ms),
+        title: poll.title,
+      })
         .then(([a, s]) => {
           if (!alive) return;
           // Only overwrite when the probe actually identified the title;
@@ -653,6 +656,12 @@ export default function PlayerOverlay() {
         className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        // Black glow so the bar stays readable over bright video (the bar
+        // itself is background-less and floats over the native video).
+        style={{
+          filter:
+            'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
+        }}
       >
         <div className="px-4 py-3 flex items-center gap-2.5">
           {/* The current disc, by number (owner: "Disc 1", never a filename),

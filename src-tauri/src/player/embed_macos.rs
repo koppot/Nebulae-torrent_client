@@ -129,6 +129,18 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
 static SAVED_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// Whether the player window is currently in our manual fullscreen.
 static FULLSCREEN_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Window frame saved while the player reshapes the window to 16:9.
+static PLAYER_FRAME_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe fn restore_player_window_frame(win: &NSWindow) {
+    let raw = PLAYER_FRAME_BOX.load(Ordering::SeqCst) as *mut NSRect;
+    if !raw.is_null() {
+        let f = *raw;
+        let _: () = objc2::msg_send![win, setFrame: f display: true];
+        let _ = Box::from_raw(raw);
+        PLAYER_FRAME_BOX.store(0, Ordering::SeqCst);
+    }
+}
 
 /// Enter/leave fullscreen for the borderless player window by moving the
 /// frame only. The native toggleFullScreen: animation ignores borderless
@@ -342,6 +354,26 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 if let Some(content) = win.contentView() {
                     let b = content.bounds();
                     (*view).setFrame(b);
+                }
+                // The player window opens at 16:9 so the video fills it
+                // edge to edge; the manager/media UI restores its frame.
+                if !FULLSCREEN_ON.load(Ordering::SeqCst) {
+                    if hidden {
+                        restore_player_window_frame(&win);
+                    } else {
+                        let f = win.frame();
+                        let ptr = Box::into_raw(Box::new(f));
+                        let old = PLAYER_FRAME_BOX.swap(ptr as usize, Ordering::SeqCst) as *mut NSRect;
+                        if !old.is_null() {
+                            let _ = Box::from_raw(old);
+                        }
+                        let new_h = f.size.width * 9.0 / 16.0;
+                        let new_frame = NSRect::new(
+                            NSPoint::new(f.origin.x, f.origin.y + (f.size.height - new_h)),
+                            NSSize::new(f.size.width, new_h),
+                        );
+                        let _: () = objc2::msg_send![&*win, setFrame: new_frame display: true];
+                    }
                 }
             }
         }

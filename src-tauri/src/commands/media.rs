@@ -629,21 +629,36 @@ pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), 
     Ok(())
 }
 
-/// Audio/subtitle language names for the CURRENT title, read from the disc
-/// playlists via libbluray (VLC mislabels streams from CLIPINFO metadata on
-/// some discs). `duration_ms` is the current title's duration (poll).
+/// Audio/subtitle language names for the CURRENT title. Blu-ray: read from
+/// the disc playlists via libbluray (VLC mislabels streams from CLIPINFO
+/// metadata on some discs), matched by `duration_ms`. DVD: read from the
+/// IFO tables, where `title` (the VLC title index) maps directly to a
+/// title set - libbluray does not cover DVDs at all.
 #[tauri::command]
 pub async fn player_track_languages(
     state: tauri::State<'_, PlayerState>,
     duration_ms: i64,
+    title: Option<i64>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let path = poison(&state.current_path).clone().unwrap_or_default();
-    if path.is_empty() || duration_ms <= 0 {
+    if path.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let r = player::bluray_meta::disc_stream_languages(&path, duration_ms);
-    tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
-    r
+    let video_ts_ifo = std::path::Path::new(&path).join("VIDEO_TS").join("VIDEO_TS.IFO");
+    let is_dvd = video_ts_ifo.is_file()
+        || std::path::Path::new(&path).join("VIDEO_TS.IFO").is_file();
+    if is_dvd {
+        let t = title.unwrap_or(1);
+        tracing::info!("[player] track languages (dvd, title {t})");
+        player::dvd_meta::disc_stream_languages_dvd(&path, t)
+    } else {
+        if duration_ms <= 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let r = player::bluray_meta::disc_stream_languages(&path, duration_ms);
+        tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
+        r
+    }
 }
 
 #[tauri::command]

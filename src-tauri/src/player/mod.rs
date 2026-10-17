@@ -20,6 +20,7 @@ pub use embed_macos::{
     toggle_fullscreen,
 };
 pub mod bluray_meta;
+pub mod dvd_meta;
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{ensure_overlay, set_overlay_hidden, sync_frame};
