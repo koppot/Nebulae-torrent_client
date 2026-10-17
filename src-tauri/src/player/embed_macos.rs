@@ -315,6 +315,11 @@ unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
 }
 
 /// Show/hide the overlay without tearing the view down.
+///
+/// Waits for the main thread to apply the change: callers are the async
+/// VLC lifecycle commands, and the vout must never attach to a view that
+/// is still hidden (a dead black rectangle). Never call from the main
+/// thread itself — the wait would deadlock.
 pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     let view_ptr = app
         .state::<crate::player::PlayerState>()
@@ -324,6 +329,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         return Ok(());
     }
     let app2 = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
     app.run_on_main_thread(move || unsafe {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
@@ -340,8 +346,11 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
         }
+        let _ = tx.send(());
     })
-    .map_err(|e| format!("main thread unavailable: {e}"))
+    .map_err(|e| format!("main thread unavailable: {e}"))?;
+    rx.recv()
+        .map_err(|_| "main thread callback lost".to_string())
 }
 
 /// Position the overlay to match a frontend placeholder rect.
