@@ -311,7 +311,10 @@ export default function PlayerOverlay() {
     subs: [],
   });
   useEffect(() => {
-    if (!player.open || !player.isDisc || poll.title === 0 || poll.length_ms <= 0) return;
+    // A resume opens the feature FILE directly (isDisc false), so the gate
+    // must not require a disc - only the disc's menu title (0) is skipped,
+    // because a menu has no duration to match against the playlists.
+    if (!player.open || (player.isDisc && poll.title === 0) || poll.length_ms <= 0) return;
     let alive = true;
     const tryFetch = (retriesLeft: number) => {
       invoke<[string[], string[]]>('player_track_languages', {
