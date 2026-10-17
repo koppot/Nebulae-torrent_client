@@ -6,7 +6,7 @@ import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { resolvePoster } from '../../lib/posters';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { openInPlayer, resumeInPlayer, savedPositionMs } from '../../lib/playerStore';
+import { openInPlayer, resumeInPlayer, savedPositionMs, savePositionMs } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -591,41 +591,54 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           e.preventDefault();
           setCtxMenu({ x: e.clientX, y: e.clientY, groupId: group.id, itemId: currentItem.id });
         }}
-        className="group relative rounded-lg cursor-pointer w-[114px] flex-shrink-0"
+        className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
       >
         <div className="rounded-lg overflow-hidden">
           <div className="aspect-[660/800] w-full bg-[#141414] relative overflow-hidden">
             {posterArt}
 
             {/* Hover: only Play (or Resume) + Details, floating on the
-                poster — no panel background, no data (owner). */}
+                poster side by side — no panel background, no data (owner).
+                The primary button reads "Resume" only when a restore
+                position is actually saved; otherwise it reads "Play".
+                The startup-mode preference ("from the beginning") makes it
+                a fresh play and drops the saved position. */}
             {hoveredId === group.id && (
-              <div className="absolute inset-x-0 bottom-0 p-2 flex flex-col justify-end gap-1.5">
-                {resumePath && !isDownloading ? (
-                  <button
-                    onClick={() => handleResumeDisc(group.id, resumePath)}
-                    className="px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
-                    title="Resume the last-played disc past its menu"
-                  >
-                    <Play className="w-3 h-3 fill-black" />
-                    <span>Resume</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handlePlayDisc(effDisc.torrent, group.id, effDisc.path)}
-                    className="px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
-                    title="Play (interactive disc menus)"
-                  >
-                    <Play className="w-3 h-3 fill-black" />
-                    <span>Play</span>
-                  </button>
-                )}
+              <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
+                {(() => {
+                  const savedMs = resumePath ? savedPositionMs(resumePath) : 0;
+                  const startMode =
+                    localStorage.getItem('nebulae_pref_start_mode') || 'resume';
+                  const canResume = savedMs >= 10000 && startMode === 'resume' && !isDownloading;
+                  const onPrimary = () => {
+                    if (!canResume) {
+                      if (resumePath) savePositionMs(resumePath, 0);
+                      handlePlayDisc(effDisc.torrent, group.id, effDisc.path);
+                    } else {
+                      handleResumeDisc(group.id, resumePath as string);
+                    }
+                  };
+                  return (
+                    <button
+                      onClick={onPrimary}
+                      className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                      title={
+                        canResume
+                          ? 'Resume the last-played disc past its menu'
+                          : 'Play (interactive disc menus)'
+                      }
+                    >
+                      <Play className="w-3 h-3 fill-black" />
+                      <span>{canResume ? 'Resume' : 'Play'}</span>
+                    </button>
+                  );
+                })()}
                 <button
                   onClick={() => openDetailsPopup(group.id, currentItem)}
-                  className="px-2 py-1.5 rounded-md border border-[#555555] text-[#e5e5e5] text-[11px] font-medium hover:bg-[#262626] hover:text-white transition"
+                  className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
                   title="Name, year, duration, disc sizes and summary"
                 >
-                  Details
+                  Episodes
                 </button>
               </div>
             )}
@@ -634,7 +647,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           {/* Title on the midline BELOW the poster (owner). */}
           <div className="pt-2">
             <h4
-              className="text-[12px] font-medium text-white text-center truncate leading-tight"
+              className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
               title={group.clean_title}
             >
               {group.clean_title}

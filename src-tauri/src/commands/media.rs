@@ -767,6 +767,48 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
     Ok(())
 }
 
+/// Toggle macOS fullscreen on the player window natively. The window-
+/// manager route (Tauri set_fullscreen) and the CSS-side call both failed
+/// silently on this borderless window; NSWindow.toggleFullScreen is the
+/// reliable path. Corner radius follows the fullscreen state (owner: 3 px
+/// in the player, 0 in fullscreen).
+#[tauri::command]
+pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let app2 = app.clone();
+    let app1 = app.clone();
+    app1.run_on_main_thread(move || unsafe {
+        let Some(win) = app.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        let ns_win = raw as *mut objc2::runtime::AnyObject;
+        let _: () = objc2::msg_send![ns_win, toggleFullScreen: std::ptr::null::<objc2::runtime::AnyObject>()];
+        // The fullscreen animation takes a moment; settle the corner radius
+        // once it completes (0 in fullscreen, 3 px in the player window).
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let app3 = app2.clone();
+            let _ = app2.run_on_main_thread(move || {
+                let Some(win) = app3.get_webview_window("main") else {
+                    return;
+                };
+                let Ok(raw) = win.ns_window() else {
+                    return;
+                };
+                let ns_win = raw as *mut objc2::runtime::AnyObject;
+                let mask: u64 = objc2::msg_send![ns_win, styleMask];
+                const FULLSCREEN: u64 = 1 << 14; // NSWindowStyleMaskFullScreen
+                let radius = if mask & FULLSCREEN != 0 { 0.0 } else { 3.0 };
+                crate::player::set_window_corner_radius(&app3, radius).ok();
+            });
+        });
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
 #[tauri::command]
 pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), String> {
     let mp = *poison(&state.media_player);

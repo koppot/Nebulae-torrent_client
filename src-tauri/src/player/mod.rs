@@ -15,7 +15,7 @@
 pub mod engine;
 
 #[cfg(target_os = "macos")]
-pub use embed_macos::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_macos::{ensure_overlay, set_overlay_hidden, set_window_corner_radius, sync_frame};
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{ensure_overlay, set_overlay_hidden, sync_frame};

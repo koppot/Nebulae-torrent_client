@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
+import { usePlayerStore } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
@@ -29,6 +30,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
+  const playerOpen = usePlayerStore().open;
   const { loadSettings, fetchEngineMode } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
@@ -229,8 +231,15 @@ export const App: React.FC = () => {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="relative flex flex-col h-screen w-screen bg-[#141414] text-white overflow-hidden font-sans select-none"
+      className={`relative flex flex-col h-screen w-screen text-white overflow-hidden font-sans select-none ${
+        playerOpen ? '' : 'bg-[#141414]'
+      }`}
     >
+      {/* The embedded player replaces the whole interface: the video is the
+          native view UNDER this transparent webview, so nothing opaque may
+          be painted behind it. */}
+      {!playerOpen && (
+        <>
       {/* 1. Splash Screen */}
       {!splashDismissed && <SplashScreen />}
 
@@ -246,6 +255,8 @@ export const App: React.FC = () => {
 
       {/* 4. Bottom Desktop Application Status Bar */}
       <StatusBar />
+        </>
+      )}
 
       {/* 4. Drag & Drop Full-Window Visual Overlay */}
       {isDragging && (

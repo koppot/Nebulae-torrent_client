@@ -121,6 +121,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     let raw = win.ns_window().map_err(|e| format!("no NSWindow: {e}"))?;
+    let webview_raw = win.ns_view().map_err(|e| format!("no NSView: {e}"))?;
     unsafe {
         let ns_win: *mut NSWindow = raw as *mut NSWindow;
         if ns_win.is_null() {
@@ -134,7 +135,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         // webview and the video overlay to the same radius.
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
-            layer.setCornerRadius(12.0);
+            layer.setCornerRadius(3.0);
             layer.setMasksToBounds(true);
         }
         let bounds = content.bounds();
@@ -144,10 +145,45 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         view.setFrame(bounds);
         view.setWantsLayer(true);
         view.setHidden(true);
-        content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Above, None);
+        // The video view sits BELOW the webview (owner: controls must float
+        // OVER the video). The webview is transparent, so the video shows
+        // through wherever the DOM paints nothing; controls and popovers
+        // render and stay clickable above it.
+        let webview_ptr = webview_raw as *mut NSView;
+        assert!(!webview_ptr.is_null(), "webview NSView is null");
+        let webview = &*webview_ptr;
+        content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(webview));
         // Intentionally leak one overlay view for the process lifetime;
         // repeated play/stop reuses it.
         Ok(Retained::into_raw(view) as usize)
+    }
+}
+
+/// Round the window corners (owner): 1.5 px for the media-tab UI, 3 px
+/// while the player is up, 0 in fullscreen.
+pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), String> {
+    let app2 = app.clone();
+    app.run_on_main_thread(move || unsafe {
+        apply_window_corner_radius(&app2, radius);
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
+unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(raw) = win.ns_window() else {
+        return;
+    };
+    let ns_win = raw as *mut NSWindow;
+    let Some(content) = (*ns_win).contentView() else {
+        return;
+    };
+    content.setWantsLayer(true);
+    if let Some(layer) = content.layer() {
+        layer.setCornerRadius(radius);
+        layer.setMasksToBounds(true);
     }
 }
 
@@ -160,17 +196,13 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     if view_ptr == 0 {
         return Ok(());
     }
+    let app2 = app.clone();
     app.run_on_main_thread(move || unsafe {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
             (*view).setHidden(hidden);
-            if !hidden {
-                // Take keyboard focus so arrow keys / space / F / M reach
-                // the overlay's keyDown handler (keyboard controls).
-                if let Some(win) = (*view).window() {
-                    let _: bool = objc2::msg_send![&*win, makeFirstResponder: view];
-                }
-            }
+            // Player window: 3 px corners; back to 1.5 px for the media UI.
+            apply_window_corner_radius(&app2, if hidden { 1.5 } else { 3.0 });
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))

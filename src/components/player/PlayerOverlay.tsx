@@ -11,6 +11,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  RotateCw,
   Volume2,
   VolumeX,
   X,
@@ -125,6 +126,11 @@ export default function PlayerOverlay() {
   const [subTracks, setSubTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Auto-hide (owner): controls fade out during playback and return on any
+  // mouse movement. Kept visible while paused, at the disc menu, on the
+  // end screen, or while a popover is open.
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const hideTimerRef = useRef<number | null>(null);
   // Chapter marks: real per-chapter time offsets for the current title.
   const [chapterMarks, setChapterMarks] = useState<{ offset_ms: number; duration_ms: number; name: string }[]>([]);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
@@ -242,8 +248,17 @@ export default function PlayerOverlay() {
         }
         case 'f':
         case 'F': {
-          const win = getCurrentWindow();
-          win.isFullscreen().then((fs) => win.setFullscreen(!fs)).catch(() => {});
+          invoke('player_toggle_fullscreen').catch(() => {});
+          break;
+        }
+        case 'a':
+        case 'A': {
+          void cycleTrack('audio');
+          break;
+        }
+        case 's':
+        case 'S': {
+          void cycleTrack('subtitle');
           break;
         }
         case 'm':
@@ -261,7 +276,7 @@ export default function PlayerOverlay() {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M']);
+      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
       handle(e.key);
@@ -347,6 +362,31 @@ export default function PlayerOverlay() {
     };
   }, []);
 
+  // Control-bar auto-hide (owner): any mouse movement shows the controls;
+  // they fade after 3 s once playback is running. Paused playback, the
+  // disc menu, the end screen and open popovers keep them visible.
+  const popoverOpen = showDiscs || showSubs || showAudio || showVolume;
+  useEffect(() => {
+    if (!player.open) return;
+    const bump = () => {
+      setControlsVisible(true);
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3000);
+    };
+    bump();
+    window.addEventListener('mousemove', bump);
+    return () => {
+      window.removeEventListener('mousemove', bump);
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    };
+  }, [player.open]);
+  useEffect(() => {
+    if (popoverOpen || !poll.playing || poll.title === 0 || ended) {
+      setControlsVisible(true);
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    }
+  }, [popoverOpen, poll.playing, poll.title, ended]);
+
   // Preferred audio/subtitle languages (owner, "media player preferences"
   // on the media screen): stored by SimpleMediaView, applied automatically
   // once the feature title engages. Codes like "en,ja"; track names carry
@@ -408,7 +448,36 @@ export default function PlayerOverlay() {
   };
 
   const togglePause = () => {
+    // At the disc menu the Play button means "play all": start the first
+    // feature title directly (the old "Play All" pill, merged into Play).
+    if (player.isDisc && pollRef.current.title === 0) {
+      invoke('player_set_title', { title: 1 }).catch(() => {});
+      return;
+    }
     invoke('player_toggle_pause').catch(() => {});
+  };
+
+  // Cycle to the next audio / subtitle track (owner: keys A and S). Wraps
+  // around; the fresh track lists also refresh the popover contents.
+  const cycleTrack = async (kind: 'audio' | 'subtitle') => {
+    try {
+      const tracks = await invoke<{ id: number; name: string; active: boolean }[]>(
+        'player_list_tracks',
+        { kind },
+      );
+      if (tracks.length === 0) return;
+      const idx = tracks.findIndex((t) => t.active);
+      const next = tracks[(idx + 1) % tracks.length];
+      await invoke('player_set_track', { kind, id: next.id });
+      const refreshed = await invoke<{ id: number; name: string; active: boolean }[]>(
+        'player_list_tracks',
+        { kind },
+      );
+      if (kind === 'audio') setAudioTracks(refreshed);
+      else setSubTracks(refreshed);
+    } catch {
+      // Track cycling is best-effort.
+    }
   };
 
   const replay = () => {
@@ -446,6 +515,18 @@ export default function PlayerOverlay() {
     window.setTimeout(() => setSeeking(null), 400);
   };
 
+  // Volume from a pointer position on the custom vertical track.
+  const volumeFromPointer = (clientY: number) => {
+    const el = document.querySelector('[data-testid="volume-track"]') as HTMLElement | null;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, 1 - (clientY - rect.top) / rect.height));
+    const v = Math.round(frac * 100);
+    setVolume(v);
+    setMuted(false);
+    invoke('player_set_volume', { volume: v }).catch(() => {});
+  };
+
   // Window drag + double-click fullscreen (owner requests): the overlay
   // covers the whole undecorated window, so nothing else offers a drag
   // region. (Superseded by the native NSView subclass in embed_macos.rs,
@@ -469,11 +550,14 @@ export default function PlayerOverlay() {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black flex flex-col select-none">
-      {/* Video hole: the native overlay shows through this exact rect. */}
+    <div className="fixed inset-0 z-[100] flex flex-col select-none" style={{ background: 'transparent' }}>
+      {/* Video hole: the native video view sits BELOW this transparent
+          webview, so the video shows through and the control bar floats
+          OVER the video (owner: no playbar background). The hole spans the
+          entire window; the webview paints only the controls. */}
       <div
         ref={holderRef}
-        className="flex-1 min-h-0"
+        className="absolute inset-0"
         onMouseDown={onVideoPointerDown}
         onDoubleClick={onVideoDoubleClick}
       />
@@ -491,13 +575,14 @@ export default function PlayerOverlay() {
         </div>
       )}
 
-      {/* Nebulae control bar. Popups render INSIDE the bar, as a row above
-          the buttons: the native video overlay covers the whole webview area
-          above this bar, so absolutely-positioned popovers there render
-          BEHIND the video (invisible, unclickable). When a popup opens the
-          bar grows, the video hole shrinks, and the ResizeObserver re-syncs
-          the native view to the smaller rect. */}
-      <div className="shrink-0 bg-transparent">
+      {/* Nebulae control bar: floats over the video — the native video
+          view sits BELOW the transparent webview, so the bar, its popovers
+          and track menus all render above the video and stay clickable. */}
+      <div
+        className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
         {/* Disc switcher row: every disc of the playing release, by number. */}
         {showDiscs && discChoices && discChoices.length > 1 && (
           <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto space-y-1">
@@ -586,18 +671,9 @@ export default function PlayerOverlay() {
               >
                 Select
               </button>
-              {/* Play All: jumps straight to the first feature title, bypassing
-                  menu navigation entirely — one click, deterministic. */}
-              {poll.title_count > 1 && (
-                <button
-                  type="button"
-                  onClick={() => invoke('player_set_title', { title: 1 }).catch(() => {})}
-                  className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
-                  title="Start playing the feature (title 1) without navigating the menu"
-                >
-                  Play All
-                </button>
-              )}
+              {/* (The old "Play All" pill was removed per owner: the regular
+                  Play button below starts the feature straight from the
+                  menu.) */}
             </div>
           )}
 
@@ -630,7 +706,13 @@ export default function PlayerOverlay() {
           type="button"
           onClick={togglePause}
           className="p-1.5 rounded hover:bg-[#262626] text-white transition"
-          title={poll.playing ? 'Pause' : 'Play'}
+          title={
+            player.isDisc && poll.title === 0
+              ? 'Play — start the feature from the menu'
+              : poll.playing
+                ? 'Pause'
+                : 'Play'
+          }
         >
           {poll.playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
         </button>
@@ -663,23 +745,47 @@ export default function PlayerOverlay() {
         {/* Seek bar (owner): a thin bar that fills gradually as the title
             progresses, with real chapter offsets drawn as vertical ticks.
             Click / drag anywhere on the track to seek. */}
-        <div
-          className="relative flex-1 flex items-center h-5 group/bar cursor-pointer"
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
-            seekFromPointer(e.clientX);
-          }}
-          onPointerMove={(e) => {
-            if (e.buttons & 1) seekFromPointer(e.clientX);
-          }}
+        <div className="relative flex-1 flex flex-col justify-end gap-1 group/bar">
+          {/* Skip-10 buttons (owner): small round graphics right above the
+              progress bar — rotate-left/right arrows with the seconds
+              marked inside. */}
+          <div className="flex items-center justify-end gap-1">
+            <button
+              type="button"
+              onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
+              className="relative p-1 rounded-full text-[#d4d4d4] hover:text-white hover:bg-white/10 transition"
+              title="Back 10 seconds"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => invoke('player_seek', { positionMs: dur > 0 ? Math.min(pos + 10000, dur) : pos + 10000 }).catch(() => {})}
+              className="relative p-1 rounded-full text-[#d4d4d4] hover:text-white hover:bg-white/10 transition"
+              title="Forward 10 seconds"
+            >
+              <RotateCw className="w-4 h-4" />
+              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
+            </button>
+          </div>
+          <div
+            className="relative flex items-center h-3 cursor-pointer"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              seekFromPointer(e.clientX);
+            }}
+            onPointerMove={(e) => {
+              if (e.buttons & 1) seekFromPointer(e.clientX);
+            }}
         >
           <div
             data-testid="seek-track"
             className="relative w-full h-[3px] rounded-full bg-white/25 overflow-visible"
           >
-            {/* Gradual fill */}
+            {/* Gradual fill (owner: grey, not red) */}
             <div
-              className="absolute left-0 top-0 h-full rounded-full bg-[#e50914]"
+              className="absolute left-0 top-0 h-full rounded-full bg-[#9a9a9a]"
               style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
             {/* Chapter marks: vertical ticks at the real chapter offsets */}
@@ -696,6 +802,7 @@ export default function PlayerOverlay() {
               className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
               style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
+          </div>
           </div>
         </div>
         <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
@@ -715,19 +822,24 @@ export default function PlayerOverlay() {
           </button>
           {showVolume && (
             <div className="absolute bottom-9 right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-32">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={volume}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setVolume(v);
-                  setMuted(false);
-                  invoke('player_set_volume', { volume: v }).catch(() => {});
+              {/* Thin vertical track (owner): white line filled with grey,
+                  same styling as the seek bar. Drag / click to set. */}
+              <div
+                data-testid="volume-track"
+                className="relative w-[3px] h-24 rounded-full bg-white/25 cursor-pointer"
+                onPointerDown={(e) => {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  volumeFromPointer(e.clientY);
                 }}
-                className="accent-[#e50914] w-1 h-24 [writing-mode:vertical-lr] [direction:rtl]"
-              />
+                onPointerMove={(e) => {
+                  if (e.buttons & 1) volumeFromPointer(e.clientY);
+                }}
+              >
+                <div
+                  className="absolute bottom-0 left-0 w-full rounded-full bg-[#9a9a9a]"
+                  style={{ height: `${volume}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -744,10 +856,10 @@ export default function PlayerOverlay() {
               }
               setShowSubs((v) => !v);
             }}
-            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate w-[86px] text-center border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition"
             title="Subtitles"
           >
-            Subs
+            Subtitles
           </button>
           {showSubs && (
             <div className="absolute bottom-9 right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 space-y-0.5">
@@ -783,7 +895,7 @@ export default function PlayerOverlay() {
               }
               setShowAudio((v) => !v);
             }}
-            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate w-[86px] text-center border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition"
             title="Audio tracks"
           >
             Audio
@@ -816,27 +928,27 @@ export default function PlayerOverlay() {
         {/* Fullscreen (owner): explicit button in the bar, right-hand side. */}
         <button
           type="button"
-          onClick={() => {
-            const win = getCurrentWindow();
-            win.setFullscreen(!isFullscreen).catch(() => {});
-            setIsFullscreen(!isFullscreen);
-          }}
+          onClick={() => invoke('player_toggle_fullscreen').catch(() => {})}
           className="shrink-0 p-1.5 rounded hover:bg-[#262626] text-white transition"
           title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
         >
           {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
         </button>
-
-        <button
-          type="button"
-          onClick={() => closePlayer()}
-          className="p-1.5 rounded hover:bg-[#3a1010] text-[#e50914] transition"
-          title="Stop and close"
-        >
-          <X className="w-4 h-4" />
-        </button>
         </div>
       </div>
+
+      {/* Close (owner): white X, pinned to the top-right corner of the
+          player window, above the control bar's auto-hide. */}
+      <button
+        type="button"
+        onClick={() => closePlayer()}
+        className={`absolute top-3 right-4 z-20 p-1.5 rounded-md text-white hover:bg-white/15 transition ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        title="Stop and close"
+      >
+        <X className="w-5 h-5" />
+      </button>
     </div>
   );
 }
