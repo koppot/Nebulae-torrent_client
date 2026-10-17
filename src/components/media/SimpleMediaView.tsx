@@ -79,7 +79,7 @@ export const folderOf = (t: TorrentItem): string => {
 
 export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode, searchQuery } = useUiStore();
-  const { seedTimeRecords, fetchSeedTimeRecords } = useTrackerStore();
+  const { fetchSeedTimeRecords } = useTrackerStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
   const [discSetMap, setDiscSetMap] = useState<Record<string, DiscStructureInfo[]>>({});
