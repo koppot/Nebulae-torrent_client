@@ -129,3 +129,37 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
+
+/// Rounded corners are macOS-specific (owner, Movist style); no-op here.
+pub fn apply_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+/// Window drag: Tauri's startDragging works on Windows.
+pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.start_dragging().map_err(|e| format!("drag: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Fullscreen via the Tauri window API (works for standard windows).
+pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let fs = win.is_fullscreen().unwrap_or(false);
+        return win.set_fullscreen(!fs).map_err(|e| format!("fullscreen: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Minimize via the Tauri window API.
+pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}

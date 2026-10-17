@@ -23,10 +23,16 @@ pub mod bluray_meta;
 pub mod dvd_meta;
 
 #[cfg(target_os = "windows")]
-pub use embed_windows::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_windows::{
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
+    set_window_corner_radius, sync_frame, toggle_fullscreen,
+};
 
 #[cfg(target_os = "linux")]
-pub use embed_linux::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_linux::{
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
+    set_window_corner_radius, sync_frame, toggle_fullscreen,
+};
 
 #[cfg(target_os = "macos")]
 mod embed_macos;

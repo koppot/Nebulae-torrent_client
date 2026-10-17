@@ -1473,14 +1473,71 @@ mod tests {
 pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri::Manager;
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
-    app.run_on_main_thread(move || {
-        let picked = unsafe { present_disc_panel() };
-        let _ = tx.send(picked);
-    })
-    .map_err(|e| format!("main thread unavailable: {e}"))?;
-    Ok(rx.recv().map_err(|_| "panel channel lost".to_string())?)
+
+    #[cfg(target_os = "macos")]
+    {
+        app.run_on_main_thread(move || {
+            let picked = unsafe { present_disc_panel() };
+            let _ = tx.send(picked);
+        })
+        .map_err(|e| format!("main thread unavailable: {e}"))?;
+        return Ok(rx.recv().map_err(|_| "panel channel lost".to_string())?);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = &tx;
+        // Windows: file dialog for ISO first; folder dialog for a release
+        // root when the file dialog is cancelled.
+        let iso = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $f = New-Object System.Windows.Forms.OpenFileDialog
+        $f.Title = "Add Movie - select an ISO disc image (or cancel for a folder)"
+        $f.Filter = "Disc images (*.iso;*.img)|*.iso;*.img|All files|*.*"
+        if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.FileName }
+        "#;
+        if let Ok(out) = crate::utils::process::run_hidden_powershell(iso) {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(Some(path));
+            }
+        }
+        let folder = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $f = New-Object System.Windows.Forms.FolderBrowserDialog
+        $f.Description = "Add Movie - select the release ROOT folder that holds ALL of its disc folders"
+        if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }
+        "#;
+        let out = crate::utils::process::run_hidden_powershell(folder)
+            .map_err(|e| format!("Failed to open folder picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok(if path.is_empty() { None } else { Some(path) })
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = &tx;
+        // Linux: zenity file selection (ISO); directory selection when
+        // the file dialog is cancelled.
+        let out = std::process::Command::new("zenity")
+            .args(["--file-selection", "--title", "Add Movie - select an ISO disc image"])
+            .output()
+            .map_err(|e| format!("Failed to open picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() && !path.is_empty() {
+            return Ok(Some(path));
+        }
+        let out = std::process::Command::new("zenity")
+            .args(["--file-selection", "--directory", "--title",
+                   "Add Movie - select the release ROOT folder"])
+            .output()
+            .map_err(|e| format!("Failed to open picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok(if out.status.success() && !path.is_empty() { Some(path) } else { None })
+    }
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn present_disc_panel() -> Option<String> {
     use objc2::runtime::{Class, Object};
     let cstr_cls = |name: &str| Class::get(std::ffi::CString::new(name).unwrap().as_c_str());

@@ -2020,28 +2020,49 @@ static PINNED_ON_TOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 #[tauri::command]
 pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String> {
     let (tx, rx) = std::sync::mpsc::channel::<bool>();
-    app.run_on_main_thread(move || unsafe {
-        use objc2::runtime::Object;
+
+    #[cfg(target_os = "macos")]
+    {
+        app.run_on_main_thread(move || unsafe {
+            use objc2::runtime::Object;
+            let pinned = PINNED_ON_TOP.load(std::sync::atomic::Ordering::SeqCst);
+            let new_state = !pinned;
+            if let Some(win) = ns_main_window() {
+                if new_state {
+                    // NSFloatingWindowLevel = 3; keeps the player above all
+                    // normal windows without hiding it over the Dock/menu bar.
+                    let _: () = objc2::msg_send![win, setLevel: 3f64];
+                } else {
+                    let _: () = objc2::msg_send![win, setLevel: 0f64];
+                }
+                PINNED_ON_TOP.store(new_state, std::sync::atomic::Ordering::SeqCst);
+                let _ = tx.send(new_state);
+            } else {
+                let _ = tx.send(false);
+            }
+        })
+        .map_err(|e| format!("main thread unavailable: {e}"))?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri::Manager;
         let pinned = PINNED_ON_TOP.load(std::sync::atomic::Ordering::SeqCst);
         let new_state = !pinned;
-        if let Some(win) = ns_main_window() {
-            if new_state {
-                // NSFloatingWindowLevel = 3; keeps the player above all
-                // normal windows without hiding it over the Dock/menu bar.
-                let _: () = objc2::msg_send![win, setLevel: 3f64];
-            } else {
-                let _: () = objc2::msg_send![win, setLevel: 0f64];
-            }
+        if let Some(win) = app.get_webview_window("main") {
+            win.set_always_on_top(new_state)
+                .map_err(|e| format!("always on top: {e}"))?;
             PINNED_ON_TOP.store(new_state, std::sync::atomic::Ordering::SeqCst);
             let _ = tx.send(new_state);
         } else {
             let _ = tx.send(false);
         }
-    })
-    .map_err(|e| format!("main thread unavailable: {e}"))?;
+    }
+
     rx.recv().map_err(|_| "pin channel lost".to_string())
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn ns_main_window() -> Option<*mut objc2::runtime::Object> {
     let cls = objc2::runtime::Class::get(std::ffi::CString::new("NSApplication").unwrap().as_c_str())?;
     let app: *mut objc2::runtime::Object = objc2::msg_send![cls, sharedApplication];
