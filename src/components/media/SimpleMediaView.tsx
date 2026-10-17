@@ -514,7 +514,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
     const currentItem = group.items[group.active_index] || group.items[0];
     const discInfo = discMetaMap[currentItem.id];
     const progressPct = Math.round(group.overall_progress * 100);
-    const isDownloading = currentItem.status === 'Downloading';
     // Cover priority: structure-detected scan, then the WebP poster cache,
     // then TMDB (fetched lazily below), then any remote poster URL.
     const localCover = discInfo?.cover_image || thumbMap[currentItem.id];
@@ -605,36 +604,24 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden">
             {posterArt}
 
-            {/* Hover: only Play (or Resume) + Details, floating on the
-                poster side by side — no panel background, no data (owner).
-                The primary button reads "Resume" only when a restore
-                position is actually saved; otherwise it reads "Play".
-                The startup-mode preference ("from the beginning") makes it
-                a fresh play and drops the saved position. */}
+            {/* Hover: only Play + Details, floating on the poster side by
+                side — no panel background, no data (owner). Play ALWAYS
+                starts at the disc's interactive menu (owner: "when user is
+                clicking play, the media player window should start with
+                menu first"); resuming past the menu stays an explicit
+                action (the right-click menu's Resume). */}
             {hoveredId === group.id && (
               <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                 {(() => {
-                  const savedMs = resumePath ? savedPositionMs(resumePath) : 0;
-                  const startMode =
-                    localStorage.getItem('nebulae_pref_start_mode') || 'resume';
-                  const canResume = savedMs >= 10000 && startMode === 'resume' && !isDownloading;
                   const onPrimary = () => {
-                    if (!canResume) {
-                      if (resumePath) savePositionMs(resumePath, 0);
-                      handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id));
-                    } else {
-                      handleResumeDisc(group.id, resumePath as string, featureLabel(group.id));
-                    }
+                    if (resumePath) savePositionMs(resumePath, 0);
+                    handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id));
                   };
                   return (
                     <button
                       onClick={onPrimary}
                       className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                      title={
-                        canResume
-                          ? 'Resume the last-played disc past its menu'
-                          : 'Play (interactive disc menus)'
-                      }
+                      title="Play (interactive disc menus)"
                     >
                       <Play className="w-3 h-3 fill-black" />
                       <span>Play</span>

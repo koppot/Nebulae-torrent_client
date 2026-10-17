@@ -155,6 +155,35 @@ pub fn fetch_poster(
         }
     };
 
+    // v3 cache miss: the pre-v3 entries are still valid art and summary —
+    // only the runtime may predate the TV total fix. When the network is
+    // unreachable, serve them instead of leaving the shelf blank.
+    let v2_key = format!("tmdb_poster:v2:{}", lookup_key.to_lowercase());
+    let v2_fallback = || -> Option<TmdbMatch> {
+        let p = db.get_setting(&v2_key).ok().flatten()?;
+        let path = PathBuf::from(&p);
+        if !path.exists() {
+            return None;
+        }
+        Some(TmdbMatch {
+            poster_webp: path,
+            overview: db.get_setting(&format!("{v2_key}:overview")).ok().flatten(),
+            year: db
+                .get_setting(&format!("{v2_key}:year"))
+                .ok()
+                .flatten()
+                .and_then(|y| y.parse().ok()),
+            runtime: db
+                .get_setting(&format!("{v2_key}:runtime"))
+                .ok()
+                .flatten()
+                .and_then(|r| r.parse().ok()),
+        })
+    };
+
+    // The network pipeline; on total failure fall back to the pre-v3
+    // cached entry so the shelf never goes blank.
+    let net = (|| -> Result<Option<TmdbMatch>, String> {
     // 2. Search (title + optional year): movies first, then TV — the library
     // holds OVAs and series that only match /search/tv (owner's "Foundation"
     // mock is a show, and a movie-only search never sees it).
@@ -307,6 +336,11 @@ pub fn fetch_poster(
         year,
         runtime,
     }))
+    })();
+    match net {
+        Ok(v) => Ok(v),
+        Err(_) => Ok(v2_fallback()),
+    }
 }
 
 fn hash_of(key: &str) -> u64 {
