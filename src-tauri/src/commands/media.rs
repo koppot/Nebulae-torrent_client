@@ -675,9 +675,9 @@ pub async fn player_track_languages(
         tracing::info!("[player] track languages (dvd, title {t})");
         player::dvd_meta::disc_stream_languages_dvd(&path, t)
     } else {
-        if duration_ms <= 0 {
-            return Ok((Vec::new(), Vec::new()));
-        }
+        // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
+        // falls back to the feature playlist (most distinct audio
+        // languages) and returns the real track names.
         let r = player::bluray_meta::disc_stream_languages(&path, duration_ms);
         tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
         r
