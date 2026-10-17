@@ -476,9 +476,9 @@ fn start_playback(
 }
 
 #[tauri::command]
-pub fn player_open(
+pub async fn player_open(
     app: tauri::AppHandle,
-    state: tauri::State<PlayerState>,
+    state: tauri::State<'_, PlayerState>,
     file_path: String,
 ) -> Result<ResolvedPlayback, String> {
     tracing::info!("player_open: entry, path='{file_path}'");
@@ -550,9 +550,9 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// change after a grace period we simply restart the disc fresh — a freshly
 /// opened DVD always presents its menu.
 #[tauri::command]
-pub fn player_return_to_menu(
+pub async fn player_return_to_menu(
     app: tauri::AppHandle,
-    state: tauri::State<PlayerState>,
+    state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     tracing::info!("[player] return_to_menu: requested");
     let mp = *poison(&state.media_player);
@@ -605,8 +605,8 @@ pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), 
 /// playlists via libbluray (VLC mislabels streams from CLIPINFO metadata on
 /// some discs). `duration_ms` is the current title's duration (poll).
 #[tauri::command]
-pub fn player_track_languages(
-    state: tauri::State<PlayerState>,
+pub async fn player_track_languages(
+    state: tauri::State<'_, PlayerState>,
     duration_ms: i64,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let path = poison(&state.current_path).clone().unwrap_or_default();
@@ -619,7 +619,10 @@ pub fn player_track_languages(
 }
 
 #[tauri::command]
-pub fn player_close(app: tauri::AppHandle, state: tauri::State<PlayerState>) -> Result<(), String> {
+pub async fn player_close(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PlayerState>,
+) -> Result<(), String> {
     stop_session(&app, &state);
     Ok(())
 }
