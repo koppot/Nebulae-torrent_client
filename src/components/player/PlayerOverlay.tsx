@@ -14,6 +14,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  Pin,
 } from 'lucide-react';
 import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -145,6 +146,8 @@ export default function PlayerOverlay() {
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
+  const [pinnedTop, setPinnedTop] = useState(false);
   // Auto-hide (owner): controls fade out during playback and return on any
   // mouse movement. Kept visible while paused, at the disc menu, on the
   // end screen, or while a popover is open.
@@ -1169,37 +1172,27 @@ export default function PlayerOverlay() {
         {player.title}
       </div>
 
-      {/* Window controls (owner): the native traffic lights are dead on
-          this borderless window — these webview dots close, minimize and
-          maximize for real, pinned top-left, same auto-hide as the X. */}
-      <div
-        className={`absolute top-3 left-4 z-20 flex items-center gap-2 transition ${
-          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+      {/* Always-on-top pin (owner): right lower corner; click engages,
+          click again disengages. Auto-hides with the controls. */}
+      <button
+        type="button"
+        onClick={() => {
+          invoke<boolean>('player_always_on_top')
+            .then((v) => setPinnedTop(v))
+            .catch(() => {});
+        }}
+        className={`absolute right-4 bottom-16 z-20 p-1.5 rounded-md transition ${
+          pinnedTop ? 'text-[#e50914] bg-white/15' : 'text-white hover:bg-white/15'
+        } ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
+        title={pinnedTop ? 'Disable always on top' : 'Keep window on top'}
       >
-        <button
-          type="button"
-          onClick={() => void closePlayer()}
-          className="w-3 h-3 rounded-full bg-[#ff5f57] hover:brightness-125 transition"
-          title="Close player"
-        />
-        <button
-          type="button"
-          onClick={() => getCurrentWindow().minimize()}
-          className="w-3 h-3 rounded-full bg-[#febc2e] hover:brightness-125 transition"
-          title="Minimize"
-        />
-        <button
-          type="button"
-          onClick={() => getCurrentWindow().toggleMaximize()}
-          className="w-3 h-3 rounded-full bg-[#28c840] hover:brightness-125 transition"
-          title="Maximize"
-        />
-      </div>
+        <Pin className={`w-4 h-4 ${pinnedTop ? 'fill-current' : ''}`} />
+      </button>
 
       {/* Close (owner): white X, pinned to the top-right corner of the
-          player window, above the control bar's auto-hide. */}
+          player window, above the control bar's auto-hide. The native
+          traffic lights stay hidden (dead on this borderless window). */}
       <button
         type="button"
         onClick={() => {

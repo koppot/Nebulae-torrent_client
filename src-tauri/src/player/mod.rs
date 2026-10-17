@@ -16,7 +16,7 @@ pub mod engine;
 
 #[cfg(target_os = "macos")]
 pub use embed_macos::{
-    begin_window_drag, ensure_overlay, set_overlay_hidden, set_window_corner_radius, sync_frame,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, set_overlay_hidden, set_window_corner_radius, sync_frame,
     toggle_fullscreen,
 };
 pub mod bluray_meta;

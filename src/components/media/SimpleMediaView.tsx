@@ -27,14 +27,10 @@ import {
   FolderOpen,
   ArrowDownCircle,
   Disc,
-  Eraser,
-  Layers,
   FolderArchive,
-  Search,
   X,
   Info,
   Copy,
-  Settings,
 } from 'lucide-react';
 
 interface MediaGroup {
@@ -83,7 +79,7 @@ export const folderOf = (t: TorrentItem): string => {
 };
 
 export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedId } = useTorrentStore();
-  const { setShowAddTorrent, setViewMode } = useUiStore();
+  const { setShowAddTorrent, setViewMode, searchQuery } = useUiStore();
   const { seedTimeRecords, fetchSeedTimeRecords } = useTrackerStore();
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
@@ -94,8 +90,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   const [tmdbMap, setTmdbMap] = useState<
     Record<string, { poster?: string; overview?: string; runtime?: number }>
   >({});
-  const [groupBoxsets, setGroupBoxsets] = useState<boolean>(true);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [groupBoxsets] = useState<boolean>(true);
+  
 
   // Hover = the lower half of the poster is replaced by grayscale info
   // (owner). The overlay lives INSIDE the poster box, so nothing can clip
@@ -188,6 +184,18 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
   }, []);
   useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia]);
+  // Title-bar controls (media mode): Add Movie + Player prefs live in the
+  // top bar and reach this component through window events.
+  useEffect(() => {
+    const onAdd = () => void handlePlayExternalDisc();
+    const onPrefs = () => setShowPlayerPrefs(true);
+    window.addEventListener('nebulae:add-movie', onAdd);
+    window.addEventListener('nebulae:player-prefs', onPrefs);
+    return () => {
+      window.removeEventListener('nebulae:add-movie', onAdd);
+      window.removeEventListener('nebulae:player-prefs', onPrefs);
+    };
+  });
   // Library banners for external titles: same TMDB pipeline as downloads.
   const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
   useEffect(() => {
@@ -720,77 +728,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           <h2 className="text-2xl font-bold tracking-tight">Media Center</h2>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Media player preferences (owner): preferred audio/subtitle
-              languages, applied automatically on every playback. */}
-          <button
-            onClick={() => setShowPlayerPrefs(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
-            title="Preferred audio and subtitle languages for the media player"
-          >
-            <Settings className="w-4 h-4" />
-            <span>Player prefs</span>
-          </button>
-          <div
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] w-56 focus-within:border-[#e50914]/50 transition"
-            title="Search the library by release or folder name"
-          >
-            <Search className="w-4 h-4 text-[#737373]" />
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search library..."
-              className="bg-transparent text-xs outline-none flex-1 text-white placeholder:text-[#737373]"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="text-[#737373] hover:text-white transition"
-                title="Clear search"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-
-          <button
-            onClick={() => {
-              // Forget every last-played disc: the Resume buttons vanish
-              // until new discs are played (owner-requested reset).
-              setLastPlayedDiscs({});
-              try {
-                localStorage.removeItem('nebulae_last_played_discs');
-              } catch {
-                // Nothing to clear if storage is unavailable.
-              }
-            }}
-            className="p-2 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-            title="Clear Resume Cache — forget last-played discs (hides Resume until discs are played again)"
-          >
-            <Eraser className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            onClick={() => setGroupBoxsets(!groupBoxsets)}
-            className={`p-2 rounded-lg border transition ${
-              groupBoxsets
-                ? 'border-[#e50914]/40 bg-[#e50914]/10 text-white'
-                : 'border-[#333333] bg-[#1f1f1f] text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Cluster multi-disc releases into unified rows"
-          >
-            <Layers className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            onClick={handlePlayExternalDisc}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs font-semibold transition"
-            title="Pick the release's ROOT folder (holding ALL of its disc folders, like a torrent download) or an ISO disc image. Picking a single disc's folder plays only that disc."
-          >
-            <Disc className="w-4 h-4 text-[#e50914]" />
-            <span>Add Movie</span>
-          </button>
-        </div>
       </div>
 
       {externalDiscError && (

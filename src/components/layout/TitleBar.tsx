@@ -140,8 +140,16 @@ export const TitleBar: React.FC = () => {
         }
       }}
       onDoubleClick={handleToggleMaximize}
-      className="h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
+      className="relative h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
     >
+      {/* Centered application name (owner: Movist Pro-style top bar),
+          with the full client name on its own line BELOW the bar. */}
+      <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
+        <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+        <div className="absolute left-1/2 -translate-x-1/2 top-full whitespace-nowrap text-[10px] text-[#a3a3a3] font-normal tracking-tight">
+          Client by Asian DVD Club
+        </div>
+      </div>
       {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
       <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
         {/* macOS Native-Style Window Traffic Lights */}
@@ -182,26 +190,11 @@ export const TitleBar: React.FC = () => {
           </div>
         )}
 
-        {/* Integrated Brand Monogram & Full Title Identity */}
-        <div
-          data-tauri-drag-region
-          className="flex items-center gap-2 pr-2.5 border-r border-[#262626] flex-shrink-0"
-        >
-          <img
-            src="/favicon-boxed.svg"
-            alt="Nebulae"
-            className="w-5 h-5 rounded object-cover border border-[#333333] flex-shrink-0 pointer-events-none"
-          />
-          <div className="flex items-baseline gap-1.5 min-w-0" data-tauri-drag-region>
-            <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
-            <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden md:inline truncate">
-              — Client by Asian DVD Club
-            </span>
-          </div>
-        </div>
 
-        {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete */}
-        <div className="flex items-center gap-1 flex-shrink-0">
+        {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
+            MANAGER ONLY (owner): none of the transfer actions belong to
+            the Media Center. */}
+        <div className={`flex items-center gap-1 flex-shrink-0 ${viewMode === 'media' ? 'hidden' : ''}`}>
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setShowAddTorrent(true); }}
@@ -315,6 +308,57 @@ export const TitleBar: React.FC = () => {
 
       {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
       <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+        {/* Media-mode controls (owner): Search library, Player preferences
+            and Add Movie live in the TOP BAR; SimpleMediaView receives
+            them via window events. */}
+        {viewMode === 'media' && (
+          <>
+            <div
+              className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] w-52 focus-within:border-[#e50914]/50 transition"
+              title="Search the library by release or folder name"
+            >
+              <Search className="w-3.5 h-3.5 text-[#737373]" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search library..."
+                className="bg-transparent text-xs outline-none flex-1 text-white placeholder:text-[#737373] min-w-0"
+              />
+              {searchQuery && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSearchQuery(''); }}
+                  className="text-[#737373] hover:text-white transition"
+                  title="Clear search"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('nebulae:player-prefs'));
+              }}
+              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+              title="Player preferences — preferred audio and subtitle languages"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+              title="Add Movie — pick the release root folder (all discs) or an ISO image"
+            >
+              <Film className="w-3.5 h-3.5" />
+              <span>Add Movie</span>
+            </button>
+          </>
+        )}
         {/* UI Mode Switcher (Media / Manager / Compact) */}
         <div className="flex items-center p-0.5 rounded-lg bg-[#1f1f1f] border border-[#333333] text-xs">
           <button

@@ -1948,3 +1948,46 @@ pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), 
     items.retain(|m| m.path != path);
     write_external_store(&app, &items)
 }
+
+/// Toggle the player window's always-on-top pin (owner: a little mark in
+/// the player's top-right corner; click to engage, click again to
+/// disengage). Reports the NEW state.
+static PINNED_ON_TOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    app.run_on_main_thread(move || unsafe {
+        use objc2::runtime::Object;
+        let pinned = PINNED_ON_TOP.load(std::sync::atomic::Ordering::SeqCst);
+        let new_state = !pinned;
+        if let Some(win) = ns_main_window() {
+            if new_state {
+                // NSFloatingWindowLevel = 3; keeps the player above all
+                // normal windows without hiding it over the Dock/menu bar.
+                let _: () = objc2::msg_send![win, setLevel: 3f64];
+            } else {
+                let _: () = objc2::msg_send![win, setLevel: 0f64];
+            }
+            PINNED_ON_TOP.store(new_state, std::sync::atomic::Ordering::SeqCst);
+            let _ = tx.send(new_state);
+        } else {
+            let _ = tx.send(false);
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))?;
+    rx.recv().map_err(|_| "pin channel lost".to_string())
+}
+
+unsafe fn ns_main_window() -> Option<*mut objc2::runtime::Object> {
+    let cls = objc2::runtime::Class::get(std::ffi::CString::new("NSApplication").unwrap().as_c_str())?;
+    let app: *mut objc2::runtime::Object = objc2::msg_send![cls, sharedApplication];
+    if app.is_null() {
+        return None;
+    }
+    let win: *mut objc2::runtime::Object = objc2::msg_send![app, mainWindow];
+    if win.is_null() {
+        return None;
+    }
+    Some(win)
+}

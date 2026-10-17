@@ -341,14 +341,19 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
     }
 }
 
-/// Debug variant used by the chap_probe example: returns offsets plus the
-/// matched title's own duration (ms) and chapter count.
+/// Debug variant used by the chap_probe example: prints the matched
+/// title's playlist duration vs the chapter spread.
 pub fn disc_chapter_offsets_debug(
     disc_path: &str,
     duration_ms: i64,
-) -> Result<(Vec<i64>, i64, u32), String> {
+) -> Result<String, String> {
     let offsets = disc_chapter_offsets(disc_path, duration_ms)?;
-    // Re-probe the matched duration via disc_stream_languages-style logic is
-    // wasteful; report what the plain probe sees through the same path.
-    Ok((offsets, 0, 0))
+    let last = offsets.last().copied().unwrap_or(0);
+    Ok(format!(
+        "matched dur={duration_ms} chapters={} first={} last={} spread={:.1}%",
+        offsets.len(),
+        offsets.first().copied().unwrap_or(0),
+        last,
+        if duration_ms > 0 { (last as f64 / duration_ms as f64) * 100.0 } else { 0.0 }
+    ))
 }

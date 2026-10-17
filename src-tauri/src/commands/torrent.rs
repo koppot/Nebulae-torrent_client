@@ -1502,8 +1502,10 @@ unsafe fn present_disc_panel() -> Option<String> {
         "Select the release ROOT folder that holds ALL of its disc folders (like a torrent download) — or an ISO disc image. Picking a single disc folder plays only that disc."
     )];
     let rc: i64 = objc2::msg_send![panel, runModal];
-    if rc != 1000 {
-        return None; // NSModalResponseOK
+    // NSModalResponseOK is 1 (the old NSOKButton); 1000 was wrong and
+    // silently discarded every successful selection.
+    if rc != 1 {
+        return None; // cancelled
     }
     let url: *mut Object = objc2::msg_send![panel, URL];
     if url.is_null() {

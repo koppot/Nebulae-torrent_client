@@ -257,6 +257,15 @@ pub fn run() {
         .manage(player::PlayerState::default())
         .setup(move |app| {
             use tauri::Manager;
+            // Rounded app corners (owner, Movist-style): apply once at
+            // startup — the old call only ran when the player attached.
+            {
+                let h: tauri::AppHandle = app.handle().clone();
+                let radius_handle = h.clone();
+                let _ = tauri::AppHandle::run_on_main_thread(&h, move || unsafe {
+                    player::apply_window_corner_radius(&radius_handle, 10.0);
+                });
+            }
             commands::media::maybe_autoplay(app.handle());
 
             // Diagnostics for the reported white-screen-on-launch: log the
@@ -543,12 +552,14 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_disc_chapters,
+            commands::media::player_always_on_top,
             commands::media::add_external_media,
             commands::media::list_external_media,
             commands::media::remove_external_media,
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
             commands::media::player_disc_chapters,
+            commands::media::player_always_on_top,
             commands::media::player_list_tracks,
             commands::media::player_track_languages,
             commands::media::window_begin_drag,

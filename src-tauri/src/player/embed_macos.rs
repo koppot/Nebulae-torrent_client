@@ -186,7 +186,7 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             toggle_fullscreen_win(&*ns_win);
-            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) { 0.0 } else { 3.0 };
+            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) { 0.0 } else { 10.0 };
             apply_window_corner_radius(&app2, radius);
         }
     })
@@ -274,7 +274,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         // webview and the video overlay to the same radius.
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
-            layer.setCornerRadius(3.0);
+            layer.setCornerRadius(10.0);
             layer.setMasksToBounds(true);
         }
         let bounds = content.bounds();
@@ -307,7 +307,7 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
-unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
+pub unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
@@ -346,7 +346,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         if !view.is_null() {
             (*view).setHidden(hidden);
             // Player window: 3 px corners; media/manager UI: 4 px corners.
-            apply_window_corner_radius(&app2, if hidden { 4.0 } else { 3.0 });
+            apply_window_corner_radius(&app2, if hidden { 10.0 } else { 10.0 });
             // The video view always covers the whole window; the frontend's
             // floating bar draws above it. Full-window frame here guarantees
             // sane geometry even before the first frontend sync arrives.
