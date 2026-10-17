@@ -206,7 +206,8 @@ export const TitleBar: React.FC = () => {
             </button>          </div>
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2 px-3 h-10" data-tauri-drag-region>
+      <div className="flex items-center justify-between gap-2 px-3 h-10" data-tauri-drag-region>
+        {/* Left slot (owner): the torrent controls float left on row 2. */}
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
             the Media Center. */}
@@ -313,7 +314,8 @@ export const TitleBar: React.FC = () => {
             <HelpCircle className="w-3.5 h-3.5" />
           </button>
         </div>
-        {viewMode !== 'compact' && (
+        <div className="flex items-center gap-2 flex-shrink-0">
+        {viewMode === 'media' && (
           <>
             <button
               type="button"
@@ -351,6 +353,8 @@ export const TitleBar: React.FC = () => {
           )}
         </div>
         )}
+
+        </div>
 
         {/* Minimize (owner): second row, right end. */}
         <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10">
