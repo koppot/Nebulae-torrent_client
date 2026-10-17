@@ -71,13 +71,59 @@ export async function openInPlayer(filePath: string): Promise<PlayerOpenInfo> {
   if (!info.external) {
     playerStore.open(info);
     // Menu-first (owner): discs open at their interactive menu unless a
-    // restore position was saved for this disc. resumeInPlayer seeks past
-    // the menu itself, so only the plain path drops into the menu.
+    // restore position was saved for this disc. The engine's first open can
+    // start the disc's first-play flow (FBI warning → straight into the
+    // program chain) before the demuxer exposes titles, so KEEP insisting
+    // until the menu title (0) is actually reported.
     if (info.is_disc && savedPositionMs(info.resolved_path) < 10000) {
-      invoke('player_return_to_menu').catch(() => {});
+      void (async () => {
+        for (let attempt = 0; attempt < 6; attempt++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          try {
+            const p = await invoke<{ title: number }>('player_poll');
+            if (p.title === 0) return; // at the menu
+            await invoke('player_return_to_menu');
+          } catch {
+            return; // player closed meanwhile
+          }
+        }
+      })();
     }
   }
   return info;
+}
+
+/**
+ * Resume WITHOUT reopening: the disc is already open at its menu (the
+ * player bar's Play button on the menu). Wait for the feature title to
+ * engage, then seek to the saved position.
+ */
+export async function resumeFromMenu(
+  _filePath: string,
+  timeMs: number,
+): Promise<void> {
+  void (async () => {
+    // The disc-menu demuxer idles until a title is selected — start the
+    // first feature, then seek to the saved position once it engages.
+    try {
+      await invoke('player_set_title', { title: 1 });
+    } catch {
+      return;
+    }
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const p = await invoke<PlayerPollShape>('player_poll');
+        if (p.length_ms > 300_000 && p.playing) {
+          await invoke('player_seek', { positionMs: timeMs });
+          return;
+        }
+      } catch {
+        return; // player closed meanwhile
+      }
+    }
+  })();
 }
 
 /**

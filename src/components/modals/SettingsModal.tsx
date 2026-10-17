@@ -51,6 +51,9 @@ export const SettingsModal: React.FC = () => {
   const { selectDownloadDirectory } = useTorrentStore();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
+  const [skipSplash, setSkipSplash] = useState(
+    () => localStorage.getItem('nebulae_pref_skip_splash') === '1',
+  );
 
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -280,6 +283,18 @@ export const SettingsModal: React.FC = () => {
                   </div>
 
                   <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={skipSplash}
+                        onChange={(e) => {
+                          setSkipSplash(e.target.checked);
+                          localStorage.setItem('nebulae_pref_skip_splash', e.target.checked ? '1' : '0');
+                        }}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Start program without splash screen</span>
+                    </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"

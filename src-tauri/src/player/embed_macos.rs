@@ -15,9 +15,10 @@
 //! the frontend drives position/size with `player_sync_viewport`.
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::{ClassType, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 
@@ -35,10 +36,11 @@ objc2::define_class!(
         #[unsafe(method(mouseDown:))]
         unsafe fn mouse_down(this: &VideoOverlayView, event: &NSEvent) {
             if event.clickCount() >= 2 {
-                // Native fullscreen toggle — works for borderless windows,
-                // unlike the window-manager route that failed in testing.
+                // Borderless windows ignore toggleFullScreen: unless their
+                // collection behavior advertises fullscreen support, so use
+                // the manual frame/style-mask toggle.
                 if let Some(win) = this.window() {
-                    let _: () = objc2::msg_send![&*win, toggleFullScreen: std::ptr::null::<objc2::runtime::AnyObject>()];
+                    toggle_fullscreen_win(&win);
                 }
             } else if let Some(win) = this.window() {
                 // Become first responder so keyDown reaches us (keyboard
@@ -123,6 +125,125 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     Ok(view_ptr)
 }
 
+/// Saved window frame for leaving fullscreen (boxed NSRect pointer).
+static SAVED_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Enter/leave fullscreen for the borderless player window. The native
+/// toggleFullScreen: animation ignores borderless windows, so the frame
+/// and style mask are toggled manually.
+unsafe fn toggle_fullscreen_win(win: &NSWindow) {
+    let mask: u64 = objc2::msg_send![win, styleMask];
+    if mask & NS_WINDOW_STYLE_FULLSCREEN != 0 {
+        // Leaving fullscreen: restore the saved frame.
+        let raw = SAVED_BOX.load(Ordering::SeqCst) as *mut NSRect;
+        if !raw.is_null() {
+            let f = *raw;
+            let _: () = objc2::msg_send![win, setFrame:f display:true];
+        }
+        let _: () = objc2::msg_send![win, setStyleMask: mask & !NS_WINDOW_STYLE_FULLSCREEN];
+    } else {
+        let ptr = Box::into_raw(Box::new(win.frame()));
+        let old = SAVED_BOX.swap(ptr as usize, Ordering::SeqCst) as *mut NSRect;
+        if !old.is_null() {
+            let _ = Box::from_raw(old);
+        }
+        let _: () = objc2::msg_send![win, setStyleMask: mask | NS_WINDOW_STYLE_FULLSCREEN];
+        if let Some(screen) = win.screen() {
+            let f = screen.frame();
+            let _: () = objc2::msg_send![win, setFrame:f display:true];
+        }
+    }
+}
+
+const NS_WINDOW_STYLE_FULLSCREEN: u64 = 1 << 14;
+
+/// Toggle fullscreen for the player window (F key / fullscreen button /
+/// double-click). Sets the corner radius to 0 in fullscreen, 3 px out.
+pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
+    let app2 = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        unsafe {
+            let ns_win = raw as *mut NSWindow;
+            if ns_win.is_null() {
+                return;
+            }
+            toggle_fullscreen_win(&*ns_win);
+            let mask: u64 = objc2::msg_send![ns_win, styleMask];
+            let radius = if mask & NS_WINDOW_STYLE_FULLSCREEN != 0 { 0.0 } else { 3.0 };
+            apply_window_corner_radius(&app2, radius);
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
+/// Begin a native window drag. Tauri's startDragging (async IPC) fails to
+/// move borderless windows on current macOS; a synthetic left-mouse-down
+/// handed to performWindowDragWithEvent on the MAIN thread works reliably.
+pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
+    let app2 = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        unsafe {
+            let ns_win = raw as *mut NSWindow;
+            if ns_win.is_null() {
+                return;
+            }
+            let start: NSPoint = objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation];
+            let origin = (*ns_win).frame().origin;
+            // Track the pointer on a worker thread; each tick moves the
+            // window on the main thread until the left button is released.
+            let win_addr = ns_win as usize;
+            std::thread::spawn(move || {
+                let ns_win = win_addr as *mut NSWindow;
+                let mut last_x = start.x;
+                let mut last_y = start.y;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    let now: NSPoint =
+                        unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
+                    let buttons: usize = unsafe {
+                        objc2::msg_send![objc2_app_kit::NSEvent::class(), pressedMouseButtons]
+                    };
+                    if buttons & 1 == 0 {
+                        break;
+                    }
+                    let dx = now.x - last_x;
+                    let dy = now.y - last_y;
+                    last_x = now.x;
+                    last_y = now.y;
+                    if dx == 0.0 && dy == 0.0 {
+                        continue;
+                    }
+                    let app3 = app2.clone();
+                    let win_addr = ns_win as usize;
+                    let _ = app3.run_on_main_thread(move || unsafe {
+                        let ns_win = win_addr as *mut NSWindow;
+                        let o = (*ns_win).frame().origin;
+                        // Screen coords are bottom-left origin; Cocoa delta
+                        // already matches, but the trackpad y grows upward in
+                        // NSEvent coords while the window origin does too, so
+                        // subtract to follow the pointer downward.
+                        (*ns_win).setFrameOrigin(NSPoint::new(o.x + dx, o.y + dy));
+                    });
+                }
+                let _ = origin;
+            });
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
 fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
@@ -165,7 +286,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
     }
 }
 
-/// Round the window corners (owner): 1.5 px for the media-tab UI, 3 px
+/// Round the window corners (owner): 4 px for the media/manager UI, 3 px
 /// while the player is up, 0 in fullscreen.
 pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), String> {
     let app2 = app.clone();
@@ -207,8 +328,8 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
             (*view).setHidden(hidden);
-            // Player window: 3 px corners; back to 1.5 px for the media UI.
-            apply_window_corner_radius(&app2, if hidden { 1.5 } else { 3.0 });
+            // Player window: 3 px corners; media/manager UI: 4 px corners.
+            apply_window_corner_radius(&app2, if hidden { 4.0 } else { 3.0 });
             // The video view always covers the whole window; the frontend's
             // floating bar draws above it. Full-window frame here guarantees
             // sane geometry even before the first frontend sync arrives.

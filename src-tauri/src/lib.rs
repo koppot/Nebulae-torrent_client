@@ -543,6 +543,8 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_list_tracks,
+            commands::media::player_track_languages,
+            commands::media::window_begin_drag,
             commands::media::player_set_track,
             commands::media::player_menu_navigate,
             commands::media::player_return_to_menu,

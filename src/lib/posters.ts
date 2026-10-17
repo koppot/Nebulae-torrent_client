@@ -14,7 +14,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
  * always show the same artwork.
  */
 
-const CACHE_KEY = 'nebulae_adc_poster_map_v1';
+const CACHE_KEY = 'nebulae_adc_poster_map_v2';
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface AdcPosterCache {
@@ -201,7 +201,23 @@ export async function resolvePoster(
     }
   }
 
-  // 3. Local pipeline (cover scan → ffmpeg frame → TMDB when configured).
+  // 3. TMDB/Trakt artwork (DB-cached engine-side): preferred over local
+  // scan images — a "screenshot" frame must never outrank real key art
+  // (owner: Fuuka picked a screenshot although TMDB/Trakt had the poster).
+  try {
+    const parsed = await invoke<{ clean_title: string; year: number | null }>('parse_media_title', {
+      rawTitle: torrentName,
+    });
+    const res = await invoke<{ poster_webp?: string | null } | null>('fetch_tmdb_release', {
+      title: parsed.clean_title,
+      year: parsed.year ?? undefined,
+    });
+    if (res?.poster_webp) return res.poster_webp;
+  } catch {
+    /* fall through to the local pipeline */
+  }
+
+  // 4. Local pipeline (cover scan → ffmpeg frame → TMDB when configured).
   if (map) {
     // Log the closest ADC titles so a real matching gap is diagnosable
     // from the session log alone.

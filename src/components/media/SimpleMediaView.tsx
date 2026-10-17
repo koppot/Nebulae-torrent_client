@@ -242,9 +242,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
     const shelves = [...activeDownloads, ...readyToWatch];
     shelves.forEach((t) => {
       if (t.id in tmdbMap) return;
-      const hasLocalCover =
-        discMetaMap[t.id]?.cover_image || (thumbMap[t.id] ?? null) !== null;
-      if (hasLocalCover) return;
+      // Always fetch (DB-cached): the details modal needs the summary and
+      // runtime even when a local cover exists (owner: summary missing for
+      // locally-covered releases).
       // Reserve the slot IMMEDIATELY: without this, every re-run of the
       // effect (any map update) re-fires the fetch until the first response
       // lands — four identical TMDB searches per launch were observed.
@@ -638,7 +638,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                   className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
                   title="Name, year, duration, disc sizes and summary"
                 >
-                  Episodes
+                  Details
                 </button>
               </div>
             )}
@@ -1042,6 +1042,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                   <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
                     {(() => {
                       const facts: { label: string; value: string }[] = [];
+                      // The engine reports the TOTAL duration for the release
+                      // (TV: episode count × per-episode runtime; movies: the
+                      // film runtime) — the owner wants the whole media, not
+                      // a single disc/episode.
                       if (detailsData?.runtimeMin) facts.push({ label: 'Duration', value: fmtRuntime(detailsData.runtimeMin) ?? '—' });
                       facts.push({ label: 'Total size', value: formatBytes(group.total_bytes) });
                       facts.push({ label: 'Discs', value: String(count) });

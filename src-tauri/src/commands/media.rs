@@ -354,6 +354,14 @@ fn start_playback(
                     // back to the main feature as a plain file so playback
                     // never silently dies.
                     if resolved.is_disc {
+                        // ISOs have no in-folder feature file to fall back
+                        // to, and killing the session would kill a demuxer
+                        // that may still be initializing (observed: "disc
+                        // demux failed and no feature found" on ISOs).
+                        let is_iso = Path::new(&resolved.resolved_path)
+                            .extension()
+                            .map(|e| e.eq_ignore_ascii_case("iso"))
+                            .unwrap_or(false);
                         // Poll patiently: standalone probes show titles appear
                         // within 1 s, but the embedded instance may initialize
                         // the bluray demuxer later. Log every reading so the
@@ -371,7 +379,7 @@ fn start_playback(
                                 break;
                             }
                         }
-                        if title_count <= 0 {
+                        if title_count <= 0 && !is_iso {
                             session.close(&lib);
                             tracing::warn!(
                                 "player_open: disc demux produced no titles for '{}'; falling back to main feature",
@@ -448,6 +456,15 @@ pub fn player_open(
     });
     Ok(resolved)
 }
+/// Begin a native window drag (title-bar mousedown handler).
+#[tauri::command]
+pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
+    tracing::info!("[drag] window_begin_drag invoked");
+    let r = crate::player::begin_window_drag(&app);
+    tracing::info!("[drag] begin_window_drag -> {:?}", r);
+    r
+}
+
 /// Return DVD/BD playback to its interactive menu.
 ///
 /// `set_title(0)` is the textbook way to jump to the dvdnav menu domain, but
@@ -462,7 +479,15 @@ pub fn player_return_to_menu(
     tracing::info!("[player] return_to_menu: requested");
     let mp = *poison(&state.media_player);
     let lib = loaded_lib(&state)?;
+    // On Blu-ray title 0 is the FIRST-PLAY playlist (the whole disc), not
+    // the menu: selecting it starts full-disc playback. A freshly opened
+    // disc already sits at the interactive menu, so do nothing there.
     if mp != 0 {
+        let title = unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) };
+        if title == 0 {
+            tracing::info!("[player] return_to_menu: already at menu title");
+            return Ok(());
+        }
         unsafe {
             (lib.libvlc_media_player_set_title)(mp as *mut std::ffi::c_void, 0);
         }
@@ -475,15 +500,34 @@ pub fn player_return_to_menu(
         tracing::info!("[player] return_to_menu: now at menu title");
         return Ok(());
     }
-    // dvdnav ignored us — restart the disc; a fresh open always shows the menu.
+    // dvdnav ignored set_title(0) — or this is a Blu-ray, where title 0 is
+    // the first-play playlist (playing it would start the whole disc). A
+    // fresh open always presents the interactive menu, so restart.
     let path = poison(&state.current_path).clone().unwrap_or_default();
     if path.is_empty() {
         tracing::warn!("[player] return_to_menu: no current path to restart");
         return Err("no current media to restart".into());
     }
-    tracing::info!("[player] return_to_menu: set_title ineffective — restarting '{path}'");
+    tracing::info!("[player] return_to_menu: restarting '{path}'");
     stop_session(&app, &state);
     start_playback(&app, &state, &path).map(|_| ())
+}
+
+/// Audio/subtitle language names for the CURRENT title, read from the disc
+/// playlists via libbluray (VLC mislabels streams from CLIPINFO metadata on
+/// some discs). `duration_ms` is the current title's duration (poll).
+#[tauri::command]
+pub fn player_track_languages(
+    state: tauri::State<PlayerState>,
+    duration_ms: i64,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let path = poison(&state.current_path).clone().unwrap_or_default();
+    if path.is_empty() || duration_ms <= 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let r = player::bluray_meta::disc_stream_languages(&path, duration_ms);
+    tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
+    r
 }
 
 #[tauri::command]
@@ -786,39 +830,9 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
 /// in the player, 0 in fullscreen).
 #[tauri::command]
 pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    let app2 = app.clone();
-    let app1 = app.clone();
-    app1.run_on_main_thread(move || unsafe {
-        let Some(win) = app.get_webview_window("main") else {
-            return;
-        };
-        let Ok(raw) = win.ns_window() else {
-            return;
-        };
-        let ns_win = raw as *mut objc2::runtime::AnyObject;
-        let _: () = objc2::msg_send![ns_win, toggleFullScreen: std::ptr::null::<objc2::runtime::AnyObject>()];
-        // The fullscreen animation takes a moment; settle the corner radius
-        // once it completes (0 in fullscreen, 3 px in the player window).
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            let app3 = app2.clone();
-            let _ = app2.run_on_main_thread(move || {
-                let Some(win) = app3.get_webview_window("main") else {
-                    return;
-                };
-                let Ok(raw) = win.ns_window() else {
-                    return;
-                };
-                let ns_win = raw as *mut objc2::runtime::AnyObject;
-                let mask: u64 = objc2::msg_send![ns_win, styleMask];
-                const FULLSCREEN: u64 = 1 << 14; // NSWindowStyleMaskFullScreen
-                let radius = if mask & FULLSCREEN != 0 { 0.0 } else { 3.0 };
-                crate::player::set_window_corner_radius(&app3, radius).ok();
-            });
-        });
-    })
-    .map_err(|e| format!("main thread unavailable: {e}"))
+    // Manual frame/style-mask toggle in embed_macos: the native
+    // toggleFullScreen: animation ignores borderless windows entirely.
+    crate::player::toggle_fullscreen(&app)
 }
 
 #[tauri::command]

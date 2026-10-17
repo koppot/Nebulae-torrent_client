@@ -5,7 +5,6 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  Disc,
   Maximize,
   Minimize,
   Pause,
@@ -16,7 +15,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, savePositionMs, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -117,7 +116,6 @@ export default function PlayerOverlay() {
   const [volume, setVolume] = useState(80);
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
-  const [showDiscs, setShowDiscs] = useState(false);
   // Track popovers (owner): the volume slider and the track lists appear on
   // click on their pill, not permanently in the bar.
   const [showVolume, setShowVolume] = useState(false);
@@ -168,7 +166,6 @@ export default function PlayerOverlay() {
     if (!player.open) return;
     setEnded(false);
     setSeeking(null);
-    setShowDiscs(false);
     setDiscChoices(null);
 
     const apply = (p: Poll) => {
@@ -301,6 +298,26 @@ export default function PlayerOverlay() {
     };
   }, [player.open, player.isDisc]);
 
+  // True stream languages from the disc playlists (libbluray): VLC labels
+  // audio/subtitle tracks from CLIPINFO metadata, which some discs author
+  // incorrectly (every stream "English"). Falls back to the libvlc names.
+  const [trackLangs, setTrackLangs] = useState<{ audio: string[]; subs: string[] }>({
+    audio: [],
+    subs: [],
+  });
+  useEffect(() => {
+    if (!player.open || !player.isDisc || poll.title === 0 || poll.length_ms <= 0) return;
+    let alive = true;
+    invoke<[string[], string[]]>('player_track_languages', { durationMs: Math.round(poll.length_ms) })
+      .then(([a, s]) => {
+        if (alive) setTrackLangs({ audio: a, subs: s });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [player.open, player.isDisc, poll.title, poll.length_ms]);
+
   // Disc set of the playing release: names the current disc ("Disc 1") in
   // the control bar and feeds the switcher popup. The set may live several
   // levels above the playing file (e.g. the feature stream sits at
@@ -376,7 +393,7 @@ export default function PlayerOverlay() {
   // Control-bar auto-hide (owner): any mouse movement shows the controls;
   // they fade after 3 s once playback is running. Paused playback, the
   // disc menu, the end screen and open popovers keep them visible.
-  const popoverOpen = showDiscs || showSubs || showAudio || showVolume;
+  const popoverOpen = showSubs || showAudio || showVolume;
   useEffect(() => {
     if (!player.open) return;
     const bump = () => {
@@ -450,7 +467,6 @@ export default function PlayerOverlay() {
 
   const switchDisc = async (path: string) => {
     console.log('[player] switchDisc click:', path);
-    setShowDiscs(false);
     try {
       await openInPlayer(path);
     } catch (err) {
@@ -458,11 +474,26 @@ export default function PlayerOverlay() {
     }
   };
 
+  // Track display name: prefer the language read from the disc playlists
+  // (libbluray) — VLC's own label can be wrong on poorly-authored discs.
+  const trackLabel = (kind: 'audio' | 'subtitle', index: number, t: { id: number; name: string }) => {
+    const langs = kind === 'audio' ? trackLangs.audio : trackLangs.subs;
+    const lang = index >= 0 && index < langs.length ? langs[index] : null;
+    const base = lang ? `Track ${index + 1} (${lang})` : t.name || `Track ${t.id}`;
+    return base;
+  };
+
   const togglePause = () => {
-    // At the disc menu the Play button means "play all": start the first
-    // feature title directly (the old "Play All" pill, merged into Play).
+    // At the disc menu the button is PLAY (owner: a pause button has no
+    // meaning on a menu): resume from the last save point when one exists,
+    // otherwise start the first feature title from the beginning.
     if (player.isDisc && pollRef.current.title === 0) {
-      invoke('player_set_title', { title: 1 }).catch(() => {});
+      const savedMs = savedPositionMs(player.resolvedPath);
+      if (savedMs >= 10000) {
+        resumeFromMenu(player.resolvedPath, savedMs);
+      } else {
+        invoke('player_set_title', { title: 1 }).catch(() => {});
+      }
       return;
     }
     invoke('player_toggle_pause').catch(() => {});
@@ -546,7 +577,7 @@ export default function PlayerOverlay() {
   const onVideoPointerDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     dragArmedRef.current = true;
-    getCurrentWindow().startDragging().catch(() => {});
+    invoke('window_begin_drag').catch(() => {});
   };
   const onVideoDoubleClick = () => {
     if (dragArmedRef.current) {
@@ -595,42 +626,23 @@ export default function PlayerOverlay() {
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* Disc switcher row: every disc of the playing release, by number. */}
-        {showDiscs && discChoices && discChoices.length > 1 && (
-          <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto space-y-1">
-            <span className="text-[11px] font-semibold text-white flex items-center gap-1.5 pb-1 border-b border-[#262626]">
-              <Disc className="w-3.5 h-3.5 text-[#e50914]" />
-              Select disc
-            </span>
-            {discChoices.map((d) => (
-              <button
-                key={d.path}
-                type="button"
-                onClick={() => switchDisc(d.path)}
-                className={`w-full text-left px-2 py-1.5 rounded transition ${
-                  d === currentDisc
-                    ? 'bg-[#e50914]/15 text-white'
-                    : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
-                }`}
-              >
-                <span className="text-[12px] font-semibold">{d.label}</span>
-                <span className="block text-[9px] font-mono text-[#737373]">{d.detail}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
         <div className="px-4 py-3 flex items-center gap-2.5">
           {/* The current disc, by number (owner: "Disc 1", never a filename),
-              bordered in the same color as its text. Clicking it opens the
-              disc list (when there is more than one). */}
+              bordered in the same color as its text. Clicking it cycles to
+              the next disc of the release (owner: no disc-list popup). */}
           <button
             type="button"
-            onClick={() => setShowDiscs(!showDiscs)}
+            onClick={() => {
+              if (discChoices && discChoices.length > 1) {
+                const idx = discChoices.findIndex((d) => d === currentDisc);
+                const next = discChoices[(idx + 1 + discChoices.length) % discChoices.length];
+                void switchDisc(next.path);
+              }
+            }}
             className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate max-w-[240px] border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
             title={
               discChoices && discChoices.length > 1
-                ? `${discLabel} — click to choose another disc`
+                ? `${discLabel} — click to switch to the next disc`
                 : discLabel
             }
           >
@@ -720,13 +732,17 @@ export default function PlayerOverlay() {
           className="p-1.5 rounded hover:bg-[#262626] text-white transition"
           title={
             player.isDisc && poll.title === 0
-              ? 'Play — start the feature from the menu'
+              ? 'Play — resume from the last save point, or start the feature from the beginning'
               : poll.playing
                 ? 'Pause'
                 : 'Play'
           }
         >
-          {poll.playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+          {poll.playing && !(player.isDisc && poll.title === 0) ? (
+            <Pause className="w-4 h-4" />
+          ) : (
+            <Play className="w-4 h-4 fill-white" />
+          )}
         </button>
 
           {player.isDisc && (
@@ -893,7 +909,7 @@ export default function PlayerOverlay() {
                     t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
                   }`}
                 >
-                  {t.name || `Track ${t.id}`}
+                  {trackLabel('audio', audioTracks.indexOf(t), t)}
                 </button>
               ))}
             </div>
@@ -932,7 +948,7 @@ export default function PlayerOverlay() {
                     t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
                   }`}
                 >
-                  {t.name || `Track ${t.id}`}
+                  {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
                 </button>
               ))}
             </div>

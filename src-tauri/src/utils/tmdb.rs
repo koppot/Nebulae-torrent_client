@@ -65,9 +65,19 @@ struct TraktIds {
     tmdb: Option<i64>,
 }
 
+/// Detail-response subset (movie/tv/{id}): total runtime fields.
 #[derive(Debug, Deserialize)]
-struct TmdbItem {
+struct TmdbDetail {
     #[serde(default)]
+    runtime: Option<u32>,
+    #[serde(default)]
+    episode_run_time: Vec<u32>,
+    #[serde(default)]
+    number_of_episodes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TmdbItem {    #[serde(default)]
     id: Option<i64>,
     #[serde(default)]
     poster_path: Option<String>,
@@ -106,7 +116,10 @@ pub fn fetch_poster(
     year: Option<i32>,
 ) -> Result<Option<TmdbMatch>, String> {
     // 1. Cached match?
-    let cache_key = format!("tmdb_poster:{}", lookup_key.to_lowercase());
+    // v2: the search pipeline gained suffix-stripping retries and the
+    // first_air_date_year fix (owner: "Banner of the Stars III OVA" never
+    // matched); bump so previously cached misses re-search.
+    let cache_key = format!("tmdb_poster:v2:{}", lookup_key.to_lowercase());
     if let Ok(Some(cached)) = db.get_setting(&cache_key) {
         let p = PathBuf::from(&cached);
         if p.exists() {
@@ -149,32 +162,57 @@ pub fn fetch_poster(
         .map_err(|e| format!("TMDB client: {e}"))?;
     let mut item: Option<TmdbItem> = None;
     let mut is_tv = false;
-    for endpoint in ["search/movie", "search/tv"] {
-        let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
-            .map_err(|e| format!("TMDB url: {e}"))?;
-        url.query_pairs_mut()
-            .append_pair("api_key", &api_key)
-            .append_pair("query", title);
-        if let Some(y) = year {
-            url.query_pairs_mut().append_pair("year", &y.to_string());
-        }
-        let resp = client
-            .get(url)
-            .send()
-            .map_err(|e| format!("TMDB search: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("TMDB search returned {}", resp.status()));
-        }
-        let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
-        if let Some(i) = body
-            .results
-            .into_iter()
-            .next()
-            .filter(|i| i.poster_path.is_some())
-        {
-            is_tv = endpoint.ends_with("tv");
-            item = Some(i);
-            break;
+    // Search variants, tried in order: the raw title first, then a cleaned
+    // form without format suffixes — "Banner of the Stars III OVA" only
+    // matches TMDB as "Banner of the Stars III" (owner report), and a year
+    // filter can suppress the right TV hit (TV search wants
+    // first_air_date_year, not year).
+    let cleaned = title
+        .trim_end_matches(|c: char| c.is_whitespace())
+        .trim_end_matches("OVA")
+        .trim_end_matches("ova")
+        .trim_end_matches(|c: char| c.is_whitespace())
+        .to_string();
+    let mut variants: Vec<(String, Option<i32>)> = vec![(title.to_string(), year)];
+    if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case(title) {
+        variants.push((cleaned, None));
+    }
+    variants.push((title.to_string(), None));
+    'outer: for (query, variant_year) in variants {
+        for endpoint in ["search/movie", "search/tv"] {
+            let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
+                .map_err(|e| format!("TMDB url: {e}"))?;
+            url.query_pairs_mut()
+                .append_pair("api_key", &api_key)
+                .append_pair("query", &query);
+            if let Some(y) = variant_year {
+                // The TV endpoint ignores `year`; its own filter is
+                // first_air_date_year (using `year` there can hide hits).
+                let pair = if endpoint.ends_with("tv") {
+                    "first_air_date_year"
+                } else {
+                    "year"
+                };
+                url.query_pairs_mut().append_pair(pair, &y.to_string());
+            }
+            let resp = client
+                .get(url)
+                .send()
+                .map_err(|e| format!("TMDB search: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("TMDB search returned {}", resp.status()));
+            }
+            let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
+            if let Some(i) = body
+                .results
+                .into_iter()
+                .next()
+                .filter(|i| i.poster_path.is_some())
+            {
+                is_tv = endpoint.ends_with("tv");
+                item = Some(i);
+                break 'outer;
+            }
         }
     }
     let item = match item {
@@ -212,6 +250,8 @@ pub fn fetch_poster(
     // The runtime comes from the /movie/{id} or /tv/{id} detail response
     // (TV exposes per-episode runtimes); the search result doesn't carry
     // it. One bounded extra request, failures skipped.
+    // For TV the owner wants the TOTAL across all media: episode count ×
+    // per-episode runtime (both on the TV detail response).
     let runtime: Option<u32> = match item.id {
         Some(id) => {
             let kind = if is_tv { "tv" } else { "movie" };
@@ -224,8 +264,22 @@ pub fn fetch_poster(
                 .get(detail_url)
                 .send()
                 .ok()
-                .and_then(|r| r.json::<TmdbItem>().ok())
-                .and_then(|d| d.runtime.or_else(|| d.episode_run_time.first().copied()))
+                .and_then(|r| r.json::<TmdbDetail>().ok())
+                .and_then(|d| {
+                    if is_tv {
+                        let per_ep = d
+                            .episode_run_time
+                            .first()
+                            .copied()
+                            .or(d.runtime)
+                            .unwrap_or(0);
+                        let eps = d.number_of_episodes.unwrap_or(0);
+                        let total = per_ep.saturating_mul(eps);
+                        if total > 0 { Some(total) } else { None }
+                    } else {
+                        d.runtime
+                    }
+                })
         }
         None => None,
     };

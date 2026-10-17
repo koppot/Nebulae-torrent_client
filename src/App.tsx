@@ -171,6 +171,9 @@ export const App: React.FC = () => {
       useUiStore.getState().setSplashDismissed(false);
     } else if (splashParam === 'false') {
       useUiStore.getState().setSplashDismissed(true);
+    } else if (localStorage.getItem('nebulae_pref_skip_splash') === '1') {
+      // Owner preference: start without the splash screen.
+      useUiStore.getState().setSplashDismissed(true);
     }
 
     if (viewParam === 'manager' || viewParam === 'media' || viewParam === 'compact') {

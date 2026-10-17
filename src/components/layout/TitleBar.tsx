@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -130,6 +131,14 @@ export const TitleBar: React.FC = () => {
   return (
     <header
       data-tauri-drag-region
+      onMouseDown={(e) => {
+        // Tauri's startDragging (async IPC) fails to move borderless windows
+        // on current macOS; the backend synthesizes a native mouse-down and
+        // hands it to performWindowDragWithEvent on the main thread.
+        if (e.button === 0 && (e.target as HTMLElement).closest('button') === null) {
+          invoke('window_begin_drag').catch(() => {});
+        }
+      }}
       onDoubleClick={handleToggleMaximize}
       className="h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
     >
