@@ -24,6 +24,8 @@ pub struct VlcLib {
     pub libvlc_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_get_version: unsafe extern "C" fn() -> *const c_char,
     pub libvlc_media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    // MRL-based media (bluray://, dvd://) — folder-based disc images.
+    pub libvlc_media_new_location: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     pub libvlc_media_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_new_from_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub libvlc_media_player_release: unsafe extern "C" fn(*mut c_void),
@@ -57,6 +59,25 @@ pub struct VlcLib {
 // sharing across threads is exactly what libVLC is designed for.
 unsafe impl Send for VlcLib {}
 unsafe impl Sync for VlcLib {}
+
+/// Percent-encode a filesystem path for use in an MRL: RFC 3986 unreserved
+/// characters and path separators stay literal, everything else is escaped
+/// (spaces as %20, parentheses, commas, etc. as %XX).
+fn encode_mrl_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() + 8);
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char);
+            }
+            other => {
+                let hex = format!("%{other:02X}");
+                out.push_str(&hex);
+            }
+        }
+    }
+    out
+}
 
 impl VlcLib {
     /// Locate and load the user's libVLC.
@@ -188,6 +209,7 @@ impl VlcLib {
             libvlc_release: sym!("libvlc_release": unsafe extern "C" fn(*mut c_void)),
             libvlc_get_version: sym!("libvlc_get_version": unsafe extern "C" fn() -> *const c_char),
             libvlc_media_new_path: sym!("libvlc_media_new_path": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
+            libvlc_media_new_location: sym!("libvlc_media_new_location": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_release: sym!("libvlc_media_release": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_new_from_media: sym!("libvlc_media_player_new_from_media": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
             libvlc_media_player_release: sym!("libvlc_media_player_release": unsafe extern "C" fn(*mut c_void)),
@@ -258,7 +280,25 @@ impl VlcSession {
             if instance.is_null() {
                 return Err("libvlc_new failed".into());
             }
-            let media = (lib.libvlc_media_new_path)(instance, c_path.as_ptr());
+            // Folder-based disc images must be opened through a disc MRL:
+            // libvlc_media_new_path on a directory plays it as a plain
+            // filesystem listing (single stream, no titles/chapters, no
+            // menu), which is why folder Blu-ray showed no Menu button and
+            // no chapter controls. VLC 3 exposes both via bluray:// /
+            // dvd://.
+            let is_dir = std::path::Path::new(path).is_dir();
+            let media = if is_dir {
+                let scheme = if path.to_ascii_lowercase().contains("bdmv") {
+                    "bluray"
+                } else {
+                    "dvd"
+                };
+                let mrl = format!("{scheme}://{}", encode_mrl_path(path));
+                let c_mrl = CString::new(mrl).map_err(|_| "bad path".to_string())?;
+                (lib.libvlc_media_new_location)(instance, c_mrl.as_ptr())
+            } else {
+                (lib.libvlc_media_new_path)(instance, c_path.as_ptr())
+            };
             if media.is_null() {
                 (lib.libvlc_release)(instance);
                 return Err(format!("libvlc could not open {path}"));

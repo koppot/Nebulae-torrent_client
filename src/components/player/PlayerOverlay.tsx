@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { closePlayer, openInPlayer, savePositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
 import { formatBytes } from '../../lib/formatters';
 
@@ -70,6 +71,15 @@ export default function PlayerOverlay() {
   const [showDiscs, setShowDiscs] = useState(false);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
   const lastSaveRef = useRef(0);
+  const dragArmedRef = useRef(false);
+  // Latest poll/state mirrors for the unified keyboard handler (it must not
+  // re-register on every poll tick).
+  const pollRef = useRef(poll);
+  pollRef.current = poll;
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -128,29 +138,84 @@ export default function PlayerOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player.open]);
 
-  // DVD menu interaction (keyboard). Mouse clicks on disc menus do NOT
-  // reach dvdnav when the video is embedded into the native overlay view
-  // (reproduced and measured engine-side), so while the menu domain is
-  // active (title 0) the keyboard and the on-screen D-pad drive
-  // libvlc_media_player_navigate instead. Enter activates the highlighted
-  // menu entry ("Play all", etc.) on the FIRST press; the arrow keys move
-  // the highlight.
+  // Unified keyboard control. Mouse AND keyboard events over the video are
+  // captured by the native overlay NSView, which forwards key presses as
+  // "player-native-key" events; when the webview itself has focus the same
+  // handling runs from the window keydown listener. One handler covers
+  // both: disc-menu navigation while the menu domain is active (title 0),
+  // and standard playback shortcuts otherwise (space pause, arrows
+  // seek/volume, F fullscreen, M mute).
   useEffect(() => {
-    if (!player.open || !player.isDisc || poll.title !== 0) return;
+    if (!player.open) return;
     const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
-    const onKey = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case 'Enter': e.preventDefault(); nav(0); break;
-        case 'ArrowUp': e.preventDefault(); nav(1); break;
-        case 'ArrowDown': e.preventDefault(); nav(2); break;
-        case 'ArrowLeft': e.preventDefault(); nav(3); break;
-        case 'ArrowRight': e.preventDefault(); nav(4); break;
-        default: return;
+    const handle = (key: string) => {
+      if (player.isDisc && pollRef.current.title === 0) {
+        switch (key) {
+          case 'Enter': nav(0); break;
+          case 'ArrowUp': nav(1); break;
+          case 'ArrowDown': nav(2); break;
+          case 'ArrowLeft': nav(3); break;
+          case 'ArrowRight': nav(4); break;
+        }
+        return;
+      }
+      const t = pollRef.current.time_ms;
+      const len = pollRef.current.length_ms;
+      switch (key) {
+        case ' ':
+          invoke('player_toggle_pause').catch(() => {});
+          break;
+        case 'ArrowLeft':
+          invoke('player_seek', { positionMs: Math.max(t - 10000, 0) }).catch(() => {});
+          break;
+        case 'ArrowRight':
+          invoke('player_seek', { positionMs: len > 0 ? Math.min(t + 10000, len) : t + 10000 }).catch(() => {});
+          break;
+        case 'ArrowUp':
+        case 'ArrowDown': {
+          const delta = key === 'ArrowUp' ? 10 : -10;
+          setMuted(false);
+          setVolume((v) => {
+            const next = Math.max(0, Math.min(100, v + delta));
+            invoke('player_set_volume', { volume: next }).catch(() => {});
+            return next;
+          });
+          break;
+        }
+        case 'f':
+        case 'F': {
+          const win = getCurrentWindow();
+          win.isFullscreen().then((fs) => win.setFullscreen(!fs)).catch(() => {});
+          break;
+        }
+        case 'm':
+        case 'M': {
+          if (mutedRef.current) {
+            setMuted(false);
+            invoke('player_set_volume', { volume: volumeRef.current }).catch(() => {});
+          } else {
+            setMuted(true);
+            invoke('player_set_volume', { volume: 0 }).catch(() => {});
+          }
+          break;
+        }
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M']);
+      if (!keys.has(e.key)) return;
+      e.preventDefault();
+      handle(e.key);
+    };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [player.open, player.isDisc, poll.title]);
+    let unlisten: (() => void) | undefined;
+    listen<string>('player-native-key', (e) => handle(e.payload)).then((u) => { unlisten = u; }).catch(() => {});
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      unlisten?.();
+    };
+  }, [player.open, player.isDisc]);
 
   // Disc set of the playing release: names the current disc ("Disc 1") in
   // the control bar and feeds the switcher popup. The set may live several
@@ -211,11 +276,12 @@ export default function PlayerOverlay() {
   const discLabel = player.isDisc ? currentDisc?.label || 'Disc 1' : player.title;
 
   const switchDisc = async (path: string) => {
+    console.log('[player] switchDisc click:', path);
     setShowDiscs(false);
     try {
       await openInPlayer(path);
-    } catch {
-      // The overlay stays; the failed open is logged engine-side.
+    } catch (err) {
+      console.error('[player] switchDisc failed:', err);
     }
   };
 
@@ -243,10 +309,9 @@ export default function PlayerOverlay() {
 
   // Window drag + double-click fullscreen (owner requests): the overlay
   // covers the whole undecorated window, so nothing else offers a drag
-  // region. Mousedown on the video hole starts a native window drag;
-  // double-click toggles macOS fullscreen. A drag gesture suppresses the
-  // following dblclick so a move is never read as a fullscreen toggle.
-  const dragArmedRef = useRef(false);
+  // region. (Superseded by the native NSView subclass in embed_macos.rs,
+  // which now performs the drag and fullscreen toggle itself; the webview
+  // handlers remain as a fallback for clicks that reach the webview.)
   const onVideoPointerDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     dragArmedRef.current = true;

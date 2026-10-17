@@ -11,12 +11,88 @@
 
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
-use objc2_app_kit::{NSView, NSWindow, NSWindowOrderingMode};
+use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 
+// The overlay NSView sits ABOVE the webview, so mouse and keyboard events
+// over the video never reach the frontend (owner-reported: dragging,
+// double-click fullscreen and keyboard controls were all dead). The view
+// is therefore a real subclass:
+//   - single click-drag  -> native window drag (performWindowDragWithEvent,
+//     the standard borderless-window mechanism);
+//   - double click       -> toggle macOS fullscreen;
+//   - keyDown            -> forwarded to the frontend ("player-native-key"
+//     event) where one unified handler applies the shortcuts (menu
+//     navigation, pause, seek, volume, fullscreen).
+objc2::define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "NebulaeVideoOverlayView"]
+    struct VideoOverlayView;
+
+    impl VideoOverlayView {
+        #[unsafe(method(mouseDown:))]
+        unsafe fn mouse_down(this: &VideoOverlayView, event: &NSEvent) {
+            if event.clickCount() >= 2 {
+                if let Some(app) = overlay_app() {
+                    toggle_fullscreen(app);
+                }
+            } else if let Some(win) = this.window() {
+                let _: () = objc2::msg_send![&*win, performWindowDragWithEvent: event];
+            }
+        }
+
+        #[unsafe(method(keyDown:))]
+        unsafe fn key_down(this: &VideoOverlayView, event: &NSEvent) {
+            let _ = this;
+            if let Some(app) = overlay_app() {
+                if let Some(key) = native_key_name(event) {
+                    use tauri::Emitter;
+                    let _ = app.emit("player-native-key", key);
+                }
+            }
+        }
+
+        #[unsafe(method(acceptsFirstResponder))]
+        unsafe fn accepts_first_responder(this: &VideoOverlayView) -> bool {
+            let _ = this;
+            true // receive keyDown when the user interacts with the video
+        }
+    }
+);
+
+fn overlay_app() -> Option<&'static AppHandle> {
+    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+    APP.get()
+}
+
+fn overlay_app_init(app: AppHandle) {
+    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+    let _ = APP.set(app);
+}
+
+fn toggle_fullscreen(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let fs = win.is_fullscreen().unwrap_or(false);
+        let _ = win.set_fullscreen(!fs);
+    }
+}
+
+/// Translate a native key event into the frontend's key-name vocabulary.
+fn native_key_name(event: &NSEvent) -> Option<String> {
+    let chars = event.charactersIgnoringModifiers()?.to_string();
+    match chars.as_str() {
+        " " => Some(" ".to_string()),
+        "\r" => Some("Enter".to_string()),
+        "\x1b" => Some("Escape".to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
+    overlay_app_init(app.clone());
     let existing = app
         .state::<crate::player::PlayerState>()
         .overlay_view
@@ -57,7 +133,9 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
             .ok_or_else(|| "window has no contentView".to_string())?;
         let bounds = content.bounds();
         let mtm = MainThreadMarker::new().ok_or("not on main thread")?;
-        let view: Retained<NSView> = NSView::initWithFrame(NSView::alloc(mtm), bounds);
+        let view: Retained<VideoOverlayView> =
+            objc2::msg_send![VideoOverlayView::alloc(mtm), init];
+        view.setFrame(bounds);
         view.setWantsLayer(true);
         view.setHidden(true);
         content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Above, None);

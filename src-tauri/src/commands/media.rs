@@ -137,6 +137,28 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         });
     }
     if path.is_dir() {
+        // The BDMV/VIDEO_TS directory itself was passed (e.g. saved in the
+        // resume store): the disc root is its parent.
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if dir_name == "bdmv" || dir_name == "video_ts" {
+            if let Some(disc_root) = path.parent() {
+                let title = disc_root
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Video")
+                    .to_string();
+                return Ok(ResolvedPlayback {
+                    resolved_path: disc_root.display().to_string(),
+                    title,
+                    is_disc: true,
+                    external: false,
+                });
+            }
+        }
         if let Some(target) = resolve_disc_target(path) {
             if let Some(disc) = DiscDetector::inspect(&target) {
                 let title = disc.title.clone();
@@ -175,8 +197,9 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     // must never play as a bare clip: such entries are menu loops seconds
     // long, and playback ends into a black screen (owner-reported blank
     // player for the Fuuka Blu-ray). Older builds saved such paths into the
-    // resume store; redirect to the disc's main feature instead of playing
-    // the clip. The feature is the largest video under the disc structure.
+    // resume store; redirect to the disc itself (played through the
+    // bluray:// MRL so titles, chapters and the menu are available) instead
+    // of playing the clip as a bare file.
     let disc_ancestor = path
         .ancestors()
         .skip(1)
@@ -188,23 +211,23 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
                 .to_ascii_lowercase();
             name == "bdmv" || name == "video_ts"
         });
-    if let Some(disc_root) = disc_ancestor {
-        if let Some(feature) = find_main_video(disc_root) {
+    if let Some(disc_dir) = disc_ancestor {
+        // The disc root is the folder CONTAINING BDMV/VIDEO_TS.
+        if let Some(disc_root) = disc_dir.parent() {
             let title = disc_root
-                .parent()
-                .and_then(|p| p.file_name())
+                .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or(title.as_str())
                 .to_string();
             tracing::info!(
-                "resolve_playback: in-disc file {} redirected to feature {}",
+                "resolve_playback: in-disc file {} redirected to disc root {}",
                 path.display(),
-                feature.display()
+                disc_root.display()
             );
             return Ok(ResolvedPlayback {
-                resolved_path: feature.display().to_string(),
+                resolved_path: disc_root.display().to_string(),
                 title,
-                is_disc: false,
+                is_disc: true,
                 external: false,
             });
         }
