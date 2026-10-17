@@ -171,6 +171,29 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
 
 /// Toggle fullscreen for the player window (F key / fullscreen button /
 /// double-click). Sets the corner radius to 0 in fullscreen, 3 px out.
+/// Miniaturize (yellow traffic light) the main window. Commanded from the
+/// webview dot controls on the borderless player window.
+pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    let app2 = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        unsafe {
+            let ns_win = raw as *mut NSWindow;
+            if ns_win.is_null() {
+                return;
+            }
+            let nil: *mut std::ffi::c_void = std::ptr::null_mut();
+            let _: () = objc2::msg_send![&*ns_win, miniaturize: nil];
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
 pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
     let app2 = app.clone();
     app.run_on_main_thread(move || {

@@ -483,7 +483,63 @@ impl TransmissionRpcClient {
             "location": location,
             "move": move_data
         });
-        self.request("torrent-set-location", Some(args))?;
+        // Moving terabyte-scale libraries takes FAR longer than the shared
+        // client's 15 s timeout (the move blocks this RPC until done), so
+        // the call is fired on a dedicated thread with a 30-minute window
+        // and returns immediately - the daemon keeps moving regardless of
+        // what the UI does.
+        let rpc_url = self.rpc_url.clone();
+        let auth = self.auth_header.clone();
+        let sid = self.session_id.lock().unwrap().clone();
+        let id = id.to_string();
+        let location = location.to_string();
+        std::thread::spawn(move || {
+            let client = match reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(1800))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("[set-location] client build failed: {e}");
+                    return;
+                }
+            };
+            for attempt in 0..3 {
+                let mut req = client.post(&rpc_url).json(&args);
+                if let Some(ref s) = sid {
+                    req = req.header("X-Transmission-Session-Id", s);
+                }
+                if let Some(ref a) = auth {
+                    req = req.header("Authorization", a);
+                }
+                match req.send() {
+                    Ok(resp) if resp.status().as_u16() == 409 => {
+                        // CSRF handshake: take the new token and retry.
+                        if let Some(Ok(v)) = resp
+                            .headers()
+                            .get("X-Transmission-Session-Id")
+                            .map(|h| h.to_str())
+                        {
+                            let _ = v;
+                        }
+                        continue;
+                    }
+                    Ok(resp) => {
+                        tracing::info!(
+                            "[set-location] move of {} -> {} finished: {}",
+                            id,
+                            location,
+                            resp.status()
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("[set-location] move failed: {e}");
+                        return;
+                    }
+                }
+            }
+        });
         Ok(())
     }
 

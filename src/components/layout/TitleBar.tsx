@@ -145,12 +145,15 @@ export const TitleBar: React.FC = () => {
     >
       {/* Centered application name (owner: Movist Pro-style top bar),
           with the full client name on its own line BELOW the bar. */}
-      <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
-        <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
-        <div className="absolute left-1/2 -translate-x-1/2 top-full whitespace-nowrap text-[10px] text-[#a3a3a3] font-normal tracking-tight">
-          Client by Asian DVD Club
+      {/* Brand inline after the traffic lights (owner) - manager only. */}
+      {viewMode !== 'media' && (
+        <div className="flex items-baseline gap-1.5 flex-shrink-0 mr-1" data-tauri-drag-region>
+          <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+          <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
+            — Client by Asian DVD Club
+          </span>
         </div>
-      </div>
+      )}
       {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
       <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
         {/* macOS Native-Style Window Traffic Lights */}
@@ -317,10 +320,10 @@ export const TitleBar: React.FC = () => {
 
       {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
       <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
-        {/* Media-mode controls (owner): Search library, Player preferences
-            and Add Movie live in the TOP BAR; SimpleMediaView receives
-            them via window events. */}
-        {viewMode === 'media' && (
+        {/* Right-side controls (owner): Search library + Player preferences
+            on manager AND media; the folder-open (Add Movie) sits in the
+            corner. SimpleMediaView receives its events via window events. */}
+        {viewMode !== 'compact' && (
           <>
             <div
               className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] w-52 focus-within:border-[#e50914]/50 transition"

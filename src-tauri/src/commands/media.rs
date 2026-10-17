@@ -1310,6 +1310,11 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
 /// reliable path. Corner radius follows the fullscreen state (owner: 3 px
 /// in the player, 0 in fullscreen).
 #[tauri::command]
+pub fn player_window_minimize(app: tauri::AppHandle) -> Result<(), String> {
+    crate::player::miniaturize(&app)
+}
+
+#[tauri::command]
 pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     // Manual frame/style-mask toggle in embed_macos: the native
     // toggleFullScreen: animation ignores borderless windows entirely.

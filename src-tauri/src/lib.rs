@@ -544,6 +544,7 @@ pub fn run() {
             commands::media::player_close,
             commands::media::player_toggle_pause,
             commands::media::player_toggle_fullscreen,
+            commands::media::player_window_minimize,
             commands::media::player_seek,
             commands::media::player_set_volume,
             commands::media::player_poll,
