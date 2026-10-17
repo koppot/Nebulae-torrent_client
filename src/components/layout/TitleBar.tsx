@@ -248,6 +248,14 @@ export const TitleBar: React.FC = () => {
             <span>Delete</span>
           </button>
 
+          {/* Brand between the action and utility icons (owner). */}
+          <div className="flex items-baseline gap-1.5 mx-2 flex-shrink-0" data-tauri-drag-region>
+            <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+            <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
+              — Client by Asian DVD Club
+            </span>
+          </div>
+
           {/* Divider */}
           <div className="h-4 w-[1px] bg-[#262626] mx-1" />
 
