@@ -1914,6 +1914,35 @@ pub fn add_external_media(
     path: String,
     title: String,
 ) -> Result<(), String> {
+    // Store the RELEASE ROOT, never a single disc (owner): a recorded
+    // disc folder (".../91 DAYS US/91 DAYS D1") is walked up until the
+    // directory no longer IS a disc (no direct BDMV/VIDEO_TS child and
+    // no ISO child). The root then contains every disc of the set.
+    let release_root = {
+        fn is_disc_dir(dir: &std::path::Path) -> bool {
+            if dir.file_name().map(|n| {
+                let n = n.to_string_lossy().to_lowercase();
+                n.ends_with(".iso") || n.ends_with(".img")
+            }) == Some(true)
+            {
+                return true;
+            }
+            let ok = |name: &str| dir.join(name).exists();
+            ok("BDMV") || ok("VIDEO_TS")
+        }
+        let mut cur = std::path::PathBuf::from(&path);
+        if cur.is_file() {
+            cur = cur.parent().map(|p| p.to_path_buf()).unwrap_or(cur);
+        }
+        while is_disc_dir(&cur) {
+            match cur.parent() {
+                Some(p) => cur = p.to_path_buf(),
+                None => break,
+            }
+        }
+        cur.to_string_lossy().to_string()
+    };
+    let path = release_root;
     let mut items = read_external_store(&app);
     if items.iter().any(|m| m.path == path) {
         return Ok(());
