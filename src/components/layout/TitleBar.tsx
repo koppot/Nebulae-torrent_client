@@ -21,6 +21,7 @@ import {
   Copy,
   LayoutGrid,
   Film,
+  FolderOpen,
   Minimize2,
   Maximize2,
 } from 'lucide-react';
@@ -359,11 +360,10 @@ export const TitleBar: React.FC = () => {
                 e.stopPropagation();
                 window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
               }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
               title="Add Movie — pick the release root folder (all discs) or an ISO image"
             >
-              <Film className="w-3.5 h-3.5" />
-              <span>Add Movie</span>
+              <FolderOpen className="w-4 h-4" />
             </button>
           </>
         )}
