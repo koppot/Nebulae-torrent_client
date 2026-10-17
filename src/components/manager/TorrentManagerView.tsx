@@ -39,6 +39,7 @@ import {
   LineChart,
   Sliders,
   Zap,
+  FolderInput,
 } from 'lucide-react';
 
 // Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
@@ -251,6 +252,8 @@ export const TorrentManagerView: React.FC = () => {
     setFilePriority,
     toggleSequential,
     setTorrentLimits,
+    setLocation,
+    selectDownloadDirectory,
   } = useTorrentStore();
 
   const {
@@ -1626,6 +1629,21 @@ export const TorrentManagerView: React.FC = () => {
             >
               <Edit2 className="w-3.5 h-3.5" />
               <span>Rename...</span>
+            </button>
+          )}
+          {!isRemoteServer && (
+            <button
+              onClick={async () => {
+                const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                setContextMenu((prev) => ({ ...prev, visible: false }));
+                if (!t) return;
+                const folder = await selectDownloadDirectory();
+                if (folder) setLocation(t.id, folder);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+            >
+              <FolderInput className="w-3.5 h-3.5" />
+              <span>Move to Folder...</span>
             </button>
           )}
           <button
