@@ -796,7 +796,11 @@ export const SplashScreen: React.FC = () => {
         >
           <p className="m-0 text-[18px] md:text-[20px] leading-[1.8] font-light flex items-baseline gap-3">
             <span
-              style={{ color: '#ffffff' }}
+              style={{
+                color: '#ffffff',
+                textShadow:
+                  '0 0 14px rgba(212,175,55,0.45), 0 0 34px rgba(212,175,55,0.25), 0 0 60px rgba(212,175,55,0.12)',
+              }}
               className="font-normal text-[90px] md:text-[100px] leading-none tracking-wide"
             >
               NEBULAE

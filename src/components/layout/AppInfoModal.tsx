@@ -62,14 +62,16 @@ export default function AppInfoModal({ onClose }: Props) {
             <dt className="text-[#a3a3a3]">Version</dt>
             <dd className="font-mono text-white">{version}</dd>
           </div>
-          <div className="flex justify-between">
-            <dt className="text-[#a3a3a3]">Engine</dt>
-            <dd className="text-white">Transmission (embedded)</dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-[#a3a3a3]">Playback</dt>
-            <dd className="text-white">VLC (libVLC) disc menus</dd>
-          </div>
+        </dl>
+        <p className="mt-3 text-[10px] uppercase tracking-[0.15em] text-[#a3a3a3]">Features</p>
+        <ul className="mt-1.5 space-y-1 text-[11px] text-[#d4d4d4]">
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>Torrent manager with swarm detail, RSS and trackers</li>
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>Media Center — optical cinema gallery with TMDB posters</li>
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>Embedded VLC player with interactive DVD / Blu-ray menus</li>
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>Chapter navigation, audio & subtitle language control</li>
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>ISO and multi-disc releases, resume points, external media library</li>
+          <li className="flex gap-2"><span className="text-[#e50914]">•</span>VPN kill switch, connectivity doctor, ADC ratio profile</li>
+        </dl>
         </dl>
 
         <button
