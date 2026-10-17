@@ -443,6 +443,22 @@ export default function PlayerOverlay() {
     }
   }, [popoverOpen, poll.playing, poll.title, ended]);
 
+  // Subtitle track list for the current title: fetched as soon as the
+  // feature engages so the bar can hide the Subtitles pill entirely when
+  // the title has no subtitle streams (owner).
+  useEffect(() => {
+    if (!player.open || poll.title === 0) return;
+    let alive = true;
+    invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
+      .then((tracks) => {
+        if (alive) setSubTracks(tracks.map((t) => ({ ...t, active: false })));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [player.open, poll.title]);
+
   // Preferred audio/subtitle languages (owner, "media player preferences"
   // on the media screen): stored by SimpleMediaView, applied automatically
   // once the feature title engages. Codes like "en,ja"; track names carry
@@ -676,7 +692,7 @@ export default function PlayerOverlay() {
                 void switchDisc(next.path);
               }
             }}
-            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate max-w-[240px] border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+            className="shrink-0 text-xs text-white font-medium truncate max-w-[240px] border border-white rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
             title={
               discChoices && discChoices.length > 1
                 ? `${discLabel} — click to switch to the next disc`
@@ -695,7 +711,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => invoke('player_return_to_menu').catch(() => {})}
-              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded-md border border-[#333333] text-[#a3a3a3] hover:bg-[#262626] hover:text-white transition"
+              className="shrink-0 text-[10px] uppercase tracking-wider px-2 py-1 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition"
               title="Return to the disc's interactive menu"
             >
               Menu
@@ -718,7 +734,7 @@ export default function PlayerOverlay() {
                   key={mode}
                   type="button"
                   onClick={() => invoke('player_menu_navigate', { mode }).catch(() => {})}
-                  className="w-7 h-7 rounded-md border border-[#333333] text-[#a3a3a3] hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
+                  className="w-7 h-7 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
                   title={tip}
                 >
                   {glyph}
@@ -746,7 +762,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => jumpChapter(-1)}
-              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              className="shrink-0 p-1.5 rounded text-white hover:text-white hover:bg-[#262626] transition"
               title="Previous chapter"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -756,7 +772,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: -1 }).catch(() => {})}
-              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              className="shrink-0 p-1.5 rounded text-white hover:text-white hover:bg-[#262626] transition"
               title="Previous episode (feature title)"
             >
               <ChevronsLeft className="w-4 h-4" />
@@ -786,7 +802,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: 1 }).catch(() => {})}
-              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              className="shrink-0 p-1.5 rounded text-white hover:text-white hover:bg-[#262626] transition"
               title="Next episode (feature title)"
             >
               <ChevronsRight className="w-4 h-4" />
@@ -796,7 +812,7 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => jumpChapter(1)}
-              className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
+              className="shrink-0 p-1.5 rounded text-white hover:text-white hover:bg-[#262626] transition"
               title="Next chapter"
             >
               <ChevronRight className="w-4 h-4" />
@@ -810,11 +826,12 @@ export default function PlayerOverlay() {
         {/* Seek bar (owner): a thin bar that fills gradually as the title
             progresses, with real chapter offsets drawn as vertical ticks.
             Click / drag anywhere on the track to seek. */}
-        <div className="relative flex-1 flex flex-col justify-end gap-1 group/bar">
+        <div className="relative flex-1 flex items-center group/bar">
           {/* Skip-10 buttons (owner): small round graphics right above the
               progress bar — rotate-left/right arrows with the seconds
-              marked inside. */}
-          <div className="flex items-center justify-end gap-1">
+              marked inside. They float above the line so the track shares
+              the bar's midline with the buttons. */}
+          <div className="absolute right-0 bottom-full flex items-center gap-1">
             <button
               type="button"
               onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
@@ -846,11 +863,11 @@ export default function PlayerOverlay() {
         >
           <div
             data-testid="seek-track"
-            className="relative w-full h-[3px] rounded-full bg-white/25 overflow-visible"
+            className="relative w-full h-[3px] rounded-full bg-white/40 overflow-visible"
           >
             {/* Gradual fill (owner: grey, not red) */}
             <div
-              className="absolute left-0 top-0 h-full rounded-full bg-[#9a9a9a]"
+              className="absolute left-0 top-0 h-full rounded-full bg-white"
               style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
             {/* Chapter marks: vertical ticks at the real chapter offsets */}
@@ -905,7 +922,7 @@ export default function PlayerOverlay() {
                   halfway level. */}
               <div
                 data-testid="volume-track"
-                className="relative w-[3px] h-16 rounded-full bg-white/25 cursor-pointer"
+                className="relative w-[3px] h-16 rounded-full bg-white/40 cursor-pointer"
                 onPointerDown={(e) => {
                   e.currentTarget.setPointerCapture(e.pointerId);
                   volumeFromPointer(e.clientY);
@@ -916,7 +933,7 @@ export default function PlayerOverlay() {
               >
                 <span className="absolute left-1/2 -translate-x-1/2 w-[9px] h-[2px] rounded bg-white/80 pointer-events-none" style={{ bottom: '50%' }} />
                 <div
-                  className="absolute bottom-0 left-0 w-full rounded-full bg-[#9a9a9a]"
+                  className="absolute bottom-0 left-0 w-full rounded-full bg-white"
                   style={{ height: `${volume}%` }}
                 />
               </div>
@@ -925,7 +942,10 @@ export default function PlayerOverlay() {
         </div>
 
         {/* Subtitles / Audio (owner): pill buttons styled like the disc
-            button, with the popover listing the disc's tracks. */}
+            button, with the popover listing the disc's tracks. The
+            Subtitles pill is hidden entirely when the current title has
+            no subtitle streams. */}
+        {subTracks.length > 0 && (
         <div className="relative shrink-0">
           <button
             type="button"
@@ -936,7 +956,7 @@ export default function PlayerOverlay() {
               }
               setShowSubs((v) => !v);
             }}
-            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate w-[86px] text-center border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition"
+            className="shrink-0 text-xs text-white font-medium truncate w-[86px] text-center border border-white rounded-md px-2 py-1 hover:text-white hover:border-white transition"
             title="Subtitles"
           >
             Subtitles
@@ -956,7 +976,7 @@ export default function PlayerOverlay() {
                     setShowSubs(false);
                   }}
                   className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
-                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
                   }`}
                 >
                   {trackLabel('audio', audioTracks.indexOf(t), t)}
@@ -965,6 +985,7 @@ export default function PlayerOverlay() {
             </div>
           )}
         </div>
+        )}
         <div className="relative shrink-0">
           <button
             type="button"
@@ -975,7 +996,7 @@ export default function PlayerOverlay() {
               }
               setShowAudio((v) => !v);
             }}
-            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate w-[86px] text-center border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition"
+            className="shrink-0 text-xs text-white font-medium truncate w-[86px] text-center border border-white rounded-md px-2 py-1 hover:text-white hover:border-white transition"
             title="Audio tracks"
           >
             Audio
@@ -995,7 +1016,7 @@ export default function PlayerOverlay() {
                     setShowAudio(false);
                   }}
                   className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
-                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
                   }`}
                 >
                   {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
@@ -1015,6 +1036,20 @@ export default function PlayerOverlay() {
           {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
         </button>
         </div>
+      </div>
+
+      {/* Now playing (owner): current title in the top-left corner, fading
+          with the controls. */}
+      <div
+        className={`absolute top-3 left-4 z-20 max-w-[60%] truncate text-sm text-white font-medium transition ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        style={{
+          filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
+        }}
+        title={player.title}
+      >
+        {player.title}
       </div>
 
       {/* Close (owner): white X, pinned to the top-right corner of the
