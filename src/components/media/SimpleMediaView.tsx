@@ -82,7 +82,7 @@ export const folderOf = (t: TorrentItem): string => {
   return /\.[a-z0-9]+$/i.test(p) ? p.split('/').slice(0, -1).join('/') : p;
 };
 
-export const SimpleMediaView: React.FC = () => {  const { torrents, selectSourceFolder, setSelectedId } = useTorrentStore();
+export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode } = useUiStore();
   const { seedTimeRecords, fetchSeedTimeRecords } = useTrackerStore();
 
@@ -183,11 +183,29 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
   const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
   const [externalTitlePrompt, setExternalTitlePrompt] = useState<{ path: string; guess: string } | null>(null);
   const [externalTitleInput, setExternalTitleInput] = useState('');
-  const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; kind: string }[]>([]);
+  const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string }[]>([]);
   const refreshExternalMedia = useCallback(async () => {
     try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
   }, []);
   useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia]);
+  // Library banners for external titles: same TMDB pipeline as downloads.
+  const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
+  useEffect(() => {
+    externalMedia.forEach((m) => {
+      if (m.path in externalPosterMap) return;
+      setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
+      invoke<FetchTmdbResult>('fetch_tmdb_release', {
+        title: m.title,
+        year: m.year ?? undefined,
+      })
+        .then((res) => {
+          setExternalPosterMap((prev) => ({ ...prev, [m.path]: res?.poster_webp ?? undefined }));
+        })
+        .catch(() => {
+          setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
+        });
+    });
+  }, [externalMedia, externalPosterMap]);
 
   // ADC seed-time records power the hover line ("ADC: 2.48 · Seed time: 2d 14h").
   useEffect(() => {
@@ -428,24 +446,16 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
       setExternalTitlePrompt({ path: p, guess: (p.split('/').filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
     }
   };
+  // ONE entry point (owner): the dialog accepts the release ROOT folder
+  // (holding all disc folders, like a torrent download) OR an ISO image.
   const handlePlayExternalDisc = async () => {
     setExternalDiscError(null);
     try {
-      const folder = await selectSourceFolder();
-      if (!folder) return;
-      await importExternal(folder);
+      const src = await invoke<string | null>('select_disc_source');
+      if (!src) return;
+      await importExternal(src);
     } catch (err: unknown) {
       setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
-    }
-  };
-  const handlePlayExternalIso = async () => {
-    setExternalDiscError(null);
-    try {
-      const iso = await invoke<string | null>('select_iso_file');
-      if (!iso) return;
-      await importExternal(iso);
-    } catch (err: unknown) {
-      setExternalDiscError(errorMessage(err, 'Could not launch the disc image.'));
     }
   };
 
@@ -775,19 +785,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           <button
             onClick={handlePlayExternalDisc}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs font-semibold transition"
-            title="Play a DVD, Blu-ray, or UHD disc from your optical drive with the bundled Nebulae player"
+            title="Pick the release's ROOT folder (holding ALL of its disc folders, like a torrent download) or an ISO disc image. Picking a single disc's folder plays only that disc."
           >
             <Disc className="w-4 h-4 text-[#e50914]" />
-            <span>Play External Disc</span>
-          </button>
-
-          <button
-            onClick={handlePlayExternalIso}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs font-semibold transition"
-            title="Play a DVD/Blu-ray ISO disc image with the bundled Nebulae player"
-          >
-            <Disc className="w-4 h-4 text-[#e50914]" />
-            <span>Play ISO</span>
+            <span>Add Movie</span>
           </button>
         </div>
       </div>
@@ -884,8 +885,17 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                   className="w-full text-left rounded-lg overflow-hidden bg-[#141414] border border-[#262626] hover:border-[#e50914]/50 transition"
                   title={`${m.title} — ${m.kind} (right-click to remove)`}
                 >
-                  <div className="aspect-[2/3] flex items-center justify-center bg-[#0d0d0d]">
-                    <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                  <div className="aspect-[2/3] flex items-center justify-center bg-[#0d0d0d] overflow-hidden">
+                    {externalPosterMap[m.path] ? (
+                      <img
+                        src={localSrc(externalPosterMap[m.path] as string)}
+                        alt={m.title}
+                        className="w-full h-full object-cover rounded-lg"
+                        draggable={false}
+                      />
+                    ) : (
+                      <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                    )}
                   </div>
                   <div className="p-2">
                     <div className="text-[11px] font-medium text-white truncate">{m.title}</div>
