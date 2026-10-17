@@ -1092,8 +1092,8 @@ impl TransmissionTorrentEngine {
             engine_dir.display()
         );
 
-        let child = std::process::Command::new(&daemon_path)
-            .arg("--config-dir")
+        let mut cmd = std::process::Command::new(&daemon_path);
+        cmd.arg("--config-dir")
             .arg(&engine_dir)
             .arg("--foreground")
             // Pin the working directory to the writable engine dir: inheriting
@@ -1101,8 +1101,15 @@ impl TransmissionTorrentEngine {
             // daemon's path handling.
             .current_dir(&engine_dir)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
+            .stderr(std::process::Stdio::null());
+        // transmission-daemon is a CONSOLE program: without CREATE_NO_WINDOW
+        // Windows opens a cmd window (showing the engine dir) next to the app.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let child = cmd.spawn()
             .map_err(|e| format!("Failed to spawn transmission-daemon: {e}"))?;
 
         let pid = child.id();
@@ -1192,13 +1199,18 @@ impl TransmissionTorrentEngine {
                         tokio::time::sleep(backoff).await;
                         backoff = (backoff * 2).min(Duration::from_secs(16));
 
-                        match std::process::Command::new(&daemon_path_watch)
-                            .arg("--config-dir")
+                        let mut cmd = std::process::Command::new(&daemon_path_watch);
+                        cmd.arg("--config-dir")
                             .arg(&engine_dir_watch)
                             .arg("--foreground")
                             .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn()
+                            .stderr(std::process::Stdio::null());
+                        #[cfg(target_os = "windows")]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                        }
+                        match cmd.spawn()
                         {
                             Ok(new_child) => {
                                 let new_pid = new_child.id();
@@ -1667,14 +1679,17 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let dest = normalize_download_dir(download_dir)?;
         let mut args = json!({
             "filename": trimmed,
-            "paused": false
+            "paused": true
         });
         if let Some(ref d) = dest {
             args["download-dir"] = json!(d);
         }
 
         let hash = self.rpc_client.torrent_add(args)?;
-        info!("Added torrent {hash} via Transmission sidecar");
+        // Verify FIRST (finds renamed existing data), then start.
+        let _ = self.rpc_client.torrent_verify(&hash);
+        let _ = self.rpc_client.torrent_start(Some(&hash));
+        info!("Added torrent {hash} via Transmission sidecar (verify-then-start)");
         Ok(hash)
     }
 
@@ -1707,14 +1722,18 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
         let mut args = json!({
             "metainfo": b64,
-            "paused": false
+            "paused": true
         });
         if let Some(ref d) = effective_dest {
             args["download-dir"] = json!(d);
         }
 
         let hash = self.rpc_client.torrent_add(args)?;
-        info!("Added torrent {hash} from metainfo bytes via Transmission sidecar");
+        // Verify FIRST (finds renamed existing data), then start: without
+        // the initial check the torrent re-downloads from scratch.
+        let _ = self.rpc_client.torrent_verify(&hash);
+        let _ = self.rpc_client.torrent_start(Some(&hash));
+        info!("Added torrent {hash} from metainfo bytes via Transmission sidecar (verify-then-start)");
         Ok(hash)
     }
 

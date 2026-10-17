@@ -47,6 +47,7 @@ roxmltree = "0.20"
 base64 = "0.22"
 axum = "0.8"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 libloading = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 maxminddb = "0.24"

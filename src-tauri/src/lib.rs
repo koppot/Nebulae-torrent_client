@@ -244,6 +244,23 @@ pub fn run() {
     let db_for_rss = Arc::clone(&db);
 
     let app = tauri::Builder::default()
+        // Single instance (owner): double-clicking another .torrent must
+        // focus the running app and hand it the file, not spawn a second
+        // instance. Registered FIRST per the plugin's requirement.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            use tauri::{Emitter, Manager};
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            for arg in argv.iter().skip(1) {
+                let lower = arg.to_lowercase();
+                if lower.ends_with(".torrent") || lower.starts_with("magnet:") {
+                    let _ = app.emit("nebulae://open-uri", arg.clone());
+                }
+            }
+        }))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
