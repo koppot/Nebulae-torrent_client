@@ -629,7 +629,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                       }
                     >
                       <Play className="w-3 h-3 fill-black" />
-                      <span>{canResume ? 'Resume' : 'Play'}</span>
+                      <span>Play</span>
                     </button>
                   );
                 })()}
@@ -651,6 +651,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
               title={group.clean_title}
             >
               {group.clean_title}
+              {group.year ? <span className="text-[#a3a3a3]"> ({group.year})</span> : null}
             </h4>
             {variant === 'active' && (
               <>
@@ -803,16 +804,12 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
             </div>
           )}
 
-          {/* Shelf 2: Ready to Watch */}
+          {/* Shelf 2: Ready (owner: no icon, no count). */}
           <div className="space-y-7">
             <div className="flex items-center gap-2">
-              <Play className="w-4 h-4 text-[#e50914] fill-current" />
               <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
-                Ready to Watch
+                Ready
               </h3>
-              <span className="text-[11px] font-mono text-white px-2 rounded-md bg-[#1f1f1f] border border-[#333333] flex items-center h-[22px]">
-                {readyToWatch.length}
-              </span>
             </div>
             {readyToWatch.length === 0 ? (
               <p className="text-xs text-[#737373] italic">
