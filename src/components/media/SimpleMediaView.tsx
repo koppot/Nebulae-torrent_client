@@ -244,8 +244,27 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   useEffect(() => {
     if (!extDetails) return;
     setExtDiscSet([]);
-    invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: extDetails.path })
-      .then(setExtDiscSet)
+    const probe = (p: string) =>
+      invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: p });
+    probe(extDetails.path)
+      .then(async (set) => {
+        // Imports can record the FIRST DISC's folder; when only one disc
+        // comes back, re-probe the parent release root so multi-disc
+        // sets report every disc.
+        if (set.length <= 1) {
+          const parent = extDetails.path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
+          if (parent && parent !== extDetails.path) {
+            try {
+              const parentSet = await probe(parent);
+              if (parentSet.length > set.length) {
+                setExtDiscSet(parentSet);
+                return;
+              }
+            } catch { /* keep the single-disc result */ }
+          }
+        }
+        setExtDiscSet(set);
+      })
       .catch(() => {});
   }, [extDetails]);
 
