@@ -65,27 +65,15 @@ export const StatusBar: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Primary LAN interface IP, for the Connected tooltip (owner request:
-  // hovering "Connected" shows the current IP address). Re-resolved on the
-  // same 60 s cadence as the disk stat; interfaces rarely change faster.
-  const [localIp, setLocalIp] = useState<{ ip: string; iface: string } | null>(null);
+  // Egress source IP — the address the OS actually uses for outbound
+  // connections (owner request: hovering "Connected" shows the current
+  // address through which the client accesses other servers, NOT the
+  // Tailscale address). Follows default-route/VPN changes automatically.
+  const [egressIp, setEgressIp] = useState<string | null>(null);
   useEffect(() => {
     const resolve = () =>
-      invoke<Array<{ name: string; ip_addresses: string[]; is_vpn: boolean }>>(
-        'get_network_interfaces'
-      )
-        .then((list) => {
-          const candidate = list.find(
-            (i) =>
-              !i.is_vpn &&
-              !i.name.startsWith('lo') &&
-              i.ip_addresses.some((ip) => ip.includes('.'))
-          );
-          if (candidate) {
-            const ip = candidate.ip_addresses.find((p) => p.includes('.')) || '';
-            setLocalIp({ ip, iface: candidate.name });
-          }
-        })
+      invoke<string | null>('get_egress_source_ip')
+        .then((ip) => setEgressIp(ip ?? null))
         .catch(() => {});
     resolve();
     const timer = setInterval(resolve, 60 * 1000);
@@ -129,8 +117,8 @@ export const StatusBar: React.FC = () => {
           className="flex items-center gap-1.5"
           title={
             connected
-              ? localIp
-                ? `Connected — IP ${localIp.ip} (${localIp.iface})`
+              ? egressIp
+                ? `Connected — outbound via ${egressIp}`
                 : 'Connected'
               : 'Disconnected'
           }

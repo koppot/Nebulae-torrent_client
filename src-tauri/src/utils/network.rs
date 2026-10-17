@@ -44,6 +44,18 @@ pub fn is_vpn_interface_name(name: &str) -> bool {
         || lower.contains("wintun")
 }
 
+/// The local source address the OS actually uses for outbound internet
+/// traffic: open a probe socket to a public anycast address and read its
+/// local address. This is the honest "current address through which the
+/// client accesses other servers" — it follows the default route and
+/// switches to the VPN's tunnel address the moment a VPN claims egress.
+pub fn egress_source_ip() -> Option<String> {
+    let addr: std::net::SocketAddr = "1.1.1.1:53".parse().ok()?;
+    let stream =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).ok()?;
+    stream.local_addr().ok().map(|a| a.ip().to_string())
+}
+
 pub fn find_active_vpn_interface() -> Option<NetworkInterfaceInfo> {
     list_network_interfaces()
         .into_iter()

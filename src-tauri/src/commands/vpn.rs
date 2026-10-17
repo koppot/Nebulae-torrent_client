@@ -184,3 +184,11 @@ pub fn get_network_interfaces() -> Result<Vec<crate::utils::network::NetworkInte
 {
     Ok(crate::utils::network::list_network_interfaces())
 }
+
+/// The source address the OS uses for outbound internet traffic right now
+/// (default-route egress; the VPN tunnel IP when a VPN claims the route).
+/// Shown in the status bar's Connected tooltip (owner request).
+#[tauri::command]
+pub fn get_egress_source_ip() -> Result<Option<String>, String> {
+    Ok(crate::utils::network::egress_source_ip())
+}

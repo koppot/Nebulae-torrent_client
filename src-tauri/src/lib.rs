@@ -527,6 +527,7 @@ pub fn run() {
             commands::vpn::list_vpn_profiles,
             commands::vpn::delete_vpn_profile,
             commands::vpn::get_network_interfaces,
+            commands::vpn::get_egress_source_ip,
             // Media Station & Optical Disc Cinema — ONE engine: the user's
             // VLC, loaded as a library and embedded in the app window.
             commands::media::player_open,
