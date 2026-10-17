@@ -414,7 +414,9 @@ export const TitleBar: React.FC = () => {
           </button>
         </div>
 
-        {/* Compact Quick Filter */}
+        {/* Compact Quick Filter — transfers only (manager/compact); the
+            media mode uses the Search library box instead. */}
+        {viewMode !== 'media' && (
         <div className="relative w-44">
           <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
           <input
@@ -434,6 +436,7 @@ export const TitleBar: React.FC = () => {
             </button>
           )}
         </div>
+        )}
 
         {/* Windows / Linux Desktop Window Control Buttons */}
         {platform !== 'mac' && (
