@@ -397,6 +397,7 @@ export const TitleBar: React.FC = () => {
             <span className="hidden xl:inline">Manager</span>
           </button>
 
+          {viewMode !== 'media' && (
           <button
             type="button"
             onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
@@ -420,6 +421,7 @@ export const TitleBar: React.FC = () => {
               {viewMode === 'compact' ? 'Expand' : 'Compact'}
             </span>
           </button>
+          )}
         </div>
 
         {/* Compact Quick Filter — transfers only (manager/compact); the

@@ -86,9 +86,20 @@ export async function openInPlayer(
     // folder - those already appear as downloaded cards.
     try {
       const { useTorrentStore } = await import('../stores/torrentStore');
+      // The torrent's CONTENT lives at save_path/<name>: a broad save_path
+      // (e.g. a whole volume) must not swallow external discs that merely
+      // sit under the same parent - only items inside the torrent's own
+      // download directory count as "already in the library".
       const inDownload = useTorrentStore
         .getState()
-        .torrents.some((t) => t.save_path && info.resolved_path.startsWith(t.save_path));
+        .torrents.some((t) => {
+          if (!t.save_path) return false;
+          const contentRoot = `${t.save_path.replace(/\/+$/, '')}/${t.name}`;
+          return (
+            info.resolved_path.startsWith(contentRoot) ||
+            info.resolved_path === t.save_path
+          );
+        });
       if (!inDownload) {
         invoke('add_external_media', {
           path: info.resolved_path,
