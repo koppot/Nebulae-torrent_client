@@ -828,7 +828,7 @@ export default function PlayerOverlay() {
             Click / drag anywhere on the track to seek. */}
         <div className="relative flex-1 flex items-center group/bar">
           <div
-            className="relative flex items-center h-3 cursor-pointer"
+            className="relative flex-1 flex items-center h-3 cursor-pointer"
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId);
               seekFromPointer(e.clientX);
@@ -862,32 +862,33 @@ export default function PlayerOverlay() {
             />
           </div>
           </div>
-          {/* Skip-10 buttons (owner): sit on the right side of the progress
-              bar, on the same midline. */}
-          <div className="shrink-0 flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
-              className="relative p-1 rounded-full text-white hover:bg-white/10 transition"
-              title="Back 10 seconds"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => invoke('player_seek', { positionMs: dur > 0 ? Math.min(pos + 10000, dur) : pos + 10000 }).catch(() => {})}
-              className="relative p-1 rounded-full text-white hover:bg-white/10 transition"
-              title="Forward 10 seconds"
-            >
-              <RotateCw className="w-4 h-4" />
-              <span className="absolute inset-0 flex items-center justify-center text-[6px] font-bold">10</span>
-            </button>
-          </div>
         </div>
         <span className="text-[11px] font-mono text-white tabular-nums">
           {fmt(dur)}
         </span>
+
+        {/* Skip-10 buttons (owner): larger, on the right side of the
+            progress bar right after the remaining-time label. */}
+        <div className="shrink-0 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => invoke('player_seek', { positionMs: Math.max(pos - 10000, 0) }).catch(() => {})}
+            className="relative p-1.5 rounded-full text-white hover:bg-white/15 transition"
+            title="Back 10 seconds"
+          >
+            <RotateCcw className="w-5 h-5" />
+            <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold">10</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => invoke('player_seek', { positionMs: dur > 0 ? Math.min(pos + 10000, dur) : pos + 10000 }).catch(() => {})}
+            className="relative p-1.5 rounded-full text-white hover:bg-white/15 transition"
+            title="Forward 10 seconds"
+          >
+            <RotateCw className="w-5 h-5" />
+            <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold">10</span>
+          </button>
+        </div>
 
         {/* Volume (owner): hover the speaker to reveal the slider; clicking
             the speaker toggles mute. */}
