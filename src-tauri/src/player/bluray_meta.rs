@@ -271,6 +271,10 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
         let count = bd_get_titles(bd, 0, 999);
         let mut best_match: Option<(i64, *mut BdTitleInfo)> = None;
         let mut most_audio: Option<(u8, *mut BdTitleInfo)> = None;
+        // Longest playlist (full-disc / whole-season title): the fallback
+        // when nothing closely matches what VLC reports. Episodic discs
+        // (e.g. 91 DAYS) hide the real chapter grid on the full playlist.
+        let mut longest: Option<(i64, usize, *mut BdTitleInfo)> = None;
         for i in 0..count {
             let info = bd_get_title_info(bd, i as c_uint, 0);
             if info.is_null() {
@@ -282,6 +286,15 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
             let diff = (dur_ms - duration_ms).abs();
             if best_match.map(|(b, _)| diff < b).unwrap_or(true) {
                 best_match = Some((diff, info));
+            }
+            {
+                let chapters = if ti.chapters.is_null() { 0usize } else { ti.chapter_count as usize };
+                if longest
+                    .map(|(d, c, _)| dur_ms > d || (dur_ms == d && chapters > c))
+                    .unwrap_or(true)
+                {
+                    longest = Some((dur_ms, chapters, info));
+                }
             }
             if !ti.clips.is_null() && ti.clip_count > 0 {
                 // Same feature-identification scoring as the language
@@ -318,7 +331,12 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
             best_match
                 .filter(|(diff, _)| *diff <= 5000)
                 .map(|(_, i)| i)
-                .or_else(|| most_audio.map(|(_, i)| i))
+                // Episodic / full-disc fallback: when no playlist matches
+                // what VLC reports (e.g. 91 DAYS hides 251 chapters on the
+                // 5h55m whole-disc title while VLC reports a different
+                // length), use the LONGEST playlist - the menu plays the
+                // whole title, so its marks must span the FULL timeline.
+                .or_else(|| longest.map(|(_, _, i)| i))
         } else {
             most_audio.map(|(_, i)| i)
         };
@@ -356,4 +374,43 @@ pub fn disc_chapter_offsets_debug(
         last,
         if duration_ms > 0 { (last as f64 / duration_ms as f64) * 100.0 } else { 0.0 }
     ))
+}
+
+/// Debug dump: every playlist with duration (ms), clip and chapter counts.
+pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
+    unsafe {
+        let lib = open_bluray_lib()?;
+        let bd_open: Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void> =
+            lib.get(b"bd_open").map_err(|e| e.to_string())?;
+        let bd_get_titles: Symbol<unsafe extern "C" fn(*mut c_void, c_uchar, c_uint) -> c_int> =
+            lib.get(b"bd_get_titles").map_err(|e| e.to_string())?;
+        let bd_get_title_info: Symbol<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut BdTitleInfo> =
+            lib.get(b"bd_get_title_info").map_err(|e| e.to_string())?;
+        let bd_free_title_info: Symbol<unsafe extern "C" fn(*mut BdTitleInfo)> =
+            lib.get(b"bd_free_title_info").map_err(|e| e.to_string())?;
+        let bd_close: Symbol<unsafe extern "C" fn(*mut c_void)> =
+            lib.get(b"bd_close").map_err(|e| e.to_string())?;
+        let cpath = std::ffi::CString::new(disc_path).map_err(|e| e.to_string())?;
+        let bd = bd_open(cpath.as_ptr(), std::ptr::null());
+        if bd.is_null() {
+            return Err("bd_open failed".into());
+        }
+        let count = bd_get_titles(bd, 0, 999);
+        let mut out = String::new();
+        for i in 0..count {
+            let info = bd_get_title_info(bd, i as c_uint, 0);
+            if info.is_null() {
+                continue;
+            }
+            let ti = &*info;
+            let dur_ms = (ti.duration / 90) as i64;
+            out.push_str(&format!(
+                "title {} dur_ms={} clips={} chapters={}\n",
+                ti.idx, dur_ms, ti.clip_count, ti.chapter_count
+            ));
+            bd_free_title_info(info);
+        }
+        bd_close(bd);
+        Ok(out)
+    }
 }

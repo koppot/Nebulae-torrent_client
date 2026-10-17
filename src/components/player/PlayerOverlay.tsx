@@ -262,22 +262,32 @@ export default function PlayerOverlay() {
           invoke('player_toggle_pause').catch(() => {});
           break;
         case 'ArrowLeft':
-          invoke('player_seek', { positionMs: Math.max(t - 10000, 0) }).catch(() => {});
+          // Chapter skip (owner): left arrow = previous chapter.
+          jumpChapter(-1);
           break;
         case 'ArrowRight':
-          invoke('player_seek', { positionMs: len > 0 ? Math.min(t + 10000, len) : t + 10000 }).catch(() => {});
+          // Chapter skip (owner): right arrow = next chapter.
+          jumpChapter(1);
           break;
         case 'ArrowUp':
-        case 'ArrowDown': {
-          const delta = key === 'ArrowUp' ? 10 : -10;
-          setMuted(false);
-          setVolume((v) => {
-            const next = Math.max(0, Math.min(100, v + delta));
-            invoke('player_set_volume', { volume: next }).catch(() => {});
-            return next;
-          });
+          // 30s forward (owner).
+          invoke('player_seek', { positionMs: len > 0 ? Math.min(t + 30000, len) : t + 30000 }).catch(() => {});
           break;
-        }
+        case 'ArrowDown':
+          // 30s back (owner).
+          invoke('player_seek', { positionMs: Math.max(t - 30000, 0) }).catch(() => {});
+          break;
+        case 'q':
+        case 'Q':
+          // Close (owner): persist the resume point, then close.
+          {
+            const p = pollRef.current;
+            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+              savePositionMs(player.resolvedPath, p.time_ms);
+            }
+            void closePlayer();
+          }
+          break;
         case 'f':
         case 'F': {
           invoke('player_toggle_fullscreen').catch(() => {});
@@ -330,7 +340,7 @@ export default function PlayerOverlay() {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
+      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
       handle(e.key);

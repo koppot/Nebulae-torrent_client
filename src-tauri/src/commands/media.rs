@@ -1909,39 +1909,41 @@ fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Resu
 /// Record an externally-opened item (file / disc folder / ISO) in the
 /// persistent media collection. Idempotent on `path`.
 #[tauri::command]
+
+/// Walk up from a recorded path to the RELEASE ROOT: a disc folder
+/// (direct BDMV/VIDEO_TS child, or an ISO file) is replaced by its
+/// parent until the directory no longer IS a disc.
+fn release_root_of(path: &str) -> String {
+    fn is_disc_dir(dir: &std::path::Path) -> bool {
+        if dir.file_name().map(|n| {
+            let n = n.to_string_lossy().to_lowercase();
+            n.ends_with(".iso") || n.ends_with(".img")
+        }) == Some(true)
+        {
+            return true;
+        }
+        dir.join("BDMV").exists() || dir.join("VIDEO_TS").exists()
+    }
+    let mut cur = std::path::PathBuf::from(path);
+    if cur.is_file() {
+        cur = cur.parent().map(|p| p.to_path_buf()).unwrap_or(cur);
+    }
+    while is_disc_dir(&cur) {
+        match cur.parent() {
+            Some(p) => cur = p.to_path_buf(),
+            None => break,
+        }
+    }
+    cur.to_string_lossy().to_string()
+}
+
+#[tauri::command]
 pub fn add_external_media(
     app: tauri::AppHandle,
     path: String,
     title: String,
 ) -> Result<(), String> {
-    // Store the RELEASE ROOT, never a single disc (owner): a recorded
-    // disc folder (".../91 DAYS US/91 DAYS D1") is walked up until the
-    // directory no longer IS a disc (no direct BDMV/VIDEO_TS child and
-    // no ISO child). The root then contains every disc of the set.
-    let release_root = {
-        fn is_disc_dir(dir: &std::path::Path) -> bool {
-            if dir.file_name().map(|n| {
-                let n = n.to_string_lossy().to_lowercase();
-                n.ends_with(".iso") || n.ends_with(".img")
-            }) == Some(true)
-            {
-                return true;
-            }
-            let ok = |name: &str| dir.join(name).exists();
-            ok("BDMV") || ok("VIDEO_TS")
-        }
-        let mut cur = std::path::PathBuf::from(&path);
-        if cur.is_file() {
-            cur = cur.parent().map(|p| p.to_path_buf()).unwrap_or(cur);
-        }
-        while is_disc_dir(&cur) {
-            match cur.parent() {
-                Some(p) => cur = p.to_path_buf(),
-                None => break,
-            }
-        }
-        cur.to_string_lossy().to_string()
-    };
+    let release_root = release_root_of(&path);
     let path = release_root;
     let mut items = read_external_store(&app);
     if items.iter().any(|m| m.path == path) {
@@ -1988,8 +1990,14 @@ pub fn add_external_media(
 #[tauri::command]
 pub fn list_external_media(app: tauri::AppHandle) -> Result<Vec<ExternalMedia>, String> {
     let items = read_external_store(&app);
+    // Heal legacy disc-level paths to the release root on read (same
+    // normalization add_external_media applies).
     let live: Vec<ExternalMedia> = items
         .into_iter()
+        .map(|mut m| {
+            m.path = release_root_of(&m.path);
+            m
+        })
         .filter(|m| std::path::Path::new(&m.path).exists())
         .collect();
     let _ = write_external_store(&app, &live);
