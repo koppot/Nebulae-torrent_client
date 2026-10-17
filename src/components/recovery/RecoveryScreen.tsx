@@ -87,7 +87,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
 
         {/* Product Attribution */}
         <p className="text-xs uppercase tracking-widest text-[#a3a3a3] font-semibold mb-6">
-          Nebulae — Torrent Client by Asian DVD Club
+          Nebulae — Client by Asian DVD Club
         </p>
 
         {/* Friendly explanation */}

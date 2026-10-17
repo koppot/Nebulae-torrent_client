@@ -195,7 +195,7 @@ export const TitleBar: React.FC = () => {
           <div className="flex items-baseline gap-1.5 min-w-0" data-tauri-drag-region>
             <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
             <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden md:inline truncate">
-              — Torrent Client by Asian DVD Club
+              — Client by Asian DVD Club
             </span>
           </div>
         </div>

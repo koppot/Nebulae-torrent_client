@@ -24,7 +24,7 @@ export const CreateTorrentModal: React.FC = () => {
   });
   const [isPrivate, setIsPrivate] = useState(true); // Private by default
   const [comment, setComment] = useState('Created with Nebulae');
-  const [createdBy, setCreatedBy] = useState('Nebulae Torrent Client 1.0');
+  const [createdBy, setCreatedBy] = useState('Nebulae Client 1.0');
   const [startSeeding, setStartSeeding] = useState(false); // Opt-in: do not seed unless asked
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(

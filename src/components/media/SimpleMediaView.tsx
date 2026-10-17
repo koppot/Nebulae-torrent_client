@@ -675,8 +675,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           Dark palette per the owner's override of the Canva background. */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[#262626]">
         <div className="flex items-center gap-2.5">
-          <span className="w-[22px] h-[22px] rounded-full bg-[#e50914]" />
-          <h2 className="text-2xl font-bold tracking-tight">Nebulae</h2>
+          <h2 className="text-2xl font-bold tracking-tight">Media Center</h2>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">

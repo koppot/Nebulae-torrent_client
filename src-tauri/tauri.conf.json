@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Nebulae — Torrent Client by Asian DVD Club",
+        "title": "Nebulae — Client by Asian DVD Club",
         "width": 1280,
         "height": 840,
         "minWidth": 980,
@@ -37,7 +37,7 @@
     "macOS": {
       "signingIdentity": "E3A26A990308798F8DE4B7C49A3E27BFEF192623"
     },
-    "shortDescription": "Nebulae — Torrent Client by Asian DVD Club",
+    "shortDescription": "Nebulae — Client by Asian DVD Club",
     "longDescription": "Native cross-platform BitTorrent client for reliable, high-scale seeding with qBittorrent parity, private tracker intelligence, and ultra-low RAM footprint.",
     "icon": [
       "icons/32x32.png",

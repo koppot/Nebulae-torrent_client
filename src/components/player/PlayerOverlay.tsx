@@ -275,6 +275,28 @@ export default function PlayerOverlay() {
           void cycleTrack('subtitle');
           break;
         }
+        case 'AudioVolumeUp':
+        case 'AudioVolumeDown': {
+          // Dedicated keyboard volume keys (F11/F12 on macOS keyboards).
+          const delta = key === 'AudioVolumeUp' ? 10 : -10;
+          setMuted(false);
+          setVolume((v) => {
+            const next = Math.max(0, Math.min(100, v + delta));
+            invoke('player_set_volume', { volume: next }).catch(() => {});
+            return next;
+          });
+          break;
+        }
+        case 'AudioVolumeMute': {
+          if (mutedRef.current) {
+            setMuted(false);
+            invoke('player_set_volume', { volume: volumeRef.current }).catch(() => {});
+          } else {
+            setMuted(true);
+            invoke('player_set_volume', { volume: 0 }).catch(() => {});
+          }
+          break;
+        }
         case 'm':
         case 'M': {
           if (mutedRef.current) {
@@ -290,7 +312,7 @@ export default function PlayerOverlay() {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S']);
+      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
       handle(e.key);
@@ -992,7 +1014,7 @@ export default function PlayerOverlay() {
                     t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
                   }`}
                 >
-                  {trackLabel('audio', audioTracks.indexOf(t), t)}
+                  {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
                 </button>
               ))}
             </div>
@@ -1032,7 +1054,7 @@ export default function PlayerOverlay() {
                     t.active ? 'bg-[#e50914]/15 text-white' : 'text-white hover:text-white hover:bg-[#262626]'
                   }`}
                 >
-                  {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
+                  {trackLabel('audio', audioTracks.indexOf(t), t)}
                 </button>
               ))}
             </div>

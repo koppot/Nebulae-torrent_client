@@ -330,7 +330,7 @@ pub fn run() {
             )?;
 
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("nebulae-tray")
-                .tooltip("Nebulae — Torrent Client by Asian DVD Club")
+                .tooltip("Nebulae — Client by Asian DVD Club")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
