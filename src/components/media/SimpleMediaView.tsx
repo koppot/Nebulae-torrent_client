@@ -746,15 +746,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
 
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-16 bg-[#141414] text-white select-none">
-      {/* Top bar (Canva): Nebulae wordmark left; search + controls right.
-          Dark palette per the owner's override of the Canva background. */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[#262626]">
-        <div className="flex items-center gap-2.5">
-          <h2 className="text-2xl font-bold tracking-tight">Media</h2>
-        </div>
-
-      </div>
-
       {externalDiscError && (
         <div className="p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
           {externalDiscError}
