@@ -256,7 +256,12 @@ pub fn maybe_autoplay(app: &tauri::AppHandle) {
                 return;
             };
             match start_playback(&app, &state, &path) {
-                Ok(_) => {}
+                Ok(resolved) => {
+                    // Record the same session bookkeeping player_open does,
+                    // so the frontend's engine poll can adopt the session.
+                    *poison(&state.current_path) = Some(path.clone());
+                    *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
+                }
                 Err(e) => tracing::error!("autoplay diag failed: {e}"),
             }
         });
@@ -413,6 +418,46 @@ fn start_playback(
                         resolved.resolved_path,
                         resolved.is_disc
                     );
+                    if resolved.is_disc {
+                        // Enforce MENU-FIRST from the engine side: the Blu-ray
+                        // demuxer boots into the disc's first-play flow (FBI
+                        // warning → straight into the program chain). Keep
+                        // selecting the menu title until it reports 0. The
+                        // frontend cancels this when a resume is wanted.
+                        state.menu_watch.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let app2 = app.clone();
+                        std::thread::spawn(move || {
+                            use tauri::Manager;
+                            for _ in 0..30 {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                let state = app2.state::<PlayerState>();
+                                if !state.menu_watch.load(std::sync::atomic::Ordering::SeqCst) {
+                                    tracing::info!("[player] menu watcher cancelled (resume wanted)");
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 {
+                                    return; // session closed
+                                }
+                                let lib = match loaded_lib(&state) {
+                                    Ok(l) => l,
+                                    Err(_) => return,
+                                };
+                                let title = unsafe {
+                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                };
+                                if title == 0 {
+                                    tracing::info!("[player] menu watcher: at menu title");
+                                    return;
+                                }
+                                unsafe {
+                                    (lib.libvlc_media_player_set_title)(mp as *mut c_void, 0);
+                                }
+                                tracing::info!("[player] menu watcher: set_title(0) (was {title})");
+                            }
+                            tracing::warn!("[player] menu watcher gave up after 15 s");
+                        });
+                    }
                     Ok(resolved)
                 }
                 Err(e) => {
@@ -456,6 +501,39 @@ pub fn player_open(
     });
     Ok(resolved)
 }
+/// What the engine is currently playing (for the frontend's readiness
+/// poll): Some when a session is live, None otherwise. This replaces
+/// event-based programmatic-open notification, which raced the webview's
+/// own loading.
+#[derive(Debug, Clone, Serialize)]
+pub struct EnginePlayback {
+    pub resolved_path: String,
+    pub title: String,
+    pub is_disc: bool,
+}
+
+#[tauri::command]
+pub fn player_engine_playback(state: tauri::State<PlayerState>) -> Option<EnginePlayback> {
+    let started = *poison(&state.started);
+    if !started {
+        return None;
+    }
+    let resolved = poison(&state.current_resolved).clone()?;
+    let title = poison(&state.current_path)
+        .clone()
+        .and_then(|p| {
+            Path::new(&p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| resolved.clone());
+    Some(EnginePlayback {
+        resolved_path: resolved,
+        title,
+        is_disc: true, // only disc sessions are auto-opened engine-side
+    })
+}
+
 /// Begin a native window drag (title-bar mousedown handler).
 #[tauri::command]
 pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
@@ -511,6 +589,16 @@ pub fn player_return_to_menu(
     tracing::info!("[player] return_to_menu: restarting '{path}'");
     stop_session(&app, &state);
     start_playback(&app, &state, &path).map(|_| ())
+}
+
+/// Stop the post-open menu watcher: the user explicitly wants playback
+/// (media-screen resume, or the menu bar's Play button).
+#[tauri::command]
+pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), String> {
+    state
+        .menu_watch
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
 }
 
 /// Audio/subtitle language names for the CURRENT title, read from the disc

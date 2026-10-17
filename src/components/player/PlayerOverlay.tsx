@@ -488,11 +488,14 @@ export default function PlayerOverlay() {
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
     if (player.isDisc && pollRef.current.title === 0) {
+      // The menu demuxer idles until an entry is activated (set_title is
+      // ignored in the menu domain): activate the highlighted entry (Play
+      // All), then seek to the save point if one exists.
       const savedMs = savedPositionMs(player.resolvedPath);
+      invoke('player_cancel_menu_watch').catch(() => {});
+      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       if (savedMs >= 10000) {
         resumeFromMenu(player.resolvedPath, savedMs);
-      } else {
-        invoke('player_set_title', { title: 1 }).catch(() => {});
       }
       return;
     }

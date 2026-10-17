@@ -67,27 +67,22 @@ export function usePlayerStore(): PlayerStoreState {
  * (embedded) or show nothing (external VLC on other platforms).
  */
 export async function openInPlayer(filePath: string): Promise<PlayerOpenInfo> {
+  // Decide the start mode BEFORE opening: the engine enforces the disc menu
+  // after open (cancellable) — a resume must cancel that watcher so the
+  // disc's own first-play flow can engage the feature for the seek.
+  const savedMs = savedPositionMs(filePath);
+  const startMode = localStorage.getItem('nebulae_pref_start_mode') || 'resume';
+  const wantsResume = savedMs >= 10000 && startMode === 'resume';
   const info = await invoke<PlayerOpenInfo>('player_open', { filePath });
   if (!info.external) {
     playerStore.open(info);
-    // Menu-first (owner): discs open at their interactive menu unless a
-    // restore position was saved for this disc. The engine's first open can
-    // start the disc's first-play flow (FBI warning → straight into the
-    // program chain) before the demuxer exposes titles, so KEEP insisting
-    // until the menu title (0) is actually reported.
-    if (info.is_disc && savedPositionMs(info.resolved_path) < 10000) {
-      void (async () => {
-        for (let attempt = 0; attempt < 6; attempt++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          try {
-            const p = await invoke<{ title: number }>('player_poll');
-            if (p.title === 0) return; // at the menu
-            await invoke('player_return_to_menu');
-          } catch {
-            return; // player closed meanwhile
-          }
-        }
-      })();
+    if (info.is_disc) {
+      if (wantsResume) {
+        invoke('player_cancel_menu_watch').catch(() => {});
+        void resumeInPlayer(info.resolved_path, savedMs);
+      }
+      // Menu-first (no save): the engine's menu watcher lands the disc on
+      // its interactive menu — nothing else to do here.
     }
   }
   return info;
@@ -103,20 +98,18 @@ export async function resumeFromMenu(
   timeMs: number,
 ): Promise<void> {
   void (async () => {
-    // The disc-menu demuxer idles until a title is selected — start the
-    // first feature, then seek to the saved position once it engages.
-    try {
-      await invoke('player_set_title', { title: 1 });
-    } catch {
-      return;
-    }
+    // The caller (menu Play button) already cancelled the menu watcher and
+    // activated the highlighted menu entry; wait for the feature title to
+    // engage, then seek to the saved position.
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1000));
       try {
         const p = await invoke<PlayerPollShape>('player_poll');
         if (p.length_ms > 300_000 && p.playing) {
-          await invoke('player_seek', { positionMs: timeMs });
+          if (timeMs >= 10000) {
+            await invoke('player_seek', { positionMs: timeMs });
+          }
           return;
         }
       } catch {

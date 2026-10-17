@@ -42,10 +42,32 @@ export const App: React.FC = () => {
   // player via a backend event rather than a frontend invoke.
   useEffect(() => {
     const un = listen<PlayerOpenInfo>('player-opened', (e) => {
+      invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
       if (!e.payload.external) playerStore.open(e.payload);
     });
+    // Belt-and-braces: poll the engine for a live session while the player
+    // UI is closed. Event delivery raced the webview's own loading in the
+    // autoplay path (owner: player UI never appeared).
+    const iv = window.setInterval(() => {
+      if (playerStore.get().open) return;
+      invoke<{ resolved_path: string; title: string; is_disc: boolean } | null>(
+        'player_engine_playback',
+      )
+        .then((s) => {
+          if (s && !playerStore.get().open) {
+            playerStore.open({
+              resolved_path: s.resolved_path,
+              title: s.title,
+              is_disc: s.is_disc,
+              external: false,
+            });
+          }
+        })
+        .catch(() => {});
+    }, 1000);
     return () => {
       un.then((f) => f()).catch(() => {});
+      window.clearInterval(iv);
     };
   }, []);
   const { loadSettings, fetchEngineMode } = useSettingsStore();
