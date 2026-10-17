@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::utils::keyring::get_secret;
 
 const TMDB_BASE: &str = "https://api.themoviedb.org/3";
-const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w342";
+const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w500";
 
 /// Owner directive: TMDB works for ALL downloads out of the box — the user
 /// never needs to obtain their own key. The bundled key is the app's own

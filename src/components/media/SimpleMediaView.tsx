@@ -239,6 +239,15 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     ? externalMetaMap[extDetails.path]?.year ?? extDetails.year
     : null;
   const extMeta = extDetails ? externalMetaMap[extDetails.path] : undefined;
+  // Disc structure for the external popup: same source the library uses.
+  const [extDiscSet, setExtDiscSet] = useState<DiscStructureInfo[]>([]);
+  useEffect(() => {
+    if (!extDetails) return;
+    setExtDiscSet([]);
+    invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: extDetails.path })
+      .then(setExtDiscSet)
+      .catch(() => {});
+  }, [extDetails]);
 
   // ADC seed-time records power the hover line ("ADC: 2.48 · Seed time: 2d 14h").
   useEffect(() => {
@@ -838,8 +847,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       <img
                         src={localSrc(externalPosterMap[m.path] as string)}
                         alt={m.title}
-                        className="w-full h-full object-cover scale-[0.78] rounded-lg"
-                        style={{ objectPosition: 'center' }}
+                        className="w-full h-full object-cover"
                         draggable={false}
                       />
                     ) : (
@@ -939,7 +947,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           <div className="space-y-7">
             <div className="flex items-center gap-2">
               <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
-                Library
+                Downloaded
               </h3>
             </div>
             {readyToWatch.length === 0 ? (
@@ -1082,6 +1090,50 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                   </p>
                 )}
               </div>
+            </div>
+            {/* Facts + disc rows (owner): the same details the library popup
+                shows for downloaded titles. */}
+            <div className="px-4 pb-4 space-y-2">
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
+                {(() => {
+                  const facts: { label: string; value: string }[] = [];
+                  if (extMeta?.runtime)
+                    facts.push({ label: 'Duration', value: fmtRuntime(extMeta.runtime) ?? `${extMeta.runtime} min` });
+                  const totalBytes = extDiscSet.reduce((a, d) => a + (d.total_bytes || 0), 0);
+                  if (totalBytes > 0) facts.push({ label: 'Total size', value: formatBytes(totalBytes) });
+                  if (extDiscSet.length > 0) facts.push({ label: 'Discs', value: String(extDiscSet.length) });
+                  const fmts = extDiscSet.map((d) => layerLabel(d.layer_spec)).filter(Boolean);
+                  if (fmts.length > 0) facts.push({ label: 'Format', value: fmts.join(' + ') });
+                  return facts.map((f) => (
+                    <div key={f.label} className="space-y-0.5">
+                      <span className="block text-[9px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                        {f.label}
+                      </span>
+                      <span className="block text-[12px] text-[#d4d4d4] font-mono">{f.value}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+              {extDiscSet.length > 0 && (
+                <div className="space-y-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                    Discs
+                  </span>
+                  {extDiscSet.map((d, i) => (
+                    <div
+                      key={d.root_path || i}
+                      className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-[#111111] border border-[#262626]"
+                    >
+                      <span className="text-[12px] text-white font-medium">
+                        {d.title || `Disc ${d.disc_number ?? i + 1}`}
+                      </span>
+                      <span className="text-[10px] font-mono text-[#8c8c8c]">
+                        {layerLabel(d.layer_spec)} · {formatBytes(d.total_bytes)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="px-4 pb-4 flex gap-2">
               <button

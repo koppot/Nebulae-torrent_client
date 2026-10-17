@@ -249,12 +249,14 @@ export const TitleBar: React.FC = () => {
             </button>          </div>
         </div>
       </div>
-      <div className="flex items-center px-3 h-10" data-tauri-drag-region>
+      {/* Second row (owner): manager-only — nothing on it belongs to
+          the Media Center. */}
+      {viewMode !== 'media' && <div className="flex items-center px-3 h-10" data-tauri-drag-region>
         {/* Left slot (owner): the torrent controls float left on row 2. */}
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
             the Media Center. */}
-        <div className={`flex items-center gap-1 flex-shrink-0 ${viewMode === 'media' ? 'hidden' : ''}`}>
+        <div className="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setShowAddTorrent(true); }}
@@ -353,9 +355,7 @@ export const TitleBar: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-        {/* Compact Quick Filter — transfers only (manager/compact); the
-            media mode uses the Search library box instead. */}
-        {viewMode !== 'media' && (
+        {/* Compact Quick Filter — transfers only. */}
         <div className="relative w-44">
           <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
           <input
@@ -375,14 +375,12 @@ export const TitleBar: React.FC = () => {
             </button>
           )}
         </div>
-        )}
 
         </div>
 
-        {viewMode !== 'media' && (
-            <button
-              type="button"
-              onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
+        <button
+          type="button"
+          onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
               className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
               title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
             >
@@ -391,10 +389,8 @@ export const TitleBar: React.FC = () => {
               ) : (
                 <Minimize2 className="w-3.5 h-3.5" />
               )}
-            </button>
-
-        )}
-      </div>
+          </button>
+      </div>}
       {showAppInfo && <AppInfoModal onClose={() => setShowAppInfo(false)} />}
     </header>
   );
