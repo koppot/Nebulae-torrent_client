@@ -146,21 +146,37 @@ export const TitleBar: React.FC = () => {
       className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
       <div className="flex items-center justify-between px-3 h-10" data-tauri-drag-region>
-        {/* Mode toggle (owner): centered on the top row on BOTH views,
-            bigger than the other controls but the same design. */}
-        <button
-          type="button"
-          onClick={() => setViewMode(viewMode === 'media' ? 'manager' : 'media')}
-          className="absolute left-1/2 -translate-x-1/2 top-0 h-10 flex items-center gap-2 px-4 rounded-b-lg bg-[#1f1f1f] border border-t-0 border-[#333333] text-sm font-semibold text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
-          title={viewMode === 'media' ? 'Switch to the Torrent Manager' : 'Switch to the Media Center'}
-        >
-          {viewMode === 'media' ? (
-            <LayoutGrid className="w-4 h-4" />
-          ) : (
+        {/* Mode buttons (owner): TWO separate buttons, centered on the top
+            bar on both views, as colorful as Add/Create. The active mode
+            is red like Add; the other is gold-accented like Create. */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-0 h-10 flex items-stretch gap-2">
+          <button
+            type="button"
+            onClick={() => setViewMode('media')}
+            className={`flex items-center gap-2 px-4 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+              viewMode === 'media'
+                ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+            }`}
+            title="Media Center — your optical cinema gallery"
+          >
             <Film className="w-4 h-4" />
-          )}
-          <span>{viewMode === 'media' ? 'Manager' : 'Media'}</span>
-        </button>
+            <span>Media</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('manager')}
+            className={`flex items-center gap-2 px-4 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+              viewMode === 'manager'
+                ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+            }`}
+            title="Torrent Manager — detailed swarm grid"
+          >
+            <LayoutGrid className="w-4 h-4" />
+            <span>Manager</span>
+          </button>
+        </div>
         <div className="flex items-center gap-2.5 flex-shrink-0" data-tauri-drag-region>
           {/* Nebula icon (owner): visible on BOTH views; opens the
               release/app info popup with the Update button. */}
