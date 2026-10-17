@@ -271,6 +271,8 @@ fn loaded_lib(state: &PlayerState) -> Result<std::sync::Arc<player::engine::VlcL
     Ok(guard.as_ref().unwrap().clone())
 }
 
+use std::ffi::CStr;
+
 fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     g.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -570,6 +572,198 @@ pub fn player_set_chapter(state: tauri::State<PlayerState>, chapter: i32) -> Res
     let lib = loaded_lib(&state)?;
     tracing::info!("[player] set_chapter({chapter})");
     unsafe { (lib.libvlc_media_player_set_chapter)(mp as *mut c_void, chapter.max(0)) };
+    Ok(())
+}
+
+/// Chapter marks for the seek bar: real per-chapter time offsets of the
+/// CURRENT title (libvlc_chapter_description_t). Empty when the demuxer
+/// exposes none (e.g. plain files).
+#[derive(serde::Serialize)]
+pub struct ChapterMark {
+    pub offset_ms: i64,
+    pub duration_ms: i64,
+    pub name: String,
+}
+
+#[tauri::command]
+pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<ChapterMark>, String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(Vec::new());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        let title = (lib.libvlc_media_player_get_title)(m);
+        let mut chapters: *mut *mut crate::player::engine::VlcChapterDescription =
+            std::ptr::null_mut();
+        let rc = (lib.libvlc_media_player_get_full_chapter_descriptions)(
+            m,
+            title,
+            &mut chapters,
+        );
+        if rc != 0 || chapters.is_null() {
+            return Ok(Vec::new());
+        }
+        let mut marks = Vec::new();
+        let mut i = 0;
+        // The array is NULL-name-terminated per the libvlc docs (count via
+        // entries until NULL); iterate defensively with a cap.
+        while i < 512 && !(*chapters.add(i)).is_null() {
+            let ch = *chapters.add(i);
+            let name = if (*ch).psz_name.is_null() {
+                format!("Chapter {}", i + 1)
+            } else {
+                CStr::from_ptr((*ch).psz_name).to_string_lossy().into_owned()
+            };
+            marks.push(ChapterMark {
+                offset_ms: (*ch).i_time_offset,
+                duration_ms: (*ch).i_duration,
+                name,
+            });
+            i += 1;
+        }
+        (lib.libvlc_chapter_descriptions_release)(chapters, i as i32);
+        Ok(marks)
+    }
+}
+
+/// A selectable playback track (subtitle or audio).
+#[derive(serde::Serialize)]
+pub struct TrackInfo {
+    pub id: i32,
+    pub name: String,
+    pub active: bool,
+}
+
+unsafe fn tracks_from_list(
+    lib: &player::engine::VlcLib,
+    list: *mut crate::player::engine::VlcTrackDescription,
+    active_id: i32,
+) -> Vec<TrackInfo> {
+    let mut out = Vec::new();
+    let mut node = list;
+    let mut guard = 0;
+    while !node.is_null() && guard < 64 {
+        let name = if (*node).psz_name.is_null() {
+            format!("Track {}", (*node).i_id)
+        } else {
+            CStr::from_ptr((*node).psz_name).to_string_lossy().into_owned()
+        };
+        out.push(TrackInfo {
+            id: (*node).i_id,
+            name,
+            active: (*node).i_id == active_id,
+        });
+        node = (*node).p_next;
+        guard += 1;
+    }
+    (lib.libvlc_track_description_list_release)(list);
+    out
+}
+
+#[tauri::command]
+pub fn player_list_tracks(state: tauri::State<PlayerState>, kind: String) -> Result<Vec<TrackInfo>, String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(Vec::new());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        match kind.as_str() {
+            "subtitle" => {
+                let active = (lib.libvlc_video_get_spu)(m);
+                let list = (lib.libvlc_video_get_spu_description)(m);
+                Ok(tracks_from_list(&lib, list, active))
+            }
+            "audio" => {
+                let active = (lib.libvlc_audio_get_track)(m);
+                let list = (lib.libvlc_audio_get_track_description)(m);
+                Ok(tracks_from_list(&lib, list, active))
+            }
+            _ => Err(format!("unknown track kind: {kind}")),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn player_set_track(state: tauri::State<PlayerState>, kind: String, id: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        match kind.as_str() {
+            "subtitle" => (lib.libvlc_video_set_spu)(m, id),
+            "audio" => (lib.libvlc_audio_set_track)(m, id),
+            _ => return Err(format!("unknown track kind: {kind}")),
+        }
+    }
+    Ok(())
+}
+
+/// Move to the previous/next FEATURE title, skipping menu and short
+/// entries. Raw set_title(title+1) sent the player to arbitrary titles
+/// (menus, extras) and read as "restarting from the beginning" (owner).
+/// Titles with a duration under 2 minutes are skipped; if the engine
+/// cannot enumerate titles, falls back to plain set_title.
+#[tauri::command]
+pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(), String> {
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Ok(());
+    }
+    let lib = loaded_lib(&state)?;
+    unsafe {
+        let m = mp as *mut c_void;
+        let current = (lib.libvlc_media_player_get_title)(m);
+        let mut titles: *mut *mut crate::player::engine::VlcTitleDescription = std::ptr::null_mut();
+        let rc = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+        if rc != 0 || titles.is_null() {
+            tracing::info!("[player] step_title: no title list, set_title({})", current + dir);
+            (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
+            return Ok(());
+        }
+        let mut count = 0usize;
+        while count < 512 && !(*titles.add(count)).is_null() {
+            count += 1;
+        }
+        // Feature titles: duration >= 2 min. Index 0 (menu domain) excluded.
+        let mut features: Vec<usize> = Vec::new();
+        for i in 1..count {
+            let t = *titles.add(i);
+            if (*t).i_duration >= 120_000 {
+                features.push(i);
+            }
+        }
+        if features.len() < 2 {
+            (lib.libvlc_title_descriptions_release)(titles, count as i32);
+            tracing::info!("[player] step_title: single feature, set_title({})", current + dir);
+            (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
+            return Ok(());
+        }
+        // Find the feature index nearest the current position.
+        let pos = features
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, idx)| ((**idx as i32) - current).abs())
+            .map(|(k, _)| k)
+            .unwrap_or(0);
+        let next = if dir >= 0 {
+            features[(pos + 1).min(features.len() - 1)]
+        } else {
+            features[pos.saturating_sub(1)]
+        };
+        tracing::info!(
+            "[player] step_title: current={current} -> {next} ({} feature titles)",
+            features.len()
+        );
+        (lib.libvlc_media_player_set_title)(m, next as i32);
+        (lib.libvlc_title_descriptions_release)(titles, count as i32);
+    }
     Ok(())
 }
 

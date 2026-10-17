@@ -70,6 +70,12 @@ export async function openInPlayer(filePath: string): Promise<PlayerOpenInfo> {
   const info = await invoke<PlayerOpenInfo>('player_open', { filePath });
   if (!info.external) {
     playerStore.open(info);
+    // Menu-first (owner): discs open at their interactive menu unless a
+    // restore position was saved for this disc. resumeInPlayer seeks past
+    // the menu itself, so only the plain path drops into the menu.
+    if (info.is_disc && savedPositionMs(info.resolved_path) < 10000) {
+      invoke('player_return_to_menu').catch(() => {});
+    }
   }
   return info;
 }

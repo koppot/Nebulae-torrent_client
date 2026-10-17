@@ -129,6 +129,14 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         let content = (*ns_win)
             .contentView()
             .ok_or_else(|| "window has no contentView".to_string())?;
+        // Slightly rounded window corners (owner): the borderless window is
+        // square by default; rounding the content view's layer clips the
+        // webview and the video overlay to the same radius.
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            layer.setCornerRadius(12.0);
+            layer.setMasksToBounds(true);
+        }
         let bounds = content.bounds();
         let mtm = MainThreadMarker::new().ok_or("not on main thread")?;
         let view: Retained<VideoOverlayView> =

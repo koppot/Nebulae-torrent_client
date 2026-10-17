@@ -34,6 +34,7 @@ import {
   X,
   Info,
   Copy,
+  Settings,
 } from 'lucide-react';
 
 interface MediaGroup {
@@ -121,6 +122,25 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
     source: 'adc' | 'tmdb' | 'none';
   } | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+
+  // Media player language preferences (owner): ISO language codes for
+  // audio and subtitles, applied automatically by the player overlay.
+  const [showPlayerPrefs, setShowPlayerPrefs] = useState(false);
+  const [prefAudioLangs, setPrefAudioLangs] = useState(
+    () => localStorage.getItem('nebulae_pref_audio_langs') || '',
+  );
+  const [prefSubsLangs, setPrefSubsLangs] = useState(
+    () => localStorage.getItem('nebulae_pref_subs_langs') || '',
+  );
+  const savePlayerPrefs = () => {
+    try {
+      localStorage.setItem('nebulae_pref_audio_langs', prefAudioLangs.trim());
+      localStorage.setItem('nebulae_pref_subs_langs', prefSubsLangs.trim());
+    } catch {
+      // Storage unavailable — the fields stay in memory for this session.
+    }
+    setShowPlayerPrefs(false);
+  };
 
   // Any scroll dismisses the context menu.
   useEffect(() => {
@@ -540,14 +560,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
     // Aggregated disc badge from the FULL disc set (multi-ISO torrents count
     // every disc by its own size), owner's mock format: "DVD-9 ×2", mixed
     // sets read "DVD-9 + DVD-5".
-    const setSpecs = set.map((d) => d.layer_spec);
-    const groupSpecs = Array.from(new Set(setSpecs));
-    const discCount = set.length || group.items.length;
-    const discBadge = groupSpecs.length
-      ? groupSpecs.length === 1
-        ? `${layerLabel(groupSpecs[0])}${discCount > 1 ? ` ×${discCount}` : ''}`
-        : groupSpecs.map(layerLabel).join(' + ')
-      : null;
 
     // Poster art: object-cover trims the picture into the 660:800 frame.
     const posterArt = coverImage ? (
@@ -566,12 +578,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
       </div>
     );
 
-    // Hover meta line: exactly the owner's list — year, disc formats, size,
-    // duration. Grayscale only; nothing duplicated.
-    const runtimeText = fmtRuntime(tmdbMap[group.id]?.runtime ?? null);
-    const hoverMeta = [group.year, discBadge, formatBytes(group.total_bytes), runtimeText]
-      .filter(Boolean)
-      .join(' · ');
+    // Hover overlay (owner): ONLY the Play and Details buttons, floating
+    // over the poster with NO background panel and no data — all data lives
+    // in the Details popup now.
 
     return (
       <div
@@ -582,49 +591,42 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
           e.preventDefault();
           setCtxMenu({ x: e.clientX, y: e.clientY, groupId: group.id, itemId: currentItem.id });
         }}
-        className="group relative rounded-lg cursor-pointer w-[176px] flex-shrink-0"
+        className="group relative rounded-lg cursor-pointer w-[114px] flex-shrink-0"
       >
         <div className="rounded-lg overflow-hidden">
           <div className="aspect-[660/800] w-full bg-[#141414] relative overflow-hidden">
             {posterArt}
 
-            {/* Hover: the lower HALF of the poster is replaced with the info
-                panel — grayscale only (owner). NO title (it sits below the
-                poster), nothing extended: just the disc/meta line and the
-                two action buttons. */}
+            {/* Hover: only Play (or Resume) + Details, floating on the
+                poster — no panel background, no data (owner). */}
             {hoveredId === group.id && (
-              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-black/90 border-t border-[#3a3a3a] p-3 flex flex-col justify-between gap-2">
-                <div className="text-[11px] font-mono text-[#a3a3a3] leading-snug break-words">
-                  {hoverMeta}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {resumePath && !isDownloading ? (
-                    <button
-                      onClick={() => handleResumeDisc(group.id, resumePath)}
-                      className="flex-1 px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
-                      title="Resume the last-played disc past its menu"
-                    >
-                      <Play className="w-3 h-3 fill-black" />
-                      <span>Resume</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handlePlayDisc(effDisc.torrent, group.id, effDisc.path)}
-                      className="flex-1 px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
-                      title="Play (interactive disc menus)"
-                    >
-                      <Play className="w-3 h-3 fill-black" />
-                      <span>Play</span>
-                    </button>
-                  )}
+              <div className="absolute inset-x-0 bottom-0 p-2 flex flex-col justify-end gap-1.5">
+                {resumePath && !isDownloading ? (
                   <button
-                    onClick={() => openDetailsPopup(group.id, currentItem)}
-                    className="flex-1 px-2 py-1.5 rounded-md border border-[#555555] text-[#e5e5e5] text-[11px] font-medium hover:bg-[#262626] hover:text-white transition"
-                    title="Summary from ADC (when available) or TMDB/Trakt"
+                    onClick={() => handleResumeDisc(group.id, resumePath)}
+                    className="px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
+                    title="Resume the last-played disc past its menu"
                   >
-                    Details
+                    <Play className="w-3 h-3 fill-black" />
+                    <span>Resume</span>
                   </button>
-                </div>
+                ) : (
+                  <button
+                    onClick={() => handlePlayDisc(effDisc.torrent, group.id, effDisc.path)}
+                    className="px-2 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition"
+                    title="Play (interactive disc menus)"
+                  >
+                    <Play className="w-3 h-3 fill-black" />
+                    <span>Play</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => openDetailsPopup(group.id, currentItem)}
+                  className="px-2 py-1.5 rounded-md border border-[#555555] text-[#e5e5e5] text-[11px] font-medium hover:bg-[#262626] hover:text-white transition"
+                  title="Name, year, duration, disc sizes and summary"
+                >
+                  Details
+                </button>
               </div>
             )}
           </div>
@@ -669,6 +671,16 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Media player preferences (owner): preferred audio/subtitle
+              languages, applied automatically on every playback. */}
+          <button
+            onClick={() => setShowPlayerPrefs(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-[#a3a3a3] hover:text-white hover:border-[#e50914]/50 transition"
+            title="Preferred audio and subtitle languages for the media player"
+          >
+            <Settings className="w-4 h-4" />
+            <span>Player prefs</span>
+          </button>
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] w-56 focus-within:border-[#e50914]/50 transition"
             title="Search the library by release or folder name"
@@ -996,14 +1008,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                   : specs.map(layerLabel).join(' + ')
                 : null;
               const seed = seedTimeRecords.find((r) => r.info_hash === item.info_hash);
-              const meta = [
-                group.year,
-                badge,
-                formatBytes(group.total_bytes),
-                fmtRuntime(detailsData?.runtimeMin ?? null),
-              ]
-                .filter(Boolean)
-                .join(' · ');
               return (
                 <>
                   <div className="flex items-start justify-between gap-3">
@@ -1011,7 +1015,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                       <h3 className="text-[16px] font-semibold text-white leading-tight">
                         {group.clean_title}
                       </h3>
-                      <div className="text-[11px] font-mono text-[#a3a3a3]">{meta}</div>
+                      {group.year && (
+                        <span className="text-[11px] font-mono text-[#a3a3a3]">{group.year}</span>
+                      )}
                     </div>
                     <button
                       onClick={() => setDetailsFor(null)}
@@ -1021,10 +1027,53 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                     </button>
                   </div>
 
+                  {/* Facts grid (owner: data moved here from the hover card,
+                      organized): duration, size, disc count, format. */}
+                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
+                    {(() => {
+                      const facts: { label: string; value: string }[] = [];
+                      if (detailsData?.runtimeMin) facts.push({ label: 'Duration', value: fmtRuntime(detailsData.runtimeMin) ?? '—' });
+                      facts.push({ label: 'Total size', value: formatBytes(group.total_bytes) });
+                      facts.push({ label: 'Discs', value: String(count) });
+                      if (badge) facts.push({ label: 'Format', value: badge });
+                      return facts.map((f) => (
+                        <div key={f.label} className="space-y-0.5">
+                          <span className="block text-[9px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                            {f.label}
+                          </span>
+                          <span className="block text-[12px] text-[#d4d4d4] font-mono">{f.value}</span>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+
+                  {/* Per-disc rows: number, type, layer spec, size — the
+                      DVD/Blu-ray sizes the owner asked to see here. */}
+                  {set.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                        Discs
+                      </span>
+                      {set.map((d, i) => (
+                        <div
+                          key={d.root_path || i}
+                          className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-[#111111] border border-[#262626]"
+                        >
+                          <span className="text-[12px] text-white font-medium">
+                            {d.title || `Disc ${d.disc_number ?? i + 1}`}
+                          </span>
+                          <span className="text-[10px] font-mono text-[#8c8c8c]">
+                            {layerLabel(d.layer_spec)} · {formatBytes(d.total_bytes)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {detailsLoading ? (
                     <p className="text-[12px] text-[#737373] italic">Fetching details…</p>
                   ) : detailsData ? (
-                    <div className="space-y-3 max-h-[50vh] overflow-y-auto">
+                    <div className="space-y-3 max-h-[40vh] overflow-y-auto">
                       {detailsData.adcText && (
                         <div className="space-y-1.5">
                           <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
@@ -1072,6 +1121,81 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, selectSource
                 </>
               );
             })()}
+          </div>
+        </div>
+      )}
+      {/* Media player preferences (owner): preferred audio/subtitle
+          languages as ISO codes (e.g. "en,ja"), applied automatically when
+          playback starts. */}
+      {showPlayerPrefs && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowPlayerPrefs(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-[#161616] border border-[#333333] shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-[15px] font-semibold text-white">Media player preferences</h3>
+                <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                  Preferred languages, tried in order every time playback starts. Use ISO 639
+                  codes, comma-separated.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPlayerPrefs(false)}
+                className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {(() => {
+              const examples: [string, string][] = [
+                ['en', 'English'],
+                ['ja', 'Japanese'],
+                ['fr', 'French'],
+                ['de', 'German'],
+                ['es', 'Spanish'],
+                ['ko', 'Korean'],
+              ];
+              return (
+                <p className="text-[10px] font-mono text-[#737373]">
+                  {examples.map(([c, n]) => `${c} = ${n}`).join(' · ')}
+                </p>
+              );
+            })()}
+            <div className="space-y-3">
+              <label className="block space-y-1">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                  Audio languages
+                </span>
+                <input
+                  value={prefAudioLangs}
+                  onChange={(e) => setPrefAudioLangs(e.target.value)}
+                  placeholder="e.g. en,ja"
+                  className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                  Subtitle languages
+                </span>
+                <input
+                  value={prefSubsLangs}
+                  onChange={(e) => setPrefSubsLangs(e.target.value)}
+                  placeholder="e.g. en (leave empty for none)"
+                  className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
+                />
+              </label>
+            </div>
+            <button
+              onClick={savePlayerPrefs}
+              className="w-full py-2 rounded-lg bg-[#e50914] hover:bg-[#c40812] text-white text-xs font-semibold transition"
+            >
+              Save preferences
+            </button>
           </div>
         </div>
       )}

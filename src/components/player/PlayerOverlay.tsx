@@ -6,6 +6,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Disc,
+  Maximize,
+  Minimize,
   Pause,
   Play,
   RotateCcw,
@@ -27,6 +29,52 @@ interface Poll {
   title_count: number;
   chapter: number;
   chapter_count: number;
+}
+
+/**
+ * Language-name lookup for the ISO codes stored in the media player
+ * preferences (owner: "select languages in advance by using appropriate
+ * language codes").
+ */
+const LANG_NAMES: Record<string, string> = {
+  en: 'english', ja: 'japanese', jp: 'japanese', fr: 'french', de: 'german',
+  es: 'spanish', it: 'italian', pt: 'portuguese', ru: 'russian', ko: 'korean',
+  zh: 'chinese', th: 'thai', nl: 'dutch', sv: 'swedish', no: 'norwegian',
+  da: 'danish', fi: 'finnish', pl: 'polish', hi: 'hindi', ar: 'arabic',
+};
+
+/** Read the preferences saved by the media screen's preferences modal. */
+function readLanguagePrefs(): { audio: string | null; subs: string | null } {
+  try {
+    return {
+      audio: localStorage.getItem('nebulae_pref_audio_langs') || null,
+      subs: localStorage.getItem('nebulae_pref_subs_langs') || null,
+    };
+  } catch {
+    return { audio: null, subs: null };
+  }
+}
+
+/**
+ * Best track whose name matches one of the preferred codes (either the raw
+ * code, e.g. "en", or the full language name, e.g. "English 5.1"). Returns
+ * the track id or null when nothing matches.
+ */
+function bestTrackFor(tracks: { id: number; name: string }[], prefCsv: string): number | null {
+  const codes = prefCsv
+    .split(',')
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean);
+  if (codes.length === 0) return null;
+  for (const code of codes) {
+    const name = LANG_NAMES[code] ?? code;
+    const hit = tracks.find((t) => {
+      const n = (t.name || '').toLowerCase();
+      return n.includes(code) || n.includes(name);
+    });
+    if (hit) return hit.id;
+  }
+  return null;
 }
 
 /** One disc of the playing release, for the switcher popup. */
@@ -69,6 +117,16 @@ export default function PlayerOverlay() {
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
   const [showDiscs, setShowDiscs] = useState(false);
+  // Track popovers (owner): the volume slider and the track lists appear on
+  // click on their pill, not permanently in the bar.
+  const [showVolume, setShowVolume] = useState(false);
+  const [showSubs, setShowSubs] = useState(false);
+  const [showAudio, setShowAudio] = useState(false);
+  const [subTracks, setSubTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
+  const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Chapter marks: real per-chapter time offsets for the current title.
+  const [chapterMarks, setChapterMarks] = useState<{ offset_ms: number; duration_ms: number; name: string }[]>([]);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
   const lastSaveRef = useRef(0);
   const dragArmedRef = useRef(false);
@@ -262,6 +320,70 @@ export default function PlayerOverlay() {
     };
   }, [player.open, player.isDisc, player.resolvedPath]);
 
+  // Chapter marks of the current title, refreshed whenever the title
+  // changes (each disc feature has its own chapter layout).
+  useEffect(() => {
+    if (!player.open) return;
+    invoke<{ offset_ms: number; duration_ms: number; name: string }[]>('player_chapter_marks')
+      .then((marks) => {
+        setChapterMarks(marks);
+        if (marks.length > 0) {
+          console.log(`[player] chapter marks: ${marks.length} on title ${poll.title}`);
+        }
+      })
+      .catch(() => {});
+     
+  }, [player.open, poll.title, poll.title_count]);
+
+  // Fullscreen state mirror for the button's icon.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    win.isFullscreen().then(setIsFullscreen).catch(() => {});
+    const un = win.onResized(() => {
+      win.isFullscreen().then(setIsFullscreen).catch(() => {});
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+
+  // Preferred audio/subtitle languages (owner, "media player preferences"
+  // on the media screen): stored by SimpleMediaView, applied automatically
+  // once the feature title engages. Codes like "en,ja"; track names carry
+  // either the code or the language name.
+  useEffect(() => {
+    if (!player.open || poll.title === 0) return;
+    const prefs = readLanguagePrefs();
+    if (!prefs.audio && !prefs.subs) return;
+    let cancelled = false;
+    const apply = async () => {
+      const deadline = Date.now() + 30_000;
+      while (!cancelled && Date.now() < deadline) {
+        try {
+          if (prefs.audio) {
+            const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'audio' });
+            const pick = bestTrackFor(tracks, prefs.audio);
+            if (pick != null) await invoke('player_set_track', { kind: 'audio', id: pick });
+          }
+          if (prefs.subs) {
+            const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' });
+            const pick = bestTrackFor(tracks, prefs.subs);
+            if (pick != null) await invoke('player_set_track', { kind: 'subtitle', id: pick });
+          }
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
+    };
+    void apply();
+    return () => {
+      cancelled = true;
+    };
+     
+  }, [player.open, poll.title]);
+
+
   if (!player.open) return null;
 
   const dur = poll.length_ms;
@@ -285,12 +407,6 @@ export default function PlayerOverlay() {
     }
   };
 
-  const onSeek = (v: number) => {
-    setSeeking(v);
-    invoke('player_seek', { positionMs: Math.round(v) }).catch(() => {});
-    window.setTimeout(() => setSeeking(null), 400);
-  };
-
   const togglePause = () => {
     invoke('player_toggle_pause').catch(() => {});
   };
@@ -301,10 +417,33 @@ export default function PlayerOverlay() {
     if (!poll.playing) invoke('player_toggle_pause').catch(() => {});
   };
 
-  const toggleMute = () => {
-    const next = !muted;
-    setMuted(next);
-    invoke('player_set_volume', { volume: next ? 0 : volume }).catch(() => {});
+  // Chapter jumping (owner): seek to the chapter's REAL time offset taken
+  // from the chapter-marks list. set_chapter is unreliable on Blu-ray, but
+  // the marks carry the exact offsets. Falls back to set_chapter when the
+  // demuxer exposes no offsets (plain files).
+  const jumpChapter = (dir: number) => {
+    const ch = poll.chapter;
+    if (chapterMarks.length > 1) {
+      let idx = chapterMarks.findIndex((m) => m.offset_ms > Math.max(poll.time_ms - 2000, 0));
+      if (idx < 0) idx = chapterMarks.length;
+      const target = dir > 0 ? Math.min(idx, chapterMarks.length - 1) : Math.max(idx - 2, 0);
+      invoke('player_seek', { positionMs: Math.max(chapterMarks[target].offset_ms + 1, 0) }).catch(() => {});
+    } else {
+      const next = dir > 0 ? ch + 1 : Math.max(ch - 1, 0);
+      invoke('player_set_chapter', { chapter: next }).catch(() => {});
+    }
+  };
+
+  // Seek from a pointer position on the custom thin bar.
+  const seekFromPointer = (clientX: number) => {
+    const el = document.querySelector('[data-testid="seek-track"]') as HTMLElement | null;
+    if (!el || dur === 0) return;
+    const rect = el.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const v = Math.round(frac * dur);
+    setSeeking(v);
+    invoke('player_seek', { positionMs: v }).catch(() => {});
+    window.setTimeout(() => setSeeking(null), 400);
   };
 
   // Window drag + double-click fullscreen (owner requests): the overlay
@@ -358,7 +497,7 @@ export default function PlayerOverlay() {
           BEHIND the video (invisible, unclickable). When a popup opens the
           bar grows, the video hole shrinks, and the ResizeObserver re-syncs
           the native view to the smaller rect. */}
-      <div className="shrink-0 bg-[#111111] border-t border-[#262626]">
+      <div className="shrink-0 bg-transparent">
         {/* Disc switcher row: every disc of the playing release, by number. */}
         {showDiscs && discChoices && discChoices.length > 1 && (
           <div className="px-4 py-3 border-b border-[#262626] max-h-56 overflow-y-auto space-y-1">
@@ -462,24 +601,26 @@ export default function PlayerOverlay() {
             </div>
           )}
 
-          {/* Skip controls: single arrows switch chapters, double arrows
-              switch episodes (DVD titles), owner directive. */}
+          {/* Skip controls: single arrows switch chapters (seeking to the
+              chapter's real time offset — set_chapter is unreliable on
+              Blu-ray), double arrows switch feature titles with menu and
+              short entries skipped (engine-side). */}
           {poll.chapter_count > 1 && (
             <button
               type="button"
-              onClick={() => invoke('player_set_chapter', { chapter: Math.max(poll.chapter - 1, 0) }).catch(() => {})}
+              onClick={() => jumpChapter(-1)}
               className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
               title="Previous chapter"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
           )}
-          {(player.isDisc && (poll.title_count > 1 || poll.title > 1)) && (
+          {player.isDisc && (
             <button
               type="button"
-              onClick={() => invoke('player_set_title', { title: Math.max(poll.title - 1, 1) }).catch(() => {})}
+              onClick={() => invoke('player_step_title', { dir: -1 }).catch(() => {})}
               className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
-              title="Previous episode (title)"
+              title="Previous episode (feature title)"
             >
               <ChevronsLeft className="w-4 h-4" />
             </button>
@@ -494,12 +635,12 @@ export default function PlayerOverlay() {
           {poll.playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
         </button>
 
-          {(player.isDisc && (poll.title_count > 1 || poll.title > 0)) && (
+          {player.isDisc && (
             <button
               type="button"
-              onClick={() => invoke('player_set_title', { title: poll.title + 1 }).catch(() => {})}
+              onClick={() => invoke('player_step_title', { dir: 1 }).catch(() => {})}
               className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
-              title="Next episode (title)"
+              title="Next episode (feature title)"
             >
               <ChevronsRight className="w-4 h-4" />
             </button>
@@ -507,7 +648,7 @@ export default function PlayerOverlay() {
           {poll.chapter_count > 1 && (
             <button
               type="button"
-              onClick={() => invoke('player_set_chapter', { chapter: poll.chapter + 1 }).catch(() => {})}
+              onClick={() => jumpChapter(1)}
               className="shrink-0 p-1.5 rounded text-[#a3a3a3] hover:text-white hover:bg-[#262626] transition"
               title="Next chapter"
             >
@@ -519,55 +660,172 @@ export default function PlayerOverlay() {
           {fmt(pos)}
         </span>
 
-        {/* Seek bar with chapter ticks (owner: chapters as ticks, not a
-            menu). The engine exposes the chapter count but not per-chapter
-            offsets, so ticks sit at even intervals of the title length. */}
-        <div className="relative flex-1 flex items-center h-4">
-          {poll.chapter_count > 1 &&
-            Array.from({ length: poll.chapter_count - 1 }, (_, i) => (
+        {/* Seek bar (owner): a thin bar that fills gradually as the title
+            progresses, with real chapter offsets drawn as vertical ticks.
+            Click / drag anywhere on the track to seek. */}
+        <div
+          className="relative flex-1 flex items-center h-5 group/bar cursor-pointer"
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            seekFromPointer(e.clientX);
+          }}
+          onPointerMove={(e) => {
+            if (e.buttons & 1) seekFromPointer(e.clientX);
+          }}
+        >
+          <div
+            data-testid="seek-track"
+            className="relative w-full h-[3px] rounded-full bg-white/25 overflow-visible"
+          >
+            {/* Gradual fill */}
+            <div
+              className="absolute left-0 top-0 h-full rounded-full bg-[#e50914]"
+              style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+            />
+            {/* Chapter marks: vertical ticks at the real chapter offsets */}
+            {chapterMarks.slice(1).map((mk, i) => (
               <span
                 key={i}
-                className="absolute top-1/2 -translate-y-1/2 w-[2px] h-2.5 rounded bg-[#8c8c8c]/70 pointer-events-none"
-                style={{ left: `${((i + 1) / poll.chapter_count) * 100}%` }}
+                className="absolute top-1/2 -translate-y-1/2 w-[2px] h-[10px] rounded bg-white/80 pointer-events-none"
+                style={{ left: `${dur > 0 ? Math.min(100, (mk.offset_ms / dur) * 100) : 0}%` }}
+                title={mk.name}
               />
             ))}
-          <input
-            type="range"
-            min={0}
-            max={dur || 1}
-            step={250}
-            value={Math.min(pos, dur || 1)}
-            onChange={(e) => setSeeking(Number(e.target.value))}
-            onMouseUp={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
-            onTouchEnd={(e) => onSeek(Number((e.target as HTMLInputElement).value))}
-            className="relative w-full accent-[#e50914] h-1"
-            disabled={dur === 0}
-          />
+            {/* Playhead */}
+            <span
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
+              style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+            />
+          </div>
         </div>
         <span className="text-[11px] font-mono text-[#8c8c8c] tabular-nums">
           {fmt(dur)}
         </span>
 
+        {/* Volume (owner): only the speaker sits in the bar; the slider
+            appears on click. */}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowVolume((v) => !v)}
+            className="p-1.5 rounded hover:bg-[#262626] text-white transition"
+            title="Volume"
+          >
+            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          </button>
+          {showVolume && (
+            <div className="absolute bottom-9 right-0 p-2 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 flex items-center justify-center h-32">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={volume}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setVolume(v);
+                  setMuted(false);
+                  invoke('player_set_volume', { volume: v }).catch(() => {});
+                }}
+                className="accent-[#e50914] w-1 h-24 [writing-mode:vertical-lr] [direction:rtl]"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Subtitles / Audio (owner): pill buttons styled like the disc
+            button, with the popover listing the disc's tracks. */}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={async () => {
+              setShowAudio(false);
+              if (!showSubs) {
+                try { setSubTracks(await invoke('player_list_tracks', { kind: 'subtitle' })); } catch {}
+              }
+              setShowSubs((v) => !v);
+            }}
+            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+            title="Subtitles"
+          >
+            Subs
+          </button>
+          {showSubs && (
+            <div className="absolute bottom-9 right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 space-y-0.5">
+              {subTracks.length === 0 && (
+                <span className="block px-2 py-1 text-[11px] text-[#666666]">No subtitle tracks</span>
+              )}
+              {subTracks.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    invoke('player_set_track', { kind: 'subtitle', id: t.id }).catch(() => {});
+                    setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
+                    setShowSubs(false);
+                  }}
+                  className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
+                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+                  }`}
+                >
+                  {t.name || `Track ${t.id}`}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={async () => {
+              setShowSubs(false);
+              if (!showAudio) {
+                try { setAudioTracks(await invoke('player_list_tracks', { kind: 'audio' })); } catch {}
+              }
+              setShowAudio((v) => !v);
+            }}
+            className="shrink-0 text-xs text-[#a3a3a3] font-medium truncate border border-[#a3a3a3] rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+            title="Audio tracks"
+          >
+            Audio
+          </button>
+          {showAudio && (
+            <div className="absolute bottom-9 right-0 w-56 max-h-52 overflow-y-auto p-1.5 rounded-lg bg-[#1a1a1a] border border-[#333333] shadow-2xl shadow-black/60 space-y-0.5">
+              {audioTracks.length === 0 && (
+                <span className="block px-2 py-1 text-[11px] text-[#666666]">No audio tracks</span>
+              )}
+              {audioTracks.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    invoke('player_set_track', { kind: 'audio', id: t.id }).catch(() => {});
+                    setAudioTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
+                    setShowAudio(false);
+                  }}
+                  className={`w-full text-left px-2 py-1 rounded text-[12px] transition ${
+                    t.active ? 'bg-[#e50914]/15 text-white' : 'text-[#a3a3a3] hover:text-white hover:bg-[#262626]'
+                  }`}
+                >
+                  {t.name || `Track ${t.id}`}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Fullscreen (owner): explicit button in the bar, right-hand side. */}
         <button
           type="button"
-          onClick={toggleMute}
-          className="p-1.5 rounded hover:bg-[#262626] text-white transition"
-          title={muted ? 'Unmute' : 'Mute'}
-        >
-          {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={volume}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            setVolume(v);
-            if (!muted) invoke('player_set_volume', { volume: v }).catch(() => {});
+          onClick={() => {
+            const win = getCurrentWindow();
+            win.setFullscreen(!isFullscreen).catch(() => {});
+            setIsFullscreen(!isFullscreen);
           }}
-          className="w-24 accent-[#e50914] h-1"
-        />
+          className="shrink-0 p-1.5 rounded hover:bg-[#262626] text-white transition"
+          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        >
+          {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+        </button>
 
         <button
           type="button"
