@@ -1902,7 +1902,7 @@ fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Resu
         .cloned()
         .collect();
     let store = external_media_path(app)?;
-    let data = serde_json::to_vec_pretty(items).map_err(|e| e.to_string())?;
+    let data = serde_json::to_vec_pretty(&items).map_err(|e| e.to_string())?;
     std::fs::write(store, data).map_err(|e| e.to_string())
 }
 

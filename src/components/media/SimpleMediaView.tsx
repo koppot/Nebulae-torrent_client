@@ -598,17 +598,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       : groups;
 
   // "2d 14h" style seed-time text for the ADC hover line.
-  const fmtSeedTime = (s?: number) => {
-    if (!s || s <= 0) return null;
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
-
-  const layerLabel = (ls?: string) =>
+    const layerLabel = (ls?: string) =>
     (({ Dvd5: 'DVD-5', Dvd9: 'DVD-9', Bd25: 'BD-25', Bd50: 'BD-50', UhdBd66: 'UHD-66', UhdBd100: 'UHD-100' }) as Record<string, string>)[ls || ''] || 'Disc';
 
   const renderGroupCard = (group: MediaGroup, variant: 'active' | 'watch' | 'seeding') => {
@@ -1365,14 +1355,15 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                   ? `${count > 1 ? `${count}× ` : ''}${layerLabel(specs[0])}`
                   : specs.map(layerLabel).join(' + ')
                 : null;
-              const seed = seedTimeRecords.find((r) => r.info_hash === item.info_hash);
               return (
                 <>
+                  {/* EXTERNAL-STYLE layout (owner): poster left; title,
+                      year, pills and the overview beside it. */}
                   <div className="flex gap-4">
                     <div className="w-[110px] flex-shrink-0">
                       {(() => {
                         const cover =
-                          (discMetaMap[item.id]?.cover_image) ||
+                          discMetaMap[item.id]?.cover_image ||
                           tmdbMap[group.id]?.poster ||
                           item.poster_url;
                         return cover ? (
@@ -1389,38 +1380,51 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                         );
                       })()}
                     </div>
-                    <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
-                      <div className="space-y-1 min-w-0">
-                        <h3 className="text-[16px] font-semibold text-white leading-tight">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="text-[15px] font-bold text-white leading-tight">
                           {group.clean_title}
+                          {group.year ? (
+                            <span className="text-[#a3a3a3] font-normal"> ({group.year})</span>
+                          ) : null}
                         </h3>
-                        {group.year && (
-                          <span className="text-[11px] font-mono text-[#a3a3a3]">{group.year}</span>
-                        )}
+                        <button
+                          onClick={() => setDetailsFor(null)}
+                          className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {badge && (
-                          <span className="block w-max px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                          <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
                             {badge}
                           </span>
                         )}
+                        {detailsData?.runtimeMin ? (
+                          <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                            {detailsData.runtimeMin} min
+                          </span>
+                        ) : null}
                       </div>
-                      <button
-                        onClick={() => setDetailsFor(null)}
-                        className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                      {detailsLoading ? (
+                        <p className="mt-2 text-[11px] text-[#737373] italic">Fetching details…</p>
+                      ) : detailsData?.overview ? (
+                        <p className="mt-2 text-[11px] leading-relaxed text-[#d4d4d4] line-clamp-6">
+                          {detailsData.overview}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-[#737373] italic">
+                          No summary available for this title.
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  {/* Facts grid (owner: data moved here from the hover card,
-                      organized): duration, size, disc count, format. */}
+                  {/* Facts grid: duration, size, disc count, format. */}
                   <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
                     {(() => {
                       const facts: { label: string; value: string }[] = [];
-                      // The engine reports the TOTAL duration for the release
-                      // (TV: episode count × per-episode runtime; movies: the
-                      // film runtime) — the owner wants the whole media, not
-                      // a single disc/episode.
                       if (detailsData?.runtimeMin) facts.push({ label: 'Duration', value: fmtRuntime(detailsData.runtimeMin) ?? '—' });
                       facts.push({ label: 'Total size', value: formatBytes(group.total_bytes) });
                       facts.push({ label: 'Discs', value: String(count) });
@@ -1436,8 +1440,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                     })()}
                   </div>
 
-                  {/* Per-disc rows: number, type, layer spec, size — the
-                      DVD/Blu-ray sizes the owner asked to see here. */}
+                  {/* Per-disc rows. */}
                   {set.length > 0 && (
                     <div className="space-y-1">
                       <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
@@ -1459,54 +1462,27 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                     </div>
                   )}
 
-                  {detailsLoading ? (
-                    <p className="text-[12px] text-[#737373] italic">Fetching details…</p>
-                  ) : detailsData ? (
-                    <div className="space-y-3 max-h-[40vh] overflow-y-auto">
-                      {detailsData.adcText && (
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                            AsianDVDClub
-                          </span>
-                          <p className="text-[12px] text-[#d4d4d4] leading-relaxed whitespace-pre-line">
-                            {detailsData.adcText}
-                          </p>
-                          {detailsData.adcUrl && (
-                            <a
-                              href={detailsData.adcUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-[11px] text-[#a3a3a3] underline underline-offset-2 hover:text-white"
-                            >
-                              Open the ADC release page
-                            </a>
-                          )}
-                          {seed && (
-                            <p className="text-[11px] font-mono text-[#8c8c8c]">
-                              Seed time {fmtSeedTime(seed.seeding_time_seconds) || '0m'} of{' '}
-                              {fmtSeedTime(seed.required_seeding_seconds) || '—'} required
-                              {seed.is_shield_satisfied ? ' · shield satisfied' : ''}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {detailsData.overview && (
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                            {detailsData.source === 'tmdb' ? 'TMDB / Trakt' : 'TMDB'}
-                          </span>
-                          <p className="text-[12px] text-[#a3a3a3] leading-relaxed">
-                            {detailsData.overview}
-                          </p>
-                        </div>
-                      )}
-                      {!detailsData.adcText && !detailsData.overview && (
-                        <p className="text-[12px] text-[#737373] italic">
-                          No summary available{detailsData.adcUrl ? ' — the ADC page requires a website login' : ''}.
-                        </p>
-                      )}
-                    </div>
-                  ) : null}
+                  {/* Actions: same as the External popup. */}
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        setDetailsFor(null);
+                        handlePlayDisc(item, group.id, undefined, featureLabel(group.id));
+                      }}
+                      className="flex-1 px-3 py-2 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition"
+                    >
+                      Play
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDetailsFor(null);
+                        handleOpenFolder(folderOf(item));
+                      }}
+                      className="flex-1 px-3 py-2 rounded-lg bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5e5e5] text-xs font-medium transition"
+                    >
+                      Show in Finder
+                    </button>
+                  </div>
                 </>
               );
             })()}
