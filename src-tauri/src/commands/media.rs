@@ -170,6 +170,46 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("Video")
         .to_string();
+
+    // A file INSIDE a disc structure (BDMV/STREAM/*.m2ts, VIDEO_TS/*.VOB)
+    // must never play as a bare clip: such entries are menu loops seconds
+    // long, and playback ends into a black screen (owner-reported blank
+    // player for the Fuuka Blu-ray). Older builds saved such paths into the
+    // resume store; redirect to the disc's main feature instead of playing
+    // the clip. The feature is the largest video under the disc structure.
+    let disc_ancestor = path
+        .ancestors()
+        .skip(1)
+        .find(|a| {
+            let name = a
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            name == "bdmv" || name == "video_ts"
+        });
+    if let Some(disc_root) = disc_ancestor {
+        if let Some(feature) = find_main_video(disc_root) {
+            let title = disc_root
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or(title.as_str())
+                .to_string();
+            tracing::info!(
+                "resolve_playback: in-disc file {} redirected to feature {}",
+                path.display(),
+                feature.display()
+            );
+            return Ok(ResolvedPlayback {
+                resolved_path: feature.display().to_string(),
+                title,
+                is_disc: false,
+                external: false,
+            });
+        }
+    }
+
     Ok(ResolvedPlayback {
         resolved_path: file_path.to_string(),
         title,
