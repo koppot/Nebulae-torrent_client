@@ -46,7 +46,7 @@ export const TitleBar: React.FC = () => {
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
 
   const [isMaximized, setIsMaximized] = useState(false);
-  const [platform, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
+  const [, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
 
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
@@ -155,46 +155,15 @@ export const TitleBar: React.FC = () => {
         </div>
       )}
       {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
-      <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
-        {/* macOS Native-Style Window Traffic Lights */}
-        {platform === 'mac' && (
-          <div className="flex items-center pr-2.5 pl-0 flex-shrink-0">
-            {/* 24px hit areas around 12px dots — the dots alone were too
-                small to click reliably (owner: "buttons are not functional"). */}
-            <button
-              type="button"
-              onClick={handleClose}
-              className="w-6 h-6 flex items-center justify-center group transition"
-              title="Minimize to Dock"
-            >
-              <span className="w-3 h-3 rounded-full bg-[#ff5f56] group-hover:brightness-90 flex items-center justify-center transition">
-                <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={handleMinimize}
-              className="w-6 h-6 flex items-center justify-center group transition"
-              title="Minimize"
-            >
-              <span className="w-3 h-3 rounded-full bg-[#ffbd2e] group-hover:brightness-90 flex items-center justify-center transition">
-                <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={handleToggleMaximize}
-              className="w-6 h-6 flex items-center justify-center group transition"
-              title="Zoom / Maximize"
-            >
-              <span className="w-3 h-3 rounded-full bg-[#27c93f] group-hover:brightness-90 flex items-center justify-center transition">
-                <Square className="w-1.5 h-1.5 text-black/60 opacity-0 group-hover:opacity-100" />
-              </span>
-            </button>
-          </div>
-        )}
+      {/* Middle: Expansive Draggable Region */}
+      <div
+        data-tauri-drag-region
+        onDoubleClick={handleToggleMaximize}
+        className="flex-1 h-full min-w-4 cursor-default"
+      />
 
-
+      {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
+      <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
             the Media Center. */}
@@ -301,43 +270,11 @@ export const TitleBar: React.FC = () => {
             <HelpCircle className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
-
-      {/* Middle: Expansive Draggable Region */}
-      <div
-        data-tauri-drag-region
-        onDoubleClick={handleToggleMaximize}
-        className="flex-1 h-full min-w-4 cursor-default"
-      />
-
-      {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
-      <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
         {/* Right-side controls (owner): Search library + Player preferences
             on manager AND media; the folder-open (Add Movie) sits in the
             corner. SimpleMediaView receives its events via window events. */}
         {viewMode !== 'compact' && (
           <>
-            <div
-              className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#1f1f1f] border border-[#333333] w-52 focus-within:border-[#e50914]/50 transition"
-              title="Search the library by release or folder name"
-            >
-              <Search className="w-3.5 h-3.5 text-[#737373]" />
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search library..."
-                className="bg-transparent text-xs outline-none flex-1 text-white placeholder:text-[#737373] min-w-0"
-              />
-              {searchQuery && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); setSearchQuery(''); }}
-                  className="text-[#737373] hover:text-white transition"
-                  title="Clear search"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
             <button
               type="button"
               onClick={(e) => {
@@ -402,8 +339,9 @@ export const TitleBar: React.FC = () => {
         </div>
         )}
 
-        {/* Windows / Linux Desktop Window Control Buttons */}
-        {platform !== 'mac' && (
+        {/* Desktop Window Control Buttons (owner): traffic lights are
+            gone; these apply on every platform. */}
+        {(
           <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
             {/* Minimize */}
             <button
