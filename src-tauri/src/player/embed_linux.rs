@@ -148,7 +148,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     .map(|_| ())
 }
 
-pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64, _bar_height: f64) -> Result<(), String> {
     let scale = app
         .get_webview_window("main")
         .and_then(|w| w.scale_factor().ok())
