@@ -1362,8 +1362,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                   <div className="flex gap-4">
                     <div className="w-[110px] flex-shrink-0">
                       {(() => {
+                        // Same chain the poster card uses: the disc's own
+                        // cover art, the extracted thumbnail, then TMDB.
                         const cover =
-                          discMetaMap[item.id]?.cover_image ||
+                          (discSetMap[item.id] ?? [])[0]?.cover_image ||
+                          thumbMap[item.id] ||
                           tmdbMap[group.id]?.poster ||
                           item.poster_url;
                         return cover ? (
