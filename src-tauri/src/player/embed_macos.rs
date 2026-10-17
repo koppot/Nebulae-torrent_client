@@ -355,6 +355,18 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     let b = content.bounds();
                     (*view).setFrame(b);
                 }
+                // The native traffic lights are dead on this borderless
+                // window (no AX entries, clicks land in the webview): hide
+                // them so the working webview controls stand alone.
+                for btn_id in [0u64, 1, 2] {
+                    let btn: *mut objc2::runtime::Object = objc2::msg_send![
+                        &*win,
+                        standardWindowButton: btn_id
+                    ];
+                    if !btn.is_null() {
+                        let _: () = objc2::msg_send![btn, setHidden: true];
+                    }
+                }
                 if !hidden {
                     // Bring the player window to key status: without this
                     // the traffic lights render grayed out and the FIRST

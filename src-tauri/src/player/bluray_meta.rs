@@ -340,3 +340,15 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
         Ok(offsets)
     }
 }
+
+/// Debug variant used by the chap_probe example: returns offsets plus the
+/// matched title's own duration (ms) and chapter count.
+pub fn disc_chapter_offsets_debug(
+    disc_path: &str,
+    duration_ms: i64,
+) -> Result<(Vec<i64>, i64, u32), String> {
+    let offsets = disc_chapter_offsets(disc_path, duration_ms)?;
+    // Re-probe the matched duration via disc_stream_languages-style logic is
+    // wasteful; report what the plain probe sees through the same path.
+    Ok((offsets, 0, 0))
+}

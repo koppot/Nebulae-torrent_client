@@ -802,31 +802,62 @@ pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), 
 /// metadata on some discs), matched by `duration_ms`. DVD: read from the
 /// IFO tables, where `title` (the VLC title index) maps directly to a
 /// title set - libbluray does not cover DVDs at all.
+
+/// Probe path for the language/chapter probes: prefer the RESOLVED disc
+/// root (a multi-disc release resolves to a disc subfolder, so walking up
+/// from current_path finds nothing); fall back to walking up from the raw
+/// path, then to a disc folder inside it.
+fn probe_root(path: &str) -> std::path::PathBuf {
+    let mut probe = std::path::PathBuf::from(path);
+    for _ in 0..4 {
+        if probe.join("BDMV").is_dir() || probe.join("VIDEO_TS").is_dir() {
+            return probe;
+        }
+        if !probe.pop() {
+            break;
+        }
+    }
+    // Multi-disc release root: the disc folders live BELOW it.
+    let mut probe = std::path::PathBuf::from(path);
+    for _ in 0..4 {
+        if probe.join("BDMV").is_dir() || probe.join("VIDEO_TS").is_dir() {
+            return probe;
+        }
+        if probe.is_dir() {
+            let hit = std::fs::read_dir(&probe)
+                .ok()
+                .and_then(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .find(|d| {
+                            d.is_dir() && (d.join("BDMV").is_dir() || d.join("VIDEO_TS").is_dir())
+                        })
+                });
+            if let Some(d) = hit {
+                return d;
+            }
+        }
+        if !probe.pop() {
+            break;
+        }
+    }
+    probe
+}
+
 #[tauri::command]
 pub async fn player_track_languages(
     state: tauri::State<'_, PlayerState>,
     duration_ms: i64,
     title: Option<i64>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
-    let path = poison(&state.current_path).clone().unwrap_or_default();
+    let path = poison(&state.current_resolved)
+        .clone()
+        .or_else(|| poison(&state.current_path).clone())
+        .unwrap_or_default();
     if path.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    // current_path can be the feature FILE (resume flow) rather than the
-    // disc folder: walk up until a BDMV/VIDEO_TS parent is found so the
-    // probe always sees the disc root.
-    let mut probe_path = std::path::PathBuf::from(&path);
-    for _ in 0..4 {
-        if probe_path.join("BDMV").is_dir()
-            || probe_path.join("VIDEO_TS").is_dir()
-            || probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO").is_file()
-        {
-            break;
-        }
-        if !probe_path.pop() {
-            break;
-        }
-    }
+    let probe_path = probe_root(&path);
     let video_ts_ifo = probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO");
     let is_dvd = video_ts_ifo.is_file() || probe_path.join("VIDEO_TS.IFO").is_file();
     if is_dvd {
@@ -1062,20 +1093,15 @@ pub async fn player_disc_chapters(
 ) -> Result<Vec<ChapterMark>, String> {
     // VLC's chapter API reports nothing for Blu-ray titles; read the
     // chapter starts straight from the disc's playlists via libbluray.
-    let path = poison(&state.current_path).clone().unwrap_or_default();
+    let path = poison(&state.current_resolved)
+        .clone()
+        .or_else(|| poison(&state.current_path).clone())
+        .unwrap_or_default();
     if path.is_empty() {
         return Ok(Vec::new());
     }
     tokio::task::spawn_blocking(move || {
-    let mut probe_path = std::path::PathBuf::from(&path);
-    for _ in 0..4 {
-        if probe_path.join("BDMV").is_dir() {
-            break;
-        }
-        if !probe_path.pop() {
-            break;
-        }
-    }
+    let mut probe_path = probe_root(&path);
     // ISO disc image: libbluray cannot read through the image file —
     // mount it read-only in the BACKGROUND (no dialogs, invisible to the
     // owner) and probe the BDMV inside, then detach.

@@ -1169,6 +1169,35 @@ export default function PlayerOverlay() {
         {player.title}
       </div>
 
+      {/* Window controls (owner): the native traffic lights are dead on
+          this borderless window — these webview dots close, minimize and
+          maximize for real, pinned top-left, same auto-hide as the X. */}
+      <div
+        className={`absolute top-3 left-4 z-20 flex items-center gap-2 transition ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
+      >
+        <button
+          type="button"
+          onClick={() => void closePlayer()}
+          className="w-3 h-3 rounded-full bg-[#ff5f57] hover:brightness-125 transition"
+          title="Close player"
+        />
+        <button
+          type="button"
+          onClick={() => getCurrentWindow().minimize()}
+          className="w-3 h-3 rounded-full bg-[#febc2e] hover:brightness-125 transition"
+          title="Minimize"
+        />
+        <button
+          type="button"
+          onClick={() => getCurrentWindow().toggleMaximize()}
+          className="w-3 h-3 rounded-full bg-[#28c840] hover:brightness-125 transition"
+          title="Maximize"
+        />
+      </div>
+
       {/* Close (owner): white X, pinned to the top-right corner of the
           player window, above the control bar's auto-hide. */}
       <button
