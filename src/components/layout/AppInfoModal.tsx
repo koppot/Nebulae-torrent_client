@@ -71,8 +71,7 @@ export default function AppInfoModal({ onClose }: Props) {
           <li className="flex gap-2"><span className="text-[#e50914]">•</span>Chapter navigation, audio & subtitle language control</li>
           <li className="flex gap-2"><span className="text-[#e50914]">•</span>ISO and multi-disc releases, resume points, external media library</li>
           <li className="flex gap-2"><span className="text-[#e50914]">•</span>VPN kill switch, connectivity doctor, ADC ratio profile</li>
-        </dl>
-        </dl>
+        </ul>
 
         <button
           type="button"

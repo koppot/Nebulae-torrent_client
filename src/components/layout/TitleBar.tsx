@@ -153,7 +153,7 @@ export const TitleBar: React.FC = () => {
           <button
             type="button"
             onClick={() => setViewMode('media')}
-            className={`flex items-center gap-2 px-4 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+            className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
               viewMode === 'media'
                 ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
                 : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
@@ -166,7 +166,7 @@ export const TitleBar: React.FC = () => {
           <button
             type="button"
             onClick={() => setViewMode('manager')}
-            className={`flex items-center gap-2 px-4 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+            className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
               viewMode === 'manager'
                 ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
                 : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
@@ -340,21 +340,6 @@ export const TitleBar: React.FC = () => {
           </button>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-        {viewMode === 'media' && (
-          <>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                window.dispatchEvent(new CustomEvent('nebulae:player-prefs'));
-              }}
-              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-              title="Player preferences — preferred audio and subtitle languages"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-          </>
-        )}
         {/* Compact Quick Filter — transfers only (manager/compact); the
             media mode uses the Search library box instead. */}
         {viewMode !== 'media' && (
