@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { closePlayer, openInPlayer, savePositionMs, usePlayerStore } from '../../lib/playerStore';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DiscStructureInfo } from '../../types';
 import { formatBytes } from '../../lib/formatters';
 
@@ -152,18 +153,23 @@ export default function PlayerOverlay() {
   }, [player.open, player.isDisc, poll.title]);
 
   // Disc set of the playing release: names the current disc ("Disc 1") in
-  // the control bar and feeds the switcher popup. Refetched when the resolved
-  // path changes (after a disc switch) so the label follows the playback.
+  // the control bar and feeds the switcher popup. The set may live several
+  // levels above the playing file (e.g. the feature stream sits at
+  // <release>/FUUKA_CS_D1/BDMV/STREAM/00015.m2ts, while its sibling disc
+  // FUUKA_CS_D2 hangs off the release root) — so walk up the ancestors
+  // until a folder reports more than one disc. A single immediate-parent
+  // probe only worked for flat multi-ISO layouts (Banner of the Stars).
   useEffect(() => {
     if (!player.open || !player.isDisc) {
       setDiscChoices(null);
       return;
     }
     let alive = true;
-    const dir = player.resolvedPath.split('/').slice(0, -1).join('/');
-    invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dir })
-      .then((set) => {
-        if (!alive) return;
+    const parts = player.resolvedPath.split('/');
+    const tryDir = async (dir: string) => {
+      const set = await invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dir });
+      if (!alive) return;
+      if (set.length > 1) {
         setDiscChoices(
           set.map((d, idx) => ({
             label: `Disc ${d.disc_number || idx + 1}`,
@@ -171,14 +177,24 @@ export default function PlayerOverlay() {
             path: d.play_target,
           })),
         );
-      })
-      .catch(() => {
-        if (alive) setDiscChoices(null);
-      });
+        return true;
+      }
+      return false;
+    };
+    (async () => {
+      for (let i = parts.length - 1; i >= 3; i--) {
+        const dir = parts.slice(0, i).join('/');
+        try {
+          if (await tryDir(dir)) return;
+        } catch {
+          /* keep walking up */
+        }
+      }
+      if (alive) setDiscChoices(null);
+    })();
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player.open, player.isDisc, player.resolvedPath]);
 
   if (!player.open) return null;
@@ -225,10 +241,38 @@ export default function PlayerOverlay() {
     invoke('player_set_volume', { volume: next ? 0 : volume }).catch(() => {});
   };
 
+  // Window drag + double-click fullscreen (owner requests): the overlay
+  // covers the whole undecorated window, so nothing else offers a drag
+  // region. Mousedown on the video hole starts a native window drag;
+  // double-click toggles macOS fullscreen. A drag gesture suppresses the
+  // following dblclick so a move is never read as a fullscreen toggle.
+  const dragArmedRef = useRef(false);
+  const onVideoPointerDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    dragArmedRef.current = true;
+    getCurrentWindow().startDragging().catch(() => {});
+  };
+  const onVideoDoubleClick = () => {
+    if (dragArmedRef.current) {
+      dragArmedRef.current = false;
+      return;
+    }
+    const win = getCurrentWindow();
+    win
+      .isFullscreen()
+      .then((fs) => win.setFullscreen(!fs))
+      .catch(() => {});
+  };
+
   return (
     <div className="fixed inset-0 z-[100] bg-black flex flex-col select-none">
       {/* Video hole: the native overlay shows through this exact rect. */}
-      <div ref={holderRef} className="flex-1 min-h-0" />
+      <div
+        ref={holderRef}
+        className="flex-1 min-h-0"
+        onMouseDown={onVideoPointerDown}
+        onDoubleClick={onVideoDoubleClick}
+      />
 
       {ended && (
         <div className="absolute inset-x-0 top-0 flex-1 flex items-center justify-center pointer-events-none">
