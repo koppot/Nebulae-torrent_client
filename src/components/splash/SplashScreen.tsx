@@ -801,7 +801,7 @@ export const SplashScreen: React.FC = () => {
                 textShadow:
                   '0 0 14px rgba(212,175,55,0.45), 0 0 34px rgba(212,175,55,0.25), 0 0 60px rgba(212,175,55,0.12)',
               }}
-              className="font-normal text-[90px] md:text-[100px] leading-none tracking-wide"
+              className="font-semibold text-[76px] md:text-[85px] leading-none tracking-wide"
             >
               NEBULAE
             </span>

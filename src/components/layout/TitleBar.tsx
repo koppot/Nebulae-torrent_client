@@ -240,7 +240,7 @@ export const TitleBar: React.FC = () => {
             </button>          </div>
         </div>
       </div>
-      <div className="flex items-center justify-between gap-2 px-3 h-10" data-tauri-drag-region>
+      <div className="flex items-center px-3 h-10" data-tauri-drag-region>
         {/* Left slot (owner): the torrent controls float left on row 2. */}
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
@@ -302,6 +302,9 @@ export const TitleBar: React.FC = () => {
           {/* Divider */}
           <div className="h-4 w-[1px] bg-[#262626] mx-1" />
 
+        </div>
+        {/* Utility dialogs (owner): centered on the second row. */}
+        <div className="flex-1 flex items-center justify-center gap-1 min-w-0">
           {/* Utility Workbench Dialogs: Doctor, VPN, Tracker, Settings, Help */}
           <button
             type="button"
@@ -339,6 +342,7 @@ export const TitleBar: React.FC = () => {
             <HelpCircle className="w-3.5 h-3.5" />
           </button>
         </div>
+
         <div className="flex items-center gap-2 flex-shrink-0">
         {/* Compact Quick Filter — transfers only (manager/compact); the
             media mode uses the Search library box instead. */}
