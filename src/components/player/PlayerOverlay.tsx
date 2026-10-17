@@ -1209,43 +1209,6 @@ export default function PlayerOverlay() {
         {player.title}
       </div>
 
-      {/* Traffic lights (owner, finally): the NATIVE lights are dead on
-          this borderless window, so the controls are real webview dots.
-          Red = save & close, yellow = minimize, green = fullscreen. */}
-      <div
-        className={`absolute top-3.5 left-4 z-20 flex items-center gap-2 transition ${
-          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95))' }}
-      >
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={() => {
-            const p = pollRef.current;
-            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
-              savePositionMs(player.resolvedPath, p.time_ms);
-            }
-            void closePlayer();
-          }}
-          className="w-3 h-3 rounded-full bg-[#ff5f57] hover:brightness-110 flex items-center justify-center"
-        >
-          <span className="text-[8px] leading-none text-black/60 opacity-0 group-hover:opacity-100">✕</span>
-        </button>
-        <button
-          type="button"
-          aria-label="Minimize"
-          onClick={() => invoke('player_window_minimize').catch(() => {})}
-          className="w-3 h-3 rounded-full bg-[#febc2e] hover:brightness-110"
-        />
-        <button
-          type="button"
-          aria-label="Fullscreen"
-          onClick={() => invoke('player_toggle_fullscreen').catch(() => {})}
-          className="w-3 h-3 rounded-full bg-[#28c840] hover:brightness-110"
-        />
-      </div>
-
       {/* Close (owner): white X, pinned to the top-right corner of the
           player window, above the control bar's auto-hide. The native
           traffic lights stay hidden (dead on this borderless window). */}
