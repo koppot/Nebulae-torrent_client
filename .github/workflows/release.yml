@@ -156,8 +156,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p src-tauri/resources/vlc/lib src-tauri/resources/vlc/plugins
-          cp -a /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
-          cp -a /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          cp -rL /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
+          cp -rL /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          chmod -R u+rwX,go+rX src-tauri/resources/vlc
           ls src-tauri/resources/vlc/lib | head -3
 
       - name: Cache cargo dependencies
@@ -228,7 +229,10 @@ jobs:
           curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
           mkdir -p jrex src-tauri/resources/jre
           if [ "$EXT" = "zip" ]; then unzip -q jre.$EXT -d jrex; else tar xzf jre.$EXT -C jrex; fi
-          cp -a jrex/jdk-*-jre/. src-tauri/resources/jre/
+          # macOS tarballs nest the runtime in Contents/Home.
+          SRC=$(ls -d jrex/jdk-*-jre/Contents/Home jrex/jdk-*-jre 2>/dev/null | head -n 1)
+          cp -a "$SRC"/. src-tauri/resources/jre/
+          chmod -R u+rwX,go+rX src-tauri/resources/jre
           ls src-tauri/resources/jre/bin | head -3
 
       # --- Linux split build ------------------------------------------------
