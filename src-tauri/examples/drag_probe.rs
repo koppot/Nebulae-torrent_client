@@ -5,8 +5,7 @@ fn main() {
         unsafe {
             let loc: objc2_foundation::NSPoint =
                 objc2::msg_send![objc2::class!(NSEvent), mouseLocation];
-            let buttons: usize =
-                objc2::msg_send![objc2::class!(NSEvent), pressedMouseButtons];
+            let buttons: usize = objc2::msg_send![objc2::class!(NSEvent), pressedMouseButtons];
             println!("loc=({},{}) buttons={}", loc.x, loc.y, buttons);
         }
         std::thread::sleep(std::time::Duration::from_millis(500));

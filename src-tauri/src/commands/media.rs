@@ -200,17 +200,14 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     // resume store; redirect to the disc itself (played through the
     // bluray:// MRL so titles, chapters and the menu are available) instead
     // of playing the clip as a bare file.
-    let disc_ancestor = path
-        .ancestors()
-        .skip(1)
-        .find(|a| {
-            let name = a
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            name == "bdmv" || name == "video_ts"
-        });
+    let disc_ancestor = path.ancestors().skip(1).find(|a| {
+        let name = a
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        name == "bdmv" || name == "video_ts"
+    });
     if let Some(disc_dir) = disc_ancestor {
         // The disc root is the folder CONTAINING BDMV/VIDEO_TS.
         if let Some(disc_root) = disc_dir.parent() {
@@ -319,7 +316,10 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
             .and_then(|s| s.to_str())
             .unwrap_or(title.as_str())
             .to_string();
-        tracing::info!("resolve_playback: ISO image {} treated as disc", path.display());
+        tracing::info!(
+            "resolve_playback: ISO image {} treated as disc",
+            path.display()
+        );
         return Ok(ResolvedPlayback {
             resolved_path: file_path.to_string(),
             title,
@@ -349,7 +349,11 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
                 .and_then(|s| s.to_str())
                 .unwrap_or(title.as_str())
                 .to_string();
-            tracing::info!("resolve_playback: folder {} holds one ISO, using {}", path.display(), iso.display());
+            tracing::info!(
+                "resolve_playback: folder {} holds one ISO, using {}",
+                path.display(),
+                iso.display()
+            );
             return Ok(ResolvedPlayback {
                 resolved_path: iso.display().to_string(),
                 title,
@@ -488,7 +492,12 @@ fn start_playback(
                 tracing::error!("player_open: overlay unhide failed: {e}");
                 return Err(e);
             }
-            match VlcSession::open_shared(&lib, &state.shared_instance, &resolved.resolved_path, view) {
+            match VlcSession::open_shared(
+                &lib,
+                &state.shared_instance,
+                &resolved.resolved_path,
+                view,
+            ) {
                 Ok(session) => {
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
                     // can fail inside the demuxer while libvlc_media_player_play
@@ -518,7 +527,9 @@ fn start_playback(
                         for attempt in 0..16u32 {
                             std::thread::sleep(std::time::Duration::from_millis(500));
                             title_count = unsafe {
-                                (lib.libvlc_media_player_get_title_count)(session.media_player as *mut c_void)
+                                (lib.libvlc_media_player_get_title_count)(
+                                    session.media_player as *mut c_void,
+                                )
                             };
                             tracing::info!(
                                 "player_open: disc probe {attempt}: titles={title_count}"
@@ -534,8 +545,15 @@ fn start_playback(
                                 resolved.resolved_path
                             );
                             let fallback = find_main_video(Path::new(&resolved.resolved_path))
-                            .ok_or_else(|| "disc demux failed and no feature found".to_string())?;
-                            let fb_session = VlcSession::open_shared(&lib, &state.shared_instance, &fallback.display().to_string(), view)?;
+                                .ok_or_else(|| {
+                                    "disc demux failed and no feature found".to_string()
+                                })?;
+                            let fb_session = VlcSession::open_shared(
+                                &lib,
+                                &state.shared_instance,
+                                &fallback.display().to_string(),
+                                view,
+                            )?;
                             *poison(&state.instance) = fb_session.instance;
                             *poison(&state.media) = fb_session.media;
                             *poison(&state.media_player) = fb_session.media_player;
@@ -569,7 +587,9 @@ fn start_playback(
                         // explicit resume (frontend passes resume:true) skips
                         // the watcher so the first-play flow engages the
                         // feature directly for the deferred seek.
-                        state.menu_watch.store(true, std::sync::atomic::Ordering::SeqCst);
+                        state
+                            .menu_watch
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
                             use tauri::Manager;
@@ -577,7 +597,9 @@ fn start_playback(
                                 std::thread::sleep(std::time::Duration::from_millis(500));
                                 let state = app2.state::<PlayerState>();
                                 if !state.menu_watch.load(std::sync::atomic::Ordering::SeqCst) {
-                                    tracing::info!("[player] menu watcher cancelled (resume wanted)");
+                                    tracing::info!(
+                                        "[player] menu watcher cancelled (resume wanted)"
+                                    );
                                     return;
                                 }
                                 // Hold the player pointer guard across the VLC
@@ -824,15 +846,11 @@ fn probe_root(path: &str) -> std::path::PathBuf {
             return probe;
         }
         if probe.is_dir() {
-            let hit = std::fs::read_dir(&probe)
-                .ok()
-                .and_then(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .map(|e| e.path())
-                        .find(|d| {
-                            d.is_dir() && (d.join("BDMV").is_dir() || d.join("VIDEO_TS").is_dir())
-                        })
-                });
+            let hit = std::fs::read_dir(&probe).ok().and_then(|rd| {
+                rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|d| {
+                    d.is_dir() && (d.join("BDMV").is_dir() || d.join("VIDEO_TS").is_dir())
+                })
+            });
             if let Some(d) = hit {
                 return d;
             }
@@ -868,7 +886,8 @@ pub async fn player_track_languages(
         // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
         // falls back to the feature playlist (most distinct audio
         // languages) and returns the real track names.
-        let r = player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
+        let r =
+            player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
         tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
         r
     }
@@ -1020,11 +1039,7 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
         let title = (lib.libvlc_media_player_get_title)(m);
         let mut chapters: *mut *mut crate::player::engine::VlcChapterDescription =
             std::ptr::null_mut();
-        let rc = (lib.libvlc_media_player_get_full_chapter_descriptions)(
-            m,
-            title,
-            &mut chapters,
-        );
+        let rc = (lib.libvlc_media_player_get_full_chapter_descriptions)(m, title, &mut chapters);
         if rc != 0 || chapters.is_null() {
             return Ok(Vec::new());
         }
@@ -1037,7 +1052,9 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
             let name = if (*ch).psz_name.is_null() {
                 format!("Chapter {}", i + 1)
             } else {
-                CStr::from_ptr((*ch).psz_name).to_string_lossy().into_owned()
+                CStr::from_ptr((*ch).psz_name)
+                    .to_string_lossy()
+                    .into_owned()
             };
             marks.push(ChapterMark {
                 offset_ms: (*ch).i_time_offset,
@@ -1071,7 +1088,9 @@ unsafe fn tracks_from_list(
         let name = if (*node).psz_name.is_null() {
             format!("Track {}", (*node).i_id)
         } else {
-            CStr::from_ptr((*node).psz_name).to_string_lossy().into_owned()
+            CStr::from_ptr((*node).psz_name)
+                .to_string_lossy()
+                .into_owned()
         };
         out.push(TrackInfo {
             id: (*node).i_id,
@@ -1084,7 +1103,6 @@ unsafe fn tracks_from_list(
     (lib.libvlc_track_description_list_release)(list);
     out
 }
-
 
 #[tauri::command]
 pub async fn player_disc_chapters(
@@ -1101,94 +1119,96 @@ pub async fn player_disc_chapters(
         return Ok(Vec::new());
     }
     tokio::task::spawn_blocking(move || {
-    let mut probe_path = probe_root(&path);
-    // ISO disc image: libbluray cannot read through the image file —
-    // mount it read-only in the BACKGROUND (no dialogs, invisible to the
-    // owner) and probe the BDMV inside, then detach.
-    let mut iso_mount: Option<std::path::PathBuf> = None;
-    if !probe_path.join("BDMV").is_dir() {
-        let iso: Option<std::path::PathBuf> = if probe_path.is_file()
-            && probe_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("iso"))
-                .unwrap_or(false)
-        {
-            Some(probe_path.clone())
-        } else if probe_path.is_dir() {
-            probe_path
-                .read_dir()
-                .ok()
-                .and_then(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .map(|e| e.path())
-                        .find(|p| {
-                            p.is_file()
-                                && p.extension()
-                                    .and_then(|e| e.to_str())
-                                    .map(|e| e.eq_ignore_ascii_case("iso"))
-                                    .unwrap_or(false)
-                        })
+        let mut probe_path = probe_root(&path);
+        // ISO disc image: libbluray cannot read through the image file —
+        // mount it read-only in the BACKGROUND (no dialogs, invisible to the
+        // owner) and probe the BDMV inside, then detach.
+        let mut iso_mount: Option<std::path::PathBuf> = None;
+        if !probe_path.join("BDMV").is_dir() {
+            let iso: Option<std::path::PathBuf> = if probe_path.is_file()
+                && probe_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("iso"))
+                    .unwrap_or(false)
+            {
+                Some(probe_path.clone())
+            } else if probe_path.is_dir() {
+                probe_path.read_dir().ok().and_then(|rd| {
+                    rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                        p.is_file()
+                            && p.extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.eq_ignore_ascii_case("iso"))
+                                .unwrap_or(false)
+                    })
                 })
-        } else {
-            None
-        };
-        if let Some(iso) = iso {
-            let mp = std::env::temp_dir().join(format!("nebulae-iso-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&mp);
-            let _ = std::fs::create_dir_all(&mp);
-            let out = std::process::Command::new("hdiutil")
-                .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
-                .arg(&mp)
-                .arg(&iso)
-                .output();
-            if out.map(|o| o.status.success()).unwrap_or(false) {
-                // BDMV may sit at the mount root or one level down.
-                let bdmv = if mp.join("BDMV").is_dir() {
-                    mp.clone()
-                } else {
-                    std::fs::read_dir(&mp)
-                        .ok()
-                        .and_then(|rd| {
-                            rd.filter_map(|e| e.ok())
-                                .map(|e| e.path())
-                                .find(|d| d.is_dir() && d.join("BDMV").is_dir())
-                        })
-                        .unwrap_or_else(|| mp.clone())
-                };
-                probe_path = bdmv;
-                iso_mount = Some(mp);
             } else {
+                None
+            };
+            if let Some(iso) = iso {
+                let mp = std::env::temp_dir().join(format!("nebulae-iso-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&mp);
+                let _ = std::fs::create_dir_all(&mp);
+                let out = std::process::Command::new("hdiutil")
+                    .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
+                    .arg(&mp)
+                    .arg(&iso)
+                    .output();
+                if out.map(|o| o.status.success()).unwrap_or(false) {
+                    // BDMV may sit at the mount root or one level down.
+                    let bdmv = if mp.join("BDMV").is_dir() {
+                        mp.clone()
+                    } else {
+                        std::fs::read_dir(&mp)
+                            .ok()
+                            .and_then(|rd| {
+                                rd.filter_map(|e| e.ok())
+                                    .map(|e| e.path())
+                                    .find(|d| d.is_dir() && d.join("BDMV").is_dir())
+                            })
+                            .unwrap_or_else(|| mp.clone())
+                    };
+                    probe_path = bdmv;
+                    iso_mount = Some(mp);
+                } else {
+                    let _ = std::fs::remove_dir_all(&mp);
+                }
             }
         }
-    }
-    let offsets = player::bluray_meta::disc_chapter_offsets(&probe_path.to_string_lossy(), duration_ms);
-    if let Some(mp) = iso_mount {
-        let _ = std::process::Command::new("hdiutil")
-            .args(["detach", "-force"])
-            .arg(&mp)
-            .output();
-        let _ = std::fs::remove_dir_all(&mp);
-    }
-    let offsets = offsets?;
-    tracing::info!("[player] disc chapters for dur {duration_ms}: {} marks", offsets.len());
-    Ok(offsets
-        .into_iter()
-        .enumerate()
-        .map(|(i, off)| ChapterMark {
-            offset_ms: off,
-            duration_ms: 0,
-            name: format!("Chapter {}", i + 1),
-        })
-        .collect())
+        let offsets =
+            player::bluray_meta::disc_chapter_offsets(&probe_path.to_string_lossy(), duration_ms);
+        if let Some(mp) = iso_mount {
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-force"])
+                .arg(&mp)
+                .output();
+            let _ = std::fs::remove_dir_all(&mp);
+        }
+        let offsets = offsets?;
+        tracing::info!(
+            "[player] disc chapters for dur {duration_ms}: {} marks",
+            offsets.len()
+        );
+        Ok(offsets
+            .into_iter()
+            .enumerate()
+            .map(|(i, off)| ChapterMark {
+                offset_ms: off,
+                duration_ms: 0,
+                name: format!("Chapter {}", i + 1),
+            })
+            .collect())
     })
     .await
     .map_err(|e| format!("disc chapters join error: {e}"))?
 }
 
 #[tauri::command]
-pub fn player_list_tracks(state: tauri::State<PlayerState>, kind: String) -> Result<Vec<TrackInfo>, String> {
+pub fn player_list_tracks(
+    state: tauri::State<PlayerState>,
+    kind: String,
+) -> Result<Vec<TrackInfo>, String> {
     let mp_guard = state
         .media_player_cell
         .lock()
@@ -1217,7 +1237,11 @@ pub fn player_list_tracks(state: tauri::State<PlayerState>, kind: String) -> Res
 }
 
 #[tauri::command]
-pub fn player_set_track(state: tauri::State<PlayerState>, kind: String, id: i32) -> Result<(), String> {
+pub fn player_set_track(
+    state: tauri::State<PlayerState>,
+    kind: String,
+    id: i32,
+) -> Result<(), String> {
     let mp_guard = state
         .media_player_cell
         .lock()
@@ -1260,7 +1284,10 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
         let mut titles: *mut *mut crate::player::engine::VlcTitleDescription = std::ptr::null_mut();
         let rc = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
         if rc != 0 || titles.is_null() {
-            tracing::info!("[player] step_title: no title list, set_title({})", current + dir);
+            tracing::info!(
+                "[player] step_title: no title list, set_title({})",
+                current + dir
+            );
             (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
             return Ok(());
         }
@@ -1278,7 +1305,10 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
         }
         if features.len() < 2 {
             (lib.libvlc_title_descriptions_release)(titles, count as i32);
-            tracing::info!("[player] step_title: single feature, set_title({})", current + dir);
+            tracing::info!(
+                "[player] step_title: single feature, set_title({})",
+                current + dir
+            );
             (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
             return Ok(());
         }
@@ -1974,15 +2004,13 @@ pub fn add_external_media(
     // "Name (Year)" from the import prompt is split so TMDB metadata
     // (the library banner/poster) resolves the same way as downloads.
     let clean = title.trim().to_string();
-    let year = clean
-        .rfind('(')
-        .and_then(|i| {
-            let inner = &clean[i + 1..];
-            inner
-                .strip_suffix(')')
-                .map(|y| y.trim().parse::<i32>().ok())
-                .unwrap_or(None)
-        });
+    let year = clean.rfind('(').and_then(|i| {
+        let inner = &clean[i + 1..];
+        inner
+            .strip_suffix(')')
+            .map(|y| y.trim().parse::<i32>().ok())
+            .unwrap_or(None)
+    });
     let title_clean = match clean.rfind('(') {
         Some(i) if year.is_some() => clean[..i].trim().to_string(),
         _ => clean,
@@ -1990,7 +2018,10 @@ pub fn add_external_media(
     // One poster per movie (owner): the same title can arrive twice -
     // auto-adopted on play AND added manually - at different folder
     // levels. Keep the FIRST entry; later duplicates are dropped.
-    if items.iter().any(|m| m.title.eq_ignore_ascii_case(&title_clean) && m.year == year) {
+    if items
+        .iter()
+        .any(|m| m.title.eq_ignore_ascii_case(&title_clean) && m.year == year)
+    {
         return Ok(());
     }
     items.push(ExternalMedia {
@@ -2086,7 +2117,8 @@ pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String>
 
 #[cfg(target_os = "macos")]
 unsafe fn ns_main_window() -> Option<*mut objc2::runtime::Object> {
-    let cls = objc2::runtime::Class::get(std::ffi::CString::new("NSApplication").unwrap().as_c_str())?;
+    let cls =
+        objc2::runtime::Class::get(std::ffi::CString::new("NSApplication").unwrap().as_c_str())?;
     let app: *mut objc2::runtime::Object = objc2::msg_send![cls, sharedApplication];
     if app.is_null() {
         return None;

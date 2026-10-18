@@ -30,6 +30,8 @@ pub struct VlcLib {
     pub libvlc_media_player_new_from_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub libvlc_media_player_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_set_nsobject: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    pub libvlc_media_player_set_hwnd: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    pub libvlc_media_player_set_xwindow: unsafe extern "C" fn(*mut c_void, u32),
     pub libvlc_media_player_play: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_stop: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_pause: unsafe extern "C" fn(*mut c_void, c_int),
@@ -67,7 +69,8 @@ pub struct VlcLib {
     pub libvlc_video_get_spu_count: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_video_set_spu: unsafe extern "C" fn(*mut c_void, c_int),
-    pub libvlc_video_get_spu_description: unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
+    pub libvlc_video_get_spu_description:
+        unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_audio_get_track_count: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_audio_get_track: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_audio_set_track: unsafe extern "C" fn(*mut c_void, c_int),
@@ -230,9 +233,7 @@ impl VlcLib {
                         unsafe {
                             match Library::new(&dep) {
                                 Ok(l) => out.push(l),
-                                Err(e) => {
-                                    failures.push(format!("preload {}: {e}", dep.display()))
-                                }
+                                Err(e) => failures.push(format!("preload {}: {e}", dep.display())),
                             }
                         }
                     }
@@ -255,7 +256,12 @@ impl VlcLib {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("vlc").join("lib").join("libvlc.dylib"));
                     if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
-                        c.push(res.join("resources").join("vlc").join("lib").join("libvlc.dylib"));
+                        c.push(
+                            res.join("resources")
+                                .join("vlc")
+                                .join("lib")
+                                .join("libvlc.dylib"),
+                        );
                     }
                 }
             }
@@ -295,14 +301,16 @@ impl VlcLib {
             // VLC install).
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
-                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.so.5"));
+                    c.push(
+                        dir.join("resources")
+                            .join("vlc")
+                            .join("lib")
+                            .join("libvlc.so.5"),
+                    );
                     c.push(dir.join("vlc").join("lib").join("libvlc.so.5"));
                 }
                 if let Some(prefix) = exe.parent().and_then(|d| d.parent()) {
-                    c.push(
-                        prefix
-                            .join("share/nebulae/resources/vlc/lib/libvlc.so.5"),
-                    );
+                    c.push(prefix.join("share/nebulae/resources/vlc/lib/libvlc.so.5"));
                     c.push(prefix.join("lib/nebulae/resources/vlc/lib/libvlc.so.5"));
                 }
             }
@@ -351,6 +359,8 @@ impl VlcLib {
             libvlc_media_player_new_from_media: sym!("libvlc_media_player_new_from_media": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
             libvlc_media_player_release: sym!("libvlc_media_player_release": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_set_nsobject: sym!("libvlc_media_player_set_nsobject": unsafe extern "C" fn(*mut c_void, *mut c_void)),
+            libvlc_media_player_set_hwnd: sym!("libvlc_media_player_set_hwnd": unsafe extern "C" fn(*mut c_void, *mut c_void)),
+            libvlc_media_player_set_xwindow: sym!("libvlc_media_player_set_xwindow": unsafe extern "C" fn(*mut c_void, u32)),
             libvlc_media_player_play: sym!("libvlc_media_player_play": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_stop: sym!("libvlc_media_player_stop": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_pause: sym!("libvlc_media_player_pause": unsafe extern "C" fn(*mut c_void, c_int)),
@@ -489,7 +499,10 @@ impl VlcSession {
                 (lib.libvlc_media_new_path)(instance, c_path.as_ptr())
             };
             if media.is_null() {
-                (lib.libvlc_release)(instance);
+                // Do NOT release `instance` here: it is the shared app-lifetime
+                // libvlc instance stored in PlayerState::shared_instance. Releasing
+                // it leaves a dangling pointer in the AtomicUsize and causes a
+                // use-after-free on the next playback attempt.
                 return Err(format!("libvlc could not open {path}"));
             }
             let mp = (lib.libvlc_media_player_new_from_media)(media);
@@ -498,7 +511,25 @@ impl VlcSession {
                 return Err("media player creation failed".into());
             }
             if video_target != 0 {
-                (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
+                // Use the platform-correct vout attachment API. Calling
+                // set_nsobject on Windows/Linux is a no-op at best; calling
+                // the wrong variant on macOS would crash.
+                #[cfg(target_os = "macos")]
+                {
+                    (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    (lib.libvlc_media_player_set_hwnd)(mp, video_target as *mut c_void);
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    // Linux: video_target is an X11 Window id (u32/u64, cast to
+                    // u32 for set_xwindow). Under native Wayland there is no X11
+                    // drawable and ensure_overlay already returns an error, so
+                    // this branch is never reached on a pure Wayland session.
+                    (lib.libvlc_media_player_set_xwindow)(mp, video_target as u32);
+                }
             }
             let rc = (lib.libvlc_media_player_play)(mp);
             if rc != 0 {

@@ -77,14 +77,18 @@ objc2::define_class!(
     }
 );
 
+// Single module-level storage for the AppHandle used by native key forwarding.
+// Two function-local statics with the same name are distinct memory — using
+// separate locals means overlay_app_init writes one cell and overlay_app reads
+// a different empty cell, so overlay_app always returns None.
+static OVERLAY_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
 fn overlay_app() -> Option<&'static AppHandle> {
-    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-    APP.get()
+    OVERLAY_APP.get()
 }
 
 fn overlay_app_init(app: AppHandle) {
-    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-    let _ = APP.set(app);
+    let _ = OVERLAY_APP.set(app);
 }
 
 /// Translate a native key event into the frontend's key-name vocabulary.
@@ -209,7 +213,11 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             toggle_fullscreen_win(&*ns_win);
-            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) { 0.0 } else { 10.0 };
+            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) {
+                0.0
+            } else {
+                10.0
+            };
             apply_window_corner_radius(&app2, radius);
         }
     })
@@ -302,8 +310,7 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         }
         let bounds = content.bounds();
         let mtm = MainThreadMarker::new().ok_or("not on main thread")?;
-        let view: Retained<VideoOverlayView> =
-            objc2::msg_send![VideoOverlayView::alloc(mtm), init];
+        let view: Retained<VideoOverlayView> = objc2::msg_send![VideoOverlayView::alloc(mtm), init];
         view.setFrame(bounds);
         view.setHidden(true);
         // The video view sits BELOW the webview (owner: controls must float
@@ -442,7 +449,14 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 /// origin, so flip using the superview (content view) height. `bar_height`
 /// is accepted for API compatibility; the floating control bar is webview
 /// content drawn above the video, so no native cutout is needed.
-pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64, _bar_height: f64) -> Result<(), String> {
+pub fn sync_frame(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    _bar_height: f64,
+) -> Result<(), String> {
     let view_ptr = app
         .state::<crate::player::PlayerState>()
         .overlay_view

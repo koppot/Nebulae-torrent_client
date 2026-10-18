@@ -246,14 +246,16 @@ export default function PlayerOverlay() {
     const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
     const handle = (key: string) => {
       if (player.isDisc && pollRef.current.title === 0) {
+        // In the menu domain, navigation keys route to dvdnav/libbluray.
+        // Only intercept these specific keys; all other shortcuts (Q, F, M,
+        // volume) must fall through to the standard handler below.
         switch (key) {
-          case 'Enter': nav(0); break;
-          case 'ArrowUp': nav(1); break;
-          case 'ArrowDown': nav(2); break;
-          case 'ArrowLeft': nav(3); break;
-          case 'ArrowRight': nav(4); break;
+          case 'Enter': nav(0); return;
+          case 'ArrowUp': nav(1); return;
+          case 'ArrowDown': nav(2); return;
+          case 'ArrowLeft': nav(3); return;
+          case 'ArrowRight': nav(4); return;
         }
-        return;
       }
       const t = pollRef.current.time_ms;
       const len = pollRef.current.length_ms;
@@ -367,9 +369,13 @@ export default function PlayerOverlay() {
     // languages) when the reported duration matches nothing, so the Audio
     // popover shows real languages even before playback starts.
     if (!player.open) return;
-    // The poll fires every second; only re-probe when the session or title
-    // actually changed (the menu→feature transition changes the answer).
-    const probeKey = `${player.resolvedPath}:${poll.title}`;
+    // The poll fires every second; only re-probe when the session, title,
+    // or duration state (unknown→known) actually changes. The menu→feature
+    // transition changes the answer; a duration transition from 0 to a
+    // positive value also needs a fresh probe because the title-matching
+    // logic uses duration to identify the correct playlist.
+    const durKnown = poll.length_ms > 0 ? 'known' : 'unknown';
+    const probeKey = `${player.resolvedPath}:${poll.title}:${durKnown}`;
     if (probeKey === lastLangProbeRef.current) return;
     lastLangProbeRef.current = probeKey;
     let alive = true;

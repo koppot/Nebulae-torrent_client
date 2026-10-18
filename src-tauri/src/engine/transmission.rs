@@ -450,17 +450,16 @@ impl TransmissionRpcClient {
         )
     }
 
-
-/// `ids` in Transmission RPC accepts NUMBERS (session ids) or strings
-/// (info-hash). A numeric STRING like "3" is parsed as an info-hash and
-/// silently matches NOTHING - the call "succeeds" while doing nothing.
-/// Normalize: numeric ids go over the wire as JSON numbers.
-fn rpc_id(id: &str) -> serde_json::Value {
-    match id.parse::<i64>() {
-        Ok(n) => json!(n),
-        Err(_) => json!(id),
+    /// `ids` in Transmission RPC accepts NUMBERS (session ids) or strings
+    /// (info-hash). A numeric STRING like "3" is parsed as an info-hash and
+    /// silently matches NOTHING - the call "succeeds" while doing nothing.
+    /// Normalize: numeric ids go over the wire as JSON numbers.
+    fn rpc_id(id: &str) -> serde_json::Value {
+        match id.parse::<i64>() {
+            Ok(n) => json!(n),
+            Err(_) => json!(id),
+        }
     }
-}
     pub fn torrent_remove(&self, id: &str, delete_data: bool) -> Result<(), String> {
         let args = json!({
             "ids": [rpc_id(id)],
@@ -1109,7 +1108,8 @@ impl TransmissionTorrentEngine {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .map_err(|e| format!("Failed to spawn transmission-daemon: {e}"))?;
 
         let pid = child.id();
@@ -1210,8 +1210,7 @@ impl TransmissionTorrentEngine {
                             use std::os::windows::process::CommandExt;
                             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
                         }
-                        match cmd.spawn()
-                        {
+                        match cmd.spawn() {
                             Ok(new_child) => {
                                 let new_pid = new_child.id();
                                 let _ = std::fs::write(&pid_file_watch, new_pid.to_string());
@@ -1733,7 +1732,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
         // the initial check the torrent re-downloads from scratch.
         let _ = self.rpc_client.torrent_verify(&hash);
         let _ = self.rpc_client.torrent_start(Some(&hash));
-        info!("Added torrent {hash} from metainfo bytes via Transmission sidecar (verify-then-start)");
+        info!(
+            "Added torrent {hash} from metainfo bytes via Transmission sidecar (verify-then-start)"
+        );
         Ok(hash)
     }
 

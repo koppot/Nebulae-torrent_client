@@ -53,7 +53,8 @@ fn clean_code(bytes: &[u8]) -> Option<String> {
     let b = bytes[1];
     let is_letter = |c: u8| c.is_ascii_lowercase() || c.is_ascii_uppercase();
     if is_letter(a) && is_letter(b) {
-        let s = String::from_utf8_lossy(&[a.to_ascii_lowercase(), b.to_ascii_lowercase()]).into_owned();
+        let s =
+            String::from_utf8_lossy(&[a.to_ascii_lowercase(), b.to_ascii_lowercase()]).into_owned();
         Some(s)
     } else {
         None
@@ -132,7 +133,9 @@ pub fn disc_stream_languages_dvd(
         return Err(format!("missing {}", vts_path.display()));
     }
     let vts = std::fs::read(&vts_path).map_err(|e| e.to_string())?;
-    if vts.len() < 0x310 || &vts[0..12] != b"DVDVIDEO-VTS" {
+    // Minimum size: subpicture table can have up to 32 × 6-byte records
+    // starting at 0x254 → 0x254 + 192 = 0x314. Reject truncated IFOs.
+    if vts.len() < 0x314 || &vts[0..12] != b"DVDVIDEO-VTS" {
         return Err("not a VTS IFO".into());
     }
 
@@ -142,7 +145,11 @@ pub fn disc_stream_languages_dvd(
     let mut audio = Vec::new();
     let nr_audio = vts[0x203] as usize;
     for i in 0..nr_audio.min(8) {
-        let a = &vts[0x204 + i * 8..0x204 + i * 8 + 8];
+        let start = 0x204usize + i * 8;
+        let a = match vts.get(start..start + 8) {
+            Some(s) => s,
+            None => return Err(format!("audio attribute record {i} out of range")),
+        };
         if a[0] == 0 && a[1] == 0 {
             continue;
         }
@@ -157,7 +164,11 @@ pub fn disc_stream_languages_dvd(
     let mut subs = Vec::new();
     let nr_sub = u16::from_be_bytes([vts[0x250], vts[0x251]]) as usize;
     for i in 0..nr_sub.min(32) {
-        let s = &vts[0x254 + i * 6..0x254 + i * 6 + 6];
+        let start = 0x254usize + i * 6;
+        let s = match vts.get(start..start + 6) {
+            Some(s) => s,
+            None => return Err(format!("subpicture attribute record {i} out of range")),
+        };
         if s[0] == 0 && s[1] == 0 {
             continue;
         }

@@ -77,7 +77,8 @@ struct TmdbDetail {
 }
 
 #[derive(Debug, Deserialize)]
-struct TmdbItem {    #[serde(default)]
+struct TmdbItem {
+    #[serde(default)]
     id: Option<i64>,
     #[serde(default)]
     poster_path: Option<String>,
@@ -184,158 +185,167 @@ pub fn fetch_poster(
     // The network pipeline; on total failure fall back to the pre-v3
     // cached entry so the shelf never goes blank.
     let net = (|| -> Result<Option<TmdbMatch>, String> {
-    // 2. Search (title + optional year): movies first, then TV — the library
-    // holds OVAs and series that only match /search/tv (owner's "Foundation"
-    // mock is a show, and a movie-only search never sees it).
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("TMDB client: {e}"))?;
-    let mut item: Option<TmdbItem> = None;
-    let mut is_tv = false;
-    // Search variants, tried in order: the raw title first, then a cleaned
-    // form without format suffixes — "Banner of the Stars III OVA" only
-    // matches TMDB as "Banner of the Stars III" (owner report), and a year
-    // filter can suppress the right TV hit (TV search wants
-    // first_air_date_year, not year).
-    let cleaned = title
-        .trim_end_matches(|c: char| c.is_whitespace())
-        .trim_end_matches("OVA")
-        .trim_end_matches("ova")
-        .trim_end_matches(|c: char| c.is_whitespace())
-        .to_string();
-    let mut variants: Vec<(String, Option<i32>)> = vec![(title.to_string(), year)];
-    if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case(title) {
-        variants.push((cleaned, None));
-    }
-    variants.push((title.to_string(), None));
-    'outer: for (query, variant_year) in variants {
-        for endpoint in ["search/movie", "search/tv"] {
-            let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
-                .map_err(|e| format!("TMDB url: {e}"))?;
-            url.query_pairs_mut()
-                .append_pair("api_key", &api_key)
-                .append_pair("query", &query);
-            if let Some(y) = variant_year {
-                // The TV endpoint ignores `year`; its own filter is
-                // first_air_date_year (using `year` there can hide hits).
-                let pair = if endpoint.ends_with("tv") {
-                    "first_air_date_year"
-                } else {
-                    "year"
-                };
-                url.query_pairs_mut().append_pair(pair, &y.to_string());
-            }
-            let resp = client
-                .get(url)
-                .send()
-                .map_err(|e| format!("TMDB search: {e}"))?;
-            if !resp.status().is_success() {
-                return Err(format!("TMDB search returned {}", resp.status()));
-            }
-            let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
-            if let Some(i) = body
-                .results
-                .into_iter()
-                .next()
-                .filter(|i| i.poster_path.is_some())
-            {
-                is_tv = endpoint.ends_with("tv");
-                item = Some(i);
-                break 'outer;
-            }
+        // 2. Search (title + optional year): movies first, then TV — the library
+        // holds OVAs and series that only match /search/tv (owner's "Foundation"
+        // mock is a show, and a movie-only search never sees it).
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("TMDB client: {e}"))?;
+        let mut item: Option<TmdbItem> = None;
+        let mut is_tv = false;
+        // Search variants, tried in order: the raw title first, then a cleaned
+        // form without format suffixes — "Banner of the Stars III OVA" only
+        // matches TMDB as "Banner of the Stars III" (owner report), and a year
+        // filter can suppress the right TV hit (TV search wants
+        // first_air_date_year, not year).
+        let cleaned = title
+            .trim_end_matches(|c: char| c.is_whitespace())
+            .trim_end_matches("OVA")
+            .trim_end_matches("ova")
+            .trim_end_matches(|c: char| c.is_whitespace())
+            .to_string();
+        let mut variants: Vec<(String, Option<i32>)> = vec![(title.to_string(), year)];
+        if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case(title) {
+            variants.push((cleaned, None));
         }
-    }
-    let item = match item {
-        // A text match with no art falls through to Trakt as well.
-        Some(i) => i,
-        None => return trakt_fallback(&client, db, &cache_key, title, lookup_key),
-    };
-    let poster = item.poster_path.clone().expect("checked above");
-
-    // 3. Download the poster into the thumbnail cache as WebP.
-    let img_resp = client
-        .get(format!("{TMDB_IMAGE}{poster}"))
-        .send()
-        .map_err(|e| format!("TMDB image: {e}"))?;
-    if !img_resp.status().is_success() {
-        return Err(format!("TMDB image returned {}", img_resp.status()));
-    }
-    let bytes = img_resp
-        .bytes()
-        .map_err(|e| format!("TMDB image body: {e}"))?;
-    let thumbs_dir = dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Nebulae")
-        .join("thumbnails");
-    std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
-    let raw_path = thumbs_dir.join(format!("tmdb-{}.jpg", hash_of(lookup_key)));
-    std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
-
-    let year: Option<i32> = item
-        .release_date
-        .as_deref()
-        .or(item.first_air_date.as_deref())
-        .and_then(|d| d.get(0..4))
-        .and_then(|y| y.parse::<i32>().ok());
-    // The runtime comes from the /movie/{id} or /tv/{id} detail response
-    // (TV exposes per-episode runtimes); the search result doesn't carry
-    // it. One bounded extra request, failures skipped.
-    // For TV the owner wants the TOTAL across all media: episode count ×
-    // per-episode runtime (both on the TV detail response).
-    let runtime: Option<u32> = match item.id {
-        Some(id) => {
-            let kind = if is_tv { "tv" } else { "movie" };
-            let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{id}"))
-                .map_err(|e| format!("TMDB url: {e}"))?;
-            detail_url
-                .query_pairs_mut()
-                .append_pair("api_key", &api_key);
-            client
-                .get(detail_url)
-                .send()
-                .ok()
-                .and_then(|r| r.json::<TmdbDetail>().ok())
-                .and_then(|d| {
-                    if is_tv {
-                        let per_ep = d
-                            .episode_run_time
-                            .first()
-                            .copied()
-                            .or(d.runtime)
-                            .unwrap_or(0);
-                        let eps = d.number_of_episodes.unwrap_or(0);
-                        let total = per_ep.saturating_mul(eps);
-                        if total > 0 { Some(total) } else { None }
+        variants.push((title.to_string(), None));
+        'outer: for (query, variant_year) in variants {
+            for endpoint in ["search/movie", "search/tv"] {
+                let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
+                    .map_err(|e| format!("TMDB url: {e}"))?;
+                url.query_pairs_mut()
+                    .append_pair("api_key", &api_key)
+                    .append_pair("query", &query);
+                if let Some(y) = variant_year {
+                    // The TV endpoint ignores `year`; its own filter is
+                    // first_air_date_year (using `year` there can hide hits).
+                    let pair = if endpoint.ends_with("tv") {
+                        "first_air_date_year"
                     } else {
-                        d.runtime
-                    }
-                })
+                        "year"
+                    };
+                    url.query_pairs_mut().append_pair(pair, &y.to_string());
+                }
+                let resp = client
+                    .get(url)
+                    .send()
+                    .map_err(|e| format!("TMDB search: {e}"))?;
+                if !resp.status().is_success() {
+                    return Err(format!("TMDB search returned {}", resp.status()));
+                }
+                let body: TmdbSearchResult = resp.json().map_err(|e| format!("TMDB parse: {e}"))?;
+                if let Some(i) = body
+                    .results
+                    .into_iter()
+                    .next()
+                    .filter(|i| i.poster_path.is_some())
+                {
+                    is_tv = endpoint.ends_with("tv");
+                    item = Some(i);
+                    break 'outer;
+                }
+            }
         }
-        None => None,
-    };
-    let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
-    let webp_path = webp.clone().unwrap_or(raw_path.clone());
-    let _ = std::fs::remove_file(&raw_path);
+        let item = match item {
+            // A text match with no art falls through to Trakt as well.
+            Some(i) => i,
+            None => return trakt_fallback(&client, db, &cache_key, title, lookup_key),
+        };
+        let poster = item.poster_path.clone().expect("checked above");
 
-    // 4. Persist the match (+ the overview for the hover panel).
-    let _ = db.set_setting(&cache_key, &webp_path.display().to_string());
-    if let Some(ov) = item.overview.clone() {
-        let _ = db.set_setting(&format!("{cache_key}:overview"), &ov);
-    }
-    if let Some(y) = year {
-        let _ = db.set_setting(&format!("{cache_key}:year"), &y.to_string());
-    }
-    if let Some(rt) = runtime {
-        let _ = db.set_setting(&format!("{cache_key}:runtime"), &rt.to_string());
-    }
+        // 3. Download the poster into the thumbnail cache as WebP.
+        let img_resp = client
+            .get(format!("{TMDB_IMAGE}{poster}"))
+            .send()
+            .map_err(|e| format!("TMDB image: {e}"))?;
+        if !img_resp.status().is_success() {
+            return Err(format!("TMDB image returned {}", img_resp.status()));
+        }
+        let bytes = img_resp
+            .bytes()
+            .map_err(|e| format!("TMDB image body: {e}"))?;
+        let thumbs_dir = dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Nebulae")
+            .join("thumbnails");
+        std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
+        let raw_path = thumbs_dir.join(format!("tmdb-{}.jpg", hash_of(lookup_key)));
+        std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
 
-    Ok(Some(TmdbMatch {
-        poster_webp: webp_path,
-        overview: item.overview,
-        year,
-        runtime,
-    }))
+        let year: Option<i32> = item
+            .release_date
+            .as_deref()
+            .or(item.first_air_date.as_deref())
+            .and_then(|d| d.get(0..4))
+            .and_then(|y| y.parse::<i32>().ok());
+        // The runtime comes from the /movie/{id} or /tv/{id} detail response
+        // (TV exposes per-episode runtimes); the search result doesn't carry
+        // it. One bounded extra request, failures skipped.
+        // For TV the owner wants the TOTAL across all media: episode count ×
+        // per-episode runtime (both on the TV detail response).
+        let runtime: Option<u32> = match item.id {
+            Some(id) => {
+                let kind = if is_tv { "tv" } else { "movie" };
+                let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{id}"))
+                    .map_err(|e| format!("TMDB url: {e}"))?;
+                detail_url
+                    .query_pairs_mut()
+                    .append_pair("api_key", &api_key);
+                client
+                    .get(detail_url)
+                    .send()
+                    .ok()
+                    .and_then(|r| r.json::<TmdbDetail>().ok())
+                    .and_then(|d| {
+                        if is_tv {
+                            let per_ep = d
+                                .episode_run_time
+                                .first()
+                                .copied()
+                                .or(d.runtime)
+                                .unwrap_or(0);
+                            let eps = d.number_of_episodes.unwrap_or(0);
+                            let total = per_ep.saturating_mul(eps);
+                            if total > 0 {
+                                Some(total)
+                            } else {
+                                None
+                            }
+                        } else {
+                            d.runtime
+                        }
+                    })
+            }
+            None => None,
+        };
+        let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
+        let webp_path = webp.clone().unwrap_or(raw_path.clone());
+        // Only remove the raw JPEG when the WebP conversion actually succeeded.
+        // If ensure_thumbnail failed, webp_path IS raw_path — deleting it would
+        // return a path to a file that no longer exists.
+        if webp.is_some() {
+            let _ = std::fs::remove_file(&raw_path);
+        }
+
+        // 4. Persist the match (+ the overview for the hover panel).
+        let _ = db.set_setting(&cache_key, &webp_path.display().to_string());
+        if let Some(ov) = item.overview.clone() {
+            let _ = db.set_setting(&format!("{cache_key}:overview"), &ov);
+        }
+        if let Some(y) = year {
+            let _ = db.set_setting(&format!("{cache_key}:year"), &y.to_string());
+        }
+        if let Some(rt) = runtime {
+            let _ = db.set_setting(&format!("{cache_key}:runtime"), &rt.to_string());
+        }
+
+        Ok(Some(TmdbMatch {
+            poster_webp: webp_path,
+            overview: item.overview,
+            year,
+            runtime,
+        }))
     })();
     match net {
         Ok(v) => Ok(v),
@@ -449,9 +459,13 @@ fn trakt_fallback(
     std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
     let raw_path = thumbs_dir.join(format!("trakt-{}.jpg", hash_of(lookup_key)));
     std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
-    let webp_path =
-        crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).unwrap_or(raw_path.clone());
-    let _ = std::fs::remove_file(&raw_path);
+    let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
+    let webp_path = webp.as_ref().cloned().unwrap_or(raw_path.clone());
+    // Only remove the raw JPEG when conversion succeeded; otherwise
+    // webp_path == raw_path and we would return a deleted file path.
+    if webp.is_some() {
+        let _ = std::fs::remove_file(&raw_path);
+    }
 
     let overview = detail.overview.clone().or_else(|| hit.overview.clone());
     let year: Option<i32> = detail

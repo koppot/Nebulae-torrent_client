@@ -928,7 +928,11 @@ pub async fn select_iso_file() -> Result<Option<String>, String> {
                 .output()
                 .map_err(|e| format!("Failed to open file picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -937,13 +941,15 @@ pub async fn select_iso_file() -> Result<Option<String>, String> {
     })
     .await
     .map_err(|e| format!("picker join error: {e}"))?
-    .map(|v: Option<String>| v.filter(|p| {
-        std::path::Path::new(p)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("iso"))
-            .unwrap_or(false)
-    }))
+    .map(|v: Option<String>| {
+        v.filter(|p| {
+            std::path::Path::new(p)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("iso"))
+                .unwrap_or(false)
+        })
+    })
 }
 
 #[tauri::command]
@@ -1573,7 +1579,11 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
         // Linux: zenity file selection (ISO); directory selection when
         // the file dialog is cancelled.
         let out = std::process::Command::new("zenity")
-            .args(["--file-selection", "--title", "Add Movie - select an ISO disc image"])
+            .args([
+                "--file-selection",
+                "--title",
+                "Add Movie - select an ISO disc image",
+            ])
             .output()
             .map_err(|e| format!("Failed to open picker: {e}"))?;
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -1581,12 +1591,20 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
             return Ok(Some(path));
         }
         let out = std::process::Command::new("zenity")
-            .args(["--file-selection", "--directory", "--title",
-                   "Add Movie - select the release ROOT folder"])
+            .args([
+                "--file-selection",
+                "--directory",
+                "--title",
+                "Add Movie - select the release ROOT folder",
+            ])
             .output()
             .map_err(|e| format!("Failed to open picker: {e}"))?;
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok(if out.status.success() && !path.is_empty() { Some(path) } else { None })
+        Ok(if out.status.success() && !path.is_empty() {
+            Some(path)
+        } else {
+            None
+        })
     }
 }
 
@@ -1629,6 +1647,9 @@ unsafe fn present_disc_panel() -> Option<String> {
     if cstr.is_null() {
         return None;
     }
-    Some(std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned())
+    Some(
+        std::ffi::CStr::from_ptr(cstr)
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
-

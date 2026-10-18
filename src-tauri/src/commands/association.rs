@@ -17,15 +17,23 @@ pub struct AssociationStatus {
 
 fn status(platform: &str, flags: [bool; 4], message: &str) -> AssociationStatus {
     AssociationStatus {
-        torrent_files: flags[0], adc_files: flags[1],
-        magnet_protocol: flags[2], adc_protocol: flags[3],
-        platform: platform.into(), message: message.into(),
+        torrent_files: flags[0],
+        adc_files: flags[1],
+        magnet_protocol: flags[2],
+        adc_protocol: flags[3],
+        platform: platform.into(),
+        message: message.into(),
     }
 }
 
 #[tauri::command]
 pub fn get_pending_open_payloads(state: State<PendingOpenPayloads>) -> Vec<String> {
-    state.0.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect()
+    state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .drain(..)
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -94,24 +102,41 @@ function Owned([string]$association, [uint32]$flags) {
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .env("NEBULAE_ASSOC_EXE", exe)
         .env("NEBULAE_ASSOC_REGISTER", if register { "1" } else { "0" })
-        .output().map_err(|e| format!("Cannot run Windows association operation: {e}"))?;
+        .output()
+        .map_err(|e| format!("Cannot run Windows association operation: {e}"))?;
     if !output.status.success() {
-        return Err(format!("Windows association operation failed: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "Windows association operation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid Windows association response: {e}"))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Invalid Windows association response: {e}"))
 }
 
 #[cfg(target_os = "linux")]
 const DESKTOP_ID: &str = "org.asiandvdclub.nebulae.desktop";
 #[cfg(target_os = "linux")]
-const MIME_TYPES: [&str; 4] = ["application/x-bittorrent", "application/x-asiandvdclub-torrent", "x-scheme-handler/magnet", "x-scheme-handler/adc"];
+const MIME_TYPES: [&str; 4] = [
+    "application/x-bittorrent",
+    "application/x-asiandvdclub-torrent",
+    "x-scheme-handler/magnet",
+    "x-scheme-handler/adc",
+];
 
 #[cfg(target_os = "linux")]
 fn xdg(args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("xdg-mime").args(args).output()
-        .map_err(|e| format!("Cannot run xdg-mime; install xdg-utils and use a desktop session: {e}"))?;
+    let out = std::process::Command::new("xdg-mime")
+        .args(args)
+        .output()
+        .map_err(|e| {
+            format!("Cannot run xdg-mime; install xdg-utils and use a desktop session: {e}")
+        })?;
     if !out.status.success() {
-        return Err(format!("xdg-mime operation failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "xdg-mime operation failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -125,7 +150,10 @@ fn desktop_exec(path: &str) -> Result<String, String> {
     for c in path.chars() {
         match c {
             '\\' => quoted.push_str("\\\\\\\\"),
-            '"' | '`' | '$' => { quoted.push_str("\\\\"); quoted.push(c); }
+            '"' | '`' | '$' => {
+                quoted.push_str("\\\\");
+                quoted.push(c);
+            }
             '%' => quoted.push_str("%%"),
             '\t' => quoted.push_str("\\t"),
             _ => quoted.push(c),
@@ -147,27 +175,42 @@ fn linux_status() -> Result<AssociationStatus, String> {
 #[tauri::command]
 pub fn check_associations_status() -> Result<AssociationStatus, String> {
     #[cfg(target_os = "windows")]
-    { windows_associations(false) }
+    {
+        windows_associations(false)
+    }
     #[cfg(target_os = "linux")]
-    { linux_status() }
+    {
+        linux_status()
+    }
     #[cfg(target_os = "macos")]
-    { Ok(status("macOS", [true; 4], "Handlers are declared by the application bundle; this does not verify that Nebulae is the selected default.")) }
+    {
+        Ok(status("macOS", [true; 4], "Handlers are declared by the application bundle; this does not verify that Nebulae is the selected default."))
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { Err("Association verification is unsupported on this platform".into()) }
+    {
+        Err("Association verification is unsupported on this platform".into())
+    }
 }
 
 #[tauri::command]
 pub fn register_protocol_associations() -> Result<AssociationStatus, String> {
     #[cfg(target_os = "windows")]
-    { windows_associations(true) }
+    {
+        windows_associations(true)
+    }
     #[cfg(target_os = "linux")]
     {
-        let executable = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from)
-            .map(Ok).unwrap_or_else(std::env::current_exe).map_err(|e| e.to_string())?;
+        let executable = std::env::var_os("APPIMAGE")
+            .map(std::path::PathBuf::from)
+            .map(Ok)
+            .unwrap_or_else(std::env::current_exe)
+            .map_err(|e| e.to_string())?;
         if !executable.is_absolute() || !executable.is_file() {
             return Err("Cannot register a missing or relative application executable".into());
         }
-        let executable = executable.to_str().ok_or("Executable path must be UTF-8 for a desktop entry")?;
+        let executable = executable
+            .to_str()
+            .ok_or("Executable path must be UTF-8 for a desktop entry")?;
         let exec = desktop_exec(executable)?;
         let data = dirs::data_dir().ok_or("Cannot resolve user data directory")?;
         let applications = data.join("applications");
@@ -175,32 +218,53 @@ pub fn register_protocol_associations() -> Result<AssociationStatus, String> {
         std::fs::create_dir_all(&applications).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&packages).map_err(|e| e.to_string())?;
         let desktop = format!("[Desktop Entry]\nType=Application\nName=Nebulae\nExec={exec}\nIcon=nebulae\nTerminal=false\nCategories=Network;FileTransfer;\nMimeType={};\n", MIME_TYPES.join(";"));
-        std::fs::write(applications.join(DESKTOP_ID), desktop).map_err(|e| format!("Cannot write desktop entry: {e}"))?;
+        std::fs::write(applications.join(DESKTOP_ID), desktop)
+            .map_err(|e| format!("Cannot write desktop entry: {e}"))?;
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info"><mime-type type="application/x-asiandvdclub-torrent"><comment>Asian DVD Club Metainfo</comment><glob pattern="*.adc"/></mime-type></mime-info>
 "#;
         std::fs::write(packages.join("nebulae-adc.xml"), xml).map_err(|e| e.to_string())?;
-        for (tool, directory) in [("update-mime-database", data.join("mime")), ("update-desktop-database", applications)] {
-            let result = std::process::Command::new(tool).arg(directory).output().map_err(|e| format!("Cannot run {tool}: {e}"))?;
+        for (tool, directory) in [
+            ("update-mime-database", data.join("mime")),
+            ("update-desktop-database", applications),
+        ] {
+            let result = std::process::Command::new(tool)
+                .arg(directory)
+                .output()
+                .map_err(|e| format!("Cannot run {tool}: {e}"))?;
             if !result.status.success() {
-                return Err(format!("{tool} failed: {}", String::from_utf8_lossy(&result.stderr)));
+                return Err(format!(
+                    "{tool} failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                ));
             }
         }
-        for mime in MIME_TYPES { xdg(&["default", DESKTOP_ID, mime])?; }
+        for mime in MIME_TYPES {
+            xdg(&["default", DESKTOP_ID, mime])?;
+        }
         linux_status()
     }
     #[cfg(target_os = "macos")]
     {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))
+        let bundle = exe
+            .ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
             .ok_or("Association registration requires an installed Nebulae.app bundle")?;
         let out = std::process::Command::new("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
             .arg("-f").arg(bundle).output().map_err(|e| e.to_string())?;
-        if !out.status.success() { return Err(format!("LaunchServices registration failed: {}", String::from_utf8_lossy(&out.stderr))); }
+        if !out.status.success() {
+            return Err(format!(
+                "LaunchServices registration failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
         check_associations_status()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { Err("Association registration is unsupported on this platform".into()) }
+    {
+        Err("Association registration is unsupported on this platform".into())
+    }
 }
 
 #[cfg(test)]
@@ -209,20 +273,29 @@ mod tests {
     #[test]
     fn status_preserves_missing_handlers() {
         let s = status("test", [false, true, false, true], "checked");
-        assert!(!s.torrent_files); assert!(s.adc_files);
-        assert!(!s.magnet_protocol); assert!(s.adc_protocol);
+        assert!(!s.torrent_files);
+        assert!(s.adc_files);
+        assert!(!s.magnet_protocol);
+        assert!(s.adc_protocol);
     }
     #[test]
     fn queue_drains_once() {
         let queue = PendingOpenPayloads::default();
-        queue.0.lock().unwrap().push("magnet:?xt=urn:btih:abc".into());
+        queue
+            .0
+            .lock()
+            .unwrap()
+            .push("magnet:?xt=urn:btih:abc".into());
         let values: Vec<_> = queue.0.lock().unwrap().drain(..).collect();
         assert_eq!(values.len(), 1);
         assert!(queue.0.lock().unwrap().is_empty());
     }
     #[test]
     fn desktop_paths_are_data() {
-        assert_eq!(desktop_exec("/opt/Nebulae App/nebulae").unwrap(), "\"/opt/Nebulae App/nebulae\" %U");
+        assert_eq!(
+            desktop_exec("/opt/Nebulae App/nebulae").unwrap(),
+            "\"/opt/Nebulae App/nebulae\" %U"
+        );
         assert!(desktop_exec("/tmp/bad\nExec=other").is_err());
         assert!(desktop_exec("/tmp/100%/nebulae").unwrap().contains("100%%"));
     }

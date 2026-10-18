@@ -74,7 +74,7 @@ export const contentPath = (t: TorrentItem): string => {
 /** Folder to reveal in Finder: the release folder, or the parent of a file. */
 export const folderOf = (t: TorrentItem): string => {
   const p = contentPath(t);
-  return /\.[a-z0-9]+$/i.test(p) ? p.split('/').slice(0, -1).join('/') : p;
+  return /\.[a-z0-9]+$/i.test(p) ? p.split(/[/\\]/).slice(0, -1).join('/') : p;
 };
 
 export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedId } = useTorrentStore();
@@ -252,7 +252,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         // comes back, re-probe the parent release root so multi-disc
         // sets report every disc.
         if (set.length <= 1) {
-          const parent = extDetails.path.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
+          const parent = extDetails.path.replace(/[/\\]+$/, '').split(/[/\\]/).slice(0, -1).join('/');
           if (parent && parent !== extDetails.path) {
             try {
               const parentSet = await probe(parent);
@@ -495,7 +495,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   // Import asks for the title when the folder/ISO name doesn't already
   // carry a "Name (Year)" pattern - metadata needs it (owner).
   const titleFromName = (p: string): string | null => {
-    const name = p.split('/').filter(Boolean).pop() || p;
+    // Split on both / and \ to handle macOS/Linux and Windows paths.
+    const name = p.split(/[/\\]/).filter(Boolean).pop() || p;
     const m = name.match(/^(.+?)\s*\((\d{4})\)\s*$/);
     return m ? `${m[1]} (${m[2]})` : null;
   };
@@ -504,7 +505,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     if (known) {
       await openInPlayer(p, { displayTitle: known });
     } else {
-      setExternalTitlePrompt({ path: p, guess: (p.split('/').filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
+      setExternalTitlePrompt({ path: p, guess: (p.split(/[/\\]/).filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
     }
   };
   // ONE entry point (owner): the dialog accepts the release ROOT folder
@@ -628,7 +629,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           ? set.map((d, idx) => ({
               key: d.play_target,
               label: String(d.disc_number || idx + 1),
-              title: d.play_target.split('/').pop() || d.play_target,
+              title: d.play_target.split(/[/\\]/).pop() || d.play_target,
               path: d.play_target,
               torrent: currentItem,
             }))
@@ -651,8 +652,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     );
     const effDisc = discs[effIdx] || discs[0];
     // Resume target: a stored path (multi-ISO set) or a torrent id (boxset).
+    // An absolute path starts with / (Unix) or a drive letter (Windows: C:\).
+    const isAbsPath = (k: string) => k.startsWith('/') || /^[A-Za-z]:[/\\]/.test(k);
     const resumePath = rememberedKey
-      ? rememberedKey.startsWith('/')
+      ? isAbsPath(rememberedKey)
         ? rememberedKey
         : (discs.find((d) => d.key === rememberedKey)?.path ?? effDisc.path)
       : null;
@@ -1263,8 +1266,9 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 group?.items.find((t) => t.id === ctxMenu.itemId) || group?.items[0];
               if (!group || !item) return null;
               const saved = lastPlayedDiscs[group.id];
+              const isAbsPath = (k: string) => k.startsWith('/') || /^[A-Za-z]:[/\\]/.test(k);
               const resumeTarget = saved
-                ? saved.startsWith('/')
+                ? isAbsPath(saved)
                   ? saved
                   : (discSetMap[item.id] ?? []).find((d) => d.play_target === saved)?.play_target
                 : null;

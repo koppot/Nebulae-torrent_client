@@ -94,10 +94,16 @@ export async function openInPlayer(
         .getState()
         .torrents.some((t) => {
           if (!t.save_path) return false;
-          const contentRoot = `${t.save_path.replace(/\/+$/, '')}/${t.name}`;
+          // Normalize to forward slashes for comparison (Windows uses \).
+          const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+          const contentRoot = `${norm(t.save_path)}/${t.name}`;
+          const filePath = norm(info.resolved_path);
+          // Component-aware check: filePath must be contentRoot itself, or
+          // start with contentRoot + separator so that /Downloads-2 or
+          // /Downloads/Other do not falsely match /Downloads.
           return (
-            info.resolved_path.startsWith(contentRoot) ||
-            info.resolved_path === t.save_path
+            filePath === contentRoot ||
+            filePath.startsWith(contentRoot + '/')
           );
         });
       if (!inDownload) {

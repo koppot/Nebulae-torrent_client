@@ -361,7 +361,11 @@ pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
             let _ = std::fs::remove_file(&plist);
             return Ok(());
         }
-        let minimized_arg = if minimized { "  <string>--minimized</string>\n" } else { "" };
+        let minimized_arg = if minimized {
+            "  <string>--minimized</string>\n"
+        } else {
+            ""
+        };
         let xml = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>com.asiandvdclub.nebulae</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{exe}</string>{minimized_arg}  </array>\n  <key>RunAtLoad</key><true/>\n</dict>\n</plist>\n"
         );
@@ -381,9 +385,15 @@ pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
                 .creation_flags_hidden();
             return Ok(());
         }
-        let value = if minimized { format!("\"{exe}\" --minimized") } else { format!("\"{exe}\"") };
+        let value = if minimized {
+            format!("\"{exe}\" --minimized")
+        } else {
+            format!("\"{exe}\"")
+        };
         let out = std::process::Command::new("reg")
-            .args(["add", key, "/v", "Nebulae", "/t", "REG_SZ", "/d", &value, "/f"])
+            .args([
+                "add", key, "/v", "Nebulae", "/t", "REG_SZ", "/d", &value, "/f",
+            ])
             .creation_flags_hidden()
             .output()
             .map_err(|e| format!("reg add: {e}"))?;
