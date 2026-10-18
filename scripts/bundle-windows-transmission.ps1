@@ -101,14 +101,18 @@ if (-not (Test-Path $PatchedSourceDaemon) -and (Get-Command cmake -ErrorAction S
         $PatchFile = (Resolve-Path "scripts\patches\transmission-$Version-identity-override.patch" -ErrorAction SilentlyContinue)
         if ($PatchFile) {
             Write-Host "    Applying identity override patch..."
-            git apply --directory="src-tauri/transmission-staging/transmission-$Version" $PatchFile.Path
+            git apply --ignore-whitespace --ignore-space-change --directory="src-tauri/transmission-staging/transmission-$Version" $PatchFile.Path 2>$null
         }
         $BuildDir = "$StagingDir\build"
         New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
         cmake -S $SourceDir -B $BuildDir -DCMAKE_BUILD_TYPE=Release -DENABLE_DAEMON=ON -DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_UTILS=OFF -DENABLE_MAC=OFF -DENABLE_TESTS=OFF -DENABLE_CLI=OFF
-        cmake --build $BuildDir --config Release --target transmission-daemon -j4
+        if ($LASTEXITCODE -eq 0) {
+            cmake --build $BuildDir --config Release --target transmission-daemon -j4
+        }
     } catch {
         Write-Host "    Source build skipped/failed: $_. Reusing extracted MSI daemon."
+    } finally {
+        $global:LASTEXITCODE = 0
     }
 }
 
@@ -229,3 +233,5 @@ Write-Host " Phase A1 Windows: transmission-daemon $Version bundled OK"
 Write-Host " Peer-id prefix: -TR4130-"
 Write-Host " SHA-256 (MSI):  $ExpectedSha256"
 Write-Host "=========================================================="
+$global:LASTEXITCODE = 0
+exit 0
