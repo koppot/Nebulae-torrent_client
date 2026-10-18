@@ -407,9 +407,9 @@ export const SettingsModal: React.FC = () => {
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
                       <div>
-                        <span className="text-white font-medium">Enable Media Center & Optical Cinema</span>
+                        <span className="text-white font-medium">Enable media mode</span>
                         <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
-                          Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch.
+                          Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch. Disabling hides the Media tab without deleting media data.
                         </span>
                       </div>
                     </label>
