@@ -60,9 +60,13 @@ At most one supervisor/daemon exists even under concurrent starts.
 ## Platform limitations (current truth)
 
 - **Windows**: private named pipe `\\.\pipe\nebulae-tailscaled` +
-  `CREATE_NO_WINDOW` for the CLI. Compile-checked and runtime-validated
-  by the `windows-pipe-smoke` CI job on `windows-latest`; not yet run on
-  real consumer hardware.
+  `CREATE_NO_WINDOW` for the CLI. tailscaled REQUIRES `--windows-mode=dev`
+  for a custom pipe (without it the daemon refuses to start — caught by
+  the CI smoke job, fixed in `daemon_command`). Runtime-validated on the
+  `windows-latest` CI runner (native Windows): daemon starts with the
+  app's exact flags, CLI status over the pipe reports `NeedsLogin`,
+  private state file persists. Not yet exercised on consumer hardware or
+  against a deployed Headscale.
 - **macOS**: no `PR_SET_PDEATHSIG`; a `kill -9` of the app can orphan the
   daemon. The next launch re-adopts it (readiness check passes on the
   existing socket); no duplicates are possible (single supervisor).
