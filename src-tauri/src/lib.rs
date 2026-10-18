@@ -256,6 +256,28 @@ pub fn run() {
         .setup(move |app| {
             use tauri::Manager;
 
+            // Main window is created in code so a TEST build can opt into a
+            // WebView2/CDP debugging port via NEBULAE_TEST_CDP=1 (never set
+            // in production; keeps packaged behavior identical).
+            {
+                let mut builder = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::default(),
+                )
+                .title("Nebulae — Torrent Client by Asian DVD Club")
+                .inner_size(1280., 840.)
+                .min_inner_size(980., 640.)
+                .decorations(false)
+                .center();
+                if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
+                    builder = builder.additional_browser_args(
+                        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",
+                    );
+                }
+                builder.build()?;
+            }
+
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
             engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
