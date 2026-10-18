@@ -1693,9 +1693,16 @@ export const TorrentManagerView: React.FC = () => {
           <button
             onClick={() => {
               invoke('save_torrent_file_as', { id: contextMenu.torrentId })
+                .then((savedPath) => {
+                  // Confirm what happened - the dialog can land behind
+                  // other windows and look like nothing happened.
+                  if (typeof savedPath === 'string' && savedPath) {
+                    alert(`Torrent file saved to:\n${savedPath}`);
+                  }
+                })
                 .catch((e) => {
                   if (typeof e === 'string' && e.includes('cancelled')) return;
-                  console.error('save_torrent_file_as failed', e);
+                  alert(`Could not save the torrent file:\n${e}`);
                 });
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
