@@ -40,6 +40,7 @@ import {
   Sliders,
   Zap,
   FolderInput,
+  Save,
 } from 'lucide-react';
 
 // Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
@@ -1688,6 +1689,20 @@ export const TorrentManagerView: React.FC = () => {
           >
             <FolderOpen className="w-3.5 h-3.5" />
             <span>Show in Finder</span>
+          </button>
+          <button
+            onClick={() => {
+              invoke('save_torrent_file_as', { id: contextMenu.torrentId })
+                .catch((e) => {
+                  if (typeof e === 'string' && e.includes('cancelled')) return;
+                  console.error('save_torrent_file_as failed', e);
+                });
+              setContextMenu((prev) => ({ ...prev, visible: false }));
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>Save Torrent File As...</span>
           </button>
           <div className="h-[1px] bg-[#333333] my-1" />
           <button

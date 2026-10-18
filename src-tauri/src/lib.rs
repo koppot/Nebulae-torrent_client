@@ -574,6 +574,7 @@ pub fn run() {
             commands::torrent::add_torrent_bytes,
             commands::torrent::create_torrent_file,
             commands::torrent::export_torrent_file,
+            commands::torrent::save_torrent_file_as,
             commands::torrent::get_engine_status,
             commands::torrent::trigger_kill_switch_command,
             commands::torrent::reset_kill_switch_command,
