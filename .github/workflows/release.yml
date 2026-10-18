@@ -228,11 +228,20 @@ jobs:
           fi
           curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
           mkdir -p jrex src-tauri/resources/jre
-          if [ "$EXT" = "zip" ]; then unzip -q jre.$EXT -d jrex; else tar xzf jre.$EXT -C jrex; fi
+          if [ "$EXT" = "zip" ]; then
+            unzip -q jre.$EXT -d jrex || tar xf jre.$EXT -C jrex
+          else
+            tar xzf jre.$EXT -C jrex
+          fi
           # macOS tarballs nest the runtime in Contents/Home.
-          SRC=$(ls -d jrex/jdk-*-jre/Contents/Home jrex/jdk-*-jre 2>/dev/null | head -n 1)
-          cp -a "$SRC"/. src-tauri/resources/jre/
-          chmod -R u+rwX,go+rX src-tauri/resources/jre
+          HOME_DIR=$(find jrex -type d -name Home -path '*Contents*' | head -1 || true)
+          if [ -z "$HOME_DIR" ]; then
+            BIN_DIR=$(find jrex -type d -name bin | head -1)
+            HOME_DIR=$(dirname "$BIN_DIR")
+          fi
+          cp -a "$HOME_DIR"/. src-tauri/resources/jre/
+          chmod -R u+rwX,go+rX src-tauri/resources/jre || true
+          test -e src-tauri/resources/jre/bin/java || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
           ls src-tauri/resources/jre/bin | head -3
 
       # --- Linux split build ------------------------------------------------
