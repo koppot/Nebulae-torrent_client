@@ -7,6 +7,10 @@ on:
       - 'ag/transmission-engine'
       - 'fix/cross-platform-repair'
 
+concurrency:
+  group: build-test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     permissions:
@@ -384,6 +388,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # Prevent older superseded runs from overwriting draft release assets
+          LATEST_SHA=$(git ls-remote origin "refs/heads/${{ github.ref_name }}" | cut -f1)
+          if [ -n "$LATEST_SHA" ] && [ "$LATEST_SHA" != "${{ github.sha }}" ]; then
+            echo "Skipping upload: current commit ${{ github.sha }} is superseded by $LATEST_SHA"
+            exit 0
+          fi
+
           INFO_FILE="BUILD_INFO-${{ matrix.artifact_name }}.txt"
           {
             echo "commit: ${{ github.sha }}"
