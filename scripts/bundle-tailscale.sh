@@ -72,7 +72,7 @@ case "$TARGET" in
     verify_native "$DEST/tailscaled" "$GOARCH" ;;
 
   x86_64-pc-windows-msvc)
-    A="tailscale-setup-${TS_VERSION}_amd64.msi"
+    A="tailscale-setup-${TS_VERSION}-amd64.msi"
     curl -fsSL "https://pkgs.tailscale.com/stable/${A}" -o "$TMP/ts.msi"
     echo "${SHA_WIN_MSI}  $TMP/ts.msi" | sha256sum -c - ||
         { echo "ERROR: windows MSI checksum mismatch"; exit 1; }
