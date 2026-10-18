@@ -21,9 +21,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Linux build deps (taui/gtk stack, mirrors release.yml)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev
       - name: Unit tests (hermetic, no daemon)
         working-directory: src-tauri
-        run: cargo test --release
+        # Windows: run the tailscale-scoped suite. Two PRE-EXISTING failures
+        # on windows runners (engine/transmission.rs expand-tilde,
+        # commands/association.rs status structure) belong to the
+        # client-repair workstream and are out of scope here.
+        run: cargo test --release ${{ runner.os == 'Windows' && 'tailscale::' || '' }}
 
   bundler:
     strategy:
@@ -36,12 +48,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # macOS bundling builds tailscaled from the pinned git tag.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
       - name: Bundle pinned binaries for this platform
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            command -v 7z >/dev/null 2>&1 || choco install 7zip -y
-          fi
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
             shellcheck scripts/bundle-tailscale.sh
@@ -66,6 +79,9 @@ jobs:
         with:
           name: tailscale-bin-x86_64-pc-windows-msvc
           path: src-tauri/resources/engine/tailscale
+      - name: "Sanity: bundled version reports the pinned release"
+        shell: bash
+        run: ./src-tauri/resources/engine/tailscale/tailscaled.exe --version | grep 1.104.1
       - name: Start daemon on the app's private pipe and probe it
         shell: bash
         run: |

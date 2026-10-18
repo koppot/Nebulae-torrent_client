@@ -11,7 +11,7 @@
 #  - The smoke test runs ONLY a same-architecture binary (never executes a
 #    foreign-arch build).
 #  - macOS: no official daemon tarball exists; build from the pinned tag
-#    with go (available on GH runners). Clone failures are fatal.
+#    with go (setup-go on CI; clone/build failures are fatal).
 set -euo pipefail
 
 TS_VERSION="1.104.1"
@@ -20,7 +20,9 @@ DEST="src-tauri/resources/engine/tailscale"
 
 # Official pinned checksums (pkgs.tailscale.com/stable/<file>.sha256)
 SHA_LINUX_AMD64="108d1d96ecf410d305571e173516f27038f870919a9b89c914a167c6d33a4528"
-SHA_WIN_AMD64="bca8ce0c845cede64b6f61f636c013c6501ce9e6c3f5c42e013d8f703d672e86"  # tailscale-setup-1.104.1.exe.sha256
+# tailscale-setup-1.104.1-amd64.msi (the NSIS .exe payload is not
+# plain-7z-extractable; the MSI administrative extract is reliable)
+SHA_WIN_MSI="6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/nebulae-ts-bundle.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
@@ -70,15 +72,22 @@ case "$TARGET" in
     verify_native "$DEST/tailscaled" "$GOARCH" ;;
 
   x86_64-pc-windows-msvc)
-    A="tailscale-setup-${TS_VERSION}.exe"
-    curl -fsSL "https://pkgs.tailscale.com/stable/${A}" -o "$TMP/ts.exe"
-    echo "${SHA_WIN_AMD64}  $TMP/ts.exe" | sha256sum -c - ||
-        { echo "ERROR: windows installer checksum mismatch"; exit 1; }
-    7z x -y -o"$TMP/win" "$TMP/ts.exe" >/dev/null
-    find "$TMP/win" -name "tailscaled.exe" -exec cp {} "$DEST/" \;
-    find "$TMP/win" -name "tailscale.exe"  -exec cp {} "$DEST/" \;
+    A="tailscale-setup-${TS_VERSION}_amd64.msi"
+    curl -fsSL "https://pkgs.tailscale.com/stable/${A}" -o "$TMP/ts.msi"
+    echo "${SHA_WIN_MSI}  $TMP/ts.msi" | sha256sum -c - ||
+        { echo "ERROR: windows MSI checksum mismatch"; exit 1; }
+    # Administrative extract (no install): msiexec /a recreates the MSI's
+    # layout under TARGETDIR; find copes with either a flat or nested one.
+    MSI_WIN=$(cygpath -w "$TMP/ts.msi")
+    OUT_WIN=$(cygpath -w "$TMP/msi")
+    powershell.exe -NoProfile -Command \
+        "Start-Process msiexec.exe -ArgumentList '/a','$MSI_WIN','/qn','TARGETDIR=$OUT_WIN' -Wait" ||
+        { echo "ERROR: msiexec administrative extract failed"; exit 1; }
+    find "$TMP/msi" -iname "tailscaled.exe" -exec cp {} "$DEST/" \;
+    find "$TMP/msi" -iname "tailscale.exe"  -exec cp {} "$DEST/" \;
     [[ -f "$DEST/tailscaled.exe" && -f "$DEST/tailscale.exe" ]] ||
-        { echo "ERROR: tailscaled.exe/tailscale.exe not found in the NSIS payload"; exit 1; } ;;
+        { echo "ERROR: tailscaled.exe/tailscale.exe not found in the MSI payload"; exit 1; }
+    verify_native "$DEST/tailscaled.exe" amd64 ;;
 
   *) echo "ERROR: unsupported target: $TARGET"; exit 1 ;;
 esac
