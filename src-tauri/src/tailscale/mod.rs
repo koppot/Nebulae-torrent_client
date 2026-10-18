@@ -305,7 +305,14 @@ fn should_resume_profile(prefs_json: &str) -> bool {
 /// Bounded resume of the saved profile (no auth key involved).
 fn resume_saved_profile(paths: &Paths) -> Result<(), String> {
     let prefs = cli_on(paths, &["debug", "prefs"], Duration::from_secs(10))?;
-    if !should_resume_profile(&prefs) {
+    let guard = should_resume_profile(&prefs);
+    tracing::info!(
+        "[tailscale] resume check: guard={} prefs_len={} head={:?}",
+        guard,
+        prefs.len(),
+        prefs.chars().take(120).collect::<String>()
+    );
+    if !guard {
         return Ok(()); // fresh install: nothing to resume
     }
     // `up` must REPEAT the saved settings or tailscale refuses to change
@@ -328,7 +335,7 @@ fn resume_saved_profile(paths: &Paths) -> Result<(), String> {
         ],
         ENROLL_TIMEOUT,
     )
-    .map(|_| ())
+    .map(|_| tracing::info!("[tailscale] resume up completed"))
 }
 
 /// Idempotent supervisor start. Returns true only for the caller that
