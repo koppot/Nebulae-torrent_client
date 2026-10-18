@@ -191,7 +191,7 @@ jobs:
       - name: Bundle libVLC (macOS)
         if: runner.os == 'macOS'
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=x86_64; fi
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
           curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
           hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
           mkdir -p src-tauri/resources/vlc
