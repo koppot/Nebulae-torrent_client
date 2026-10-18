@@ -3,7 +3,7 @@ name = "nebulae_torrent_client"
 version = "0.2.2"
 description = "Nebulae — Client by Asian DVD Club"
 authors = ["Asian DVD Club"]
-license = "LicenseRef-proprietary"
+license = "MIT"
 edition = "2021"
 default-run = "nebulae"
 
