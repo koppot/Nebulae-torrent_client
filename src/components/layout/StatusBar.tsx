@@ -28,7 +28,7 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
-  const { settings, saveSettings } = useSettingsStore();
+  const { settings } = useSettingsStore();
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
@@ -223,12 +223,11 @@ export const StatusBar: React.FC = () => {
         <span className="text-[#333333]">|</span>
 
         <div
-          className="flex items-center gap-1.5 cursor-pointer select-none hover:opacity-80 transition"
-          onClick={() => saveSettings({ racing_mode_enabled: !settings.racing_mode_enabled })}
+          className="flex items-center gap-1.5"
           title={
             settings.racing_mode_enabled
-              ? 'Racing mode active — aggressive peer limits, high bandwidth priority, large disk cache (Click to disable)'
-              : 'Racing mode disabled (Click to enable)'
+              ? 'Racing mode active — aggressive peer limits, high bandwidth priority, large disk cache'
+              : 'Racing mode disabled'
           }
         >
           <span

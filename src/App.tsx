@@ -367,16 +367,12 @@ export const App: React.FC = () => {
                 <Film className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Enable Media Mode?</h3>
-                <p className="text-xs text-[#a3a3a3]">First-run setup</p>
+                <h3 className="text-base font-bold text-white">Would you like to enable media mode?</h3>
               </div>
             </div>
 
             <p className="text-xs text-[#cccccc] leading-relaxed">
-              Nebulae features an Optical Cinema media center for streaming DVD/Blu-ray ISOs, disc menus, and media playback. Would you like to enable Media Mode?
-            </p>
-            <p className="text-[11px] text-[#8c8c8c]">
-              You can toggle this setting at any time in Settings &rarr; Behavior.
+              Nebulae’s Media Center lets you play DVDs, Blu-ray, and UHD discs with interactive disc menus, while organizing and managing your media collection in one place.
             </p>
 
             <div className="flex items-center justify-end gap-3 pt-2">
@@ -394,15 +390,16 @@ export const App: React.FC = () => {
               </button>
               <button
                 type="button"
+                autoFocus
                 onClick={() => {
                   void saveSettings({ media_mode_enabled: true });
                   setViewMode('media');
                   localStorage.setItem('nebulae_media_mode_choice', 'yes');
                   setShowFirstRunMediaModal(false);
                 }}
-                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition"
+                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition ring-1 ring-white/20"
               >
-                Yes (Default)
+                Yes
               </button>
             </div>
           </div>
