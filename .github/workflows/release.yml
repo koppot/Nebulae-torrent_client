@@ -261,12 +261,16 @@ jobs:
           # Stage OUTSIDE target/: rust-cache restores target/ between runs and
           # strips the non-cargo blobs, which would nest the move and break
           # the injection probe (squashfs nesting incident, engine parallel).
-          # The player is the user's VLC (libVLC loads at runtime) - no mpv
-          # staging anymore.
+          # The player is libVLC (bundled) - engine, VLC and JRE are staged
+          # OUT of resources/ because linuxdeploy fails scanning their trees;
+          # they are injected into the squashfs afterwards.
           rm -rf src-tauri/transmission-staging-appimage
           if [ -d src-tauri/resources/engine ]; then
             mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
           fi
+          rm -rf src-tauri/vlc-staging-appimage src-tauri/jre-staging-appimage
+          mv src-tauri/resources/vlc src-tauri/vlc-staging-appimage
+          mv src-tauri/resources/jre src-tauri/jre-staging-appimage
           pnpm tauri build --bundles appimage
 
       - name: Inject bundled player + engine into AppImage (and refresh updater bundle)
@@ -283,8 +287,8 @@ jobs:
           cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
           # Same treatment for the bundled VLC runtime and JRE.
           rm -rf squashfs-root/usr/share/nebulae/resources/vlc squashfs-root/usr/share/nebulae/resources/jre
-          cp -a src-tauri/resources/vlc squashfs-root/usr/share/nebulae/resources/vlc
-          cp -a src-tauri/resources/jre squashfs-root/usr/share/nebulae/resources/jre
+          cp -a src-tauri/vlc-staging-appimage squashfs-root/usr/share/nebulae/resources/vlc
+          cp -a src-tauri/jre-staging-appimage squashfs-root/usr/share/nebulae/resources/jre
           # Verify engine daemon is present
           if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
             echo "ERROR: transmission-daemon missing from AppImage engine staging"
