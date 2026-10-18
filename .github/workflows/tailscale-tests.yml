@@ -1,0 +1,91 @@
+# Branch-scoped validation for the Tailscale integration work.
+# Deliberately SEPARATE from release.yml (owned by the client-repair
+# workstream): this file does not build releases or overwrite any
+# test-build assets. Remove or rewire when integrating.
+name: tailscale-core
+
+on:
+  push:
+    branches: [ts/tailscale-core]
+  pull_request:
+    branches: [ts/tailscale-core]
+  workflow_dispatch:
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests (hermetic, no daemon)
+        working-directory: src-tauri
+        run: cargo test --release
+
+  bundler:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle pinned binaries for this platform
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            command -v 7z >/dev/null 2>&1 || choco install 7zip -y
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+            shellcheck scripts/bundle-tailscale.sh
+          fi
+          ./scripts/bundle-tailscale.sh "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-bin-${{ matrix.target }}
+          path: src-tauri/resources/engine/tailscale/
+          retention-days: 3
+
+  # Native-Windows runtime validation of the PRIVATE named pipe and
+  # console-suppression flags: run the bundled daemon exactly the way the
+  # app does (userspace networking, pipe socket) and drive the CLI over
+  # that pipe. This is the check that cannot run on a mac dev machine.
+  windows-pipe-smoke:
+    runs-on: windows-latest
+    needs: bundler
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-bin-x86_64-pc-windows-msvc
+          path: src-tauri/resources/engine/tailscale
+      - name: Start daemon on the app's private pipe and probe it
+        shell: bash
+        run: |
+          set -e
+          TS=src-tauri/resources/engine/tailscale
+          STATEDIR="$(mktemp -d)/state"
+          PIPE='\\.\pipe\nebulae-tailscaled'
+          "$TS/tailscaled.exe" --tun=userspace-networking --port=0 \
+            --statedir "$STATEDIR" --socket "$PIPE" \
+            --socks5-server=127.0.0.1:1055 \
+            --outbound-http-proxy-listen=127.0.0.1:1056 &
+          for i in $(seq 1 30); do
+            if "$TS/tailscale.exe" --socket "$PIPE" status --json >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          STATE=$("$TS/tailscale.exe" --socket "$PIPE" status --json | \
+            python -c "import json,sys; print(json.load(sys.stdin)['BackendState'])")
+          echo "backend over pipe: $STATE"
+          test "$STATE" = "NeedsLogin"
+          # Node identity must persist in the private state dir.
+          test -s "$STATEDIR/tailscaled.state"
