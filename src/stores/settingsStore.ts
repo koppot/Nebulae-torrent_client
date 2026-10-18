@@ -58,7 +58,7 @@ export const defaultSettings: UserSettings = {
   max_global_connections: 500,
   max_connections_per_torrent: 100,
   max_global_upload_slots: 8,
-  max_upload_slots_per_torrent: 4,
+  max_upload_slots_per_torrent: 14,
   proxy_type: 'None',
   proxy_host: '',
   proxy_port: 8080,
@@ -142,6 +142,9 @@ export const defaultSettings: UserSettings = {
 
   // 10. BitTorrent Engine
   engine: 'transmission',
+
+  // 11. Racing Mode
+  racing_mode_enabled: true,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

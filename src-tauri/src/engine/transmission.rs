@@ -414,6 +414,14 @@ impl TransmissionRpcClient {
             "fileStats",
             "peers",
             "peerStats",
+            // Racing Mode state fields
+            "bandwidthPriority",
+            "honorsSessionLimits",
+            "peer-limit",
+            // Availability / health
+            "desiredAvailable",
+            "corruptEver",
+            "etaIdle",
         ];
 
         let mut args = json!({ "fields": fields });
@@ -641,7 +649,28 @@ pub fn build_transmission_settings(
     rpc_user: &str,
     rpc_password: &str,
 ) -> Value {
+    let cache_mb = if settings.disk_cache_size_mib <= 0 { 4i32 } else { settings.disk_cache_size_mib };
+    let prealloc: u8 = if settings.preallocate_disk_space { 1 } else { 0 };
+    let idle_seeding_enabled = settings.max_seeding_time_minutes >= 0;
+    let idle_seeding_limit = settings.max_seeding_time_minutes.max(0) as u32;
+    let watch_dir_enabled = !settings.watched_folder_directory.is_empty();
+
+    // Racing Mode session overrides — maximises peer acquisition speed.
+    let (peer_per_torrent, peer_global, unchoke_slots, cache_mb_eff, stall_minutes) =
+        if settings.racing_mode_enabled {
+            (150u32, 1000u32, 14u32, 256i32, 2u32)
+        } else {
+            (
+                settings.max_connections_per_torrent.clamp(60, 150),
+                settings.max_global_connections.clamp(250, 1000),
+                settings.max_upload_slots_per_torrent.max(4),
+                cache_mb,
+                30u32,
+            )
+        };
+
     json!({
+        // RPC access (loopback-only)
         "rpc-enabled": true,
         "rpc-port": rpc_port,
         "rpc-bind-address": "127.0.0.1",
@@ -651,12 +680,12 @@ pub fn build_transmission_settings(
         "rpc-username": rpc_user,
         "rpc-password": rpc_password,
 
-        // Peer connectivity settings
+        // Peer connectivity
         "peer-port": settings.listening_port,
         "port-forwarding-enabled": settings.enable_upnp,
-        "peer-limit-per-torrent": settings.max_connections_per_torrent.clamp(60, 100),
-        "peer-limit-global": settings.max_global_connections.clamp(250, 500),
-        "upload-slots-per-torrent": settings.max_upload_slots_per_torrent.clamp(4, 8),
+        "peer-limit-per-torrent": peer_per_torrent,
+        "peer-limit-global": peer_global,
+        "upload-slots-per-torrent": unchoke_slots,
         "encryption": 1, // Preferred
         "utp-enabled": true,
 
@@ -665,9 +694,48 @@ pub fn build_transmission_settings(
         "pex-enabled": false,
         "lpd-enabled": false,
 
-        // Interface binding
+        // Interface binding and storage
         "bind-address-ipv4": bind_ipv4,
         "download-dir": default_download_dir,
+        "incomplete-dir": settings.temp_incomplete_directory,
+        "incomplete-dir-enabled": settings.use_temp_incomplete_dir,
+        "preallocation": prealloc,
+        "rename-partial-files": true,
+        "watch-dir": settings.watched_folder_directory,
+        "watch-dir-enabled": watch_dir_enabled,
+
+        // Disk cache (major throughput lever — default is only 4 MiB)
+        "cache-size-mb": cache_mb_eff,
+
+        // Default trackers appended to every torrent
+        "default-trackers": settings.default_trackers_list,
+
+        // Speed limits
+        "speed-limit-down": settings.max_download_speed_kib,
+        "speed-limit-down-enabled": settings.max_download_speed_kib > 0,
+        "speed-limit-up": settings.max_upload_speed_kib,
+        "speed-limit-up-enabled": settings.max_upload_speed_kib > 0,
+
+        // Turtle Mode (alt speed)
+        "alt-speed-enabled": settings.alt_rate_limits_enabled,
+        "alt-speed-down": settings.alt_download_speed_kib,
+        "alt-speed-up": settings.alt_upload_speed_kib,
+
+        // Queue management
+        "download-queue-size": settings.max_active_downloads,
+        "download-queue-enabled": settings.max_active_downloads > 0,
+        "queue-stalled-enabled": settings.ignore_slow_torrents_in_queue,
+        "queue-stalled-minutes": stall_minutes,
+
+        // Seeding ratio / idle limits
+        "seedRatioLimit": settings.max_ratio_limit.max(0.0),
+        "seedRatioLimited": settings.max_ratio_limit >= 0.0,
+        "idle-seeding-limit": idle_seeding_limit,
+        "idle-seeding-limit-enabled": idle_seeding_enabled,
+
+        // External script on completion
+        "script-torrent-done-enabled": settings.run_external_program_on_finished,
+        "script-torrent-done-filename": settings.external_program_command,
     })
 }
 
@@ -1341,6 +1409,44 @@ impl TransmissionTorrentEngine {
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
     }
+
+    /// Applies per-torrent Racing Mode settings immediately after a torrent is
+    /// added. Reads current user settings from DB to determine whether Racing
+    /// Mode is active and what speed cap is set.
+    fn apply_racing_mode_on_add(&self, hash: &str) {
+        let settings_opt = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            });
+
+        let Some(settings) = settings_opt else {
+            return;
+        };
+
+        if !settings.racing_mode_enabled {
+            return;
+        }
+
+        // When no global download cap is set, bypassing session limits is safe.
+        let honors = settings.max_download_speed_kib > 0;
+
+        if let Err(e) = self.rpc_client.torrent_set(
+            hash,
+            serde_json::json!({
+                "peer-limit":          150i64,
+                "bandwidthPriority":   1i64,
+                "honorsSessionLimits": honors,
+            }),
+        ) {
+            warn!("[racing_mode] failed to apply per-torrent settings to {hash}: {e}");
+        } else {
+            info!("[racing_mode] per-torrent settings applied to {hash}");
+        }
+    }
 }
 
 impl Drop for TransmissionTorrentEngine {
@@ -1590,6 +1696,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     || lower.ends_with(".vob")
             });
 
+            let bandwidth_priority = t
+                .get("bandwidthPriority")
+                .and_then(|v| v.as_i64())
+                .map(|p| p as i8);
+
             items.push(TorrentItem {
                 id,
                 name: meta
@@ -1628,6 +1739,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),
                 upload_limit_kib: meta.map(|m| m.upload_limit_kib).unwrap_or(0),
                 ratio_limit: meta.map(|m| m.ratio_limit).unwrap_or(-1.0),
+                bandwidth_priority,
                 media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
                     &name.clone(),
                 )),
@@ -1694,6 +1806,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
         // Verify FIRST (finds renamed existing data), then start.
         let _ = self.rpc_client.torrent_verify(&hash);
         let _ = self.rpc_client.torrent_start(Some(&hash));
+        self.apply_racing_mode_on_add(&hash);
         info!("Added torrent {hash} via Transmission sidecar (verify-then-start)");
         Ok(hash)
     }
@@ -1738,6 +1851,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
         // the initial check the torrent re-downloads from scratch.
         let _ = self.rpc_client.torrent_verify(&hash);
         let _ = self.rpc_client.torrent_start(Some(&hash));
+        self.apply_racing_mode_on_add(&hash);
         info!(
             "Added torrent {hash} from metainfo bytes via Transmission sidecar (verify-then-start)"
         );
@@ -2303,33 +2417,126 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
     fn apply_global_settings(
         &self,
-        dl_kib: u32,
-        ul_kib: u32,
-        ratio_limit: f32,
-        max_active_dl: u32,
-        max_active_ul: u32,
-        max_active_torrents: u32,
+        settings: &crate::commands::settings::UserSettings,
     ) -> Result<(), String> {
-        // Negative ratio means "use session default / unlimited".
-        let ratio_enabled = ratio_limit >= 0.0;
+        use serde_json::json;
+
+        let cache_mb = if settings.disk_cache_size_mib <= 0 { 4i32 } else { settings.disk_cache_size_mib };
+        let idle_seeding_enabled = settings.max_seeding_time_minutes >= 0;
+        let idle_seeding_limit = settings.max_seeding_time_minutes.max(0) as u32;
+        let watch_dir_enabled = !settings.watched_folder_directory.is_empty();
+        let ratio_enabled = settings.max_ratio_limit >= 0.0;
+        let seed_queue = settings.max_active_torrents.saturating_sub(settings.max_active_downloads);
+
+        // Derive peer + unchoke values from Racing Mode or user settings
+        let (peer_per_torrent, peer_global, unchoke_slots, cache_mb_eff, stall_minutes) =
+            if settings.racing_mode_enabled {
+                (150u32, 1000u32, 14u32, 256i32, 2u32)
+            } else {
+                (
+                    settings.max_connections_per_torrent.clamp(60, 150),
+                    settings.max_global_connections.clamp(250, 1000),
+                    settings.max_upload_slots_per_torrent.max(4),
+                    cache_mb,
+                    30u32,
+                )
+            };
+
+        // Call 1 — connectivity, cache, storage, speed
         self.rpc_client.session_set(json!({
-            "speed-limit-down":         dl_kib,
-            "speed-limit-down-enabled": dl_kib > 0,
-            "speed-limit-up":           ul_kib,
-            "speed-limit-up-enabled":   ul_kib > 0,
-            "seedRatioLimit":           ratio_limit.max(0.0),
-            "seedRatioLimited":         ratio_enabled,
-            "download-queue-size":      max_active_dl,
-            "upload-slots-per-torrent": max_active_ul.clamp(4, 8),
-            "download-queue-enabled":   max_active_dl > 0
+            // Peer connectivity
+            "peer-limit-per-torrent":   peer_per_torrent,
+            "peer-limit-global":        peer_global,
+            "upload-slots-per-torrent": unchoke_slots,
+
+            // Disk cache (throughput-critical)
+            "cache-size-mb":            cache_mb_eff,
+
+            // Storage
+            "incomplete-dir":           settings.temp_incomplete_directory,
+            "incomplete-dir-enabled":   settings.use_temp_incomplete_dir,
+            "preallocation":            if settings.preallocate_disk_space { 1u8 } else { 0u8 },
+            "watch-dir":                settings.watched_folder_directory,
+            "watch-dir-enabled":        watch_dir_enabled,
+
+            // Default trackers
+            "default-trackers":         settings.default_trackers_list,
+
+            // Speed limits
+            "speed-limit-down":         settings.max_download_speed_kib,
+            "speed-limit-down-enabled": settings.max_download_speed_kib > 0,
+            "speed-limit-up":           settings.max_upload_speed_kib,
+            "speed-limit-up-enabled":   settings.max_upload_speed_kib > 0,
+
+            // Turtle Mode
+            "alt-speed-enabled":        settings.alt_rate_limits_enabled,
+            "alt-speed-down":           settings.alt_download_speed_kib,
+            "alt-speed-up":             settings.alt_upload_speed_kib,
         }))?;
-        // Also push the per-torrent ratio toggle into session-level queue size.
-        // Transmission's active-torrent cap is: download-queue-size + seed-queue-size
-        let seed_queue = max_active_torrents.saturating_sub(max_active_dl);
-        let _ = self.rpc_client.session_set(json!({
-            "seed-queue-size":    seed_queue.max(1),
-            "seed-queue-enabled": max_active_torrents > 0
-        }));
+
+        // Call 2 — queues, seeding, script, ratio
+        self.rpc_client.session_set(json!({
+            // Queue management
+            "download-queue-size":      settings.max_active_downloads,
+            "download-queue-enabled":   settings.max_active_downloads > 0,
+            "seed-queue-size":          seed_queue.max(1),
+            "seed-queue-enabled":       settings.max_active_torrents > 0,
+            "queue-stalled-enabled":    settings.ignore_slow_torrents_in_queue,
+            "queue-stalled-minutes":    stall_minutes,
+
+            // Seeding ratio
+            "seedRatioLimit":           settings.max_ratio_limit.max(0.0),
+            "seedRatioLimited":         ratio_enabled,
+
+            // Idle seeding cutoff
+            "idle-seeding-limit":           idle_seeding_limit,
+            "idle-seeding-limit-enabled":   idle_seeding_enabled,
+
+            // External completion script
+            "script-torrent-done-enabled":  settings.run_external_program_on_finished,
+            "script-torrent-done-filename": settings.external_program_command,
+        }))?;
+
+        info!(
+            "[settings] session applied — racing={} peers_per_torrent={} global_peers={} \
+             unchoke_slots={} cache_mib={}",
+            settings.racing_mode_enabled,
+            peer_per_torrent,
+            peer_global,
+            unchoke_slots,
+            cache_mb_eff,
+        );
+        Ok(())
+    }
+
+    fn set_torrent_racing_mode(&self, id: &str, enabled: bool) -> Result<(), String> {
+        use serde_json::json;
+        // Read current speed cap to decide whether honorsSessionLimits should be off.
+        // When the user has no global download cap, bypassing session limits is safe.
+        let no_dl_cap = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok())
+            .map(|s| s.max_download_speed_kib == 0)
+            .unwrap_or(true);
+
+        if enabled {
+            self.rpc_client.torrent_set(id, json!({
+                "peer-limit":          150i64,
+                "bandwidthPriority":   1i64,
+                "honorsSessionLimits": !no_dl_cap,
+            }))?;
+            info!("[racing_mode] enabled on torrent {id}");
+        } else {
+            self.rpc_client.torrent_set(id, json!({
+                "peer-limit":          100i64,
+                "bandwidthPriority":   0i64,
+                "honorsSessionLimits": true,
+            }))?;
+            info!("[racing_mode] disabled on torrent {id}");
+        }
         Ok(())
     }
 }
@@ -2391,9 +2598,10 @@ mod tests {
         let user_settings = UserSettings {
             listening_port: 52123,
             enable_upnp: true,
-            max_connections_per_torrent: 150, // Should be clamped to 100
-            max_global_connections: 600,      // Should be clamped to 500
-            max_upload_slots_per_torrent: 10, // Should be clamped to 8
+            max_connections_per_torrent: 150, // clamp(60,150) → 150
+            max_global_connections: 600,      // clamp(250,1000) → 600
+            max_upload_slots_per_torrent: 10, // max(4) → 10
+            racing_mode_enabled: false,       // test non-racing path
             ..Default::default()
         };
 
@@ -2414,12 +2622,12 @@ mod tests {
         assert_eq!(config["rpc-username"], "nebulae");
         assert_eq!(config["rpc-password"], "secret_pass");
 
-        // Clamping and mapping table
+        // Clamping and mapping table (non-Racing Mode path)
         assert_eq!(config["peer-port"], 52123);
         assert_eq!(config["port-forwarding-enabled"], true);
-        assert_eq!(config["peer-limit-per-torrent"], 100);
-        assert_eq!(config["peer-limit-global"], 500);
-        assert_eq!(config["upload-slots-per-torrent"], 8);
+        assert_eq!(config["peer-limit-per-torrent"], 150); // clamped to 150 max
+        assert_eq!(config["peer-limit-global"], 600);      // within clamp(250,1000)
+        assert_eq!(config["upload-slots-per-torrent"], 10); // max(4) → 10
         assert_eq!(config["encryption"], 1);
         assert_eq!(config["utp-enabled"], true);
 

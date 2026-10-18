@@ -92,18 +92,20 @@ pub trait TorrentEngine: Send + Sync {
         Ok(()) // default: no-op
     }
 
-    /// Push global session limits (speed, ratio, queue limits) to the live
-    /// engine session whenever the user saves Settings. Engines that do not
+    /// Push all active session settings (speed, ratio, queue, cache, trackers,
+    /// incomplete-dir, alt-speed, script, watch-dir, Racing Mode overrides) to
+    /// the live engine whenever the user saves Settings. Engines that do not
     /// support live session-set may leave this as the default no-op.
     fn apply_global_settings(
         &self,
-        _dl_kib: u32,
-        _ul_kib: u32,
-        _ratio_limit: f32,
-        _max_active_dl: u32,
-        _max_active_ul: u32,
-        _max_active_torrents: u32,
+        _settings: &crate::commands::settings::UserSettings,
     ) -> Result<(), String> {
         Ok(()) // default: no-op
+    }
+
+    /// Toggle Racing Mode for a single torrent (per-torrent peer limit,
+    /// bandwidth priority, and session-limit bypass). Default: unsupported.
+    fn set_torrent_racing_mode(&self, _id: &str, _enabled: bool) -> Result<(), String> {
+        Err("Racing Mode is not supported by this engine".to_string())
     }
 }

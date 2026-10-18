@@ -31,6 +31,7 @@ import {
   CheckCircle2,
   RefreshCw,
   Film,
+  Zap,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -1092,6 +1093,30 @@ export const SettingsModal: React.FC = () => {
             {/* 5. BITTORRENT */}
             {activeTab === 'bittorrent' && (
               <div className="space-y-4">
+                {/* Racing Mode */}
+                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span>Racing Mode</span>
+                      </h3>
+                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                        Maximizes piece acquisition and throughput — 256 MiB disk cache, 150 peers per torrent, 1000 global peers, 14 unchoke slots, and high bandwidth priority on all added torrents. Enabled by default.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer ml-4 flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={settings.racing_mode_enabled}
+                        onChange={(e) => saveSettings({ racing_mode_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white font-medium text-xs">Enabled</span>
+                    </label>
+                  </div>
+                </div>
+
                 <div>
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
                     Privacy, Swarm & Encryption

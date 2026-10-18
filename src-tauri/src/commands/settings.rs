@@ -141,6 +141,12 @@ pub struct UserSettings {
     /// install takes over, settings are re-persisted with the new version
     /// and any newly applied defaults.
     pub app_version: Option<String>,
+
+    // 12. Racing Mode — maximizes piece acquisition and peer connectivity
+    /// When enabled, Transmission is configured with aggressive peer limits,
+    /// large disk cache, and each added torrent receives high bandwidth
+    /// priority and an uncapped per-torrent peer count.
+    pub racing_mode_enabled: bool,
 }
 
 impl Default for UserSettings {
@@ -196,7 +202,7 @@ impl Default for UserSettings {
             max_global_connections: 500,
             max_connections_per_torrent: 100,
             max_global_upload_slots: 8,
-            max_upload_slots_per_torrent: 4,
+            max_upload_slots_per_torrent: 14,
             proxy_type: "None".to_string(),
             proxy_host: "".to_string(),
             proxy_port: 8080,
@@ -283,6 +289,9 @@ impl Default for UserSettings {
 
             // 11. Internal bookkeeping
             app_version: None,
+
+            // 12. Racing Mode
+            racing_mode_enabled: true,
         }
     }
 }
@@ -337,16 +346,9 @@ pub fn save_user_settings(
 
     apply_autostart(settings.start_on_boot, settings.start_minimized)?;
 
-    // Apply rate/queue limits to the live engine session immediately so the
-    // user does not have to restart the daemon to see the new values take effect.
-    let _ = engine.apply_global_settings(
-        settings.max_download_speed_kib,
-        settings.max_upload_speed_kib,
-        settings.max_ratio_limit,
-        settings.max_active_downloads,
-        settings.max_active_uploads,
-        settings.max_active_torrents,
-    );
+    // Apply all session settings to the live engine immediately so the user
+    // does not have to restart the daemon for changes to take effect.
+    let _ = engine.apply_global_settings(&settings);
 
     Ok(())
 }

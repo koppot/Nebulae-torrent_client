@@ -148,6 +148,7 @@ export interface TorrentItem {
   sequential_download: boolean;
   first_last_piece_prio: boolean;
   super_seeding: boolean;
+  bandwidthPriority?: number; // 1 = high (Racing Mode active), 0 = normal, -1 = low
   tags: string[];
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
@@ -287,6 +288,9 @@ export interface UserSettings {
 
   // 10. BitTorrent Engine
   engine?: 'transmission';
+
+  // 11. Racing Mode — maximizes piece acquisition and peer connectivity
+  racing_mode_enabled: boolean;
 }
 
 export interface CreateTorrentParams {

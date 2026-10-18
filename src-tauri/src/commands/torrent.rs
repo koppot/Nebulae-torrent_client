@@ -75,6 +75,9 @@ pub struct TorrentItem {
     pub upload_limit_kib: u32,
     #[serde(default)]
     pub ratio_limit: f32,
+    /// Transmission bandwidthPriority: 1 = high (Racing Mode active), 0 = normal, -1 = low
+    #[serde(default, rename = "bandwidthPriority")]
+    pub bandwidth_priority: Option<i8>,
     #[serde(default)]
     pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }
@@ -673,6 +676,15 @@ pub fn toggle_torrent_super_seeding(
     engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
     engine.toggle_super_seeding(&id)
+}
+
+#[tauri::command]
+pub fn set_torrent_racing_mode(
+    id: String,
+    enabled: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    engine.set_torrent_racing_mode(&id, enabled)
 }
 
 #[tauri::command]

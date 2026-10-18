@@ -160,6 +160,7 @@ impl RtorrentRemoteEngine {
             download_limit_kib: 0,
             upload_limit_kib: 0,
             ratio_limit: 0.0,
+            bandwidth_priority: None,
             media_meta: if is_media {
                 Some(crate::utils::media_parser::MediaTitleParser::parse(&name))
             } else {

@@ -1749,6 +1749,23 @@ export const TorrentManagerView: React.FC = () => {
               </button>
             );
           })()}
+          {!isRemoteServer && (() => {
+            const t = torrents.find((item) => item.id === contextMenu.torrentId);
+            const isRacing = t?.bandwidthPriority === 1;
+            return (
+              <button
+                onClick={() => {
+                  invoke('set_torrent_racing_mode', { id: contextMenu.torrentId, enabled: !isRacing })
+                    .catch(() => {});
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+              >
+                <Zap className="w-3.5 h-3.5 text-[#e50914]" />
+                <span>{isRacing ? 'Disable Racing Mode' : 'Enable Racing Mode'}</span>
+              </button>
+            );
+          })()}
           <div className="h-[1px] bg-[#333333] my-1" />
           <button
             onClick={() => {
