@@ -185,6 +185,22 @@ jobs:
         run: |
           ./scripts/bundle-macos-transmission.sh
 
+      # Playback parity with Windows: libVLC is bundled INSIDE the app
+      # (engine.rs prefers <bundle>/Contents/Resources/resources/vlc/lib)
+      # so no system VLC install is required on macOS either.
+      - name: Bundle libVLC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=x86_64; fi
+          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
+          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
+          mkdir -p src-tauri/resources/vlc
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
+          hdiutil detach /tmp/vlcmnt -quiet || true
+          ls src-tauri/resources/vlc
+
       # --- Linux split build ------------------------------------------------
       # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
       # auto-scans AppDir/usr/lib recursively: the bundled player library
@@ -249,6 +265,21 @@ jobs:
       # artifacts - the duplicate asset list confusion). The release itself
       # is created by the create-release job; canonical assets are uploaded
       # by the platform prepare steps below.
+      # Playback must work out of the box: libVLC is bundled INSIDE the
+      # Windows installer (engine.rs prefers resources/vlc/libvlc.dll),
+      # so no system VLC install is required.
+      - name: Bundle libVLC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
+          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+          Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
+
       - name: Build Tauri Application
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}

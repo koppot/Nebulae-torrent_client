@@ -249,6 +249,16 @@ impl VlcLib {
         }
         #[cfg(target_os = "macos")]
         {
+            // Bundled libVLC ships INSIDE the app (never depend on a system
+            // VLC install): <bundle>/Contents/Resources/resources/vlc/lib.
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    c.push(dir.join("vlc").join("lib").join("libvlc.dylib"));
+                    if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
+                        c.push(res.join("resources").join("vlc").join("lib").join("libvlc.dylib"));
+                    }
+                }
+            }
             if let Ok(home) = std::env::var("HOME") {
                 c.push(
                     PathBuf::from(&home)
@@ -263,6 +273,17 @@ impl VlcLib {
         }
         #[cfg(target_os = "windows")]
         {
+            // Bundled libVLC ships INSIDE the app (same policy as the
+            // transmission engine): never depend on a system VLC install.
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    c.push(dir.join("resources").join("vlc").join("libvlc.dll"));
+                    c.push(dir.join("vlc").join("libvlc.dll"));
+                }
+                if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
+                    c.push(parent.join("resources").join("vlc").join("libvlc.dll"));
+                }
+            }
             c.push(PathBuf::from(r"C:\Program Files\VideoLAN\VLC\libvlc.dll"));
             c.push(PathBuf::from(
                 r"C:\Program Files (x86)\VideoLAN\VLC\libvlc.dll",
@@ -289,8 +310,10 @@ impl VlcLib {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = lib_path;
-            None
+            // Windows/Linux: plugins live next to the lib (bundled layout:
+            // resources/vlc/libvlc.dll -> resources/vlc/plugins).
+            let dir = lib_path.parent().map(|p| p.join("plugins"));
+            dir.filter(|p| p.exists())
         }
     }
 
