@@ -313,7 +313,10 @@ pub fn recommended_piece_size_bytes(total_bytes: u64) -> u32 {
 
 #[tauri::command]
 pub async fn list_torrents(engine: State<'_, SharedEngine>) -> Result<Vec<TorrentItem>, String> {
-    engine.list_torrents()
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.list_torrents())
+        .await
+        .map_err(|e| format!("list_torrents task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -621,22 +624,34 @@ pub fn remove_torrent(
 
 #[tauri::command]
 pub async fn pause_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
-    engine.pause_torrent(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.pause_torrent(&id))
+        .await
+        .map_err(|e| format!("pause_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
 pub async fn resume_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
-    engine.resume_torrent(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.resume_torrent(&id))
+        .await
+        .map_err(|e| format!("resume_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
 pub async fn pause_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
-    engine.pause_all()
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.pause_all())
+        .await
+        .map_err(|e| format!("pause_all task failed: {e}"))?
 }
 
 #[tauri::command]
 pub async fn resume_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
-    engine.resume_all()
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.resume_all())
+        .await
+        .map_err(|e| format!("resume_all task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -644,12 +659,18 @@ pub async fn force_recheck_torrent(
     id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.force_recheck(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.force_recheck(&id))
+        .await
+        .map_err(|e| format!("force_recheck task failed: {e}"))?
 }
 
 #[tauri::command]
 pub async fn reannounce_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
-    engine.reannounce(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.reannounce(&id))
+        .await
+        .map_err(|e| format!("reannounce task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1367,14 +1388,26 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
 pub fn open_torrent_folder(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if !p.exists() {
-        return Err(format!("Folder does not exist: {path}"));
+        return Err(format!("Path does not exist on disk: {path}"));
     }
     #[cfg(target_os = "macos")]
-    let opened = std::process::Command::new("open").arg(&p).status();
+    let opened = if p.is_dir() {
+        std::process::Command::new("open").arg(&p).status()
+    } else {
+        std::process::Command::new("open").arg("-R").arg(&p).status()
+    };
     #[cfg(target_os = "windows")]
-    let opened = std::process::Command::new("explorer").arg(&p).status();
+    let opened = if p.is_dir() {
+        std::process::Command::new("explorer").arg(&p).status()
+    } else {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", p.display()))
+            .status()
+    };
     #[cfg(all(unix, not(target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open").arg(&p).status();
+    let opened = std::process::Command::new("xdg-open")
+        .arg(if p.is_dir() { &p } else { p.parent().unwrap_or(&p) })
+        .status();
     match opened {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(format!("File manager exited with {s}")),

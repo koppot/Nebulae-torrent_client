@@ -178,6 +178,17 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
   const [externalTitlePrompt, setExternalTitlePrompt] = useState<{ path: string; guess: string } | null>(null);
   const [externalTitleInput, setExternalTitleInput] = useState('');
+  const [feedbackNotice, setFeedbackNotice] = useState<{
+    type: 'info' | 'error';
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!feedbackNotice || feedbackNotice.type === 'error') return;
+    const timer = setTimeout(() => setFeedbackNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [feedbackNotice]);
+
   const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string }[]>([]);
   const [extHovered, setExtHovered] = useState<string | null>(null);
   const [extCtx, setExtCtx] = useState<{ x: number; y: number; path: string; title: string } | null>(null);
@@ -196,7 +207,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       window.removeEventListener('nebulae:add-movie', onAdd);
       window.removeEventListener('nebulae:player-prefs', onPrefs);
     };
-  });
+  }, []);
   // Library banners for external titles: same TMDB pipeline as downloads.
   const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
   // TMDB metadata per external path: overview / runtime / canonical year —
@@ -395,11 +406,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         // position map and the disc pills key off exactly this path.
         rememberLastDisc(groupId, info.resolved_path || playPath);
       }
+      setFeedbackNotice(null);
       setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
       const msg = errorMessage(err, 'Could not launch the disc.');
       invoke('log_frontend', { message: `disc open failed: ${msg}` }).catch(() => {});
+      setFeedbackNotice({ type: 'error', message: msg });
       setExternalDiscError(msg);
     }
   };
@@ -414,20 +427,51 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     try {
       const info = await resumeInPlayer(resumePath, savedMs, displayTitle);
       rememberLastDisc(groupId, info.resolved_path || resumePath);
+      setFeedbackNotice(null);
       setExternalDiscError(null);
     } catch (err: unknown) {
       const msg = errorMessage(err, 'Could not resume the disc.');
       invoke('log_frontend', { message: `resume failed: ${msg}` }).catch(() => {});
+      setFeedbackNotice({ type: 'error', message: msg });
       setExternalDiscError(msg);
     }
   };
 
-  const handleOpenFolder = (path: string) => {
-    invoke('open_torrent_folder', { path }).catch(() => {});
+  const handleOpenFolder = async (path: string) => {
+    try {
+      await invoke('open_torrent_folder', { path });
+      const name = path.split(/[/\\]/).filter(Boolean).pop() || path;
+      setFeedbackNotice({ type: 'info', message: `Revealed in Finder: ${name}` });
+    } catch (err: unknown) {
+      const msg = errorMessage(err, `Could not reveal folder in Finder: ${path}`);
+      setFeedbackNotice({ type: 'error', message: msg });
+    }
+  };
+
+  const handleCopyPath = async (item: TorrentItem) => {
+    const p = contentPath(item);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(p);
+      } else {
+        const el = document.createElement('textarea');
+        el.value = p;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      }
+      setFeedbackNotice({ type: 'info', message: `Copied path to clipboard: ${p}` });
+    } catch (err: unknown) {
+      setFeedbackNotice({
+        type: 'error',
+        message: `Failed to copy path: ${errorMessage(err, 'clipboard unavailable')}`,
+      });
+    }
   };
 
   // Reveal the release's own folder in Finder (not the download root).
-  const handleRevealRelease = (t: TorrentItem) => handleOpenFolder(folderOf(t));
+  const handleRevealRelease = (t: TorrentItem) => void handleOpenFolder(folderOf(t));
 
   // "Details" in the Canva mock: jump into the Manager with this release selected.
   const openDetails = (id: string) => {
@@ -767,6 +811,27 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
 
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-16 bg-[#141414] text-white select-none">
+      {feedbackNotice && (
+        <div
+          className={`sticky top-2 z-[195] mx-auto max-w-xl p-3 rounded-lg flex items-center justify-between gap-3 shadow-2xl backdrop-blur-md transition ${
+            feedbackNotice.type === 'error'
+              ? 'bg-[#2a1518]/95 border border-[#e50914] text-[#ffb3b3]'
+              : 'bg-[#152a18]/95 border border-[#22c55e] text-[#bbf7d0]'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <span>{feedbackNotice.type === 'error' ? '⚠️' : '✓'}</span>
+            <span>{feedbackNotice.message}</span>
+          </div>
+          <button
+            onClick={() => setFeedbackNotice(null)}
+            className="text-current opacity-70 hover:opacity-100 text-sm font-bold ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {externalDiscError && (
         <div className="p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
           {externalDiscError}
@@ -1198,6 +1263,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         >
           <div
             className="absolute w-44 rounded-lg bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 py-1.5"
+            onClick={(e) => e.stopPropagation()}
             style={{
               left: Math.min(extCtx.x, window.innerWidth - 190),
               top: Math.min(extCtx.y, window.innerHeight - 210),
@@ -1212,7 +1278,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                     className={act}
                     onClick={() => {
                       setExtCtx(null);
-                      invoke('open_torrent_folder', { path: extCtx.path }).catch(() => {});
+                      void handleOpenFolder(extCtx.path);
                     }}
                   >
                     <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
@@ -1224,8 +1290,12 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       try {
                         await openInPlayer(extCtx.path, { displayTitle: extCtx.title });
                         void refreshExternalMedia();
+                        setFeedbackNotice(null);
                       } catch (err) {
-                        setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                        setFeedbackNotice({
+                          type: 'error',
+                          message: errorMessage(err, 'Could not launch the disc.'),
+                        });
                       }
                     }}
                   >
@@ -1238,7 +1308,16 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       try {
                         await invoke('remove_external_media', { path: extCtx.path });
                         void refreshExternalMedia();
-                      } catch { /* best-effort */ }
+                        setFeedbackNotice({
+                          type: 'info',
+                          message: `Removed from library: ${extCtx.title}`,
+                        });
+                      } catch (err) {
+                        setFeedbackNotice({
+                          type: 'error',
+                          message: errorMessage(err, 'Could not remove external media.'),
+                        });
+                      }
                     }}
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Remove from Library
@@ -1262,17 +1341,30 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         >
           <div
             className="absolute w-44 rounded-lg bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 py-1.5"
+            onClick={(e) => e.stopPropagation()}
             style={{
               left: Math.min(ctxMenu.x, window.innerWidth - 190),
               top: Math.min(ctxMenu.y, window.innerHeight - 210),
             }}
           >
             {(() => {
-              const group = groupItems([...activeDownloads, ...readyToWatch]).find(
-                (g) => g.id === ctxMenu.groupId,
-              );
               const item =
-                group?.items.find((t) => t.id === ctxMenu.itemId) || group?.items[0];
+                torrents.find((t) => t.id === ctxMenu.itemId) ||
+                groupItems(torrents).flatMap((g) => g.items).find((t) => t.id === ctxMenu.itemId);
+              const group =
+                groupItems(torrents).find((g) => g.id === ctxMenu.groupId) ||
+                (item
+                  ? {
+                      id: item.id,
+                      clean_title: item.media_meta?.clean_title || item.name,
+                      year: item.media_meta?.year,
+                      is_boxset: false,
+                      total_bytes: item.total_bytes,
+                      overall_progress: item.progress,
+                      items: [item],
+                      active_index: 0,
+                    }
+                  : null);
               if (!group || !item) return null;
               const saved = lastPlayedDiscs[group.id];
               const isAbsPath = (k: string) => k.startsWith('/') || /^[A-Za-z]:[/\\]/.test(k);
@@ -1285,7 +1377,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 'w-full text-left px-3 py-1.5 text-[11px] text-[#d4d4d4] hover:bg-[#262626] hover:text-white flex items-center gap-2 transition';
               return (
                 <>
-                  <button className={act} onClick={() => { setCtxMenu(null); handleRevealRelease(item); }}>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      handleRevealRelease(item);
+                    }}
+                  >
                     <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
                   </button>
                   <button
@@ -1320,8 +1418,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                   <button
                     className={act}
                     onClick={() => {
-                      navigator.clipboard?.writeText(contentPath(item)).catch(() => {});
                       setCtxMenu(null);
+                      void handleCopyPath(item);
                     }}
                   >
                     <Copy className="w-3.5 h-3.5" /> Copy Path
@@ -1354,12 +1452,41 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
             onClick={(e) => e.stopPropagation()}
           >
             {(() => {
-              const group = groupItems([...activeDownloads, ...readyToWatch]).find(
-                (g) => g.id === detailsFor.groupId,
-              );
               const item =
-                group?.items.find((t) => t.id === detailsFor.itemId) || group?.items[0];
-              if (!group || !item) return null;
+                torrents.find((t) => t.id === detailsFor.itemId) ||
+                groupItems(torrents).flatMap((g) => g.items).find((t) => t.id === detailsFor.itemId);
+              const group =
+                groupItems(torrents).find((g) => g.id === detailsFor.groupId) ||
+                (item
+                  ? {
+                      id: item.id,
+                      clean_title: item.media_meta?.clean_title || item.name,
+                      year: item.media_meta?.year,
+                      is_boxset: false,
+                      total_bytes: item.total_bytes,
+                      overall_progress: item.progress,
+                      items: [item],
+                      active_index: 0,
+                    }
+                  : null);
+              if (!group || !item) {
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-white">Details Unavailable</h3>
+                      <button
+                        onClick={() => setDetailsFor(null)}
+                        className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <p className="text-xs text-[#a3a3a3]">
+                      Information for this release could not be loaded because the torrent is not present in the active library.
+                    </p>
+                  </div>
+                );
+              }
               const set = discSetMap[item.id] ?? [];
               const specs = Array.from(new Set(set.map((d) => d.layer_spec)));
               const count = set.length || group.items.length;

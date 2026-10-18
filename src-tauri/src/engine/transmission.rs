@@ -508,7 +508,9 @@ impl TransmissionRpcClient {
 
     pub fn torrent_verify(&self, id: &str) -> Result<(), String> {
         let args = json!({ "ids": [rpc_id(id)] });
+        info!("[transmission-rpc] sending torrent-verify for id={id}");
         self.request("torrent-verify", Some(args))?;
+        info!("[transmission-rpc] torrent-verify accepted for id={id}");
         Ok(())
     }
 
@@ -2161,6 +2163,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn force_recheck(&self, id: &str) -> Result<(), String> {
+        info!("[engine] force_recheck requested for torrent id={id}");
         self.rpc_client.torrent_verify(id)
     }
 

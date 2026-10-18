@@ -70,13 +70,22 @@ pub struct DiscPlayerStatus {
 
 #[tauri::command]
 pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
+    let java_home = std::env::var("JAVA_HOME").ok();
+    let has_jvm = java_home
+        .as_ref()
+        .map(|p| {
+            let base = std::path::Path::new(p);
+            base.join("bin/java").exists() || base.join("bin/java.exe").exists()
+        })
+        .unwrap_or(false);
+
     match crate::player::engine::VlcLib::load() {
         Ok(lib) => {
             let version = lib.version();
             let name = if version.is_empty() {
-                "VLC (embedded engine)".to_string()
+                "Bundled VLC (embedded engine)".to_string()
             } else {
-                format!("VLC {version} (embedded engine)")
+                format!("Bundled VLC {version} (embedded engine)")
             };
             Ok(DiscPlayerStatus {
                 player_type: "vlc".to_string(),
@@ -85,26 +94,24 @@ pub fn get_disc_player_status() -> Result<DiscPlayerStatus, String> {
                     .map(|p| p.display().to_string()),
                 supports_dvd_menu: true,
                 supports_bluray_menu: true,
-                java_home: None,
-                has_jvm: false,
-                // VLC 3 renders Blu-ray standard menus; BD-J interactive
-                // menus need a JVM VLC doesn't ship on this platform.
-                bd_j_supported: false,
+                java_home,
+                has_jvm,
+                bd_j_supported: has_jvm,
                 note: Some(
-                    "Playback runs inside Nebulae on VLC's engine: full DVD menus, Blu-ray standard menus, and automatic high-quality deinterlacing. BD-J interactive Blu-ray menus are not available in VLC 3."
+                    "Playback runs inside Nebulae on the bundled VLC engine: full DVD menus, Blu-ray menus, and automatic high-quality deinterlacing."
                         .to_string(),
                 ),
             })
         }
         Err(e) => Ok(DiscPlayerStatus {
             player_type: "none".to_string(),
-            player_name: "VLC not found".to_string(),
+            player_name: "Bundled player not found".to_string(),
             player_path: None,
             supports_dvd_menu: false,
             supports_bluray_menu: false,
-            java_home: None,
-            has_jvm: false,
-            bd_j_supported: false,
+            java_home,
+            has_jvm,
+            bd_j_supported: has_jvm,
             note: Some(e),
         }),
     }

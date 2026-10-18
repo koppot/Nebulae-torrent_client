@@ -37,12 +37,18 @@ pub fn run() {
             jre_candidates.push(std::path::PathBuf::from(&appdir).join("usr/share/nebulae/resources/jre"));
         }
         jre_candidates.push(std::path::PathBuf::from("/usr/lib/Nebulae/resources/jre"));
+        jre_candidates.push(std::path::PathBuf::from("src-tauri/resources/jre"));
+        jre_candidates.push(std::path::PathBuf::from("resources/jre"));
         if let Some(jre) = jre_candidates
             .into_iter()
             .find(|c| c.join("bin").exists() || c.join("lib").exists())
         {
-            if std::env::var_os("JAVA_HOME").is_none() {
-                std::env::set_var("JAVA_HOME", &jre);
+            std::env::set_var("JAVA_HOME", &jre);
+            let bin = jre.join("bin");
+            if bin.exists() {
+                if let Ok(curr_path) = std::env::var("PATH") {
+                    std::env::set_var("PATH", format!("{}:{}", bin.display(), curr_path));
+                }
             }
         }
     }

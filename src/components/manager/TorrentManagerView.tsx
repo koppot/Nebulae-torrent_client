@@ -1654,9 +1654,12 @@ export const TorrentManagerView: React.FC = () => {
             </button>
           )}
           <button
-            onClick={() => {
-              forceRecheck(contextMenu.torrentId);
+            onClick={async () => {
+              const res = await forceRecheck(contextMenu.torrentId);
               setContextMenu((prev) => ({ ...prev, visible: false }));
+              if (!res.success && res.error) {
+                alert(`Could not start verification:\n${res.error}`);
+              }
             }}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
           >
@@ -1684,12 +1687,16 @@ export const TorrentManagerView: React.FC = () => {
             <span>Copy Info Hash</span>
           </button>
           <button
-            onClick={() => {
+            onClick={async () => {
               const t = torrents.find((item) => item.id === contextMenu.torrentId);
-              if (t && t.save_path) {
-                invoke('open_torrent_folder', { path: resolveTorrentDataDir(t) }).catch(() => {});
-              }
               setContextMenu((prev) => ({ ...prev, visible: false }));
+              if (t && t.save_path) {
+                try {
+                  await invoke('open_torrent_folder', { path: resolveTorrentDataDir(t) });
+                } catch (err: unknown) {
+                  alert(`Could not reveal in Finder:\n${err}`);
+                }
+              }
             }}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
           >

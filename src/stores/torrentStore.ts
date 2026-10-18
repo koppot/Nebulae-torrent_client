@@ -46,14 +46,20 @@ export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
     }
 
     // Torrent is currently NOT reported as checking by the engine.
-    if (!recheck.seenChecking && now - recheck.requestedAt < 1500) {
-      // The daemon has not yet transitioned into checking in this polled sample,
-      // and we are within the debounce grace window. Preserve Queued for checking.
-      return { ...t, status: 'Queued for checking', progress: 0 };
+    if (!recheck.seenChecking) {
+      if (now - recheck.requestedAt < 10000) {
+        // Within 10s debounce grace window before engine flips to Checking:
+        // preserve optimistic Queued for checking
+        return { ...t, status: 'Queued for checking', progress: 0 };
+      }
+      // Grace window elapsed without engine ever reporting Checking/Queued:
+      // discard stale recheck tracking and report engine truth
+      activeRechecks.delete(t.id);
+      return t;
     }
 
-    // Either we previously saw checking and it has completed, or the grace
-    // window elapsed. Clean up activeRechecks and report the engine's final truth.
+    // Engine was previously seen Checking, and now is NO LONGER Checking or Queued for checking.
+    // That means verification finished successfully!
     activeRechecks.delete(t.id);
     return t;
   });
@@ -178,7 +184,7 @@ interface TorrentState {
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
   matchTorrentContent: (source: string, downloadDir: string) => Promise<TorrentContentMatch>;
   applyTorrentRenames: (downloadDir: string, renames: TorrentRenameEntry[]) => Promise<number>;
-  forceRecheck: (id: string) => Promise<void>;
+  forceRecheck: (id: string) => Promise<{ success: boolean; error?: string }>;
   reannounce: (id: string) => Promise<void>;
   setLocation: (id: string, newPath: string) => Promise<void>;
   setCategory: (id: string, category: string) => Promise<void>;
@@ -306,7 +312,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     return await invoke<number>('apply_torrent_renames', { downloadDir, renames });
   },
 
-  forceRecheck: async (id: string) => {
+  forceRecheck: async (id: string): Promise<{ success: boolean; error?: string }> => {
     activeRechecks.set(id, { requestedAt: Date.now(), seenChecking: false });
     set({
       torrents: get().torrents.map((t) =>
@@ -315,31 +321,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     });
     try {
       await invoke('force_recheck_torrent', { id });
-    } catch (err) {
-      console.warn('force_recheck_torrent failed:', err);
+      // Schedule a single refresh to capture initial checking state;
+      // subsequent progress updates stream live from engine telemetry.
+      setTimeout(() => {
+        void get().fetchTorrents();
+      }, 300);
+      return { success: true };
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as Error)?.message || 'Failed to start force recheck';
+      console.warn('force_recheck_torrent failed:', msg);
       activeRechecks.delete(id);
       await get().fetchTorrents();
-      return;
+      return { success: false, error: msg };
     }
-    // Pull engine truth immediately
-    await get().fetchTorrents();
-
-    // Fast-poll during verification (200ms) so intermediate progress
-    // is reflected smoothly in the UI
-    let ticksLeft = 60; // Up to 12s of fast polling if needed
-    const fastPoll = async () => {
-      const entry = activeRechecks.get(id);
-      if (!entry || ticksLeft <= 0) return;
-      ticksLeft--;
-      await get().fetchTorrents();
-      const current = get().torrents.find((t) => t.id === id);
-      if (current && (current.status === 'Checking' || current.status === 'Queued for checking')) {
-        setTimeout(fastPoll, 200);
-      } else {
-        activeRechecks.delete(id);
-      }
-    };
-    setTimeout(fastPoll, 100);
   },
 
   reannounce: async (id: string) => {

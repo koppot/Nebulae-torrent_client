@@ -22,6 +22,7 @@ pub struct VlcLib {
     deps: Vec<Library>,
     pub libvlc_new: unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
     pub libvlc_release: unsafe extern "C" fn(*mut c_void),
+    pub libvlc_errmsg: unsafe extern "C" fn() -> *const c_char,
     pub libvlc_get_version: unsafe extern "C" fn() -> *const c_char,
     pub libvlc_media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     // MRL-based media (bluray://, dvd://) — folder-based disc images.
@@ -159,19 +160,13 @@ extern "C" fn vlc_log_emit(level: c_int, msg: *const c_char) {
 }
 
 impl VlcLib {
-    /// Locate and load the user's libVLC.
+    /// Locate and load the bundled libVLC.
     pub fn load() -> Result<VlcLib, String> {
         let candidates = Self::candidate_paths();
         let mut failures: Vec<String> = Vec::new();
         for path in &candidates {
-            // libVLC discovers its module plugins relative to itself, but a
-            // dylib loaded out of VLC.app needs the plugin dir pointed at
-            // explicitly. Setting it before the first `libvlc_new` is the
-            // documented approach.
-            if let Some(plugins) = Self::plugin_dir_for(path) {
-                if std::env::var_os("VLC_PLUGIN_PATH").is_none() {
-                    std::env::set_var("VLC_PLUGIN_PATH", &plugins);
-                }
+            if !path.exists() {
+                continue;
             }
             // Preload libvlccore by absolute path: libvlc references it via
             // @rpath/soname, which does not resolve from a foreign process.
@@ -179,6 +174,12 @@ impl VlcLib {
             unsafe {
                 match Library::new(path) {
                     Ok(lib) => {
+                        // Point VLC to its module plugins directory relative to itself.
+                        // Setting VLC_PLUGIN_PATH must ONLY happen for the successfully
+                        // loaded library so that failed candidates do not corrupt the path.
+                        if let Some(plugins) = Self::plugin_dir_for(path) {
+                            std::env::set_var("VLC_PLUGIN_PATH", &plugins);
+                        }
                         if let Ok(mut p) = LOADED_PATH.lock() {
                             *p = Some(path.clone());
                         }
@@ -189,7 +190,7 @@ impl VlcLib {
             }
         }
         Err(format!(
-            "VLC's playback engine (libvlc) was not found. Install VLC (https://www.videolan.org) and try again. Attempts: {}",
+            "Nebulae's bundled playback engine (libvlc) was not found or failed to load. Attempts: {}",
             failures.join(" | ")
         ))
     }
@@ -250,11 +251,13 @@ impl VlcLib {
         }
         #[cfg(target_os = "macos")]
         {
-            // Bundled libVLC ships INSIDE the app (never depend on a system
-            // VLC install): <bundle>/Contents/Resources/resources/vlc/lib.
+            // Bundled libVLC ships INSIDE the app (strictly self-contained;
+            // never depend on an external VLC install):
+            // <bundle>/Contents/Resources/resources/vlc/lib/libvlc.dylib
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("vlc").join("lib").join("libvlc.dylib"));
+                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.dylib"));
                     if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
                         c.push(
                             res.join("resources")
@@ -265,22 +268,13 @@ impl VlcLib {
                     }
                 }
             }
-            if let Ok(home) = std::env::var("HOME") {
-                c.push(
-                    PathBuf::from(&home)
-                        .join("Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"),
-                );
-            }
-            c.push(PathBuf::from(
-                "/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib",
-            ));
-            c.push(PathBuf::from("/usr/local/lib/libvlc.dylib"));
-            c.push(PathBuf::from("/opt/homebrew/lib/libvlc.dylib"));
+            // Development / local fallback paths relative to working directory:
+            c.push(PathBuf::from("src-tauri/resources/vlc/lib/libvlc.dylib"));
+            c.push(PathBuf::from("resources/vlc/lib/libvlc.dylib"));
         }
         #[cfg(target_os = "windows")]
         {
-            // Bundled libVLC ships INSIDE the app (same policy as the
-            // transmission engine): never depend on a system VLC install.
+            // Bundled libVLC ships INSIDE the app: never depend on a system VLC install.
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("resources").join("vlc").join("libvlc.dll"));
@@ -290,10 +284,8 @@ impl VlcLib {
                     c.push(parent.join("resources").join("vlc").join("libvlc.dll"));
                 }
             }
-            c.push(PathBuf::from(r"C:\Program Files\VideoLAN\VLC\libvlc.dll"));
-            c.push(PathBuf::from(
-                r"C:\Program Files (x86)\VideoLAN\VLC\libvlc.dll",
-            ));
+            c.push(PathBuf::from("src-tauri/resources/vlc/libvlc.dll"));
+            c.push(PathBuf::from("resources/vlc/libvlc.dll"));
         }
         #[cfg(target_os = "linux")]
         {
@@ -322,9 +314,8 @@ impl VlcLib {
             }
             c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
             c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so"));
-            c.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libvlc.so.5"));
-            c.push(PathBuf::from("/usr/lib/libvlc.so.5"));
-            c.push(PathBuf::from("/usr/lib/libvlc.so"));
+            c.push(PathBuf::from("src-tauri/resources/vlc/lib/libvlc.so.5"));
+            c.push(PathBuf::from("resources/vlc/lib/libvlc.so.5"));
         }
         c
     }
@@ -332,12 +323,22 @@ impl VlcLib {
     fn plugin_dir_for(lib_path: &Path) -> Option<PathBuf> {
         #[cfg(target_os = "macos")]
         {
-            // .../VLC.app/Contents/MacOS/lib/libvlc.dylib -> .../MacOS/plugins
-            let dir = lib_path
+            // .../resources/vlc/lib/libvlc.dylib -> .../resources/vlc/plugins
+            if let Some(dir) = lib_path
                 .parent()
                 .and_then(|p| p.parent())
-                .map(|p| p.join("plugins"));
-            dir.filter(|p| p.exists())
+                .map(|p| p.join("plugins"))
+            {
+                if dir.exists() {
+                    return Some(dir);
+                }
+            }
+            if let Some(dir) = lib_path.parent().map(|p| p.join("plugins")) {
+                if dir.exists() {
+                    return Some(dir);
+                }
+            }
+            None
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -370,6 +371,7 @@ impl VlcLib {
         VlcLib {
             libvlc_new: sym!("libvlc_new": unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void),
             libvlc_release: sym!("libvlc_release": unsafe extern "C" fn(*mut c_void)),
+            libvlc_errmsg: sym!("libvlc_errmsg": unsafe extern "C" fn() -> *const c_char),
             libvlc_get_version: sym!("libvlc_get_version": unsafe extern "C" fn() -> *const c_char),
             libvlc_media_new_path: sym!("libvlc_media_new_path": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_new_location: sym!("libvlc_media_new_location": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
@@ -461,7 +463,7 @@ impl VlcSession {
         video_target: usize,
     ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
-        let args = [
+        let mut args = vec![
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
@@ -476,13 +478,28 @@ impl VlcSession {
             ))
             .unwrap(),
         ];
+        if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
+            if let Some(plugin_str) = plugin_dir.to_str() {
+                if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
+                    args.push(arg);
+                }
+            }
+        }
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
             let mut instance = shared.load(std::sync::atomic::Ordering::SeqCst) as *mut c_void;
             if instance.is_null() {
                 instance = (lib.libvlc_new)(argv.len() as c_int, argv.as_ptr());
                 if instance.is_null() {
-                    return Err("libvlc_new failed".into());
+                    let detail = {
+                        let msg_ptr = (lib.libvlc_errmsg)();
+                        if !msg_ptr.is_null() {
+                            CStr::from_ptr(msg_ptr).to_string_lossy().into_owned()
+                        } else {
+                            "unknown error".to_string()
+                        }
+                    };
+                    return Err(format!("libvlc_new failed: {detail}"));
                 }
                 shared.store(instance as usize, std::sync::atomic::Ordering::SeqCst);
             }
