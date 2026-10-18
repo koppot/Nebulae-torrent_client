@@ -130,7 +130,7 @@ jobs:
       - name: Stage bundled tailscale binaries (pinned, checksum-verified)
         shell: bash
         run: ./scripts/bundle-tailscale.sh x86_64-pc-windows-msvc
-      - name: Build the app (no bundle: binary + resources only)
+      - name: "Build the app (no bundle: binary + resources only)"
         run: pnpm tauri build --no-bundle
       - name: Package portable test build
         shell: pwsh
