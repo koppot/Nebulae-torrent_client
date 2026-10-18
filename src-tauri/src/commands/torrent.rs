@@ -879,7 +879,6 @@ pub async fn save_torrent_file_as(
 
         // Native save dialog on the main thread (rfd requirement on macOS).
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
-        let dialog_app = app.clone();
         let dialog_name = filename.clone();
         app.run_on_main_thread(move || {
             let picked = rfd::FileDialog::new()

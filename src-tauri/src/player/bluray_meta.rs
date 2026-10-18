@@ -498,3 +498,26 @@ pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bluray_91_days_metadata_probe() {
+        let disc = "/Volumes/300TB/Blu-ray/91 DAYS US/91 DAYS D1";
+        if !std::path::Path::new(disc).exists() {
+            println!("Disc not mounted, skipping");
+            return;
+        }
+
+        for i in 0..5 {
+            let (audio, subs) = disc_stream_languages(disc, 1454000).expect("stream languages probe");
+            assert!(!audio.is_empty(), "Audio tracks must be discovered");
+
+            let chapters = disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
+            assert!(!chapters.is_empty(), "Chapters must be discovered");
+            println!("Iteration {i}: audio={audio:?} subs={subs:?} chapters={}", chapters.len());
+        }
+    }
+}

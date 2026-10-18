@@ -656,7 +656,7 @@ fn start_playback_inner(
                                 // the same guard, so the watcher can never call
                                 // into a released media player (use-after-free
                                 // crash on close).
-                                let mp_guard = match state.media_player_cell.lock() {
+                                let _mp_guard = match state.media_player_cell.lock() {
                                     Ok(g) => g,
                                     Err(_) => return,
                                 };
@@ -986,7 +986,7 @@ pub struct PlayerPoll {
 
 #[tauri::command]
 pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1025,7 +1025,7 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
     state
         .menu_watch
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1056,7 +1056,7 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
             .menu_watch
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1075,7 +1075,7 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
 /// 1-based labels). The chapters popover's grid wires each cell to this.
 #[tauri::command]
 pub fn player_set_chapter(state: tauri::State<PlayerState>, chapter: i32) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1101,7 +1101,7 @@ pub struct ChapterMark {
 
 #[tauri::command]
 pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<ChapterMark>, String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1285,7 +1285,7 @@ pub fn player_list_tracks(
     state: tauri::State<PlayerState>,
     kind: String,
 ) -> Result<Vec<TrackInfo>, String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1318,7 +1318,7 @@ pub fn player_set_track(
     kind: String,
     id: i32,
 ) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1345,7 +1345,7 @@ pub fn player_set_track(
 /// cannot enumerate titles, falls back to plain set_title.
 #[tauri::command]
 pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1451,7 +1451,7 @@ pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1470,7 +1470,7 @@ pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
@@ -1485,7 +1485,7 @@ pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result
 
 #[tauri::command]
 pub fn player_set_volume(state: tauri::State<PlayerState>, volume: i32) -> Result<(), String> {
-    let mp_guard = state
+    let _mp_guard = state
         .media_player_cell
         .lock()
         .map_err(|_| "player state poisoned")?;
