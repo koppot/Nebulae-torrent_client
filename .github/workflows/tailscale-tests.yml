@@ -89,7 +89,9 @@ jobs:
           TS=src-tauri/resources/engine/tailscale
           STATEDIR="$(mktemp -d)/state"
           PIPE='\\.\pipe\nebulae-tailscaled'
-          "$TS/tailscaled.exe" --tun=userspace-networking --port=0 \
+          # --windows-mode=dev is REQUIRED for a custom pipe (verified live:
+          # without it tailscaled rejects the socket outright).
+          "$TS/tailscaled.exe" --windows-mode=dev --tun=userspace-networking --port=0 \
             --statedir "$STATEDIR" --socket "$PIPE" \
             --socks5-server=127.0.0.1:1055 \
             --outbound-http-proxy-listen=127.0.0.1:1056 &

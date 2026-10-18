@@ -188,6 +188,13 @@ fn daemon_command(paths: &Paths) -> Command {
         .stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
+        // Custom pipe names are rejected unless the daemon runs in dev
+        // mode (verified by the CI windows-pipe-smoke job):
+        //   "--socket=... is not under \\.\pipe\ProtectedPrefix\...;
+        //    a developer running tailscaled by hand must pass
+        //    --windows-mode=dev"
+        // Dev mode is exactly our embedded use: user-owned, no service.
+        cmd.arg("--windows-mode=dev");
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
