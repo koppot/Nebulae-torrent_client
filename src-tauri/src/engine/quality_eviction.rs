@@ -51,6 +51,7 @@ use crate::{
     db::Database,
     engine::transmission::TransmissionRpcClient,
     models::peering::{LocalityTier, PeerEmaState, PeerTelemetry, PeeringMode, PeeringSettings},
+    utils::geo::GeoResolver,
 };
 
 /// How often the quality eviction task wakes up.
@@ -89,9 +90,11 @@ pub fn spawn(
     peer_ema_cache: Arc<Mutex<HashMap<String, PeerEmaState>>>,
     db: Arc<Database>,
     peer_remove_unsupported: Arc<AtomicBool>,
+    geo_resolver: Option<Arc<GeoResolver>>,
 ) {
     tauri::async_runtime::spawn(async move {
-        run_eviction_loop(rpc_client, peer_ema_cache, db, peer_remove_unsupported).await;
+        run_eviction_loop(rpc_client, peer_ema_cache, db, peer_remove_unsupported, geo_resolver)
+            .await;
     });
 }
 
@@ -100,6 +103,7 @@ async fn run_eviction_loop(
     ema_cache: Arc<Mutex<HashMap<String, PeerEmaState>>>,
     db: Arc<Database>,
     peer_remove_unsupported: Arc<AtomicBool>,
+    geo_resolver: Option<Arc<GeoResolver>>,
 ) {
     // Per-peer cooldown tracker: maps "torrent_hash:ip:port" → last eviction time.
     let mut eviction_history: HashMap<String, Instant> = HashMap::new();
@@ -129,8 +133,9 @@ async fn run_eviction_loop(
         // Fetch all torrents with peer lists.
         let rpc_clone = Arc::clone(&rpc);
         let ema_clone = Arc::clone(&ema_cache);
+        let geo_clone = geo_resolver.clone();
         let result = tokio::task::spawn_blocking(move || {
-            run_eviction_cycle(&rpc_clone, &ema_clone, mode, threshold)
+            run_eviction_cycle(&rpc_clone, &ema_clone, mode, threshold, geo_clone.as_deref())
         })
         .await;
 
@@ -170,6 +175,7 @@ fn run_eviction_cycle(
     ema_cache: &Mutex<HashMap<String, PeerEmaState>>,
     mode: PeeringMode,
     threshold: f32,
+    geo_resolver: Option<&GeoResolver>,
 ) -> Result<CycleResult, String> {
     let torrents = rpc.torrent_get(None)?;
 
@@ -253,9 +259,10 @@ fn run_eviction_cycle(
                     timeout_count: 0,
                     choke_events: 0,
                     client_name: String::new(),
-                    locality_tier: classify_ip_locality(address),
-                    country_code: None,
-                    asn: None,
+                    locality_tier: geo_resolver
+                        .map_or_else(|| classify_ip_locality(address), |g| g.classify_locality(address)),
+                    country_code: geo_resolver.and_then(|g| g.country_code(address)),
+                    asn: geo_resolver.and_then(|g| g.asn(address)),
                     utp: false,
                     encryption: false,
                     ipv6: address.contains(':'),

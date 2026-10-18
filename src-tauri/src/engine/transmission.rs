@@ -511,7 +511,10 @@ impl TransmissionRpcClient {
         // what the UI does.
         let rpc_url = self.rpc_url.clone();
         let auth = self.auth_header.clone();
-        let sid = self.session_id.lock().unwrap().clone();
+        // Clone the current token as a mutable local — the thread will update
+        // it in-place whenever Transmission returns 409 with a new token,
+        // so subsequent retries use the refreshed value.
+        let mut sid = self.session_id.lock().unwrap().clone();
         let id = id.to_string();
         let location = location.to_string();
         std::thread::spawn(move || {
@@ -525,7 +528,7 @@ impl TransmissionRpcClient {
                     return;
                 }
             };
-            for attempt in 0..3 {
+            for _attempt in 0..3 {
                 let mut req = client.post(&rpc_url).json(&args);
                 if let Some(ref s) = sid {
                     req = req.header("X-Transmission-Session-Id", s);
@@ -535,13 +538,14 @@ impl TransmissionRpcClient {
                 }
                 match req.send() {
                     Ok(resp) if resp.status().as_u16() == 409 => {
-                        // CSRF handshake: take the new token and retry.
-                        if let Some(Ok(v)) = resp
+                        // CSRF handshake: store the new token so the next
+                        // retry sends the correct value.
+                        if let Some(Ok(new_token)) = resp
                             .headers()
                             .get("X-Transmission-Session-Id")
                             .map(|h| h.to_str())
                         {
-                            let _ = v;
+                            sid = Some(new_token.to_string());
                         }
                         continue;
                     }
@@ -1264,16 +1268,8 @@ impl TransmissionTorrentEngine {
             }
         }
 
-        // 10. Spawn quality-based peer eviction task (Phase 5A).
-        crate::engine::quality_eviction::spawn(
-            Arc::clone(&rpc_client),
-            Arc::clone(&peer_ema_cache),
-            Arc::clone(&db),
-            Arc::clone(&peer_remove_unsupported),
-        );
-        info!("[quality_eviction] quality-based peer eviction task spawned");
-
-        // 11. Load GeoLite2 resolver (graceful degradation if .mmdb absent).
+        // 10. Load GeoLite2 resolver first so it can be passed to the eviction
+        //     task below (graceful degradation if .mmdb absent).
         let geo_resolver = match resource_dir {
             Some(rdir) => {
                 match crate::utils::geo::GeoResolver::from_resource_dir(rdir) {
@@ -1304,6 +1300,16 @@ impl TransmissionTorrentEngine {
             }
             None => None,
         };
+
+        // 11. Spawn quality-based peer eviction task (geo-aware when .mmdb present).
+        crate::engine::quality_eviction::spawn(
+            Arc::clone(&rpc_client),
+            Arc::clone(&peer_ema_cache),
+            Arc::clone(&db),
+            Arc::clone(&peer_remove_unsupported),
+            geo_resolver.clone(),
+        );
+        info!("[quality_eviction] quality-based peer eviction task spawned");
 
         // 12. RTT prober (always created; probing is opt-in per settings).
         let rtt_prober = Arc::new(crate::utils::rtt_prober::RttProber::new());
@@ -1872,11 +1878,15 @@ impl TorrentEngine for TransmissionTorrentEngine {
         ul_kib: u32,
         ratio_limit: f32,
     ) -> Result<(), String> {
+        // Negative ratio_limit means "use global default" (no per-torrent override).
+        // Transmission interprets seedRatioLimited=false as "follow session default".
         let args = json!({
             "speed-limit-down": dl_kib,
             "speed-limit-down-enabled": dl_kib > 0,
             "speed-limit-up": ul_kib,
-            "speed-limit-up-enabled": ul_kib > 0
+            "speed-limit-up-enabled": ul_kib > 0,
+            "seedRatioLimit": ratio_limit.max(0.0),
+            "seedRatioLimited": ratio_limit >= 0.0
         });
         self.rpc_client.torrent_set(id, args)?;
 
@@ -1901,11 +1911,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .unwrap_or(false);
         let new_val = !current;
 
-        // Transmission 4.1.3 natively supports sequential-download (verified in Phase A1)
+        // Transmission 4.1.3 RPC spec uses snake_case: "sequential_download".
+        // The hyphenated variant ("sequential-download") is silently ignored.
         self.rpc_client.torrent_set(
             id,
             json!({
-                "sequential-download": new_val
+                "sequential_download": new_val
             }),
         )?;
 
@@ -1953,8 +1964,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn rename_torrent(&self, id: &str, new_name: &str) -> Result<(), String> {
-        // Find current top-level name from torrent-get
-        let torrents = self.rpc_client.torrent_get(Some(vec![json!(id)]))?;
+        // Find current top-level name from torrent-get.
+        // rpc_id() converts numeric session-id strings to JSON numbers;
+        // a bare json!(id) would treat the id as an info-hash string and
+        // silently match nothing when the id is numeric.
+        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
         let current_name = torrents
             .first()
             .and_then(|t| t.get("name"))
@@ -1979,7 +1993,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
         file_index: u32,
         new_file_name: &str,
     ) -> Result<(), String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![json!(id)]))?;
+        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -2007,7 +2021,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![json!(id)]))?;
+        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -2047,7 +2061,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
         const EMA_ALPHA: f64 = 0.3; // smoothing factor — 30% new sample, 70% history
         const MIN_OBSERVATIONS_FOR_STABILITY: u32 = 3;
 
-        let torrents = self.rpc_client.torrent_get(Some(vec![json!(id)]))?;
+        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -2285,6 +2299,38 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 ))
             }
         }
+    }
+
+    fn apply_global_settings(
+        &self,
+        dl_kib: u32,
+        ul_kib: u32,
+        ratio_limit: f32,
+        max_active_dl: u32,
+        max_active_ul: u32,
+        max_active_torrents: u32,
+    ) -> Result<(), String> {
+        // Negative ratio means "use session default / unlimited".
+        let ratio_enabled = ratio_limit >= 0.0;
+        self.rpc_client.session_set(json!({
+            "speed-limit-down":         dl_kib,
+            "speed-limit-down-enabled": dl_kib > 0,
+            "speed-limit-up":           ul_kib,
+            "speed-limit-up-enabled":   ul_kib > 0,
+            "seedRatioLimit":           ratio_limit.max(0.0),
+            "seedRatioLimited":         ratio_enabled,
+            "download-queue-size":      max_active_dl,
+            "upload-slots-per-torrent": max_active_ul.clamp(4, 8),
+            "download-queue-enabled":   max_active_dl > 0
+        }))?;
+        // Also push the per-torrent ratio toggle into session-level queue size.
+        // Transmission's active-torrent cap is: download-queue-size + seed-queue-size
+        let seed_queue = max_active_torrents.saturating_sub(max_active_dl);
+        let _ = self.rpc_client.session_set(json!({
+            "seed-queue-size":    seed_queue.max(1),
+            "seed-queue-enabled": max_active_torrents > 0
+        }));
+        Ok(())
     }
 }
 

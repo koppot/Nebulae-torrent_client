@@ -91,4 +91,19 @@ pub trait TorrentEngine: Send + Sync {
     ) -> Result<(), String> {
         Ok(()) // default: no-op
     }
+
+    /// Push global session limits (speed, ratio, queue limits) to the live
+    /// engine session whenever the user saves Settings. Engines that do not
+    /// support live session-set may leave this as the default no-op.
+    fn apply_global_settings(
+        &self,
+        _dl_kib: u32,
+        _ul_kib: u32,
+        _ratio_limit: f32,
+        _max_active_dl: u32,
+        _max_active_ul: u32,
+        _max_active_torrents: u32,
+    ) -> Result<(), String> {
+        Ok(()) // default: no-op
+    }
 }

@@ -324,6 +324,7 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 pub fn save_user_settings(
     mut settings: UserSettings,
     db: State<Arc<Database>>,
+    engine: State<crate::engine::SharedEngine>,
 ) -> Result<(), String> {
     if settings.engine.trim() == "librqbit" {
         settings.engine = "transmission".to_string();
@@ -335,6 +336,17 @@ pub fn save_user_settings(
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
     apply_autostart(settings.start_on_boot, settings.start_minimized)?;
+
+    // Apply rate/queue limits to the live engine session immediately so the
+    // user does not have to restart the daemon to see the new values take effect.
+    let _ = engine.apply_global_settings(
+        settings.max_download_speed_kib,
+        settings.max_upload_speed_kib,
+        settings.max_ratio_limit,
+        settings.max_active_downloads,
+        settings.max_active_uploads,
+        settings.max_active_torrents,
+    );
 
     Ok(())
 }

@@ -370,6 +370,45 @@ export const SettingsModal: React.FC = () => {
 
                 <div className="pt-3 border-t border-[#333333]">
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Community Splash Screen
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_splash}
+                        onChange={(e) => saveSettings({ enable_splash: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show community splash screen on startup</span>
+                    </label>
+                    {settings.enable_splash && (
+                      <div className="pl-5 space-y-2">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1">Splash message</label>
+                          <textarea
+                            value={settings.splash_message}
+                            onChange={(e) => saveSettings({ splash_message: e.target.value })}
+                            rows={2}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:outline-none focus:border-[#e50914] resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1">Splash URL</label>
+                          <input
+                            type="text"
+                            value={settings.splash_url}
+                            onChange={(e) => saveSettings({ splash_url: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
                     Notifications & Confirmations
                   </h3>
                   <div className="space-y-2">
@@ -543,6 +582,29 @@ export const SettingsModal: React.FC = () => {
                       placeholder="/path/to/incomplete_downloads"
                       className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] disabled:opacity-40"
                     />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Copy .torrent files to:</label>
+                      <input type="text" value={settings.copy_torrent_files_to}
+                        onChange={(e) => saveSettings({ copy_torrent_files_to: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Copy finished torrents to:</label>
+                      <input type="text" value={settings.copy_finished_torrents_to}
+                        onChange={(e) => saveSettings({ copy_finished_torrents_to: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Watched folder (auto-add .torrent files):</label>
+                      <input type="text" value={settings.watched_folder_directory}
+                        onChange={(e) => saveSettings({ watched_folder_directory: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
                   </div>
                 </div>
 
@@ -807,7 +869,63 @@ export const SettingsModal: React.FC = () => {
                       />
                       <span className="text-white">Disable connections not supported by proxies</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_auth_enabled}
+                        onChange={(e) => saveSettings({ proxy_auth_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Proxy requires authentication</span>
+                    </label>
+                    {settings.proxy_auth_enabled && (
+                      <div className="grid grid-cols-2 gap-3 pl-5 font-mono">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Username</label>
+                          <input type="text" value={settings.proxy_username}
+                            onChange={(e) => saveSettings({ proxy_username: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Password</label>
+                          <input type="password" value={settings.proxy_password}
+                            onChange={(e) => saveSettings({ proxy_password: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_torrents}
+                        onChange={(e) => saveSettings({ proxy_torrents: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Use proxy for torrent connections</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_rss}
+                        onChange={(e) => saveSettings({ proxy_rss: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Use proxy for RSS feeds</span>
+                    </label>
                   </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">IP Filtering</h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-2">
+                    <input type="checkbox" checked={settings.ip_filtering_enabled}
+                      onChange={(e) => saveSettings({ ip_filtering_enabled: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                    <span className="text-white">Enable IP filter</span>
+                  </label>
+                  <input type="text" disabled={!settings.ip_filtering_enabled}
+                    value={settings.ip_filter_path}
+                    onChange={(e) => saveSettings({ ip_filter_path: e.target.value })}
+                    placeholder="/path/to/ipfilter.dat"
+                    className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40 mb-2" />
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" disabled={!settings.ip_filtering_enabled}
+                      checked={settings.ip_filter_apply_to_trackers}
+                      onChange={(e) => saveSettings({ ip_filter_apply_to_trackers: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 disabled:opacity-40" />
+                    <span className="text-white">Apply filter to trackers too</span>
+                  </label>
                 </div>
               </div>
             )}
@@ -1072,6 +1190,33 @@ export const SettingsModal: React.FC = () => {
                       />
                     </div>
                   </div>
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.ignore_slow_torrents_in_queue}
+                        onChange={(e) => saveSettings({ ignore_slow_torrents_in_queue: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Do not count slow torrents in active limits</span>
+                    </label>
+                    {settings.ignore_slow_torrents_in_queue && (
+                      <div className="grid grid-cols-2 gap-3 pl-5 font-mono">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Slow DL threshold (KiB/s):</label>
+                          <input type="number" value={settings.slow_torrent_dl_threshold_kib}
+                            onChange={(e) => saveSettings({ slow_torrent_dl_threshold_kib: Number(e.target.value) })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Slow UL threshold (KiB/s):</label>
+                          <input type="number" value={settings.slow_torrent_ul_threshold_kib}
+                            onChange={(e) => saveSettings({ slow_torrent_ul_threshold_kib: Number(e.target.value) })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pt-3 border-t border-[#333333]">
@@ -1107,6 +1252,26 @@ export const SettingsModal: React.FC = () => {
                       </select>
                     </div>
                   </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">When seeding time (min) reaches (-1 = unlimited):</label>
+                      <input type="number" value={settings.max_seeding_time_minutes}
+                        onChange={(e) => saveSettings({ max_seeding_time_minutes: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">Default Trackers (added to all new torrents)</h3>
+                  <textarea
+                    value={settings.default_trackers_list}
+                    onChange={(e) => saveSettings({ default_trackers_list: e.target.value })}
+                    rows={4}
+                    placeholder="https://tracker.example.com/announce"
+                    className="w-full px-3 py-2 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] resize-none"
+                  />
+                  <p className="text-[10px] text-[#a3a3a3] mt-1">One URL per line. Applied to every torrent added through this client.</p>
                 </div>
               </div>
             )}
@@ -1549,6 +1714,83 @@ export const SettingsModal: React.FC = () => {
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-3 gap-3 font-mono mt-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        File Pool Size
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.file_pool_size}
+                        onChange={(e) => saveSettings({ file_pool_size: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Stop Tracker Timeout (s)
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.stop_tracker_timeout_seconds}
+                        onChange={(e) => saveSettings({ stop_tracker_timeout_seconds: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Outgoing Ports Min
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.outgoing_ports_min}
+                        onChange={(e) => saveSettings({ outgoing_ports_min: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Outgoing Ports Max
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.outgoing_ports_max}
+                        onChange={(e) => saveSettings({ outgoing_ports_max: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.coalesce_reads_writes}
+                        onChange={(e) => saveSettings({ coalesce_reads_writes: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Coalesce reads and writes (optimize sequential I/O)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.embedded_tracker_enabled}
+                        onChange={(e) => saveSettings({ embedded_tracker_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable embedded tracker</span>
+                    </label>
+                    {settings.embedded_tracker_enabled && (
+                      <div className="pl-5">
+                        <label className="block text-[11px] text-[#a3a3a3] mb-1">Embedded tracker port</label>
+                        <input
+                          type="number"
+                          value={settings.embedded_tracker_port}
+                          onChange={(e) => saveSettings({ embedded_tracker_port: Number(e.target.value) })}
+                          className="w-48 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
 
@@ -1556,6 +1798,27 @@ export const SettingsModal: React.FC = () => {
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
                     Diagnostics & Storage Maintenance
                   </h3>
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.save_log_to_disk}
+                        onChange={(e) => saveSettings({ save_log_to_disk: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Save logs to disk</span>
+                    </label>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max log size (MiB)</label>
+                      <input
+                        type="number"
+                        value={settings.max_log_size_mib}
+                        disabled={!settings.save_log_to_disk}
+                        onChange={(e) => saveSettings({ max_log_size_mib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -1606,12 +1869,22 @@ export const SettingsModal: React.FC = () => {
 
         {/* Modal Footer */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
-          <div className="text-[11px] font-mono text-[#a3a3a3]">
-            {statusMessage ? (
-              <span className="text-[#e50914] font-semibold">{statusMessage}</span>
-            ) : (
-              <span>Nebulae Preferences · Changes applied automatically</span>
-            )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleResetSettings}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs transition"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Restore Defaults</span>
+            </button>
+            <div className="text-[11px] font-mono text-[#a3a3a3]">
+              {statusMessage ? (
+                <span className="text-[#e50914] font-semibold">{statusMessage}</span>
+              ) : (
+                <span>Nebulae Preferences · Changes applied automatically</span>
+              )}
+            </div>
           </div>
           <button
             type="button"
