@@ -1,6 +1,6 @@
 # Third-Party Notices and Open-Source Software Licenses
 
-Nebulae does not bundle media players. Playback uses the user's installed VLC, loaded at runtime as a library (libVLC) and embedded inside the app's own window; VLC is not redistributed. The notices below cover the components Nebulae does distribute.
+Nebulae bundles the components listed below to deliver self-contained playback with no additional user installations required. libVLC (LGPL 2.1+), libbluray (LGPL 2.1), and Eclipse Temurin JRE 21 (GPLv2 + Classpath Exception) are included in the installer. Transmission-daemon (GPLv2) is also bundled as an independent sidecar process. The corresponding source code for each component is available at the upstream projects linked below.
 
 ---
 
@@ -63,3 +63,82 @@ the non-system dynamic libraries required by `transmission-daemon` into
 The exact set varies by platform and pinned build. Each bundled library's source is obtainable from its upstream project as linked above. No bundled library is modified by Nebulae beyond binary load-path rewriting (`install_name_tool` / `patchelf`), which does not constitute a modification of the work under the applicable licenses.
 
 Nebulae's `transmission-daemon` integration does not enable PEX, DHT, Local Peer Discovery, web-seeding, or any metainfo rewriting capability. It is used exclusively as a private-tracker BitTorrent client.
+
+
+---
+
+## 2. VLC media player — libVLC (libvlc, libvlccore, plugins)
+
+- **Component:** libVLC shared libraries and bundled codec/format/output plugins
+- **Version:** 3.0.21
+- **License:** GNU Lesser General Public License version 2.1 or later (LGPL 2.1+)
+- **Upstream Project & Source Code:** [https://www.videolan.org/vlc/](https://www.videolan.org/vlc/)
+- **Release Source Tarball:** [https://download.videolan.org/pub/videolan/vlc/3.0.21/](https://download.videolan.org/pub/videolan/vlc/3.0.21/)
+- **Bundled Location:** `resources/vlc/` inside the installed package (lib/, plugins/, Frameworks/ on macOS)
+
+### Bundling Method
+
+The CI release workflow (`release.yml`) stages libVLC from the official VLC 3.0.21 distribution for each platform:
+
+- **macOS**: downloaded from `download.videolan.org` (arm64/intel64 DMG), VLC framework extracted into `resources/vlc/`.
+- **Windows**: downloaded from `download.videolan.org` (win64 ZIP), `libvlc.dll`, `libvlccore.dll`, and `plugins/` extracted into `resources/vlc/`.
+- **Linux**: the runner's system `libvlc5` and `vlc-plugin-*` packages are copied into `resources/vlc/` for inclusion in the AppImage.
+
+Nebulae loads libVLC at runtime via `libloading`. The libraries are not statically linked. No modifications are made to libVLC source or binaries beyond path relocation.
+
+### LGPL 2.1 Compliance Notes
+
+The LGPL 2.1 requires that users be able to replace the bundled LGPL library with a modified version. Nebulae ships the unmodified official libVLC binary. Users may substitute an alternative `libvlc.so.5` / `libvlc.dll` / `libvlc.dylib` in the `resources/vlc/` location within the installation. The `engine.rs` VLC loader checks `resources/vlc/` first and falls back to system paths, making substitution practical.
+
+Corresponding source code is available from [https://download.videolan.org/pub/videolan/vlc/3.0.21/](https://download.videolan.org/pub/videolan/vlc/3.0.21/).
+
+Note: many VLC *plugins* are licensed under the GPL (version 2 or later), not the LGPL. Nebulae bundles VLC's standard plugin set. Users who need to audit individual plugin licenses should refer to the VLC source tree (`modules/`) at the upstream URL above.
+
+### GNU LESSER GENERAL PUBLIC LICENSE (Version 2.1, February 1999)
+
+```
+[Full license text available at: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt]
+```
+
+---
+
+## 3. libbluray
+
+- **Component:** libbluray — Blu-ray disc access library
+- **Version:** 1.3.x (system-provided on Linux; bundled via the macOS VLC framework and Windows VLC distribution on those platforms)
+- **License:** GNU Lesser General Public License version 2.1 (LGPL 2.1)
+- **Upstream Project & Source Code:** [https://www.videolan.org/developers/libbluray.html](https://www.videolan.org/developers/libbluray.html)
+- **Bundled Location:** included as part of the VLC distribution under `resources/vlc/` or loaded from the system library path on Linux
+
+Nebulae loads libbluray dynamically at runtime to read disc metadata (chapter structure, language streams, titles). No modifications are made to libbluray source.
+
+### GNU LESSER GENERAL PUBLIC LICENSE (Version 2.1)
+
+```
+[Full license text available at: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt]
+```
+
+---
+
+## 4. Eclipse Temurin JRE (OpenJDK 21)
+
+- **Component:** Eclipse Temurin JRE 21 (OpenJDK HotSpot runtime)
+- **Version:** 21 GA (latest at release time, fetched from Adoptium)
+- **License:** GNU General Public License version 2 with the Classpath Exception (GPLv2 + CE)
+- **Upstream Project:** [https://adoptium.net/](https://adoptium.net/)
+- **Source Code:** [https://github.com/adoptium/temurin-build](https://github.com/adoptium/temurin-build)
+- **Bundled Location:** `resources/jre/` inside the installed package
+
+### Bundling Purpose
+
+libbluray uses BD-J (Blu-ray Disc Java) for UHD interactive menus. A JRE is required to execute BD-J content. The bundled JRE is private to Nebulae's installation and does not affect the user's system Java configuration.
+
+### GNU GENERAL PUBLIC LICENSE (Version 2) + Classpath Exception
+
+```
+[Full license text available at: https://openjdk.org/legal/gplv2+ce.html]
+
+The Classpath Exception grants permission to link the JDK class libraries
+with independent modules that are not themselves derived works of the JDK.
+```
+
