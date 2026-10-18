@@ -88,4 +88,7 @@ pub struct PlayerState {
     /// (menu watcher) must never call into a released player. Held for the
     /// duration of each call, never across waits.
     pub media_player_cell: std::sync::Mutex<()>,
+    /// Serializes session open and teardown calls so concurrent open requests
+    /// cannot race and create duplicate concurrent playback sessions.
+    pub open_lock: tokio::sync::Mutex<()>,
 }

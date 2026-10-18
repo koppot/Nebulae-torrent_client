@@ -584,9 +584,19 @@ impl VlcSession {
     /// there); on other platforms any thread is fine.
     pub fn close(&self, lib: &VlcLib) {
         unsafe {
-            (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
-            (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
-            (lib.libvlc_media_release)(self.media as *mut c_void);
+            if self.media_player != 0 {
+                (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
+                for _ in 0..20 {
+                    if (lib.libvlc_media_player_is_playing)(self.media_player as *mut c_void) == 0 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
+            }
+            if self.media != 0 {
+                (lib.libvlc_media_release)(self.media as *mut c_void);
+            }
             // The libvlc instance is SHARED (PlayerState::shared_instance):
             // releasing it runs libxml2's global xmlCleanupParser, which
             // races the next session's metadata parsing and aborts the

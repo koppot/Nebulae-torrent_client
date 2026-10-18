@@ -420,6 +420,9 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+    state
+        .menu_watch
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let mp_guard = match state.media_player_cell.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -541,6 +544,13 @@ fn start_playback_inner(
                 view,
             ) {
                 Ok(session) => {
+                    // Record session pointers immediately so stop_session and
+                    // pollers are immediately aware of the live media player.
+                    *poison(&state.instance) = session.instance;
+                    *poison(&state.media) = session.media;
+                    *poison(&state.media_player) = session.media_player;
+                    *poison(&state.started) = true;
+
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
                     // can fail inside the demuxer while libvlc_media_player_play
                     // still reports success (reproduced: black screen, no
@@ -582,6 +592,7 @@ fn start_playback_inner(
                         }
                         if title_count <= 0 && !is_iso {
                             session.close(&lib);
+                            *poison(&state.media_player) = 0;
                             tracing::warn!(
                                 "player_open: disc demux produced no titles for '{}'; falling back to main feature",
                                 resolved.resolved_path
@@ -612,10 +623,6 @@ fn start_playback_inner(
                             });
                         }
                     }
-                    *poison(&state.instance) = session.instance;
-                    *poison(&state.media) = session.media;
-                    *poison(&state.media_player) = session.media_player;
-                    *poison(&state.started) = true;
                     tracing::info!(
                         "player_open: PLAYING '{}' (disc: {})",
                         resolved.resolved_path,
@@ -635,12 +642,12 @@ fn start_playback_inner(
                         let app2 = app.clone();
                         std::thread::spawn(move || {
                             use tauri::Manager;
+                            let state = app2.state::<PlayerState>();
                             for _ in 0..30 {
                                 std::thread::sleep(std::time::Duration::from_millis(500));
-                                let state = app2.state::<PlayerState>();
                                 if !state.menu_watch.load(std::sync::atomic::Ordering::SeqCst) {
                                     tracing::info!(
-                                        "[player] menu watcher cancelled (resume wanted)"
+                                        "[player] menu watcher cancelled"
                                     );
                                     return;
                                 }
@@ -666,6 +673,9 @@ fn start_playback_inner(
                                 };
                                 if title == 0 {
                                     tracing::info!("[player] menu watcher: at menu title");
+                                    state
+                                        .menu_watch
+                                        .store(false, std::sync::atomic::Ordering::SeqCst);
                                     return;
                                 }
                                 unsafe {
@@ -673,7 +683,10 @@ fn start_playback_inner(
                                 }
                                 tracing::info!("[player] menu watcher: set_title(0) (was {title})");
                             }
-                            tracing::warn!("[player] menu watcher gave up after 15 s");
+                            state
+                                .menu_watch
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            tracing::warn!("[player] menu watcher finished 15 s window");
                         });
                     }
                     Ok(resolved)
@@ -700,6 +713,7 @@ pub async fn player_open(
     file_path: String,
     resume: Option<bool>,
 ) -> Result<ResolvedPlayback, String> {
+    let _open_guard = state.open_lock.lock().await;
     let resume = resume.unwrap_or(false);
     tracing::info!("player_open: entry, path='{file_path}' (resume={resume})");
     stop_session(&app, &state);
@@ -1008,6 +1022,9 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
 /// return to the interactive menu.
 #[tauri::command]
 pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<(), String> {
+    state
+        .menu_watch
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let mp_guard = state
         .media_player_cell
         .lock()
@@ -1034,6 +1051,11 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
 pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
+    if mode == 0 {
+        state
+            .menu_watch
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
     let mp_guard = state
         .media_player_cell
         .lock()

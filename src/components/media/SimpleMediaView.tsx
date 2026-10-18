@@ -96,6 +96,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   // (owner). The overlay lives INSIDE the poster box, so nothing can clip
   // it and no portal is needed.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [isLaunchingDisc, setIsLaunchingDisc] = useState(false);
 
   // Right-click menu on a poster (owner): Show in Finder, Play, Resume, plus
   // a few useful extras. Viewport-anchored, grayscale, closes on any click.
@@ -395,6 +396,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     targetPath?: string,
     displayTitle?: string,
   ) => {
+    if (isLaunchingDisc) return;
+    setIsLaunchingDisc(true);
     const playPath = targetPath || contentPath(torrent);
     invoke('log_frontend', {
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
@@ -414,6 +417,8 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       invoke('log_frontend', { message: `disc open failed: ${msg}` }).catch(() => {});
       setFeedbackNotice({ type: 'error', message: msg });
       setExternalDiscError(msg);
+    } finally {
+      setIsLaunchingDisc(false);
     }
   };
 

@@ -79,73 +79,83 @@ struct BdTitleChap {
     duration: u64,
 }
 
+static BLURAY_LIB: std::sync::OnceLock<Result<Library, String>> = std::sync::OnceLock::new();
+static BD_PROBE_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Locate and open the libbluray dylib (bundled first, then system fallback).
 /// Candidates are checked in priority order: bundled resources ship inside
 /// the app on all platforms; system paths are the last resort only.
-unsafe fn open_bluray_lib() -> Result<Library, String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+/// Cached in a OnceLock so the dylib and its dependencies (fontconfig, freetype)
+/// are NEVER dlclosed while worker threads or VLC playback are active.
+unsafe fn open_bluray_lib() -> Result<&'static Library, String> {
+    BLURAY_LIB
+        .get_or_init(|| {
+            let mut candidates: Vec<PathBuf> = Vec::new();
 
-    // Env override — allows integration tests to point at a specific copy.
-    if let Ok(p) = std::env::var("NEBULAE_LIBBLURAY_PATH") {
-        candidates.push(PathBuf::from(p));
-    }
+            // Env override — allows integration tests to point at a specific copy.
+            if let Ok(p) = std::env::var("NEBULAE_LIBBLURAY_PATH") {
+                candidates.push(PathBuf::from(p));
+            }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            #[cfg(target_os = "macos")]
-            {
-                candidates.push(dir.join("../Frameworks/libbluray.4.dylib"));
-                candidates.push(dir.join("libbluray.4.dylib"));
-                // Bundled inside the app's VLC resource directory.
-                candidates.push(dir.join("vlc/lib/libbluray.4.dylib"));
-                if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
-                    candidates.push(res.join("resources/vlc/lib/libbluray.4.dylib"));
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    #[cfg(target_os = "macos")]
+                    {
+                        candidates.push(dir.join("../Frameworks/libbluray.4.dylib"));
+                        candidates.push(dir.join("libbluray.4.dylib"));
+                        // Bundled inside the app's VLC resource directory.
+                        candidates.push(dir.join("vlc/lib/libbluray.4.dylib"));
+                        if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
+                            candidates.push(res.join("resources/vlc/lib/libbluray.4.dylib"));
+                        }
+                    }
+                    #[cfg(target_os = "windows")]
+                    {
+                        candidates.push(dir.join("resources/vlc/libbluray.dll"));
+                        candidates.push(dir.join("vlc/libbluray.dll"));
+                        candidates.push(dir.join("libbluray.dll"));
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        candidates.push(dir.join("resources/vlc/lib/libbluray.so.2"));
+                        candidates.push(dir.join("vlc/lib/libbluray.so.2"));
+                    }
                 }
             }
-            #[cfg(target_os = "windows")]
+
+            // System fallback paths (last resort — a missing bundled copy is
+            // reported clearly by the empty bundled candidates failing first).
+            #[cfg(target_os = "macos")]
             {
-                candidates.push(dir.join("resources/vlc/libbluray.dll"));
-                candidates.push(dir.join("vlc/libbluray.dll"));
-                candidates.push(dir.join("libbluray.dll"));
+                candidates.push(PathBuf::from("/opt/homebrew/lib/libbluray.4.dylib"));
+                candidates.push(PathBuf::from("/usr/local/lib/libbluray.4.dylib"));
             }
             #[cfg(target_os = "linux")]
             {
-                candidates.push(dir.join("resources/vlc/lib/libbluray.so.2"));
-                candidates.push(dir.join("vlc/lib/libbluray.so.2"));
+                candidates.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libbluray.so.2"));
+                candidates.push(PathBuf::from("/usr/lib/aarch64-linux-gnu/libbluray.so.2"));
+                candidates.push(PathBuf::from("/usr/lib/libbluray.so.2"));
+                candidates.push(PathBuf::from("/usr/lib/libbluray.so"));
             }
-        }
-    }
 
-    // System fallback paths (last resort — a missing bundled copy is
-    // reported clearly by the empty bundled candidates failing first).
-    #[cfg(target_os = "macos")]
-    {
-        candidates.push(PathBuf::from("/opt/homebrew/lib/libbluray.4.dylib"));
-        candidates.push(PathBuf::from("/usr/local/lib/libbluray.4.dylib"));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        candidates.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libbluray.so.2"));
-        candidates.push(PathBuf::from("/usr/lib/aarch64-linux-gnu/libbluray.so.2"));
-        candidates.push(PathBuf::from("/usr/lib/libbluray.so.2"));
-        candidates.push(PathBuf::from("/usr/lib/libbluray.so"));
-    }
-
-    for path in &candidates {
-        if path.exists() {
-            if let Ok(lib) = Library::new(path) {
-                return Ok(lib);
+            for path in &candidates {
+                if path.exists() {
+                    if let Ok(lib) = Library::new(path) {
+                        return Ok(lib);
+                    }
+                }
             }
-        }
-    }
-    Err(format!(
-        "libbluray not found. Checked: {}",
-        candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+            Err(format!(
+                "libbluray not found. Checked: {}",
+                candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
 }
 
 fn lang_name(code: &[c_char]) -> String {
@@ -183,6 +193,7 @@ pub fn disc_stream_languages(
     disc_path: &str,
     duration_ms: i64,
 ) -> Result<(Vec<String>, Vec<String>), String> {
+    let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
         let bd_open: Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void> =
@@ -306,6 +317,7 @@ pub fn disc_stream_languages(
 /// `disc_stream_languages`. VLC's own chapter API reports nothing for
 /// Blu-ray titles, so the seek bar's chapter ticks come from here.
 pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64>, String> {
+    let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
         let bd_open: Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void> =
@@ -448,6 +460,7 @@ pub fn disc_chapter_offsets_debug(disc_path: &str, duration_ms: i64) -> Result<S
 
 /// Debug dump: every playlist with duration (ms), clip and chapter counts.
 pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
+    let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
         let bd_open: Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void> =

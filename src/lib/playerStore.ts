@@ -61,6 +61,8 @@ export function usePlayerStore(): PlayerStoreState {
   return useSyncExternalStore(playerStore.subscribe, playerStore.get);
 }
 
+let isOpening = false;
+
 /**
  * Resolve a save path / file / folder and start playback in the embedded
  * VLC engine. Returns what was resolved so the caller can open the overlay
@@ -70,15 +72,27 @@ export async function openInPlayer(
   filePath: string,
   opts?: { resume?: boolean; seekTo?: number; displayTitle?: string },
 ): Promise<PlayerOpenInfo> {
-  // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
-  // interactive menu and stays there. Only an explicit resume skips the
-  // menu (engine flag, no race) and seeks once the feature engages.
-  const resume = !!opts?.resume;
-  const seekTo = opts?.seekTo ?? 0;
-  const info = await invoke<PlayerOpenInfo>('player_open', {
-    filePath,
-    resume,
-  });
+  if (isOpening) {
+    console.warn('[playerStore] openInPlayer ignored: already opening');
+    const cur = playerStore.get();
+    return {
+      resolved_path: cur.resolvedPath || filePath,
+      title: cur.title || opts?.displayTitle || filePath,
+      is_disc: cur.isDisc,
+      external: false,
+    };
+  }
+  isOpening = true;
+  try {
+    // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
+    // interactive menu and stays there. Only an explicit resume skips the
+    // menu (engine flag, no race) and seeks once the feature engages.
+    const resume = !!opts?.resume;
+    const seekTo = opts?.seekTo ?? 0;
+    const info = await invoke<PlayerOpenInfo>('player_open', {
+      filePath,
+      resume,
+    });
   if (!info.external) {
     playerStore.open(info, opts?.displayTitle);
     // Media collection (owner): every externally-opened item is saved as a
@@ -120,6 +134,9 @@ export async function openInPlayer(
     }
   }
   return info;
+  } finally {
+    isOpening = false;
+  }
 }
 
 /**
