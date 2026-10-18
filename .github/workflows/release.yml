@@ -219,7 +219,7 @@ jobs:
       - name: Bundle JRE (BD-J/UHD menus)
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=macosx; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=mac || true; fi
           if [ "$RUNNER_OS" = "macOS" ]; then
             if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
           else
