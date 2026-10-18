@@ -500,19 +500,6 @@ jobs:
 
             UPLOAD_FILES=("$DMG_NAME" "$DMG_NAME.sha256")
 
-            # Metadata-preserving delivery: a ZIP of the icon-customized DMG
-            # (resource forks intact via --sequesterRsrc). Contains the DMG
-            # itself, NOT Nebulae.app. GitHub's raw .dmg download is NOT
-            # guaranteed to keep the outer file icon (Finder metadata can be
-            # stripped in transit); this ZIP is. The mounted-volume icon is
-            # embedded in both and always survives.
-            DMG_ZIP="$DMG_NAME.zip"
-            # NOTE: no --keepParent here - on a FILE argument it nests the
-            # parent directory; the DMG must sit at the ZIP root.
-            ditto -c -k --sequesterRsrc "$DMG_NAME" "$DMG_ZIP"
-            shasum -a 256 "$DMG_ZIP" > "$DMG_ZIP.sha256"
-            UPLOAD_FILES+=("$DMG_ZIP" "$DMG_ZIP.sha256")
-
             # Create standalone zip of Nebulae.app with full icon and bundle metadata
             if [ -n "$APP_DIR" ]; then
               APP_ZIP="$DMG_NAME-app.zip"
