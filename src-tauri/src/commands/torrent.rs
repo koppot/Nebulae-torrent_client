@@ -794,36 +794,55 @@ pub async fn create_torrent_file(
 
 /// "Save torrent file as...": native save dialog (owner request) then write
 /// the metainfo where the user picked.
+///
+/// The AppKit save panel MUST be shown on the main thread on macOS, so the
+/// dialog runs via run_on_main_thread and the (possibly slow) file write
+/// happens on a blocking thread - the UI never stalls.
 #[tauri::command]
-pub fn save_torrent_file_as(
+pub async fn save_torrent_file_as(
+    app: tauri::AppHandle,
     id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
-    let bytes = engine.export_torrent_bytes(&id)?;
-    let torrents = engine.list_torrents()?;
-    let item = torrents.iter().find(|t| t.id == id);
-    let raw_name = item.map(|t| t.name.clone()).unwrap_or_else(|| id.clone());
-    let clean_name = raw_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-    let filename = if clean_name.to_lowercase().ends_with(".torrent") {
-        clean_name
-    } else {
-        format!("{clean_name}.torrent")
-    };
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = engine.export_torrent_bytes(&id)?;
+        let torrents = engine.list_torrents()?;
+        let item = torrents.iter().find(|t| t.id == id);
+        let raw_name = item.map(|t| t.name.clone()).unwrap_or_else(|| id.clone());
+        let clean_name = raw_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+        let filename = if clean_name.to_lowercase().ends_with(".torrent") {
+            clean_name
+        } else {
+            format!("{clean_name}.torrent")
+        };
 
-    // Blocking native save dialog. Tauri commands run off the main thread,
-    // which is what rfd's blocking API requires on macOS.
-    let target = rfd::FileDialog::new()
-        .set_file_name(&filename)
-        .add_filter("Torrent files", &["torrent"])
-        .save_file();
+        // Native save dialog on the main thread (rfd requirement on macOS).
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        let dialog_app = app.clone();
+        let dialog_name = filename.clone();
+        app.run_on_main_thread(move || {
+            let picked = rfd::FileDialog::new()
+                .set_file_name(&dialog_name)
+                .add_filter("Torrent files", &["torrent"])
+                .save_file();
+            let _ = tx.send(picked);
+        })
+        .map_err(|e| format!("Dialog unavailable: {e}"))?;
+        let target = rx
+            .recv()
+            .map_err(|_| "Dialog did not return a result".to_string())?;
 
-    let Some(target_path) = target else {
-        return Err("cancelled".into());
-    };
+        let Some(target_path) = target else {
+            return Err("cancelled".into());
+        };
 
-    std::fs::write(&target_path, &bytes)
-        .map_err(|e| format!("Failed to write .torrent file: {e}"))?;
-    Ok(target_path.to_string_lossy().to_string())
+        std::fs::write(&target_path, &bytes)
+            .map_err(|e| format!("Failed to write .torrent file: {e}"))?;
+        Ok(target_path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {e}"))?
 }
 
 #[tauri::command]
