@@ -7,6 +7,7 @@ import {
   AssociationStatus,
   DiscPlayerStatus,
   UserSettings,
+  EngineIdentityInfo,
 } from '../../types';
 import { errorMessage } from '../../utils/errors';
 import { invoke } from '@tauri-apps/api/core';
@@ -32,6 +33,8 @@ import {
   RefreshCw,
   Film,
   Zap,
+  AlertCircle,
+  Fingerprint,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -48,8 +51,9 @@ type SettingsTab =
 
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
-  const { settings, saveSettings } = useSettingsStore();
+  const { settings, saveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
+  const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
   const [skipSplash, setSkipSplash] = useState(
@@ -65,6 +69,29 @@ export const SettingsModal: React.FC = () => {
   const [discPlayerStatus, setDiscPlayerStatus] = useState<DiscPlayerStatus | null>(null);
   const [isProbingPlayer, setIsProbingPlayer] = useState(false);
 
+  const [identityInfo, setIdentityInfo] = useState<EngineIdentityInfo | null>(null);
+  const [, setIsLoadingIdentity] = useState(false);
+  const [identityFeedback, setIdentityFeedback] = useState<string | null>(null);
+
+  const fetchIdentityInfo = () => {
+    setIsLoadingIdentity(true);
+    invoke<EngineIdentityInfo>('get_engine_identity_info')
+      .then(setIdentityInfo)
+      .catch(() => {})
+      .finally(() => setIsLoadingIdentity(false));
+  };
+
+  const handleRestoreIdentityDefaults = async () => {
+    await saveSettings({
+      engine_identity_profile: 'transmission',
+      custom_user_agent: '',
+      custom_peer_id_prefix: '',
+    });
+    setIdentityFeedback('Restored Transmission upstream defaults. Restart required to apply.');
+    fetchIdentityInfo();
+    setTimeout(() => setIdentityFeedback(null), 4000);
+  };
+
   const probePlayer = () => {
     setIsProbingPlayer(true);
     invoke<DiscPlayerStatus>('get_disc_player_status')
@@ -79,6 +106,12 @@ export const SettingsModal: React.FC = () => {
       .catch(() => {});
     probePlayer();
   }, []);
+
+  useEffect(() => {
+    if (showSettings && activeTab === 'bittorrent') {
+      fetchIdentityInfo();
+    }
+  }, [showSettings, activeTab]);
 
   if (!showSettings) return null;
 
@@ -1115,6 +1148,177 @@ export const SettingsModal: React.FC = () => {
                       <span className="text-white font-medium text-xs">Enabled</span>
                     </label>
                   </div>
+                </div>
+
+                {/* Engine Identification */}
+                <div className={`p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-3 ${isRemoteServer ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <Fingerprint className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span>Engine Identification</span>
+                      </h3>
+                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                        Configures tracker announce and peer handshake identification (User-Agent and Peer-ID prefix). Changes take effect on next engine restart.
+                      </p>
+                    </div>
+                    {!isRemoteServer && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreIdentityDefaults}
+                        className="px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-[11px] font-mono flex items-center gap-1 transition"
+                        title="Restore Transmission upstream defaults"
+                      >
+                        <RotateCcw className="w-3 h-3 text-[#a3a3a3]" />
+                        <span>Restore defaults</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {isRemoteServer && (
+                    <div className="p-2.5 rounded bg-[#1f1f1f] border border-[#333333] text-xs text-[#a3a3a3] flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                      <span>Engine identification is disabled for remote rTorrent. The remote daemon manages its own identity.</span>
+                    </div>
+                  )}
+
+                  {!isRemoteServer && identityInfo && !identityInfo.supports_runtime_overrides && (
+                    <div className="p-2.5 rounded bg-[#2a1f1f] border border-[#552222] text-xs text-[#d4d4d4] flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-white block mb-0.5">Stock Transmission Daemon Active</span>
+                        <p className="text-[11px] text-[#a3a3a3] leading-relaxed">
+                          The bundled transmission-daemon is standard upstream ({identityInfo.bundled_transmission_version}) and does not contain runtime identity hooks. Stock Transmission identity remains active. Custom and Nebulae identity profiles require a patched engine build.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {!isRemoteServer && (
+                    <>
+                      {/* Active Identity Readout */}
+                      <div className="p-2 rounded bg-[#161616] border border-[#2a2a2a] text-[11px] font-mono space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#a3a3a3]">Active Outgoing User-Agent:</span>
+                          <span className="text-white font-medium">{identityInfo?.active_user_agent || 'Transmission/4.1.3'}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#a3a3a3]">Active Outgoing Peer ID Prefix:</span>
+                          <span className="text-white font-medium">{identityInfo?.active_peer_id_prefix || '-TR4130-'}</span>
+                        </div>
+                        {((identityInfo?.restart_required) || (settings.engine_identity_profile !== identityInfo?.profile)) && (
+                          <div className="mt-1.5 pt-1.5 border-t border-[#2a2a2a] flex items-center gap-1.5 text-amber-400 text-[10px]">
+                            <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                            <span>Restart required to apply new identification settings</span>
+                          </div>
+                        )}
+                        {identityFeedback && (
+                          <div className="mt-1 text-emerald-400 text-[10px]">
+                            {identityFeedback}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Profile Options */}
+                      <div className="space-y-2 pt-1">
+                        <label className="flex items-start gap-2.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="transmission"
+                            checked={settings.engine_identity_profile === 'transmission'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'transmission' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                          />
+                          <div>
+                            <span className="text-xs text-white font-medium block">Transmission (Default)</span>
+                            <span className="text-[11px] text-[#a3a3a3] block">
+                              Unchanged upstream identity: <code className="text-white">Transmission/{identityInfo?.bundled_transmission_version || '4.1.3'}</code> with prefix <code className="text-white">{identityInfo?.bundled_transmission_peer_id_prefix || '-TR4130-'}</code>
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-2.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="nebulae"
+                            checked={settings.engine_identity_profile === 'nebulae'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'nebulae' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                          />
+                          <div>
+                            <span className="text-xs text-white font-medium block">Nebulae (Native)</span>
+                            <span className="text-[11px] text-[#a3a3a3] block">
+                              Native client identification: <code className="text-white">{identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}</code> with prefix <code className="text-white">{identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}</code> (derived dynamically from client version)
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-2.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="custom"
+                            checked={settings.engine_identity_profile === 'custom'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'custom' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                          />
+                          <div className="w-full">
+                            <span className="text-xs text-white font-medium block">Custom Override</span>
+                            <span className="text-[11px] text-[#a3a3a3] block mb-2">
+                              User-specified User-Agent and exactly 8-byte Peer-ID prefix when supported by the bundled engine.
+                            </span>
+
+                            {settings.engine_identity_profile === 'custom' && (
+                              <div className="p-2.5 rounded bg-[#161616] border border-[#2a2a2a] space-y-2 mt-1">
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="block text-[11px] text-[#a3a3a3]">Custom User-Agent:</label>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        saveSettings({
+                                          custom_user_agent: identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`,
+                                          custom_peer_id_prefix: identityInfo?.nebulae_peer_id_prefix || '-NE0220-',
+                                        })
+                                      }
+                                      className="text-[10px] text-[#e50914] hover:underline"
+                                    >
+                                      Use Nebulae v{identityInfo?.nebulae_version || '0.2.2'} values
+                                    </button>
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={settings.custom_user_agent}
+                                    placeholder={identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}
+                                    onChange={(e) => saveSettings({ custom_user_agent: e.target.value })}
+                                    className="w-full px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                                    Custom Peer ID Prefix (exactly 8 characters):
+                                  </label>
+                                  <input
+                                    type="text"
+                                    maxLength={8}
+                                    value={settings.custom_peer_id_prefix}
+                                    placeholder={identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}
+                                    onChange={(e) => saveSettings({ custom_peer_id_prefix: e.target.value })}
+                                    className="w-48 px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                                  />
+                                  <p className="text-[10px] text-[#737373] mt-0.5">
+                                    Format: <code>-XX1230-</code>. 8-byte prefix + 12 random bytes = 20-byte BitTorrent Peer ID.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </label>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div>

@@ -548,6 +548,7 @@ pub fn run() {
             commands::settings::save_user_settings,
             commands::settings::get_engine_mode,
             commands::settings::test_rtorrent_server_connection,
+            commands::settings::get_engine_identity_info,
             // Torrent & Engine
             commands::torrent::list_torrents,
             commands::torrent::open_torrent_folder,

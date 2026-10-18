@@ -291,6 +291,28 @@ export interface UserSettings {
 
   // 11. Racing Mode — maximizes piece acquisition and peer connectivity
   racing_mode_enabled: boolean;
+
+  // 12. Engine Identification
+  engine_identity_profile: 'transmission' | 'nebulae' | 'custom';
+  custom_user_agent: string;
+  custom_peer_id_prefix: string;
+}
+
+export interface EngineIdentityInfo {
+  profile: 'transmission' | 'nebulae' | 'custom';
+  configured_user_agent: string;
+  configured_peer_id_prefix: string;
+  active_user_agent: string;
+  active_peer_id_prefix: string;
+  bundled_transmission_version: string;
+  bundled_transmission_user_agent: string;
+  bundled_transmission_peer_id_prefix: string;
+  nebulae_version: string;
+  nebulae_user_agent: string;
+  nebulae_peer_id_prefix: string;
+  supports_runtime_overrides: boolean;
+  restart_required: boolean;
+  status_message: string;
 }
 
 export interface CreateTorrentParams {

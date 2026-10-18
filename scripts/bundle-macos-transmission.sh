@@ -71,6 +71,11 @@ if [ -z "$DAEMON_BIN" ]; then
     rm -rf "$BUILD_ROOT" "$INSTALL_ROOT"
     mkdir -p "$BUILD_ROOT" "$INSTALL_ROOT"
     tar -xJf "$TARBALL" -C "$STAGING_DIR"
+    PATCH_FILE="$(pwd)/scripts/patches/transmission-${VERSION}-identity-override.patch"
+    if [ -f "$PATCH_FILE" ]; then
+        echo "==> Applying identity override patch..."
+        patch -d "$STAGING_DIR/transmission-${VERSION}" -p1 < "$PATCH_FILE" || true
+    fi
     cmake -S "$STAGING_DIR/transmission-${VERSION}" -B "$BUILD_ROOT" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \

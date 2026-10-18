@@ -1163,6 +1163,56 @@ impl TransmissionTorrentEngine {
             engine_dir.display()
         );
 
+        let daemon_supports_identity = crate::engine::identity::check_daemon_identity_support(&daemon_path);
+        let app_version = crate::engine::identity::get_app_version();
+        let nebulae_ua = crate::engine::identity::derive_nebulae_user_agent(app_version);
+        let nebulae_prefix = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+
+        let (spawned_profile, spawned_ua, spawned_prefix) = if !daemon_supports_identity {
+            (
+                "transmission".to_string(),
+                crate::engine::identity::get_bundled_transmission_user_agent(),
+                crate::engine::identity::get_bundled_transmission_peer_id_prefix(),
+            )
+        } else {
+            match settings.engine_identity_profile.as_str() {
+                "nebulae" => (
+                    "nebulae".to_string(),
+                    nebulae_ua,
+                    nebulae_prefix,
+                ),
+                "custom" => (
+                    "custom".to_string(),
+                    if settings.custom_user_agent.trim().is_empty() {
+                        nebulae_ua
+                    } else {
+                        settings.custom_user_agent.trim().to_string()
+                    },
+                    if settings.custom_peer_id_prefix.trim().is_empty() {
+                        nebulae_prefix
+                    } else {
+                        settings.custom_peer_id_prefix.trim().to_string()
+                    },
+                ),
+                _ => (
+                    "transmission".to_string(),
+                    crate::engine::identity::get_bundled_transmission_user_agent(),
+                    crate::engine::identity::get_bundled_transmission_peer_id_prefix(),
+                ),
+            }
+        };
+
+        // Record spawned identity in DB
+        let _ = db.set_setting(
+            "spawned_engine_identity",
+            &serde_json::json!({
+                "profile": spawned_profile,
+                "user_agent": spawned_ua,
+                "peer_id_prefix": spawned_prefix,
+            })
+            .to_string(),
+        );
+
         let mut cmd = std::process::Command::new(&daemon_path);
         cmd.arg("--config-dir")
             .arg(&engine_dir)
@@ -1173,6 +1223,17 @@ impl TransmissionTorrentEngine {
             .current_dir(&engine_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+
+        if daemon_supports_identity && spawned_profile != "transmission" {
+            cmd.env("TRANSMISSION_USER_AGENT", &spawned_ua);
+            cmd.env("TRANSMISSION_PEER_ID_PREFIX", &spawned_prefix);
+            info!(
+                "[identity] launched daemon with custom identity: UA='{}', PeerID='{}'",
+                spawned_ua, spawned_prefix
+            );
+        } else {
+            info!("[identity] launched daemon with stock Transmission identity");
+        }
         // transmission-daemon is a CONSOLE program: without CREATE_NO_WINDOW
         // Windows opens a cmd window (showing the engine dir) next to the app.
         #[cfg(target_os = "windows")]
@@ -1242,6 +1303,10 @@ impl TransmissionTorrentEngine {
             let daemon_path_watch = daemon_path.clone();
             let engine_dir_watch = engine_dir.clone();
             let pid_file_watch = engine_dir.join("daemon.pid");
+            let spawned_ua_watch = spawned_ua.clone();
+            let spawned_prefix_watch = spawned_prefix.clone();
+            let spawned_profile_watch = spawned_profile.clone();
+            let daemon_supports_identity_watch = daemon_supports_identity;
 
             tauri::async_runtime::spawn(async move {
                 let mut backoff = Duration::from_secs(1);
@@ -1277,6 +1342,11 @@ impl TransmissionTorrentEngine {
                             .arg("--foreground")
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null());
+
+                        if daemon_supports_identity_watch && spawned_profile_watch != "transmission" {
+                            cmd.env("TRANSMISSION_USER_AGENT", &spawned_ua_watch);
+                            cmd.env("TRANSMISSION_PEER_ID_PREFIX", &spawned_prefix_watch);
+                        }
                         #[cfg(target_os = "windows")]
                         {
                             use std::os::windows::process::CommandExt;

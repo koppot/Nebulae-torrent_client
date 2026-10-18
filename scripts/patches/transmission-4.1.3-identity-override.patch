@@ -1,0 +1,24 @@
+--- a/libtransmission/session.cc
++++ b/libtransmission/session.cc
+@@ -198,6 +198,11 @@
+     // starts with -TRXXXX-
+     auto constexpr Prefix = std::string_view{ PEERID_PREFIX };
++    auto const custom_prefix = tr_env_get_string("TRANSMISSION_PEER_ID_PREFIX");
++    auto const effective_prefix = !custom_prefix.empty() && custom_prefix.size() <= 8 ?
++        std::string_view{ custom_prefix } : Prefix;
+     auto const* const end = it + std::size(peer_id);
+-    it = std::copy_n(std::data(Prefix), std::size(Prefix), it);
++    it = std::copy_n(std::data(effective_prefix), std::size(effective_prefix), it);
+ 
+     // remainder is randomly-generated characters
+@@ -329,6 +334,11 @@
+ std::optional<std::string_view> tr_session::WebMediator::userAgent() const
+ {
++    static std::string const custom_ua = tr_env_get_string("TRANSMISSION_USER_AGENT");
++    if (!custom_ua.empty())
++    {
++        return custom_ua;
++    }
+     return TR_NAME "/" SHORT_VERSION_STRING;
+ }
+ 

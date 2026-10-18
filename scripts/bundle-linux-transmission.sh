@@ -62,6 +62,11 @@ rm -rf "$BUILD_ROOT" "$INSTALL_ROOT"
 mkdir -p "$BUILD_ROOT" "$INSTALL_ROOT"
 tar -xJf "$TARBALL" -C "$STAGING_DIR"
 SRC_DIR="$STAGING_DIR/transmission-${VERSION}"
+PATCH_FILE="$(pwd)/scripts/patches/transmission-${VERSION}-identity-override.patch"
+if [ -f "$PATCH_FILE" ]; then
+    echo "==> Applying identity override patch..."
+    patch -d "$SRC_DIR" -p1 < "$PATCH_FILE" || true
+fi
 
 echo "==> Configuring (daemon only, no GUI/Qt/GTK/utils)..."
 cmake -S "$SRC_DIR" -B "$BUILD_ROOT" \

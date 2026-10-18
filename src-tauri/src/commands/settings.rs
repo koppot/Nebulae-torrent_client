@@ -147,6 +147,21 @@ pub struct UserSettings {
     /// large disk cache, and each added torrent receives high bandwidth
     /// priority and an uncapped per-torrent peer count.
     pub racing_mode_enabled: bool,
+
+    // 13. Engine Identification
+    /// Selected engine identity profile: "transmission" (default) | "nebulae" | "custom"
+    #[serde(default = "default_engine_identity_profile")]
+    pub engine_identity_profile: String,
+    /// Custom User-Agent string (used when engine_identity_profile == "custom")
+    #[serde(default)]
+    pub custom_user_agent: String,
+    /// Custom Peer ID prefix (8 chars, e.g. "-NE0220-", used when profile == "custom")
+    #[serde(default)]
+    pub custom_peer_id_prefix: String,
+}
+
+fn default_engine_identity_profile() -> String {
+    "transmission".to_string()
 }
 
 impl Default for UserSettings {
@@ -292,6 +307,11 @@ impl Default for UserSettings {
 
             // 12. Racing Mode
             racing_mode_enabled: true,
+
+            // 13. Engine Identification
+            engine_identity_profile: "transmission".to_string(),
+            custom_user_agent: "".to_string(),
+            custom_peer_id_prefix: "".to_string(),
         }
     }
 }
@@ -501,6 +521,138 @@ pub fn test_rtorrent_server_connection(
         .json::<ServerStatusResponse>()
         .map_err(|e| format!("Unexpected server response: {e}"))
 }
+
+#[tauri::command]
+pub fn get_engine_identity_info(
+    db: State<Arc<Database>>,
+    app: tauri::AppHandle,
+) -> Result<crate::engine::identity::EngineIdentityInfo, String> {
+    use tauri::Manager;
+    let settings = load_user_settings(db.clone())?;
+
+    let app_version = crate::engine::identity::get_app_version();
+    let nebulae_ua = crate::engine::identity::derive_nebulae_user_agent(app_version);
+    let nebulae_prefix = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+
+    let tr_version = crate::engine::identity::get_bundled_transmission_version().to_string();
+    let tr_ua = crate::engine::identity::get_bundled_transmission_user_agent();
+    let tr_prefix = crate::engine::identity::get_bundled_transmission_peer_id_prefix();
+
+    // Check daemon capabilities
+    let res_dir = app.path().resource_dir().ok();
+    let daemon_path_res =
+        crate::engine::transmission::find_transmission_daemon_binary(res_dir.as_deref());
+    let (_daemon_found, supports_overrides) = match daemon_path_res {
+        Ok(path) => (true, crate::engine::identity::check_daemon_identity_support(&path)),
+        Err(_) => (false, false),
+    };
+
+    let is_remote = settings.rtorrent_server_enabled;
+
+    let (configured_ua, configured_prefix) = match settings.engine_identity_profile.as_str() {
+        "nebulae" => (nebulae_ua.clone(), nebulae_prefix.clone()),
+        "custom" => (
+            if settings.custom_user_agent.trim().is_empty() {
+                nebulae_ua.clone()
+            } else {
+                settings.custom_user_agent.clone()
+            },
+            if settings.custom_peer_id_prefix.trim().is_empty() {
+                nebulae_prefix.clone()
+            } else {
+                settings.custom_peer_id_prefix.clone()
+            },
+        ),
+        _ => (tr_ua.clone(), tr_prefix.clone()),
+    };
+
+    // Check what identity the running engine was spawned with
+    let spawned_info = db
+        .get_setting("spawned_engine_identity")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+
+    let (active_ua, active_prefix, status_message) = if is_remote {
+        (
+            "rTorrent/remote".to_string(),
+            "-RT----".to_string(),
+            "Remote rTorrent server is active. Engine identity is managed server-side and cannot be overridden locally.".to_string(),
+        )
+    } else if !supports_overrides {
+        (
+            tr_ua.clone(),
+            tr_prefix.clone(),
+            if settings.engine_identity_profile == "transmission" {
+                "Transmission upstream engine active.".to_string()
+            } else {
+                "Bundled transmission-daemon is stock upstream and lacks runtime identity override hooks. Upstream Transmission identity is active. Apply Nebulae build patch to enable identity overrides.".to_string()
+            },
+        )
+    } else if let Some(info) = spawned_info {
+        let spawned_ua = info
+            .get("user_agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&tr_ua)
+            .to_string();
+        let spawned_prefix = info
+            .get("peer_id_prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&tr_prefix)
+            .to_string();
+        let spawned_profile = info
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("transmission");
+
+        let msg = match spawned_profile {
+            "nebulae" => format!("Native Nebulae v{} engine identity active.", app_version),
+            "custom" => "Custom engine identity active.".to_string(),
+            _ => "Transmission upstream engine identity active.".to_string(),
+        };
+        (spawned_ua, spawned_prefix, msg)
+    } else {
+        match settings.engine_identity_profile.as_str() {
+            "nebulae" => (
+                nebulae_ua.clone(),
+                nebulae_prefix.clone(),
+                format!("Native Nebulae v{} engine identity active.", app_version),
+            ),
+            "custom" => (
+                configured_ua.clone(),
+                configured_prefix.clone(),
+                "Custom engine identity active.".to_string(),
+            ),
+            _ => (
+                tr_ua.clone(),
+                tr_prefix.clone(),
+                "Transmission upstream engine identity active.".to_string(),
+            ),
+        }
+    };
+
+    let restart_required = !is_remote
+        && supports_overrides
+        && (configured_ua != active_ua || configured_prefix != active_prefix);
+
+    Ok(crate::engine::identity::EngineIdentityInfo {
+        profile: settings.engine_identity_profile,
+        configured_user_agent: configured_ua,
+        configured_peer_id_prefix: configured_prefix,
+        active_user_agent: active_ua,
+        active_peer_id_prefix: active_prefix,
+        bundled_transmission_version: tr_version,
+        bundled_transmission_user_agent: tr_ua,
+        bundled_transmission_peer_id_prefix: tr_prefix,
+        nebulae_version: app_version.to_string(),
+        nebulae_user_agent: nebulae_ua,
+        nebulae_peer_id_prefix: nebulae_prefix,
+        supports_runtime_overrides: supports_overrides && !is_remote,
+        restart_required,
+        status_message,
+    })
+}
+
 
 #[cfg(test)]
 mod tests {

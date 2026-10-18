@@ -145,6 +145,11 @@ export const defaultSettings: UserSettings = {
 
   // 11. Racing Mode
   racing_mode_enabled: true,
+
+  // 12. Engine Identification
+  engine_identity_profile: 'transmission',
+  custom_user_agent: '',
+  custom_peer_id_prefix: '',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

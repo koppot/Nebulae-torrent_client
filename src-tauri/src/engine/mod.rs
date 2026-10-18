@@ -1,5 +1,6 @@
 pub mod enforcement;
 pub mod failed;
+pub mod identity;
 pub mod killswitch;
 pub mod metainfo;
 pub mod mock;
