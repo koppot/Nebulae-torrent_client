@@ -124,7 +124,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
       - name: Stage bundled tailscale binaries (pinned, checksum-verified)
