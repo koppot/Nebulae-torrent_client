@@ -459,19 +459,54 @@ fn start_playback(
     file_path: &str,
     resume: bool,
 ) -> Result<ResolvedPlayback, String> {
-    let resolved = match resolve_playback(file_path) {
-        Ok(r) => {
-            tracing::info!(
-                "player_open: resolved '{}' (disc: {}, external: {})",
-                r.resolved_path,
-                r.is_disc,
-                r.external
-            );
-            r
+    start_playback_inner(app, state, file_path, resume, None)
+}
+
+/// Inner implementation; `explicit_feature` bypasses the disc-file redirect
+/// in `resolve_playback` so an explicit resume target is never sent back to
+/// the disc root.
+fn start_playback_inner(
+    app: &tauri::AppHandle,
+    state: &PlayerState,
+    file_path: &str,
+    resume: bool,
+    explicit_feature: Option<&str>,
+) -> Result<ResolvedPlayback, String> {
+    let resolved = if let Some(feature) = explicit_feature {
+        // Explicit resume: the caller already resolved the feature file.
+        // Treat it as a plain (non-disc) file so resolve_playback cannot
+        // redirect it back to the disc root via the BDMV/VIDEO_TS ancestor walk.
+        let path = Path::new(feature);
+        let title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Video")
+            .to_string();
+        tracing::info!(
+            "player_open: resume using explicit feature '{}' (bypassing disc redirect)",
+            feature
+        );
+        ResolvedPlayback {
+            resolved_path: feature.to_string(),
+            title,
+            is_disc: false,
+            external: false,
         }
-        Err(e) => {
-            tracing::error!("player_open: resolve failed: {e}");
-            return Err(e);
+    } else {
+        match resolve_playback(file_path) {
+            Ok(r) => {
+                tracing::info!(
+                    "player_open: resolved '{}' (disc: {}, external: {})",
+                    r.resolved_path,
+                    r.is_disc,
+                    r.external
+                );
+                r
+            }
+            Err(e) => {
+                tracing::error!("player_open: resolve failed: {e}");
+                return Err(e);
+            }
         }
     };
 
@@ -666,26 +701,38 @@ pub async fn player_open(
     // (FBI warning → menu chain): resolve the disc's main feature file and
     // open it as a plain file instead. The Menu button can still return to
     // the interactive menu, which restarts from `current_path` (the disc).
-    let open_target = if resume {
+    //
+    // IMPORTANT: start_playback calls resolve_playback internally, which
+    // redirects any path inside BDMV/ or VIDEO_TS/ back to the disc root.
+    // When resuming to a feature file, bypass that redirect by passing the
+    // file as explicit_feature to start_playback_inner.
+    let (open_target, explicit_feature): (String, Option<String>) = if resume {
         match resolve_playback(&file_path) {
             Ok(r) if r.is_disc && !r.external => {
                 match find_main_video(Path::new(&r.resolved_path)) {
                     Some(feature) => {
+                        let feature_str = feature.display().to_string();
                         tracing::info!(
                             "player_open: resume targets feature file '{}'",
-                            feature.display()
+                            feature_str
                         );
-                        feature.display().to_string()
+                        (file_path.clone(), Some(feature_str))
                     }
-                    None => file_path.clone(),
+                    None => (file_path.clone(), None),
                 }
             }
-            _ => file_path.clone(),
+            _ => (file_path.clone(), None),
         }
     } else {
-        file_path.clone()
+        (file_path.clone(), None)
     };
-    let resolved = match start_playback(&app, &state, &open_target, resume) {
+    let resolved = match start_playback_inner(
+        &app,
+        &state,
+        &open_target,
+        resume,
+        explicit_feature.as_deref(),
+    ) {
         Ok(r) => r,
         Err(e) => {
             // Failed open: clear the session bookkeeping so the frontend's

@@ -401,7 +401,7 @@ export default function PlayerOverlay() {
     return () => {
       alive = false;
     };
-  }, [player.open, player.isDisc, poll.title, poll.length_ms, player.resolvedPath]);
+  }, [player.open, player.isDisc, poll.title, poll.length_ms > 0, player.resolvedPath]);
 
   // Popover labels fall back to the last successful probe for this disc, so
   // the Audio menu doesn't flash wrong VLC names while a fresh probe runs.
