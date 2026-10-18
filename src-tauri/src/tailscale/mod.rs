@@ -21,7 +21,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -206,58 +206,93 @@ fn daemon_command(paths: &Paths) -> Command {
     cmd
 }
 
-/// True when the embedded daemon answers on OUR socket within `timeout`.
-pub fn daemon_ready(timeout: Duration) -> bool {
-    cli(&["status", "--json"], timeout).is_ok()
+/// True when a daemon on `paths`' socket answers `status --json` within
+/// `timeout` (injectable form; see `wait_for_ready`).
+pub fn daemon_ready_on(paths: &Paths, timeout: Duration) -> bool {
+    cli_on(paths, &["status", "--json"], timeout).is_ok()
+}
+
+/// Clear, actionable error for a build without the bundled binaries.
+pub fn missing_binaries_error(paths: &Paths) -> String {
+    format!(
+        "Embedded Tailscale binaries are missing from this build \
+         (expected {} / {}). ADC-network mode is unavailable.",
+        paths.tailscaled().display(),
+        paths.tailscale().display()
+    )
+}
+
+/// Bounded readiness wait: the daemon must answer on OUR socket before the
+/// deadline. Each attempt has a short per-call bound so a hung socket can
+/// not eat the whole budget silently.
+pub fn wait_for_ready(paths: &Paths, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if daemon_ready_on(paths, Duration::from_secs(2)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Embedded Tailscale daemon did not become ready in {}s",
+                timeout.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Resolve the bundled binaries and fail with the clear error when absent.
+fn resolve_paths_for_start() -> Result<Paths, String> {
+    let paths = Paths::resolve()?;
+    if !paths.bundled_available() {
+        return Err(missing_binaries_error(&paths));
+    }
+    Ok(paths)
 }
 
 /// Start the embedded daemon and WAIT until it is ready (bounded).
 /// Returns a clear error when the binaries are missing — startup is never
 /// implied successful when nothing was started.
 pub fn ensure_daemon() -> Result<(), String> {
-    let paths = Paths::resolve()?;
-    if !paths.bundled_available() {
-        return Err(format!(
-            "Embedded Tailscale binaries are missing from this build \
-             (expected {} / {}). ADC-network mode is unavailable.",
-            paths.tailscaled().display(),
-            paths.tailscale().display()
-        ));
-    }
-
-    let state = &*crate::TS_STATE
+    let paths = resolve_paths_for_start()?;
+    let state = crate::TS_STATE
         .get()
-        .ok_or("tailscale state not initialised")?;
-    state.wanted.store(true, Ordering::SeqCst);
+        .ok_or("tailscale state not initialised")?
+        .clone();
+    start_with_paths(&paths, &state)
+}
 
+/// Injectable start logic (unit-testable without the app global):
+/// signal wanted, start at most one supervisor, wait for readiness.
+pub fn start_with_paths(paths: &Paths, state: &Arc<TsState>) -> Result<(), String> {
+    state.wanted.store(true, Ordering::SeqCst);
+    start_supervisor_once(state, paths.clone());
     // Exactly one supervisor thread owns spawning, restarting and teardown.
     // It outlives this call, so PR_SET_PDEATHSIG (set at spawn) tears the
     // daemon down if the app process dies hard.
-    if !state.supervisor_started.swap(true, Ordering::SeqCst) {
-        let sup_paths = paths.clone();
-        std::thread::Builder::new()
-            .name("tailscaled-supervisor".into())
-            .spawn(move || supervise_loop(sup_paths))
-            .map_err(|e| format!("supervisor thread: {e}"))?;
-    }
-
-    // Readiness: the CLI must answer on OUR socket before anything else.
-    if !daemon_ready(Duration::from_secs(30)) {
-        return Err("Embedded Tailscale daemon did not become ready in 30s".into());
-    }
+    wait_for_ready(paths, Duration::from_secs(30))?;
     tracing::info!("[tailscale] embedded tailscaled is running");
     Ok(())
+}
+
+/// Idempotent supervisor start. Returns true only for the caller that
+/// actually spawned the thread (used to test the no-duplicate guarantee).
+pub fn start_supervisor_once(state: &Arc<TsState>, paths: Paths) -> bool {
+    if state.supervisor_started.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let state = Arc::clone(state);
+    std::thread::Builder::new()
+        .name("tailscaled-supervisor".into())
+        .spawn(move || supervise_loop(state, paths))
+        .is_ok()
 }
 
 /// Single owner of the daemon process for the whole app lifetime. Spawns it
 /// when wanted, restarts it if it dies, tears it down on disconnect or app
 /// exit. PR_SET_PDEATHSIG makes hard app death clean up the child on unix.
-fn supervise_loop(paths: Paths) {
+fn supervise_loop(state: Arc<TsState>, paths: Paths) {
     loop {
-        let state = match crate::TS_STATE.get() {
-            Some(s) => s,
-            None => return,
-        };
         if !state.wanted.load(Ordering::SeqCst) {
             let mut guard = state.child.lock().unwrap();
             if let Some(child) = guard.as_mut() {
@@ -288,21 +323,45 @@ fn supervise_loop(paths: Paths) {
 /// Stop the daemon (app shutdown or user disconnect).
 pub fn shutdown() {
     if let Some(state) = crate::TS_STATE.get() {
-        state.wanted.store(false, Ordering::SeqCst);
-        if let Ok(mut guard) = state.child.lock() {
-            if let Some(child) = guard.as_mut() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            *guard = None;
-        }
+        shutdown_state(state);
     }
+}
+
+/// Injectable teardown: SIGTERM first (lets tailscaled flush its state
+/// file), bounded wait, then hard kill. Wanted=false also stops the
+/// supervisor from respawning.
+pub fn shutdown_state(state: &Arc<TsState>) {
+    state.wanted.store(false, Ordering::SeqCst);
+    let mut guard = state.child.lock().unwrap();
+    if let Some(child) = guard.as_mut() {
+        #[cfg(unix)]
+        {
+            let pid = child.id() as i32;
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let _ = child.kill();
+            }
+        }
+        let _ = child.wait();
+    }
+    *guard = None;
 }
 
 /// Run the bundled `tailscale` CLI against OUR socket (never the system
 /// daemon). Bounded so a hung daemon cannot wedge the caller.
 pub fn cli(args: &[&str], timeout: Duration) -> Result<String, String> {
-    let paths = Paths::resolve()?;
+    cli_on(&Paths::resolve()?, args, timeout)
+}
+
+/// Injectable CLI core (testable without the global state resolution).
+fn cli_on(paths: &Paths, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = Command::new(paths.tailscale());
     cmd.arg("--socket")
         .arg(private_socket_arg(&paths.state_dir))
@@ -577,6 +636,13 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
 mod tests {
     use super::*;
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
     #[test]
     fn private_socket_unix_is_state_dir_path() {
         let dir = std::env::temp_dir().join("nebulae-ts-test");
@@ -589,32 +655,128 @@ mod tests {
 
     #[test]
     fn bundled_available_requires_both_binaries() {
-        let empty = std::env::temp_dir().join("nebulae-ts-empty");
-        std::fs::create_dir_all(&empty).unwrap();
+        let empty = temp_dir("nebulae-ts-empty");
         let paths = Paths {
             state_dir: empty.clone(),
             socket: socket_path(&empty),
             bin_dir: empty,
         };
         assert!(!paths.bundled_available());
-
-        // Real staged binaries resolve via the transmission-convention search
-        // (target/release/Resources on dev builds); when present, both
+        // Real staged binaries resolve via the established conventions
+        // (target/release/Resources on dev builds); when present, BOTH
         // binaries must exist for availability.
         if let Ok(p) = Paths::resolve() {
             assert!(p.tailscaled().is_file() && p.tailscale().is_file());
         }
     }
 
+    /// Missing bundled binaries must produce the CLEAR error naming the
+    /// expected paths — never silent success, never a generic failure.
     #[test]
-    fn ensure_daemon_error_names_missing_binaries() {
-        // In test builds TS_STATE is unset; the missing-binaries wording is
-        // covered by the format check here so the message can never rot.
-        let msg = format!(
-            "Embedded Tailscale binaries are missing from this build              (expected {} / {}). ADC-network mode is unavailable.",
-            "/x/tailscaled", "/x/tailscale"
+    fn missing_binaries_error_names_expected_paths() {
+        let empty = temp_dir("nebulae-ts-missing");
+        let paths = Paths {
+            state_dir: empty.clone(),
+            socket: socket_path(&empty),
+            bin_dir: empty,
+        };
+        assert!(!paths.bundled_available());
+        let msg = missing_binaries_error(&paths);
+        assert!(msg.contains("binaries are missing"), "unexpected: {msg}");
+        assert!(msg.contains("tailscaled"), "must name the daemon: {msg}");
+        assert!(msg.contains("unavailable"), "must state the outcome: {msg}");
+    }
+
+    /// A socket nobody answers must fail readiness WITHIN the budget —
+    /// the wait may never hang forever or report success implicitly.
+    #[test]
+    fn readiness_times_out_bounded_on_dead_socket() {
+        let dir = temp_dir("nebulae-ts-deadsock");
+        let paths = Paths {
+            state_dir: dir.clone(),
+            socket: socket_path(&dir),
+            bin_dir: dir.clone(),
+        };
+        let started = Instant::now();
+        let err = wait_for_ready(&paths, Duration::from_secs(2)).unwrap_err();
+        assert!(err.contains("ready"), "unexpected: {err}");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(15),
+            "readiness wait must be bounded: {elapsed:?}"
         );
-        assert!(msg.contains("binaries are missing"));
-        assert!(msg.contains("unavailable"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Concurrent start attempts must not spawn a second supervisor (and
+    /// with wanted=false the supervisor must not spawn a daemon at all).
+    #[test]
+    fn concurrent_starts_spawn_exactly_one_supervisor() {
+        let dir = temp_dir("nebulae-ts-concurrent");
+        let paths = Paths {
+            state_dir: dir.clone(),
+            socket: socket_path(&dir),
+            bin_dir: Paths::resolve().map(|p| p.bin_dir).unwrap_or_else(|_| dir.clone()),
+        };
+        let state = Arc::new(TsState::default());
+        // wanted stays false: supervisors exit immediately, spawn nothing.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let (state, paths) = (Arc::clone(&state), paths.clone());
+                std::thread::spawn(move || start_supervisor_once(&state, paths))
+            })
+            .collect();
+        let started: usize = handles.into_iter().map(|h| h.join().unwrap() as usize).sum();
+        assert_eq!(started, 1, "exactly one supervisor may start");
+        let guard = state.child.lock().unwrap();
+        assert!(guard.is_none(), "no daemon must be spawned when not wanted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stopping a never-started state must be a no-op (no panic, clean flags).
+    #[test]
+    fn shutdown_without_daemon_is_clean_noop() {
+        let state = Arc::new(TsState::default());
+        shutdown_state(&state);
+        assert!(!state.wanted.load(Ordering::SeqCst));
+        assert!(state.child.lock().unwrap().is_none());
+    }
+
+    /// REAL-daemon lifecycle against a hermetic temp state dir:
+    /// start -> ready -> graceful stop (child reaped) -> restart reuses the
+    /// persisted identity file. Run explicitly: cargo test -- --ignored
+    #[test]
+    #[ignore = "spawns the real bundled daemon; run with: cargo test -- --ignored"]
+    fn e2e_real_daemon_restart_and_graceful_shutdown() {
+        let Ok(base) = Paths::resolve() else {
+            eprintln!("bundled binaries not staged; skipping E2E");
+            return;
+        };
+        let dir = temp_dir("nebulae-ts-e2e");
+        let paths = Paths {
+            state_dir: dir.clone(),
+            socket: socket_path(&dir),
+            bin_dir: base.bin_dir.clone(),
+        };
+        assert!(paths.bundled_available());
+        let state = Arc::new(TsState::default());
+
+        start_with_paths(&paths, &state).expect("first daemon start must become ready");
+        let state_file = dir.join("tailscaled.state");
+        assert!(state_file.is_file(), "daemon must persist node identity");
+
+        shutdown_state(&state); // graceful: SIGTERM, bounded wait, reap
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(state.child.lock().unwrap().is_none(), "child must be reaped");
+        assert!(!state.wanted.load(Ordering::SeqCst));
+
+        // Restart: readiness must come back and identity must persist.
+        let before = std::fs::metadata(&state_file).unwrap().len();
+        assert!(before > 0, "identity file must be non-empty");
+        start_with_paths(&paths, &state).expect("restart must become ready");
+        let after = std::fs::metadata(&state_file).unwrap().len();
+        assert_eq!(after, before, "node identity must persist across restart");
+        shutdown_state(&state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

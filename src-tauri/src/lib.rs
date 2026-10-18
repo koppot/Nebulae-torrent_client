@@ -15,7 +15,8 @@ use tailscale::TsState;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
-pub static TS_STATE: std::sync::OnceLock<TsState> = std::sync::OnceLock::new();
+pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> =
+    std::sync::OnceLock::new();
 
 pub fn run() {
     // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
@@ -24,7 +25,7 @@ pub fn run() {
     // Embedded Tailscale (ADC-network) state container + app-owned
     // lifecycle: start the bundled daemon at launch (readiness-waited on a
     // background thread; missing binaries are logged loudly, never silent).
-    let _ = TS_STATE.set(TsState::default());
+    let _ = TS_STATE.set(std::sync::Arc::new(TsState::default()));
     std::thread::Builder::new()
         .name("tailscale-startup".into())
         .spawn(|| {
