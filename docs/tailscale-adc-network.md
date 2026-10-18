@@ -32,8 +32,28 @@ CLI always passes `--socket <our socket>`.
 - If a restricted VPN mode is selected by the user, that mode's rules win;
   the ADC-network layer never overrides or bypasses them.
 
+## Lifecycle (verified locally end-to-end)
+- **Launch**: `ensure_daemon()` starts the bundled daemon from the resolved
+  resources and waits (30 s bound) for it to answer on OUR socket. A second
+  thread (the supervisor) owns the process for the whole app lifetime and
+  restarts it if it dies. Missing binaries produce a LOUD logged error at
+  startup and a clear `Err` from `tailscale_enroll` — never silent success.
+- **Hard app death**: Linux uses `PR_SET_PDEATHSIG` so the kernel reaps the
+  daemon with the app. macOS has no equivalent; a `kill -9` of the app can
+  orphan the daemon, but the next launch re-adopts the running daemon
+  (readiness check passes on the existing socket), so no duplicates.
+- **Quit**: `shutdown()` (on Tauri `ExitRequested`) stops the daemon.
+- **User disconnect**: `tailscale logout` leaves the node; the DAEMON KEEPS
+  RUNNING so re-enrollment is instant. Only quitting the app stops it.
+
 ## Commands (Tauri)
 - `tailscale_status` — daemon + backend state + tailnet IP + control server + ADC node seen
-- `tailscale_enroll(auth_key, control_url?)` — single-use key enrollment
-- `tailscale_disconnect` — `tailscale logout`
-- `adc_private_probe` — real HTTPS via SOCKS5 through the embedded daemon
+- `tailscale_enroll(auth_key, control_url?)` — single-use key enrollment (starts + waits for the daemon first)
+- `tailscale_disconnect` — `tailscale logout` (daemon stays up)
+- `adc_private_probe` — two-part result:
+  1. `mesh_tcp` — real TCP connect to the ADC NODE'S TAILNET IP
+     (100.x.y.z:443) via the daemon's SOCKS5 proxy. The destination only
+     exists inside the mesh, so success proves the private route.
+  2. `https_public_name` — full TLS HTTPS to https://asiandvdclub.org
+     through the same proxy; only reachable when the ADC server advertises
+     a subnet route for its public name (reported separately, honestly).

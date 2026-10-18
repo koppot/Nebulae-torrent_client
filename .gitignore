@@ -68,3 +68,6 @@ src-tauri/transmission-staging/
 src-tauri/transmission-staging-appimage/
 src-tauri/resources/player/lib/
 src-tauri/resources/engine/transmission/
+src-tauri/resources/engine/tailscale/
+src-tauri/resources/jre/
+src-tauri/resources/vlc/

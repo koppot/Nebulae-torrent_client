@@ -45,9 +45,12 @@ pub async fn tailscale_enroll(
     if auth_key.trim().is_empty() {
         return Err("Enrollment key is empty".into());
     }
-    tokio::task::spawn_blocking(move || crate::tailscale::enroll(&auth_key, control_url.as_deref()))
-        .await
-        .map_err(|e| format!("join: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        crate::tailscale::ensure_daemon()?; // start + readiness-wait before enrolling
+        crate::tailscale::enroll(&auth_key, control_url.as_deref())
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))?
 }
 
 #[tauri::command]
@@ -57,63 +60,71 @@ pub async fn tailscale_disconnect() -> Result<(), String> {
         .map_err(|e| format!("join: {e}"))?
 }
 
-/// Probe ADC connectivity THROUGH the private tailnet route.
+/// Probe ADC connectivity on the PRIVATE route — verified by construction.
 ///
-/// The request is sent via the embedded daemon's local SOCKS5 proxy, so it
-/// only succeeds when: the daemon is up, the node is enrolled, and the ADC
-/// node/subnet-route is reachable inside the tailnet. Everything else is
-/// reported as unreachable with a reason — never as success.
+/// Two independent checks, reported separately:
+///   1. `mesh_tcp` — TCP connect to the ADC NODE'S TAILNET IP (100.x.y.z:443)
+///      through the daemon's SOCKS5 proxy. That destination exists only
+///      inside the mesh, so success proves the private route.
+///   2. `https_public_name` — real HTTPS request to https://asiandvdclub.org
+///      through the same proxy with full certificate validation. This only
+///      works when the ADC server advertises a subnet route for its public
+///      IP (server-side prerequisite). An ordinary public-host reply is NOT
+///      counted as verified private connectivity on its own.
+#[derive(Debug, Serialize)]
+pub struct AdcPrivateProbe {
+    pub mesh_tcp_ok: bool,
+    pub mesh_target: Option<String>,
+    pub mesh_latency_ms: Option<u32>,
+    pub https_public_name_ok: bool,
+    pub https_status: Option<u16>,
+    pub detail: String,
+}
+
 #[tauri::command]
-pub async fn adc_private_probe() -> Result<AdcProbe, String> {
+pub async fn adc_private_probe() -> Result<AdcPrivateProbe, String> {
     tokio::task::spawn_blocking(|| {
-        let socks = match crate::tailscale::socks_addr() {
-            Some(a) => a,
-            None => {
-                return Ok(AdcProbe {
-                    reachable: false,
-                    via: "unavailable".into(),
-                    detail: "Embedded Tailscale daemon is not running or not enrolled."
-                        .into(),
-                    http_status: None,
-                    latency_ms: None,
-                });
+        // Check 1: mesh-by-construction.
+        let (mesh_ok, mesh_target, mesh_ms, mut detail) =
+            match crate::tailscale::probe_adc_mesh_tcp() {
+                Ok((ip, ms)) => (true, Some(ip), Some(ms), String::new()),
+                Err(e) => (false, None, None, e),
+            };
+
+        // Check 2: real HTTPS to the public ADC name through the mesh client.
+        let (https_ok, https_status) = match crate::tailscale::adc_http_client() {
+            Ok(client) => match client.head("https://asiandvdclub.org/").send() {
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    (code < 500, Some(code))
+                }
+                Err(_) => (false, None),
+            },
+            Err(e) => {
+                if detail.is_empty() {
+                    detail = e;
+                }
+                (false, None)
             }
         };
 
-        // HTTPS to the public ADC hostname over the tailnet: TLS name
-        // matches because the ADC node advertises a subnet route for its
-        // public IP (server-side prerequisite, docs/adc-server-setup.md).
-        let proxy = reqwest::Proxy::all(format!("socks5://{socks}"))
-            .map_err(|e| format!("proxy: {e}"))?;
-        let client = reqwest::blocking::Client::builder()
-            .proxy(proxy)
-            .timeout(std::time::Duration::from_secs(8))
-            .build()
-            .map_err(|e| format!("client: {e}"))?;
-
-        let started = std::time::Instant::now();
-        match client.head("https://asiandvdclub.org/").send() {
-            Ok(resp) => Ok(AdcProbe {
-                reachable: resp.status().is_success() || resp.status().as_u16() == 405,
-                via: "tailnet-socks".into(),
-                detail: format!(
-                    "ADC answered through the embedded daemon's private proxy (HTTP {}).                      Whether the path is tailnet-internal depends on the ADC server's                      subnet-route deployment.",
-                    resp.status()
-                ),
-                http_status: Some(resp.status().as_u16()),
-                latency_ms: Some(started.elapsed().as_millis() as u32),
-            }),
-            Err(e) => Ok(AdcProbe {
-                reachable: false,
-                via: "tailnet-socks".into(),
-                detail: format!(
-                    "ADC not reachable over the tailnet ({e}). The club server must \
-                     advertise a subnet route for its public IP (see ADC server setup)."
-                ),
-                http_status: None,
-                latency_ms: None,
-            }),
+        if detail.is_empty() {
+            detail = match (mesh_ok, https_ok) {
+                (true, true) => "ADC reachable over the tailnet (node TCP + public-name HTTPS).".into(),
+                (true, false) => "ADC node reachable over the tailnet, but the public-name                                   HTTPS path is not routed yet (server subnet route pending)."
+                    .into(),
+                (false, _) => "Private route to ADC is unavailable.".into(),
+            };
         }
+
+        Ok(AdcPrivateProbe {
+            mesh_tcp_ok: mesh_ok,
+            mesh_target,
+            mesh_latency_ms: mesh_ms,
+            https_public_name_ok: https_ok,
+            https_status,
+            detail,
+        })
     })
     .await
     .map_err(|e| format!("join: {e}"))?

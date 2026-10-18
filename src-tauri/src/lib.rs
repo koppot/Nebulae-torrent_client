@@ -21,8 +21,18 @@ pub fn run() {
     // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
     SafeLogger::init_tracing();
 
-    // Embedded Tailscale (ADC-network) state container.
+    // Embedded Tailscale (ADC-network) state container + app-owned
+    // lifecycle: start the bundled daemon at launch (readiness-waited on a
+    // background thread; missing binaries are logged loudly, never silent).
     let _ = TS_STATE.set(TsState::default());
+    std::thread::Builder::new()
+        .name("tailscale-startup".into())
+        .spawn(|| {
+            if let Err(e) = tailscale::ensure_daemon() {
+                tracing::warn!("[tailscale] not started at launch: {e}");
+            }
+        })
+        .ok();
 
     // 1. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
