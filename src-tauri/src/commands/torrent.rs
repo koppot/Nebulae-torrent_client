@@ -75,9 +75,15 @@ pub struct TorrentItem {
     pub upload_limit_kib: u32,
     #[serde(default)]
     pub ratio_limit: f32,
-    /// Transmission bandwidthPriority: 1 = high (Racing Mode active), 0 = normal, -1 = low
+    /// Transmission torrent bandwidth priority: 1 = high, 0 = normal, -1 = low
     #[serde(default, rename = "bandwidthPriority")]
     pub bandwidth_priority: Option<i8>,
+    /// Per-torrent peer limit reported by the engine
+    #[serde(default, rename = "peerLimit")]
+    pub peer_limit: Option<u32>,
+    /// Explicit Racing Mode state: true only when both bandwidthPriority == 1 AND peerLimit >= 150
+    #[serde(default, rename = "racingMode")]
+    pub racing_mode: Option<bool>,
     #[serde(default)]
     pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }

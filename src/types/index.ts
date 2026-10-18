@@ -148,7 +148,9 @@ export interface TorrentItem {
   sequential_download: boolean;
   first_last_piece_prio: boolean;
   super_seeding: boolean;
-  bandwidthPriority?: number; // 1 = high (Racing Mode active), 0 = normal, -1 = low
+  bandwidthPriority?: number; // 1 = high, 0 = normal, -1 = low
+  peerLimit?: number;
+  racingMode?: boolean;
   tags: string[];
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];

@@ -1135,7 +1135,7 @@ export const SettingsModal: React.FC = () => {
                         <span>Racing Mode</span>
                       </h3>
                       <p className="text-[11px] text-[#a3a3a3] mt-0.5">
-                        Maximizes piece acquisition and throughput — 256 MiB disk cache, 150 peers per torrent, 1000 global peers, 14 unchoke slots, and high bandwidth priority on all added torrents. Enabled by default.
+                        Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes for queue accounting, and assigns high torrent bandwidth priority to active torrents.
                       </p>
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer ml-4 flex-shrink-0">
@@ -1492,7 +1492,7 @@ export const SettingsModal: React.FC = () => {
                 </div>
 
                 <div className="pt-3 border-t border-[#333333]">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">Default Trackers (added to all new torrents)</h3>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">Default Trackers (public torrents only)</h3>
                   <textarea
                     value={settings.default_trackers_list}
                     onChange={(e) => saveSettings({ default_trackers_list: e.target.value })}
@@ -1500,7 +1500,7 @@ export const SettingsModal: React.FC = () => {
                     placeholder="https://tracker.example.com/announce"
                     className="w-full px-3 py-2 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] resize-none"
                   />
-                  <p className="text-[10px] text-[#a3a3a3] mt-1">One URL per line. Applied to every torrent added through this client.</p>
+                  <p className="text-[10px] text-[#a3a3a3] mt-1">One URL per line. Applied to public torrents only; private torrents are protected and will never receive default trackers.</p>
                 </div>
               </div>
             )}

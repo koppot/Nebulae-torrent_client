@@ -143,8 +143,8 @@ export const defaultSettings: UserSettings = {
   // 10. BitTorrent Engine
   engine: 'transmission',
 
-  // 11. Racing Mode
-  racing_mode_enabled: true,
+  // 11. Racing Mode (tuning preset, disabled by default)
+  racing_mode_enabled: false,
 
   // 12. Engine Identification
   engine_identity_profile: 'transmission',

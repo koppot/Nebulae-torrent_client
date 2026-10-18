@@ -142,10 +142,11 @@ pub struct UserSettings {
     /// and any newly applied defaults.
     pub app_version: Option<String>,
 
-    // 12. Racing Mode — maximizes piece acquisition and peer connectivity
+    // 12. Racing Mode tuning preset
     /// When enabled, Transmission is configured with aggressive peer limits,
-    /// large disk cache, and each added torrent receives high bandwidth
-    /// priority and an uncapped per-torrent peer count.
+    /// 256 MiB disk cache, 14 unchoke slots, 2-minute queue stall threshold,
+    /// and added torrents receive high bandwidth priority.
+    #[serde(default)]
     pub racing_mode_enabled: bool,
 
     // 13. Engine Identification
@@ -305,8 +306,9 @@ impl Default for UserSettings {
             // 11. Internal bookkeeping
             app_version: None,
 
-            // 12. Racing Mode
-            racing_mode_enabled: true,
+            // 12. Racing Mode tuning preset: false by default to prevent silent
+            // activation on existing installs and keep upstream defaults.
+            racing_mode_enabled: false,
 
             // 13. Engine Identification
             engine_identity_profile: "transmission".to_string(),
@@ -689,6 +691,34 @@ mod tests {
         assert_eq!(deserialized.encryption_mode, "Prefer");
         assert_eq!(deserialized.max_global_connections, 500);
         assert_eq!(deserialized.engine, "transmission");
+        assert!(!deserialized.racing_mode_enabled);
         assert!(deserialized.auto_update_enabled);
+    }
+
+    #[test]
+    fn test_racing_mode_migration_preserves_false_and_defaults_missing() {
+        // Existing user settings without racing_mode_enabled must default to false
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            !deserialized.racing_mode_enabled,
+            "Missing racing_mode_enabled must default to false for existing users"
+        );
+
+        // Explicit false must be preserved
+        let false_json = r#"{"racing_mode_enabled": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.racing_mode_enabled,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true must be preserved
+        let true_json = r#"{"racing_mode_enabled": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.racing_mode_enabled,
+            "Explicit true must be preserved"
+        );
     }
 }
