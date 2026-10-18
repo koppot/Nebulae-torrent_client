@@ -278,8 +278,57 @@ pub fn start_with_paths(paths: &Paths, state: &Arc<TsState>) -> Result<(), Strin
     // It outlives this call, so PR_SET_PDEATHSIG (set at spawn) tears the
     // daemon down if the app process dies hard.
     wait_for_ready(paths, Duration::from_secs(30))?;
+    // Resume the SAVED profile. Windows dev-mode daemons never auto-resume
+    // (verified on real hardware: the backend sits in NoState until a client
+    // runs `up`); on mac/linux this is an idempotent no-op when already
+    // Running. Enrolled state only — a fresh install stays NeedsLogin.
+    if let Err(e) = resume_saved_profile(paths) {
+        tracing::warn!("[tailscale] profile resume: {e}");
+    }
     tracing::info!("[tailscale] embedded tailscaled is running");
     Ok(())
+}
+
+/// True when saved prefs show an ENROLLED profile that should be resumed.
+/// (unit-tested: a logged-out/fresh state must never trigger `up`)
+fn should_resume_profile(prefs_json: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(prefs_json) {
+        Ok(v) => {
+            let control = v.get("ControlURL").and_then(|c| c.as_str()).unwrap_or("");
+            let logged_out = v.get("LoggedOut").and_then(|l| l.as_bool()).unwrap_or(true);
+            !control.is_empty() && !logged_out
+        }
+        Err(_) => false,
+    }
+}
+
+/// Bounded resume of the saved profile (no auth key involved).
+fn resume_saved_profile(paths: &Paths) -> Result<(), String> {
+    let prefs = cli_on(paths, &["debug", "prefs"], Duration::from_secs(10))?;
+    if !should_resume_profile(&prefs) {
+        return Ok(()); // fresh install: nothing to resume
+    }
+    // `up` must REPEAT the saved settings or tailscale refuses to change
+    // them implicitly (verified on Windows).
+    let control = serde_json::from_str::<serde_json::Value>(&prefs)
+        .ok()
+        .and_then(|v| {
+            v.get("ControlURL")
+                .and_then(|c| c.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
+    cli_on(
+        paths,
+        &[
+            "up",
+            "--accept-dns=false",
+            &format!("--login-server={control}"),
+            &format!("--hostname={}", node_name()),
+        ],
+        ENROLL_TIMEOUT,
+    )
+    .map(|_| ())
 }
 
 /// Idempotent supervisor start. Returns true only for the caller that
@@ -745,6 +794,18 @@ mod tests {
         let guard = state.child.lock().unwrap();
         assert!(guard.is_none(), "no daemon must be spawned when not wanted");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Resume guard: enrolled prefs trigger; fresh/logged-out prefs never do.
+    #[test]
+    fn resume_guard_enrolled_only() {
+        let enrolled = r#"{"ControlURL":"https://control.asiandvdclub.org","LoggedOut":false,"WantRunning":true}"#;
+        assert!(should_resume_profile(enrolled));
+        let fresh = r#"{"ControlURL":"","LoggedOut":true}"#;
+        assert!(!should_resume_profile(fresh));
+        let logged_out_with_url = r#"{"ControlURL":"https://control.asiandvdclub.org","LoggedOut":true}"#;
+        assert!(!should_resume_profile(logged_out_with_url));
+        assert!(!should_resume_profile("not json"));
     }
 
     /// Stopping a never-started state must be a no-op (no panic, clean flags).
