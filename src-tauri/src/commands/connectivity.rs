@@ -271,8 +271,20 @@ pub struct TailscaleStatus {
     pub tailnet_ip: Option<String>,
 }
 
+/// Truthful tailscale status for the status bar: the EMBEDDED daemon's
+/// state first (userspace, no TUN — "interface" is descriptive); the legacy
+/// system-TUN detection is only a fallback for an embedded daemon that has
+/// not started.
 #[tauri::command]
 pub fn get_tailscale_status() -> Result<TailscaleStatus, String> {
+    let ts = crate::tailscale::status();
+    if ts.backend_state == "Running" {
+        return Ok(TailscaleStatus {
+            connected: true,
+            interface: Some("nebulae-embedded (userspace)".into()),
+            tailnet_ip: ts.tailnet_ip,
+        });
+    }
     Ok(match crate::utils::network::detect_tailscale() {
         Some((interface, tailnet_ip)) => TailscaleStatus {
             connected: true,

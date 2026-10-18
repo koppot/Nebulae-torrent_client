@@ -162,3 +162,80 @@ mod tests {
         assert!(err.contains("ADC node not seen"), "unexpected: {err}");
     }
 }
+
+/// Real ADC HTTPS request through the embedded daemon's SOCKS5 proxy using
+/// adc_http_client(), with the ADC node's TAILNET IP pinned as the
+/// connection target (so the request rides the mesh by construction) and
+/// FULL certificate/hostname validation for asiandvdclub.org (no insecure
+/// escape hatches). No public fallback: when the mesh is down this fails.
+#[derive(Debug, Serialize)]
+pub struct AdcFetchResult {
+    pub ok: bool,
+    pub status: Option<u16>,
+    pub via_tailnet_ip: Option<String>,
+    pub body_snippet: String,
+    pub detail: String,
+}
+
+#[tauri::command]
+pub async fn tailscale_adc_fetch(path: Option<String>) -> Result<AdcFetchResult, String> {
+    tokio::task::spawn_blocking(|| {
+        let st = crate::tailscale::status();
+        let Some(node_ip) = st.adc_node.clone() else {
+            return Ok(AdcFetchResult {
+                ok: false,
+                status: None,
+                via_tailnet_ip: None,
+                body_snippet: String::new(),
+                detail: "ADC node not seen in the tailnet (not enrolled or server offline)".into(),
+            });
+        };
+        let client = match crate::tailscale::adc_http_client() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(AdcFetchResult {
+                    ok: false,
+                    status: None,
+                    via_tailnet_ip: Some(node_ip),
+                    body_snippet: String::new(),
+                    detail: e,
+                })
+            }
+        };
+        let addr: std::net::IpAddr = match node_ip.parse() {
+            Ok(a) => a,
+            Err(_) => {
+                return Ok(AdcFetchResult {
+                    ok: false, status: None, via_tailnet_ip: Some(node_ip),
+                    body_snippet: String::new(), detail: "bad ADC node IP".into(),
+                })
+            }
+        };
+        let path = path.unwrap_or_else(|| "/".into());
+        let url = format!("https://asiandvdclub.org{}", if path.starts_with('/') { path } else { format!("/{}", path) });
+        match client.get(&url).send() {
+            Ok(resp) => {
+                let ok = resp.status().is_success();
+                let code = resp.status().as_u16();
+                let body = resp.text().unwrap_or_default();
+                let snippet: String = body.chars().take(200).collect();
+                Ok(AdcFetchResult {
+                    ok,
+                    status: Some(code),
+                    via_tailnet_ip: Some(node_ip),
+                    body_snippet: snippet,
+                    detail: "fetched via tailnet with full TLS validation".into(),
+                })
+            }
+            Err(e) => Ok(AdcFetchResult {
+                ok: false,
+                status: None,
+                via_tailnet_ip: Some(node_ip),
+                body_snippet: String::new(),
+                detail: format!("request failed: {e}"),
+            }),
+        }
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))?
+}

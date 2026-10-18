@@ -631,11 +631,18 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
     }
     let proxy = reqwest::Proxy::all(format!("socks5://127.0.0.1:{SOCKS_PORT}"))
         .map_err(|e| format!("proxy: {e}"))?;
-    reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .proxy(proxy)
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|e| format!("client: {e}"))
+        .timeout(Duration::from_secs(8));
+    // Pin ADC hostnames to the node's TAILNET IP so requests ride the mesh
+    // by construction. TLS SNI + certificate/hostname validation stay on the
+    // public name (resolve() only affects the connection target).
+    if let Some(node_ip) = st.adc_node.clone() {
+        if let Ok(addr) = node_ip.parse() {
+            builder = builder.resolve("asiandvdclub.org", addr);
+        }
+    }
+    builder.build().map_err(|e| format!("client: {e}"))
 }
 
 

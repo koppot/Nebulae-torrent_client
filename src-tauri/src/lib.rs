@@ -486,6 +486,7 @@ pub fn run() {
             commands::tailscale::tailscale_enroll,
             commands::tailscale::tailscale_disconnect,
             commands::tailscale::adc_private_probe,
+            commands::tailscale::tailscale_adc_fetch,
             commands::torrent::get_engine_status,
             commands::torrent::trigger_kill_switch_command,
             commands::torrent::reset_kill_switch_command,
