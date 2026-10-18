@@ -1222,27 +1222,6 @@ impl TransmissionTorrentEngine {
             }
         };
 
-        // Record active/spawned identity in DB
-        let _ = db.set_setting(
-            "active_engine_identity",
-            &serde_json::json!({
-                "profile": spawned_profile,
-                "user_agent": spawned_ua,
-                "peer_id_prefix": spawned_prefix,
-                "supports_overrides": daemon_supports_identity,
-            })
-            .to_string(),
-        );
-        let _ = db.set_setting(
-            "spawned_engine_identity",
-            &serde_json::json!({
-                "profile": spawned_profile,
-                "user_agent": spawned_ua,
-                "peer_id_prefix": spawned_prefix,
-            })
-            .to_string(),
-        );
-
         let mut cmd = std::process::Command::new(&daemon_path);
         cmd.arg("--config-dir")
             .arg(&engine_dir)
@@ -1314,6 +1293,29 @@ impl TransmissionTorrentEngine {
         }
 
         info!("transmission-daemon successfully initialized and responsive via JSON-RPC.");
+
+        // Record active/spawned identity in DB only after daemon has successfully started
+        // and verified responsive, ensuring a failed start/restart never reports an identity
+        // that failed to become active.
+        let _ = db.set_setting(
+            "active_engine_identity",
+            &serde_json::json!({
+                "profile": spawned_profile,
+                "user_agent": spawned_ua,
+                "peer_id_prefix": spawned_prefix,
+                "supports_overrides": daemon_supports_identity,
+            })
+            .to_string(),
+        );
+        let _ = db.set_setting(
+            "spawned_engine_identity",
+            &serde_json::json!({
+                "profile": spawned_profile,
+                "user_agent": spawned_ua,
+                "peer_id_prefix": spawned_prefix,
+            })
+            .to_string(),
+        );
 
         // 7b. Execute one-time migration from librqbit if needed
         run_librqbit_migration(&rpc_client, &paths.engine_dir, &db);
