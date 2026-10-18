@@ -73,6 +73,12 @@ export default function AppInfoModal({ onClose }: Props) {
           <li className="flex gap-2"><span className="text-[#e50914]">•</span>VPN kill switch, connectivity doctor, ADC ratio profile</li>
         </ul>
 
+        <p className="mt-4 text-[10px] text-[#666666] leading-relaxed">
+          © 2026 Asian DVD Club. Third-party components, artwork, and media
+          remain the property of their respective owners. See Third-Party
+          Notices for applicable licenses.
+        </p>
+
         <button
           type="button"
           onClick={runUpdate}
