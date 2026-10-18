@@ -37,6 +37,7 @@ export interface InspectTorrentResult {
   created_by: string;
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
+  metainfo_bytes?: number[];
 }
 
 export interface TorrentContentFileMatch {
@@ -128,7 +129,7 @@ export interface TorrentItem {
   download_rate: number;
   upload_rate: number;
   progress: number;
-  status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Error';
+  status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Queued for checking' | 'Error';
   eta_seconds?: number;
   // null = unknown (no successful tracker scrape yet) - rendered as a dash
   seeds: number | null;
@@ -375,6 +376,7 @@ export interface InspectTorrentResult {
   created_by: string;
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
+  metainfo_bytes?: number[];
 }
 
 export * from './peering';

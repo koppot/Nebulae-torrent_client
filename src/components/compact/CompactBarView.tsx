@@ -160,9 +160,13 @@ export const CompactBarView: React.FC = () => {
 
                   <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
                     <span>
-                      {t.status === 'Seeding' || t.status === 'Completed' || t.progress >= 1
-                        ? `${formatBytes(t.uploaded_bytes)} uploaded`
-                        : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)} (${progressPct}%)`}
+                      {t.status === 'Checking' || t.status === 'Queued for checking'
+                        ? t.status === 'Queued for checking'
+                          ? 'Queued for checking'
+                          : `Verifying… ${progressPct}%`
+                        : t.status === 'Seeding' || t.status === 'Completed' || t.progress >= 1
+                          ? `${formatBytes(t.uploaded_bytes)} uploaded`
+                          : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)} (${progressPct}%)`}
                     </span>
                     <div className="flex items-center gap-2">
                       {isDownloading && (

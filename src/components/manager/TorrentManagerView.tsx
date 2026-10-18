@@ -1044,9 +1044,11 @@ export const TorrentManagerView: React.FC = () => {
                 const rowErrorClass = rowError ? 'text-[#e50914] hover:text-[#e50914]' : '';
                 // While downloading the bar carries the downloaded volume;
                 // once complete it switches to the uploaded volume (seeders
-                // read contribution, not progress).
+                // read contribution, not progress). Checking states display
+                // verification progress.
+                const isChecking = t.status === 'Checking' || t.status === 'Queued for checking';
                 const isComplete =
-                  t.status === 'Seeding' || t.status === 'Completed' || t.progress >= 1;
+                  !isChecking && (t.status === 'Seeding' || t.status === 'Completed' || t.progress >= 1);
                 return (
                   <tr
                     key={t.id}
@@ -1084,9 +1086,13 @@ export const TorrentManagerView: React.FC = () => {
                           </span>
                         </div>
                         <span className="text-[9px] font-mono text-[#737373] text-center leading-tight">
-                          {isComplete
-                            ? `${formatBytes(t.uploaded_bytes)} uploaded`
-                            : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)}`}
+                          {isChecking
+                            ? t.status === 'Queued for checking'
+                              ? 'Queued for checking'
+                              : `Verifying… ${progressPct}%`
+                            : isComplete
+                              ? `${formatBytes(t.uploaded_bytes)} uploaded`
+                              : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)}`}
                         </span>
                       </div>
                     </td>

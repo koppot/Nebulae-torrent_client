@@ -55,6 +55,13 @@ export const AddTorrentModal: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
+  const applyInspectPreview = (preview: InspectTorrentResult | null) => {
+    setInspectPreview(preview);
+    if (preview?.metainfo_bytes && preview.metainfo_bytes.length > 0) {
+      setSelectedFileBytes(preview.metainfo_bytes);
+    }
+  };
+
   useEffect(() => {
     if (!showAddTorrent) return;
 
@@ -81,7 +88,7 @@ export const AddTorrentModal: React.FC = () => {
         setTorrentSource(filePath);
         setInspectLoading(true);
         inspectTorrent(filePath)
-          .then((preview) => setInspectPreview(preview))
+          .then(applyInspectPreview)
           .catch(() => setInspectPreview(null))
           .finally(() => setInspectLoading(false));
       }
@@ -103,7 +110,7 @@ export const AddTorrentModal: React.FC = () => {
         setTorrentSource(filePath);
         setInspectLoading(true);
         inspectTorrent(filePath)
-          .then((preview) => setInspectPreview(preview))
+          .then(applyInspectPreview)
           .catch(() => setInspectPreview(null))
           .finally(() => setInspectLoading(false));
       }
@@ -134,7 +141,7 @@ export const AddTorrentModal: React.FC = () => {
       setInitialAddTorrentSource(null);
       setInspectLoading(true);
       inspectTorrent(initialAddTorrentSource)
-        .then((preview) => setInspectPreview(preview))
+        .then(applyInspectPreview)
         .catch(() => setInspectPreview(null))
         .finally(() => setInspectLoading(false));
     }
@@ -255,7 +262,7 @@ export const AddTorrentModal: React.FC = () => {
         setInspectLoading(true);
         inspectTorrent(path)
           .then((preview) => {
-            if (alive) setInspectPreview(preview);
+            if (alive) applyInspectPreview(preview);
           })
           .catch(() => {
             if (alive) setInspectPreview(null);
@@ -296,7 +303,7 @@ export const AddTorrentModal: React.FC = () => {
         setInspectLoading(true);
         try {
           const preview = await inspectTorrent(nativePath);
-          setInspectPreview(preview);
+          applyInspectPreview(preview);
         } catch {
           setInspectPreview(null);
         } finally {
@@ -337,7 +344,7 @@ export const AddTorrentModal: React.FC = () => {
           setInspectLoading(true);
           try {
             const preview = await inspectTorrent(undefined, bytes);
-            setInspectPreview(preview);
+            applyInspectPreview(preview);
           } catch {
             setInspectPreview(null);
           } finally {
@@ -376,7 +383,7 @@ export const AddTorrentModal: React.FC = () => {
           setInspectLoading(true);
           try {
             const preview = await inspectTorrent(undefined, bytes);
-            setInspectPreview(preview);
+            applyInspectPreview(preview);
           } catch {
             setInspectPreview(null);
           } finally {
@@ -610,7 +617,7 @@ export const AddTorrentModal: React.FC = () => {
                     if (val.trim().startsWith('magnet:') || val.trim().startsWith('http')) {
                       setInspectLoading(true);
                       inspectTorrent(val.trim())
-                        .then((preview) => setInspectPreview(preview))
+                        .then(applyInspectPreview)
                         .catch(() => setInspectPreview(null))
                         .finally(() => setInspectLoading(false));
                     } else {

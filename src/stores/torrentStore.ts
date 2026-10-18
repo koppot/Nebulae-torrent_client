@@ -24,6 +24,41 @@ interface SpeedCounterState {
 }
 const speedCounters = new Map<string, SpeedCounterState>();
 
+interface RecheckEntry {
+  requestedAt: number;
+  seenChecking: boolean;
+}
+const activeRechecks = new Map<string, RecheckEntry>();
+
+export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
+  const now = Date.now();
+  return torrents.map((t) => {
+    const recheck = activeRechecks.get(t.id);
+    if (!recheck) return t;
+
+    if (t.status === 'Checking') {
+      recheck.seenChecking = true;
+      return t;
+    }
+
+    if (t.status === 'Queued for checking') {
+      return t;
+    }
+
+    // Torrent is currently NOT reported as checking by the engine.
+    if (!recheck.seenChecking && now - recheck.requestedAt < 1500) {
+      // The daemon has not yet transitioned into checking in this polled sample,
+      // and we are within the debounce grace window. Preserve Queued for checking.
+      return { ...t, status: 'Queued for checking', progress: 0 };
+    }
+
+    // Either we previously saw checking and it has completed, or the grace
+    // window elapsed. Clean up activeRechecks and report the engine's final truth.
+    activeRechecks.delete(t.id);
+    return t;
+  });
+}
+
 export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
   const seen = new Set<string>();
   const now = Date.now();
@@ -175,7 +210,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      set({ torrents: smoothTelemetrySpeeds(data), isLoading: false });
+      set({ torrents: smoothTelemetrySpeeds(reconcileRecheckState(data)), isLoading: false });
     } catch {
       set({ isLoading: false });
     }
@@ -272,17 +307,39 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   forceRecheck: async (id: string) => {
+    activeRechecks.set(id, { requestedAt: Date.now(), seenChecking: false });
+    set({
+      torrents: get().torrents.map((t) =>
+        t.id === id ? { ...t, status: 'Queued for checking', progress: 0 } : t
+      ),
+    });
     try {
       await invoke('force_recheck_torrent', { id });
     } catch (err) {
       console.warn('force_recheck_torrent failed:', err);
+      activeRechecks.delete(id);
+      await get().fetchTorrents();
+      return;
     }
-    set({
-      torrents: get().torrents.map((t) => (t.id === id ? { ...t, status: 'Checking' } : t)),
-    });
-    // Verify flips the daemon into a checking state; refresh so the row and
-    // the inspector show the real verifying progress instead of a guess.
+    // Pull engine truth immediately
     await get().fetchTorrents();
+
+    // Fast-poll during verification (200ms) so intermediate progress
+    // is reflected smoothly in the UI
+    let ticksLeft = 60; // Up to 12s of fast polling if needed
+    const fastPoll = async () => {
+      const entry = activeRechecks.get(id);
+      if (!entry || ticksLeft <= 0) return;
+      ticksLeft--;
+      await get().fetchTorrents();
+      const current = get().torrents.find((t) => t.id === id);
+      if (current && (current.status === 'Checking' || current.status === 'Queued for checking')) {
+        setTimeout(fastPoll, 200);
+      } else {
+        activeRechecks.delete(id);
+      }
+    };
+    setTimeout(fastPoll, 100);
   },
 
   reannounce: async (id: string) => {

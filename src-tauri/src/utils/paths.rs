@@ -92,7 +92,21 @@ pub fn normalize_source_path(source: &str) -> PathBuf {
     }
     if let Some(stripped) = s.strip_prefix("file://") {
         let decoded = percent_decode_path(stripped);
-        return PathBuf::from(decoded);
+        let cleaned = if decoded.starts_with("localhost/") {
+            &decoded["localhost/".len()..]
+        } else {
+            &decoded
+        };
+        let final_path = if cleaned.len() >= 3
+            && cleaned.starts_with('/')
+            && cleaned.as_bytes()[1].is_ascii_alphabetic()
+            && cleaned.as_bytes()[2] == b':'
+        {
+            &cleaned[1..]
+        } else {
+            cleaned
+        };
+        return PathBuf::from(final_path);
     }
     if let Some(stripped) = s.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
@@ -128,4 +142,42 @@ fn percent_decode_path(input: &str) -> String {
         bytes.push(b);
     }
     String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_source_path_file_uri_unix() {
+        let p = normalize_source_path("file:///home/user/downloads/sample.torrent");
+        assert_eq!(p, PathBuf::from("/home/user/downloads/sample.torrent"));
+    }
+
+    #[test]
+    fn test_normalize_source_path_file_uri_windows_drive() {
+        let p = normalize_source_path("file:///C:/Users/dev/sample.torrent");
+        assert_eq!(p, PathBuf::from("C:/Users/dev/sample.torrent"));
+
+        let p2 = normalize_source_path("file:///V:/Blu-ray/disc.iso");
+        assert_eq!(p2, PathBuf::from("V:/Blu-ray/disc.iso"));
+    }
+
+    #[test]
+    fn test_normalize_source_path_file_uri_localhost() {
+        let p = normalize_source_path("file://localhost/C:/Users/dev/sample.torrent");
+        assert_eq!(p, PathBuf::from("C:/Users/dev/sample.torrent"));
+    }
+
+    #[test]
+    fn test_normalize_source_path_percent_encoded() {
+        let p = normalize_source_path("file:///home/user/test%20space.torrent");
+        assert_eq!(p, PathBuf::from("/home/user/test space.torrent"));
+    }
+
+    #[test]
+    fn test_normalize_source_path_quotes() {
+        let p = normalize_source_path("\"/tmp/sample.torrent\"");
+        assert_eq!(p, PathBuf::from("/tmp/sample.torrent"));
+    }
 }

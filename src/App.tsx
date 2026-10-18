@@ -3,7 +3,7 @@ import { useUiStore, ManagerTab } from './stores/uiStore';
 import { usePlayerStore, playerStore, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
-import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
+import { useTorrentStore, smoothTelemetrySpeeds, reconcileRecheckState } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
@@ -132,7 +132,7 @@ export const App: React.FC = () => {
     listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
       if (event.payload) {
         useTorrentStore.setState({
-          torrents: smoothTelemetrySpeeds(event.payload),
+          torrents: smoothTelemetrySpeeds(reconcileRecheckState(event.payload)),
           isLoading: false,
         });
       }

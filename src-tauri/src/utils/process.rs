@@ -22,13 +22,17 @@ pub fn create_hidden_command<S: AsRef<OsStr>>(program: S) -> Command {
 /// flashing prompt, or interactive profile loading.
 pub fn run_hidden_powershell(script: &str) -> io::Result<Output> {
     let mut cmd = create_hidden_command("powershell");
+    let full_script = format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::InputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8;\n{}",
+        script
+    );
     cmd.args([
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
         "Hidden",
         "-Command",
-        script,
+        &full_script,
     ]);
     cmd.output()
 }

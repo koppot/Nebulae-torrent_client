@@ -422,6 +422,9 @@ impl TransmissionRpcClient {
             "desiredAvailable",
             "corruptEver",
             "etaIdle",
+            // Verification / errors
+            "error",
+            "recheckProgress",
         ];
 
         let mut args = json!({ "fields": fields });
@@ -1608,6 +1611,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
             let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
             let percent_done = t.get("percentDone").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let recheck_progress =
+                t.get("recheckProgress").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let error_num = t.get("error").and_then(|v| v.as_i64()).unwrap_or(0);
+            let error_string = t.get("errorString").and_then(|v| v.as_str()).unwrap_or("");
             let downloaded_ever = t
                 .get("downloadedEver")
                 .and_then(|v| v.as_u64())
@@ -1645,19 +1652,33 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
             // Status mapping per design note table:
             // 0: Stopped -> "Paused"
-            // 1: Queued to check, 2: Checking -> "Checking"
+            // 1: Queued to check -> "Queued for checking"
+            // 2: Checking -> "Checking"
             // 3: Queued to download, 4: Downloading -> "Downloading"
             // 5: Queued to seed, 6: Seeding -> "Seeding"
+            // Local errors (e.g. missing files on disk) -> "Error"
             let status = if is_ks {
                 "Paused".to_string()
+            } else if error_num == 3 || (!error_string.is_empty() && error_num != 0) {
+                "Error".to_string()
             } else {
                 match status_num {
                     0 => "Paused".to_string(),
-                    1 | 2 => "Checking".to_string(),
+                    1 => "Queued for checking".to_string(),
+                    2 => "Checking".to_string(),
                     3 | 4 => "Downloading".to_string(),
                     5 | 6 => "Seeding".to_string(),
                     _ => "Paused".to_string(),
                 }
+            };
+
+            // During checking or check-queueing, progress reflects verification
+            // progress (0.0 when queued, recheck_progress when checking), NOT
+            // percent_done. When not checking, progress is percent_done.
+            let progress = match status_num {
+                1 => 0.0f32,
+                2 => recheck_progress,
+                _ => percent_done,
             };
 
             // Honest ratio (owner correction): a torrent whose data was
@@ -1833,7 +1854,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 uploaded_bytes: uploaded_ever,
                 download_rate: rate_dl,
                 upload_rate: rate_ul,
-                progress: percent_done,
+                progress,
                 status,
                 eta_seconds,
                 seeds: max_seeds,
@@ -1914,6 +1935,34 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     return self.add_torrent_from_bytes(&bytes, download_dir);
                 }
             }
+
+            // Check if trimmed is relative to user's Downloads directory
+            if let Some(dl_dir) = dirs::download_dir() {
+                let candidate = dl_dir.join(trimmed);
+                if candidate.is_file() {
+                    if let Ok(bytes) = std::fs::read(&candidate) {
+                        return self.add_torrent_from_bytes(&bytes, download_dir);
+                    }
+                }
+            }
+
+            // Check if trimmed is relative to the target download_dir
+            if let Some(dir) = download_dir {
+                let candidate = std::path::Path::new(dir).join(trimmed);
+                if candidate.is_file() {
+                    if let Ok(bytes) = std::fs::read(&candidate) {
+                        return self.add_torrent_from_bytes(&bytes, download_dir);
+                    }
+                }
+            }
+
+            // If it is not a URL and not a found file on disk, return an explicit error
+            // instead of sending an unresolvable bare filename to Transmission RPC that
+            // triggers "Transmission RPC call 'torrent-add' failed: unrecognized info".
+            return Err(format!(
+                "Torrent file not found: '{}'. Please select or drag the .torrent file again.",
+                trimmed
+            ));
         }
 
         // 3. Magnet or HTTP(S) URL
@@ -2721,19 +2770,21 @@ mod tests {
     fn test_transmission_status_mapping() {
         // Transmission status codes:
         // 0: Stopped -> "Paused"
-        // 1: Queued to check, 2: Checking -> "Checking"
+        // 1: Queued to check -> "Queued for checking"
+        // 2: Checking -> "Checking"
         // 3: Queued to download, 4: Downloading -> "Downloading"
         // 5: Queued to seed, 6: Seeding -> "Seeding"
         let map_status = |s: i64| match s {
             0 => "Paused",
-            1 | 2 => "Checking",
+            1 => "Queued for checking",
+            2 => "Checking",
             3 | 4 => "Downloading",
             5 | 6 => "Seeding",
             _ => "Paused",
         };
 
         assert_eq!(map_status(0), "Paused");
-        assert_eq!(map_status(1), "Checking");
+        assert_eq!(map_status(1), "Queued for checking");
         assert_eq!(map_status(2), "Checking");
         assert_eq!(map_status(3), "Downloading");
         assert_eq!(map_status(4), "Downloading");

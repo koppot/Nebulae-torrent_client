@@ -113,6 +113,8 @@ pub struct InspectTorrentResult {
     pub created_by: String,
     pub files: Vec<TorrentFileItem>,
     pub trackers: Vec<TorrentTrackerItem>,
+    #[serde(default)]
+    pub metainfo_bytes: Option<Vec<u8>>,
 }
 
 #[tauri::command]
@@ -135,6 +137,7 @@ pub fn inspect_torrent_file(
                 created_by: parsed.created_by,
                 files: parsed.files,
                 trackers: parsed.trackers,
+                metainfo_bytes: Some(raw),
             });
         }
     }
@@ -172,6 +175,7 @@ pub fn inspect_torrent_file(
                         created_by: parsed.created_by,
                         files: parsed.files,
                         trackers: parsed.trackers,
+                        metainfo_bytes: Some(decoded),
                     });
                 }
             }
@@ -201,14 +205,28 @@ pub fn inspect_torrent_file(
                 created_by: "Nebulae Metainfo Tool".to_string(),
                 files: vec![],
                 trackers: vec![],
+                metainfo_bytes: None,
             });
         }
 
         // Disk path?
         let norm_path = crate::engine::mock::normalize_source_path(trimmed);
-        if norm_path.exists() {
-            if norm_path.is_file() {
-                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_file(&norm_path) {
+        let disk_path = if norm_path.is_file() {
+            Some(norm_path.clone())
+        } else if let Some(dl_dir) = dirs::download_dir() {
+            let candidate = dl_dir.join(trimmed);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(target_path) = disk_path {
+            if let Ok(raw_bytes) = std::fs::read(&target_path) {
+                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw_bytes) {
                     return Ok(InspectTorrentResult {
                         name: parsed.name,
                         total_bytes: parsed.total_bytes,
@@ -220,55 +238,58 @@ pub fn inspect_torrent_file(
                         created_by: parsed.created_by,
                         files: parsed.files,
                         trackers: parsed.trackers,
+                        metainfo_bytes: Some(raw_bytes),
                     });
                 }
-                if let Ok(meta) = norm_path.metadata() {
-                    let total_bytes = meta.len();
-                    let file_name = norm_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Local File".to_string());
-                    let piece_size = recommended_piece_size_bytes(total_bytes);
-                    return Ok(InspectTorrentResult {
-                        name: file_name.clone(),
-                        total_bytes,
-                        piece_size,
-                        total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
-                        info_hash: format!("local_{:x}", total_bytes),
-                        is_private: true,
-                        comment: "Local Storage File".to_string(),
-                        created_by: "Nebulae Metainfo Tool".to_string(),
-                        files: vec![crate::commands::torrent::TorrentFileItem {
-                            index: 0,
-                            name: file_name,
-                            size_bytes: total_bytes,
-                            progress: 1.0,
-                            priority: 1,
-                        }],
-                        trackers: vec![],
-                    });
-                }
-            } else if norm_path.is_dir() {
-                let files = crate::engine::mock::scan_directory_files(&norm_path)?;
-                let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
-                let dir_name = norm_path
+            }
+            if let Ok(meta) = target_path.metadata() {
+                let total_bytes = meta.len();
+                let file_name = target_path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Local Directory".to_string());
+                    .unwrap_or_else(|| "Local File".to_string());
                 let piece_size = recommended_piece_size_bytes(total_bytes);
                 return Ok(InspectTorrentResult {
-                    name: dir_name,
+                    name: file_name.clone(),
                     total_bytes,
                     piece_size,
                     total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
                     info_hash: format!("local_{:x}", total_bytes),
                     is_private: true,
-                    comment: "Local Storage Directory".to_string(),
+                    comment: "Local Storage File".to_string(),
                     created_by: "Nebulae Metainfo Tool".to_string(),
-                    files,
+                    files: vec![crate::commands::torrent::TorrentFileItem {
+                        index: 0,
+                        name: file_name,
+                        size_bytes: total_bytes,
+                        progress: 1.0,
+                        priority: 1,
+                    }],
                     trackers: vec![],
+                    metainfo_bytes: None,
                 });
             }
+        } else if norm_path.is_dir() {
+            let files = crate::engine::mock::scan_directory_files(&norm_path)?;
+            let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
+            let dir_name = norm_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Local Directory".to_string());
+            let piece_size = recommended_piece_size_bytes(total_bytes);
+            return Ok(InspectTorrentResult {
+                name: dir_name,
+                total_bytes,
+                piece_size,
+                total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
+                info_hash: format!("local_{:x}", total_bytes),
+                is_private: true,
+                comment: "Local Storage Directory".to_string(),
+                created_by: "Nebulae Metainfo Tool".to_string(),
+                files,
+                trackers: vec![],
+                metainfo_bytes: None,
+            });
         }
     }
 
@@ -998,6 +1019,7 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.FolderBrowserDialog
             $f.Description = "Select Folder for Torrent Creation"
@@ -1047,6 +1069,7 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.OpenFileDialog
             $f.Title = "Select File for Torrent Creation"
@@ -1101,6 +1124,7 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.OpenFileDialog
             $f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
@@ -1288,6 +1312,7 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.FolderBrowserDialog
             $f.Description = "Select Download Directory"
@@ -1536,6 +1561,31 @@ mod tests {
         let res = parse_dialog_output(false, Some(127), b"", b"zenity: command not found\n");
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("zenity: command not found"));
+    }
+
+    #[test]
+    fn test_inspect_torrent_file_returns_metainfo_bytes() {
+        let raw_meta = crate::engine::metainfo::RawMetainfo {
+            announce: Some("http://tracker.example.com/announce".to_string()),
+            announce_list: None,
+            comment: Some("Test Comment".to_string()),
+            created_by: Some("Nebulae Test".to_string()),
+            creation_date: Some(1234567890),
+            info: crate::engine::metainfo::RawInfo {
+                name: Some("test_video.mkv".to_string()),
+                piece_length: Some(262144),
+                pieces: vec![0u8; 20],
+                length: Some(1048576),
+                files: None,
+                private: Some(1),
+            },
+        };
+        let bencode_bytes = serde_bencode::to_bytes(&raw_meta).unwrap();
+        let res = inspect_torrent_file(None, Some(bencode_bytes.clone())).unwrap();
+        assert_eq!(res.name, "test_video.mkv");
+        assert_eq!(res.total_bytes, 1048576);
+        assert!(res.is_private);
+        assert_eq!(res.metainfo_bytes, Some(bencode_bytes));
     }
 }
 
