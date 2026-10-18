@@ -145,7 +145,20 @@ jobs:
             xvfb \
             desktop-file-utils \
             libdvdnav4 \
-            libbluray2
+            libbluray2 \
+            libvlc5 \
+            vlc-plugin-base \
+            vlc-plugin-video-output
+
+      # Full portability on Linux too: stage the runner's VLC runtime into
+      # resources (lib/ + plugins/) exactly like the mac/windows bundles.
+      - name: Bundle libVLC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p src-tauri/resources/vlc/lib src-tauri/resources/vlc/plugins
+          cp -a /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
+          cp -a /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          ls src-tauri/resources/vlc/lib | head -3
 
       - name: Cache cargo dependencies
         uses: swatinem/rust-cache@v2
@@ -201,6 +214,23 @@ jobs:
           hdiutil detach /tmp/vlcmnt -quiet || true
           ls src-tauri/resources/vlc
 
+      # Full portability: a private JRE ships inside the app so BD-J / UHD
+      # disc menus work with zero system Java (libbluray honours JAVA_HOME).
+      - name: Bundle JRE (BD-J/UHD menus)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=macosx; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
+          else
+            A=x64
+          fi
+          curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
+          mkdir -p jrex src-tauri/resources/jre
+          if [ "$EXT" = "zip" ]; then unzip -q jre.$EXT -d jrex; else tar xzf jre.$EXT -C jrex; fi
+          cp -a jrex/jdk-*-jre/. src-tauri/resources/jre/
+          ls src-tauri/resources/jre/bin | head -3
+
       # --- Linux split build ------------------------------------------------
       # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
       # auto-scans AppDir/usr/lib recursively: the bundled player library
@@ -238,6 +268,10 @@ jobs:
           mkdir -p squashfs-root/usr/share/nebulae/resources/engine
           rm -rf squashfs-root/usr/share/nebulae/resources/engine
           cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          # Same treatment for the bundled VLC runtime and JRE.
+          rm -rf squashfs-root/usr/share/nebulae/resources/vlc squashfs-root/usr/share/nebulae/resources/jre
+          cp -a src-tauri/resources/vlc squashfs-root/usr/share/nebulae/resources/vlc
+          cp -a src-tauri/resources/jre squashfs-root/usr/share/nebulae/resources/jre
           # Verify engine daemon is present
           if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
             echo "ERROR: transmission-daemon missing from AppImage engine staging"

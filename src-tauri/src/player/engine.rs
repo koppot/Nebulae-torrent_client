@@ -291,6 +291,21 @@ impl VlcLib {
         }
         #[cfg(target_os = "linux")]
         {
+            // Bundled libVLC ships INSIDE the app (never depend on a system
+            // VLC install).
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.so.5"));
+                    c.push(dir.join("vlc").join("lib").join("libvlc.so.5"));
+                }
+                if let Some(prefix) = exe.parent().and_then(|d| d.parent()) {
+                    c.push(
+                        prefix
+                            .join("share/nebulae/resources/vlc/lib/libvlc.so.5"),
+                    );
+                    c.push(prefix.join("lib/nebulae/resources/vlc/lib/libvlc.so.5"));
+                }
+            }
             c.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libvlc.so.5"));
             c.push(PathBuf::from("/usr/lib/libvlc.so.5"));
             c.push(PathBuf::from("/usr/lib/libvlc.so"));

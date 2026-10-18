@@ -15,6 +15,28 @@ use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
 pub fn run() {
+    // Portable BD-J: point libbluray (inside the bundled VLC plugins) at the
+    // JRE shipped in resources/jre BEFORE any player library is loaded.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut jre_candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(dir) = exe.parent() {
+            jre_candidates.push(dir.join("resources").join("jre"));
+            jre_candidates.push(dir.join("jre"));
+        }
+        if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
+            jre_candidates.push(parent.join("Resources/resources/jre"));
+            jre_candidates.push(parent.join("share/nebulae/resources/jre"));
+            jre_candidates.push(parent.join("lib/nebulae/resources/jre"));
+        }
+        if let Some(jre) = jre_candidates
+            .into_iter()
+            .find(|c| c.join("bin").exists() || c.join("lib").exists())
+        {
+            if std::env::var_os("JAVA_HOME").is_none() {
+                std::env::set_var("JAVA_HOME", &jre);
+            }
+        }
+    }
     // 0. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
