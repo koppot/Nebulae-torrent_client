@@ -202,3 +202,11 @@ pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+
+pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+        Ok(IsZoomed(hwnd).as_bool())
+    }
+}

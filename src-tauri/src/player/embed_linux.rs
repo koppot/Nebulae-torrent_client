@@ -226,3 +226,10 @@ pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
     }
     Err("main window not found".into())
 }
+
+pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.is_maximized().map_err(|e| format!("is_maximized: {e}"));
+    }
+    Err("main window not found".into())
+}

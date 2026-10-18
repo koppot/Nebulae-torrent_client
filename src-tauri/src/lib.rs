@@ -594,6 +594,7 @@ pub fn run() {
             commands::media::window_minimize_cmd,
             commands::media::window_maximize_toggle_cmd,
             commands::media::window_close_cmd,
+            commands::media::window_is_maximized_cmd,
             commands::media::player_seek,
             commands::media::player_set_volume,
             commands::media::player_poll,

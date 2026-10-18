@@ -1332,6 +1332,11 @@ pub fn window_close_cmd(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn window_is_maximized_cmd(app: tauri::AppHandle) -> Result<bool, String> {
+    crate::player::window_is_maximized_native(&app)
+}
+
+#[tauri::command]
 pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     // Manual frame/style-mask toggle in embed_macos: the native
     // toggleFullScreen: animation ignores borderless windows entirely.

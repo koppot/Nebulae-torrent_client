@@ -18,7 +18,8 @@ pub mod engine;
 pub use embed_macos::{
     apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
     set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
-    window_close_native, window_maximize_toggle_native, window_minimize_native,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 pub mod bluray_meta;
 pub mod dvd_meta;
@@ -27,14 +28,16 @@ pub mod dvd_meta;
 pub use embed_windows::{
     apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
     set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
-    window_close_native, window_maximize_toggle_native, window_minimize_native,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 
 #[cfg(target_os = "linux")]
 pub use embed_linux::{
     apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
     set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
-    window_close_native, window_maximize_toggle_native, window_minimize_native,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 
 #[cfg(target_os = "macos")]

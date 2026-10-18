@@ -64,10 +64,9 @@ export const TitleBar: React.FC = () => {
     (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const appWindow = getCurrentWindow();
-        setIsMaximized(await appWindow.isMaximized());
-        unlistenResize = await appWindow.onResized(async () => {
-          setIsMaximized(await appWindow.isMaximized());
+        setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
+        unlistenResize = await getCurrentWindow().onResized(async () => {
+          setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
         });
       } catch {
         // Fallback for non-tauri contexts
@@ -108,8 +107,7 @@ export const TitleBar: React.FC = () => {
   const handleToggleMaximize = async () => {
     try {
       await invoke('window_maximize_toggle_cmd');
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      setIsMaximized(await getCurrentWindow().isMaximized());
+      setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
     } catch (e) {
       console.warn('Toggle maximize failed', e);
     }
