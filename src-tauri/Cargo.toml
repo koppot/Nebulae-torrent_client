@@ -24,6 +24,7 @@ tauri-build = { version = "2", features = [] }
 # white-screen-of-death). `tauri build` enables it; `tauri dev` does not.
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+test-updater = []
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
