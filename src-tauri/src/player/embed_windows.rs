@@ -163,3 +163,42 @@ pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
     }
     Err("main window not found".into())
 }
+
+/// Native Win32 window controls: the Tauri JS window API is unreliable on
+/// the undecorated main window, so Minimize/Maximize/Close go through
+/// ShowWindow / WM_CLOSE on the real HWND.
+fn main_hwnd(app: &AppHandle) -> Result<HWND, String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    win.hwnd().map_err(|e| format!("hwnd: {e}"))
+}
+
+pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
+        let _ = ShowWindow(hwnd, SW_MINIMIZE);
+    }
+    Ok(())
+}
+
+pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, SW_MAXIMIZE, SW_RESTORE};
+        let zoomed = IsZoomed(hwnd).as_bool();
+        let _ = ShowWindow(hwnd, if zoomed { SW_RESTORE } else { SW_MAXIMIZE });
+    }
+    Ok(())
+}
+
+pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::Foundation::WPARAM;
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        PostMessageW(Some(hwnd), WM_CLOSE, Some(WPARAM(0)), None);
+    }
+    Ok(())
+}

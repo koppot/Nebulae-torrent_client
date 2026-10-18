@@ -1314,6 +1314,23 @@ pub fn player_window_minimize(app: tauri::AppHandle) -> Result<(), String> {
     crate::player::miniaturize(&app)
 }
 
+/// Title-bar window controls (owner: the JS window API is unreliable on
+/// the undecorated Windows window - use native calls on every platform).
+#[tauri::command]
+pub fn window_minimize_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    crate::player::window_minimize_native(&app)
+}
+
+#[tauri::command]
+pub fn window_maximize_toggle_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    crate::player::window_maximize_toggle_native(&app)
+}
+
+#[tauri::command]
+pub fn window_close_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    crate::player::window_close_native(&app)
+}
+
 #[tauri::command]
 pub fn player_toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     // Manual frame/style-mask toggle in embed_macos: the native

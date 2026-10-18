@@ -472,3 +472,29 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64, _bar_height: 
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
+
+/// Window controls for the undecorated window (Tauri API works on macOS).
+pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let zoomed = win.is_maximized().unwrap_or(false);
+        if zoomed {
+            return win.unmaximize().map_err(|e| format!("unmaximize: {e}"));
+        }
+        return win.maximize().map_err(|e| format!("maximize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.close().map_err(|e| format!("close: {e}"));
+    }
+    Err("main window not found".into())
+}

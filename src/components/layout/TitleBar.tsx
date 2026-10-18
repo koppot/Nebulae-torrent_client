@@ -95,39 +95,37 @@ export const TitleBar: React.FC = () => {
 
   const { settings } = useSettingsStore();
 
+  // Window controls go through NATIVE backend commands (owner: the JS
+  // window API is unreliable on the undecorated Windows window).
   const handleMinimize = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().minimize();
+      await invoke('window_minimize_cmd');
     } catch (e) {
-      console.warn('Minimize not supported in web context', e);
+      console.warn('Minimize failed', e);
     }
   };
 
   const handleToggleMaximize = async () => {
     try {
+      await invoke('window_maximize_toggle_cmd');
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const appWindow = getCurrentWindow();
-      await appWindow.toggleMaximize();
-      setIsMaximized(await appWindow.isMaximized());
+      setIsMaximized(await getCurrentWindow().isMaximized());
     } catch (e) {
-      console.warn('Toggle maximize not supported in web context', e);
+      console.warn('Toggle maximize failed', e);
     }
   };
 
   const handleClose = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
       if (settings.close_to_tray) {
         // Owner directive: the X button minimizes to the taskbar/dock (the
         // engine keeps running); only explicit Quit ends the session.
-        await win.minimize();
+        await invoke('window_minimize_cmd');
       } else {
-        await win.close();
+        await invoke('window_close_cmd');
       }
     } catch (e) {
-      console.warn('Close not supported in web context', e);
+      console.warn('Close failed', e);
     }
   };
 

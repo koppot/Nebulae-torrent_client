@@ -200,3 +200,29 @@ pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
     }
     Err("main window not found".into())
 }
+
+/// Window controls via the Tauri window API (works on Linux).
+pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let zoomed = win.is_maximized().unwrap_or(false);
+        if zoomed {
+            return win.unmaximize().map_err(|e| format!("unmaximize: {e}"));
+        }
+        return win.maximize().map_err(|e| format!("maximize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.close().map_err(|e| format!("close: {e}"));
+    }
+    Err("main window not found".into())
+}

@@ -16,22 +16,25 @@ pub mod engine;
 
 #[cfg(target_os = "macos")]
 pub use embed_macos::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, set_overlay_hidden, set_window_corner_radius, sync_frame,
-    toggle_fullscreen, miniaturize,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
+    set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_maximize_toggle_native, window_minimize_native,
 };
 pub mod bluray_meta;
 pub mod dvd_meta;
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
+    set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_maximize_toggle_native, window_minimize_native,
 };
 
 #[cfg(target_os = "linux")]
 pub use embed_linux::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize,
+    set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_maximize_toggle_native, window_minimize_native,
 };
 
 #[cfg(target_os = "macos")]

@@ -334,7 +334,93 @@ pub fn save_user_settings(
     db.set_setting("user_settings_json", &json)
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
+    apply_autostart(settings.start_on_boot, settings.start_minimized)?;
+
     Ok(())
+}
+
+/// Make "Start Nebulae on OS startup" actually work (owner report: the
+/// toggle did nothing — nothing consumed the flag).
+/// - macOS: a LaunchAgent plist with RunAtLoad.
+/// - Windows: the HKCU Run registry key (hidden console via `reg`).
+/// - Linux: an XDG autostart .desktop entry.
+/// `start_minimized` passes a `--minimized` flag the app honours at boot.
+pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot resolve the app executable: {e}"))?
+        .to_string_lossy()
+        .to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        let dirs = dirs::home_dir().ok_or("no home dir")?;
+        let dir = dirs.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("LaunchAgents dir: {e}"))?;
+        let plist = dir.join("com.asiandvdclub.nebulae.plist");
+        if !enabled {
+            let _ = std::fs::remove_file(&plist);
+            return Ok(());
+        }
+        let minimized_arg = if minimized { "  <string>--minimized</string>\n" } else { "" };
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>com.asiandvdclub.nebulae</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{exe}</string>{minimized_arg}  </array>\n  <key>RunAtLoad</key><true/>\n</dict>\n</plist>\n"
+        );
+        std::fs::write(&plist, xml).map_err(|e| format!("Write plist: {e}"))?;
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", "gui/com.asiandvdclub.nebulae"])
+            .output();
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        if !enabled {
+            let _ = std::process::Command::new("reg")
+                .args(["delete", key, "/v", "Nebulae", "/f"])
+                .creation_flags_hidden();
+            return Ok(());
+        }
+        let value = if minimized { format!("\"{exe}\" --minimized") } else { format!("\"{exe}\"") };
+        let out = std::process::Command::new("reg")
+            .args(["add", key, "/v", "Nebulae", "/t", "REG_SZ", "/d", &value, "/f"])
+            .creation_flags_hidden()
+            .output()
+            .map_err(|e| format!("reg add: {e}"))?;
+        if !out.status.success() {
+            return Err("Failed to write the Run registry key".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let dirs = dirs::home_dir().ok_or("no home dir")?;
+        let dir = dirs.join(".config/autostart");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("autostart dir: {e}"))?;
+        let desktop = dir.join("nebulae.desktop");
+        if !enabled {
+            let _ = std::fs::remove_file(&desktop);
+            return Ok(());
+        }
+        let minimized_env = if minimized { " --minimized" } else { "" };
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=Nebulae\nExec={exe}{minimized_env}\nX-GNOME-Autostart-enabled=true\n"
+        );
+        std::fs::write(&desktop, content).map_err(|e| format!("Write desktop entry: {e}"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+trait CreationFlagsHidden {
+    fn creation_flags_hidden(&mut self) -> &mut Self;
+}
+#[cfg(target_os = "windows")]
+impl CreationFlagsHidden for std::process::Command {
+    fn creation_flags_hidden(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        self.creation_flags(0x0800_0000)
+    }
 }
 
 /// Active engine mode for this session, set once at startup and exposed to

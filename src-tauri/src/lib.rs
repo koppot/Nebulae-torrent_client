@@ -285,6 +285,35 @@ pub fn run() {
             }
             commands::media::maybe_autoplay(app.handle());
 
+            // Start-minimized (owner setting): hide the window when the app
+            // was launched by the OS autostart entry with --minimized.
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
+
+            // Re-apply the autostart registration at boot: keeps the
+            // LaunchAgent / Run key / desktop entry pointing at THIS
+            // executable after the app moves or updates.
+            {
+                let db_handle = db.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(Some(json)) = db_handle.get_setting("user_settings_json") {
+                        if let Ok(settings) =
+                            serde_json::from_str::<crate::commands::settings::UserSettings>(&json)
+                        {
+                            if let Err(e) = crate::commands::settings::apply_autostart(
+                                settings.start_on_boot,
+                                settings.start_minimized,
+                            ) {
+                                tracing::warn!("[autostart] reapply failed: {e}");
+                            }
+                        }
+                    }
+                });
+            }
+
             // Diagnostics for the reported white-screen-on-launch: log the
             // URL the main window was actually pointed at.
             if let Some(w) = app.get_webview_window("main") {
@@ -562,6 +591,9 @@ pub fn run() {
             commands::media::player_toggle_pause,
             commands::media::player_toggle_fullscreen,
             commands::media::player_window_minimize,
+            commands::media::window_minimize_cmd,
+            commands::media::window_maximize_toggle_cmd,
+            commands::media::window_close_cmd,
             commands::media::player_seek,
             commands::media::player_set_volume,
             commands::media::player_poll,
