@@ -159,6 +159,15 @@ pub struct UserSettings {
     /// Custom Peer ID prefix (8 chars, e.g. "-NE0220-", used when profile == "custom")
     #[serde(default)]
     pub custom_peer_id_prefix: String,
+
+    // 14. Media Mode (Optical Cinema)
+    /// When enabled, the Media Center view is accessible. Defaults to true.
+    #[serde(default = "default_true")]
+    pub media_mode_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_engine_identity_profile() -> String {
@@ -314,6 +323,9 @@ impl Default for UserSettings {
             engine_identity_profile: "transmission".to_string(),
             custom_user_agent: "".to_string(),
             custom_peer_id_prefix: "".to_string(),
+
+            // 14. Media Mode
+            media_mode_enabled: true,
         }
     }
 }
@@ -727,6 +739,33 @@ mod tests {
         let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
         assert!(
             deserialized_true.racing_mode_enabled,
+            "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_media_mode_migration_defaults_true_and_preserves_false() {
+        // Missing media_mode_enabled defaults to true
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            deserialized.media_mode_enabled,
+            "Missing media_mode_enabled must default to true"
+        );
+
+        // Explicit false is preserved
+        let false_json = r#"{"media_mode_enabled": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.media_mode_enabled,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true is preserved
+        let true_json = r#"{"media_mode_enabled": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.media_mode_enabled,
             "Explicit true must be preserved"
         );
     }

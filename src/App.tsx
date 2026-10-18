@@ -24,12 +24,12 @@ import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
 import { RecoveryScreen } from './components/recovery/RecoveryScreen';
 import PlayerOverlay from './components/player/PlayerOverlay';
-import { FileUp } from 'lucide-react';
+import { FileUp, Film } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
-  const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
+  const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
 
   // The webview itself must go transparent while the player is up — the
@@ -100,13 +100,14 @@ export const App: React.FC = () => {
       window.clearInterval(iv);
     };
   }, []);
-  const { loadSettings, fetchEngineMode } = useSettingsStore();
+  const { loadSettings, fetchEngineMode, saveSettings } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
   const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
   const [isDragging, setIsDragging] = useState(false);
   const [engineInitError, setEngineInitError] = useState<string | null>(null);
+  const [showFirstRunMediaModal, setShowFirstRunMediaModal] = useState(false);
 
   useEffect(() => {
     invoke<string | null>('get_engine_init_error')
@@ -123,6 +124,10 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
+
+    if (!localStorage.getItem('nebulae_media_mode_choice')) {
+      setShowFirstRunMediaModal(true);
+    }
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
@@ -352,6 +357,57 @@ export const App: React.FC = () => {
       <VpnManagerModal />
       <TrackerModal />
       <DeleteTorrentModal />
+
+      {/* First-Run Media Mode Choice */}
+      {splashDismissed && showFirstRunMediaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#181818] border border-[#333333] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-[#e50914]/10 text-[#e50914] border border-[#e50914]/20">
+                <Film className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Enable Media Mode?</h3>
+                <p className="text-xs text-[#a3a3a3]">First-run setup</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#cccccc] leading-relaxed">
+              Nebulae features an Optical Cinema media center for streaming DVD/Blu-ray ISOs, disc menus, and media playback. Would you like to enable Media Mode?
+            </p>
+            <p className="text-[11px] text-[#8c8c8c]">
+              You can toggle this setting at any time in Settings &rarr; Behavior.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void saveSettings({ media_mode_enabled: false });
+                  setViewMode('manager');
+                  localStorage.setItem('nebulae_media_mode_choice', 'no');
+                  setShowFirstRunMediaModal(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-[#262626] hover:bg-[#333333] border border-[#333333] text-xs text-[#a3a3a3] hover:text-white font-medium transition"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void saveSettings({ media_mode_enabled: true });
+                  setViewMode('media');
+                  localStorage.setItem('nebulae_media_mode_choice', 'yes');
+                  setShowFirstRunMediaModal(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition"
+              >
+                Yes (Default)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

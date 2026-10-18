@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useConnectivityStore } from '../../stores/connectivityStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
 
@@ -27,6 +28,7 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
+  const { settings } = useSettingsStore();
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
@@ -215,6 +217,28 @@ export const StatusBar: React.FC = () => {
           />
           <span className={vpnConfigured && vpn?.connected ? 'text-white' : ''}>
             VPN: {vpnConfigured ? (vpn?.connected ? vpn?.assigned_ip || 'connected' : 'disconnected') : 'not configured'}
+          </span>
+        </div>
+
+        <span className="text-[#333333]">|</span>
+
+        <div
+          className="flex items-center gap-1.5"
+          title={
+            settings.racing_mode_enabled
+              ? 'Racing mode active — aggressive peer limits, high bandwidth priority, large disk cache'
+              : 'Racing mode disabled'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full transition-colors ${
+              settings.racing_mode_enabled
+                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          <span className={settings.racing_mode_enabled ? 'text-white' : ''}>
+            Racing mode
           </span>
         </div>
       </div>

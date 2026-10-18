@@ -59,6 +59,59 @@ impl AppPaths {
     }
 }
 
+/// Resolves the bundled application resource directory across all supported platforms,
+/// respecting Tauri's packaging conventions:
+/// - macOS: Contents/Resources
+/// - Windows: adjacent to executable
+/// - Linux: /usr/lib/Nebulae (deb/rpm) or $APPDIR/usr/lib/Nebulae (AppImage)
+pub fn resolve_bundled_resource_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("NEBULAE_RESOURCE_DIR") {
+        return PathBuf::from(p);
+    }
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        let appdir_p = PathBuf::from(appdir);
+        let candidate = appdir_p.join("usr/lib/Nebulae");
+        if candidate.exists() {
+            return candidate;
+        }
+        let candidate_share = appdir_p.join("usr/share/nebulae");
+        if candidate_share.exists() {
+            return candidate_share;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // macOS bundle: Contents/MacOS/nebulae -> Contents/Resources
+            if let Some(contents) = exe_dir.parent() {
+                let mac_res = contents.join("Resources");
+                if mac_res.exists() {
+                    return mac_res;
+                }
+            }
+            // Next to executable (Windows / dev)
+            if exe_dir.join("resources").exists() {
+                return exe_dir.to_path_buf();
+            }
+            // Linux: /usr/bin/nebulae -> /usr/lib/Nebulae
+            if let Some(prefix) = exe_dir.parent() {
+                let linux_lib = prefix.join("lib/Nebulae");
+                if linux_lib.exists() {
+                    return linux_lib;
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let sys_path = PathBuf::from("/usr/lib/Nebulae");
+        if sys_path.exists() {
+            return sys_path;
+        }
+    }
+    PathBuf::from("resources")
+}
+
+
 /// Decodes standard base64 data into raw bytes.
 pub fn decode_base64_data(input: &str) -> Result<Vec<u8>, String> {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

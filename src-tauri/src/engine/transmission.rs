@@ -106,8 +106,17 @@ pub fn find_transmission_daemon_binary(resource_dir: Option<&Path>) -> Result<Pa
                 candidates.push(res_dir.join(bin_name));
             }
 
-            // Linux packaging layouts
-            if let Some(prefix) = exe_dir.parent().and_then(|p| p.parent()) {
+            // Linux packaging layouts (Tauri packages resources to /usr/lib/Nebulae/resources/)
+            if let Some(prefix) = exe_dir.parent() {
+                candidates.push(
+                    prefix
+                        .join("lib")
+                        .join("Nebulae")
+                        .join("resources")
+                        .join("engine")
+                        .join("transmission")
+                        .join(bin_name),
+                );
                 candidates.push(
                     prefix
                         .join("lib")
@@ -130,9 +139,24 @@ pub fn find_transmission_daemon_binary(resource_dir: Option<&Path>) -> Result<Pa
         }
     }
 
+    // Standard Linux packaged path (/usr/lib/Nebulae/resources/)
+    candidates.push(
+        PathBuf::from("/usr/lib/Nebulae/resources/engine/transmission").join(bin_name),
+    );
+
     // AppImage support ($APPDIR)
     if let Ok(appdir) = std::env::var("APPDIR") {
         let appdir_path = PathBuf::from(appdir);
+        candidates.push(
+            appdir_path
+                .join("usr")
+                .join("lib")
+                .join("Nebulae")
+                .join("resources")
+                .join("engine")
+                .join("transmission")
+                .join(bin_name),
+        );
         candidates.push(
             appdir_path
                 .join("usr")

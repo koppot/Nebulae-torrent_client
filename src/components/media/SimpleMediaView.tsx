@@ -914,7 +914,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         </div>
       )}
 
-      {torrents.length === 0 ? (
+      {torrents.length === 0 && externalMedia.length === 0 ? (
         /* Empty State */
         <div className="flex flex-col items-center justify-center py-24 text-center space-y-4">
           <div className="p-5 rounded-2xl bg-[#1f1f1f] border border-[#262626]">
@@ -927,13 +927,22 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
               streaming with interactive menus.
             </p>
           </div>
-          <button
-            onClick={() => setShowAddTorrent(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-md"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add First Disc</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => void handlePlayExternalDisc()}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-md"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Movie / Disc</span>
+            </button>
+            <button
+              onClick={() => setShowAddTorrent(true)}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-semibold transition shadow-md"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Torrent</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-10">

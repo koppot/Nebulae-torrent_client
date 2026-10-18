@@ -399,6 +399,20 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
+                    <label className="flex items-start gap-2 cursor-pointer pt-1">
+                      <input
+                        type="checkbox"
+                        checked={settings.media_mode_enabled !== false}
+                        onChange={(e) => saveSettings({ media_mode_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium">Enable Media Center & Optical Cinema</span>
+                        <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
+                          Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch.
+                        </span>
+                      </div>
+                    </label>
                   </div>
                 </div>
 

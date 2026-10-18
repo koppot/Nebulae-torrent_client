@@ -309,11 +309,19 @@ impl VlcLib {
                     );
                     c.push(dir.join("vlc").join("lib").join("libvlc.so.5"));
                 }
-                if let Some(prefix) = exe.parent().and_then(|d| d.parent()) {
-                    c.push(prefix.join("share/nebulae/resources/vlc/lib/libvlc.so.5"));
+                if let Some(prefix) = exe.parent() {
+                    c.push(prefix.join("lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
+                    c.push(prefix.join("lib/Nebulae/resources/vlc/lib/libvlc.so"));
                     c.push(prefix.join("lib/nebulae/resources/vlc/lib/libvlc.so.5"));
+                    c.push(prefix.join("share/nebulae/resources/vlc/lib/libvlc.so.5"));
                 }
             }
+            if let Ok(appdir) = std::env::var("APPDIR") {
+                c.push(PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
+                c.push(PathBuf::from(&appdir).join("usr/share/nebulae/resources/vlc/lib/libvlc.so.5"));
+            }
+            c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
+            c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so"));
             c.push(PathBuf::from("/usr/lib/x86_64-linux-gnu/libvlc.so.5"));
             c.push(PathBuf::from("/usr/lib/libvlc.so.5"));
             c.push(PathBuf::from("/usr/lib/libvlc.so"));
@@ -333,10 +341,20 @@ impl VlcLib {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Windows/Linux: plugins live next to the lib (bundled layout:
-            // resources/vlc/libvlc.dll -> resources/vlc/plugins).
-            let dir = lib_path.parent().map(|p| p.join("plugins"));
-            dir.filter(|p| p.exists())
+            // Windows: resources/vlc/libvlc.dll -> resources/vlc/plugins (parent)
+            // Linux: resources/vlc/lib/libvlc.so.5 -> resources/vlc/plugins (parent.parent)
+            if let Some(p) = lib_path.parent().map(|p| p.join("plugins")).filter(|p| p.exists()) {
+                Some(p)
+            } else if let Some(p) = lib_path
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.join("plugins"))
+                .filter(|p| p.exists())
+            {
+                Some(p)
+            } else {
+                None
+            }
         }
     }
 

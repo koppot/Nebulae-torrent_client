@@ -23,12 +23,20 @@ pub fn run() {
         if let Some(dir) = exe.parent() {
             jre_candidates.push(dir.join("resources").join("jre"));
             jre_candidates.push(dir.join("jre"));
+            // Linux: /usr/bin/nebulae -> /usr/lib/Nebulae/resources/jre
+            jre_candidates.push(dir.parent().unwrap_or(dir).join("lib/Nebulae/resources/jre"));
         }
         if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
             jre_candidates.push(parent.join("Resources/resources/jre"));
+            jre_candidates.push(parent.join("lib/Nebulae/resources/jre"));
             jre_candidates.push(parent.join("share/nebulae/resources/jre"));
             jre_candidates.push(parent.join("lib/nebulae/resources/jre"));
         }
+        if let Ok(appdir) = std::env::var("APPDIR") {
+            jre_candidates.push(std::path::PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/jre"));
+            jre_candidates.push(std::path::PathBuf::from(&appdir).join("usr/share/nebulae/resources/jre"));
+        }
+        jre_candidates.push(std::path::PathBuf::from("/usr/lib/Nebulae/resources/jre"));
         if let Some(jre) = jre_candidates
             .into_iter()
             .find(|c| c.join("bin").exists() || c.join("lib").exists())
@@ -143,12 +151,13 @@ pub fn run() {
         // Initialize production Transmission engine.
         // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
         // Transmission engine (default)
+        let res_dir = crate::utils::paths::resolve_bundled_resource_dir();
         match engine::TransmissionTorrentEngine::new(
             Arc::clone(&paths),
             Arc::clone(&db),
             download_dir.clone(),
             &settings,
-            None,
+            Some(&res_dir),
         ) {
             Ok(real_engine) => {
                 SafeLogger::log_to_file(
@@ -172,7 +181,7 @@ pub fn run() {
                     Arc::clone(&db),
                     download_dir,
                     &settings,
-                    None,
+                    Some(&res_dir),
                 ) {
                     Ok(real_engine) => {
                         SafeLogger::log_to_file(

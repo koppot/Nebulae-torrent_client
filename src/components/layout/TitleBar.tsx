@@ -94,6 +94,12 @@ export const TitleBar: React.FC = () => {
 
   const { settings } = useSettingsStore();
 
+  useEffect(() => {
+    if (settings.media_mode_enabled === false && viewMode === 'media') {
+      setViewMode('manager');
+    }
+  }, [settings.media_mode_enabled, viewMode, setViewMode]);
+
   // Window controls go through NATIVE backend commands (owner: the JS
   // window API is unreliable on the undecorated Windows window).
   const handleMinimize = async () => {
@@ -146,19 +152,21 @@ export const TitleBar: React.FC = () => {
             bar on both views, as colorful as Add/Create. The active mode
             is red like Add; the other is gold-accented like Create. */}
         <div className="absolute left-1/2 -translate-x-1/2 top-0 h-10 flex items-stretch gap-2">
-          <button
-            type="button"
-            onClick={() => setViewMode('media')}
-            className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
-              viewMode === 'media'
-                ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
-                : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
-            }`}
-            title="Media Center — your optical cinema gallery"
-          >
-            <Film className="w-4 h-4" />
-            <span>Media</span>
-          </button>
+          {settings.media_mode_enabled !== false && (
+            <button
+              type="button"
+              onClick={() => setViewMode('media')}
+              className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+                viewMode === 'media'
+                  ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                  : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+              }`}
+              title="Media Center — your optical cinema gallery"
+            >
+              <Film className="w-4 h-4" />
+              <span>Media</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setViewMode('manager')}
@@ -190,6 +198,22 @@ export const TitleBar: React.FC = () => {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+          {/* Add Movie button (owner): prominent in top bar during Media mode */}
+          {viewMode === 'media' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
+              }}
+              className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+              title="Add Movie / Disc — select release root folder or ISO image"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Movie</span>
+            </button>
+          )}
+
           {/* Help (?) (owner): top bar, right before Settings — it carries
             the installation/documentation info. Manager-only row gating
             keeps it off the Media Center. */}

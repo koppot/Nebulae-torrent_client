@@ -150,6 +150,9 @@ export const defaultSettings: UserSettings = {
   engine_identity_profile: 'transmission',
   custom_user_agent: '',
   custom_peer_id_prefix: '',
+
+  // 13. Media Mode
+  media_mode_enabled: true,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

@@ -299,6 +299,9 @@ export interface UserSettings {
   engine_identity_profile: 'transmission' | 'nebulae' | 'custom';
   custom_user_agent: string;
   custom_peer_id_prefix: string;
+
+  // 13. Media Mode
+  media_mode_enabled: boolean;
 }
 
 export interface EngineIdentityInfo {

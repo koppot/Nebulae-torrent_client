@@ -1314,13 +1314,15 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
             let script = r#"
             [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.TopMost = $true
             $f = New-Object System.Windows.Forms.FolderBrowserDialog
             $f.Description = "Select Download Directory"
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
                 $f.SelectedPath
             }
             "#;
-            let output = crate::utils::process::run_hidden_powershell(script)
+            let output = crate::utils::process::run_hidden_powershell_dialog(script)
                 .map_err(|e| format!("Failed to open directory picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() {
@@ -1618,12 +1620,14 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
         // root when the file dialog is cancelled.
         let iso = r#"
         Add-Type -AssemblyName System.Windows.Forms
+        $form = New-Object System.Windows.Forms.Form
+        $form.TopMost = $true
         $f = New-Object System.Windows.Forms.OpenFileDialog
         $f.Title = "Add Movie - select an ISO disc image (or cancel for a folder)"
         $f.Filter = "Disc images (*.iso;*.img)|*.iso;*.img|All files|*.*"
-        if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.FileName }
+        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.FileName }
         "#;
-        if let Ok(out) = crate::utils::process::run_hidden_powershell(iso) {
+        if let Ok(out) = crate::utils::process::run_hidden_powershell_dialog(iso) {
             let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !path.is_empty() {
                 return Ok(Some(path));
@@ -1631,11 +1635,13 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
         }
         let folder = r#"
         Add-Type -AssemblyName System.Windows.Forms
+        $form = New-Object System.Windows.Forms.Form
+        $form.TopMost = $true
         $f = New-Object System.Windows.Forms.FolderBrowserDialog
         $f.Description = "Add Movie - select the release ROOT folder that holds ALL of its disc folders"
-        if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }
+        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }
         "#;
-        let out = crate::utils::process::run_hidden_powershell(folder)
+        let out = crate::utils::process::run_hidden_powershell_dialog(folder)
             .map_err(|e| format!("Failed to open folder picker: {e}"))?;
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok(if path.is_empty() { None } else { Some(path) })
