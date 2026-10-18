@@ -80,8 +80,14 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         if (!isAllowedMetainfoName(name)) {
           setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          setSelectedFileName(null);
+          setSelectedFileSize(null);
+          setSelectedFileBytes(null);
+          setInspectPreview(null);
+          setTorrentSource('');
           return;
         }
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
@@ -102,8 +108,14 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         if (!isAllowedMetainfoName(name)) {
           setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          setSelectedFileName(null);
+          setSelectedFileSize(null);
+          setSelectedFileBytes(null);
+          setInspectPreview(null);
+          setTorrentSource('');
           return;
         }
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
@@ -252,12 +264,25 @@ export const AddTorrentModal: React.FC = () => {
         if (now - lastNativeDropRef.current < 800) return;
         const paths = (event.payload as { type: string; paths?: string[] }).paths || [];
         const path = paths.find((p) => isAllowedMetainfoName(p.split('/').pop() || p));
-        if (!path) return;
+        if (!path) {
+          if (paths.length > 0) {
+            const rejectedName = paths[0].split('/').pop()?.split('\\').pop() || paths[0];
+            setErrorMessage(`only .torrent or .adc files are accepted ('${rejectedName}' was ignored).`);
+            setSelectedFileName(null);
+            setSelectedFileSize(null);
+            setSelectedFileBytes(null);
+            setInspectPreview(null);
+            setTorrentSource('');
+          }
+          return;
+        }
         lastNativeDropRef.current = now;
+        setErrorMessage(null);
         const name = path.split('/').pop()?.split('\\').pop() || path;
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
+        setInspectPreview(null);
         setTorrentSource(path);
         setInspectLoading(true);
         inspectTorrent(path)
@@ -296,9 +321,11 @@ export const AddTorrentModal: React.FC = () => {
       const nativePath = await selectTorrentFile();
       if (nativePath) {
         const name = nativePath.split('/').pop()?.split('\\').pop() || nativePath;
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
+        setInspectPreview(null);
         setTorrentSource(nativePath);
         setInspectLoading(true);
         try {
@@ -325,11 +352,19 @@ export const AddTorrentModal: React.FC = () => {
         setErrorMessage(
           `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
         );
+        setSelectedFileName(null);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setInspectPreview(null);
+        setTorrentSource('');
         e.target.value = '';
         return;
       }
+      setErrorMessage(null);
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
       // The HTML5 file-input fallback cannot know the absolute path (the
       // webview strips File.path). Keep the bare name for the byte-based
       // inspect flow; "Find My Files" explains itself when the path is
@@ -365,14 +400,22 @@ export const AddTorrentModal: React.FC = () => {
         setErrorMessage(
           `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
         );
+        setSelectedFileName(null);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setInspectPreview(null);
+        setTorrentSource('');
         return;
       }
+      setErrorMessage(null);
       // The webview strips File.path on drops; the native drag-drop event
       // (handled in the effect below) supplies the real absolute path. This
       // inline handler stays as a fallback with the bare name only.
       const source = (file as FileWithPath).path || file.name;
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
       setTorrentSource(source);
 
       const reader = new FileReader();
@@ -421,6 +464,7 @@ export const AddTorrentModal: React.FC = () => {
 
   const handleClearSelectedFile = (e: React.MouseEvent) => {
     e.stopPropagation();
+    setErrorMessage(null);
     setSelectedFileName(null);
     setSelectedFileSize(null);
     setSelectedFileBytes(null);
