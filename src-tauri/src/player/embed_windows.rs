@@ -196,9 +196,9 @@ pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
 pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
     let hwnd = main_hwnd(app)?;
     unsafe {
-        use windows::Win32::Foundation::WPARAM;
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
-        PostMessageW(Some(hwnd), WM_CLOSE, Some(WPARAM(0)), None);
+        PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
     }
     Ok(())
 }
