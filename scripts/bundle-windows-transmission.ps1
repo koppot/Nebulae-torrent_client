@@ -79,9 +79,47 @@ if (-not $DaemonExe) {
 $DaemonDir = $DaemonExe.DirectoryName
 Write-Host "    Found: $($DaemonExe.FullName)"
 
-# Copy daemon exe to resource dir
-Write-Host "==> Copying transmission-daemon.exe..."
-Copy-Item -Path $DaemonExe.FullName -Destination "$ResourceDir\transmission-daemon.exe" -Force
+# Check if a patched daemon built from source is available in staging
+$PatchedSourceDaemon = "$StagingDir\build\daemon\Release\transmission-daemon.exe"
+if (-not (Test-Path $PatchedSourceDaemon)) {
+    $PatchedSourceDaemon = "$StagingDir\build\daemon\transmission-daemon.exe"
+}
+
+# If CMake and Git/Patch are available and patched source daemon not yet built, attempt source build
+if (-not (Test-Path $PatchedSourceDaemon) -and (Get-Command cmake -ErrorAction SilentlyContinue) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host "==> Attempting Windows source build with identity patch..."
+    try {
+        $TarballUrl = "https://github.com/transmission/transmission/releases/download/$Version/transmission-$Version.tar.xz"
+        $TarballPath = "$StagingDir\transmission-$Version.tar.xz"
+        if (-not (Test-Path $TarballPath)) {
+            Invoke-WebRequest -Uri $TarballUrl -OutFile $TarballPath -UseBasicParsing
+        }
+        $SourceDir = "$StagingDir\transmission-$Version"
+        if (-not (Test-Path $SourceDir)) {
+            tar -xJf $TarballPath -C $StagingDir
+        }
+        $PatchFile = (Resolve-Path "scripts\patches\transmission-$Version-identity-override.patch" -ErrorAction SilentlyContinue)
+        if ($PatchFile) {
+            Write-Host "    Applying identity override patch..."
+            git apply --directory="src-tauri/transmission-staging/transmission-$Version" $PatchFile.Path
+        }
+        $BuildDir = "$StagingDir\build"
+        New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+        cmake -S $SourceDir -B $BuildDir -DCMAKE_BUILD_TYPE=Release -DENABLE_DAEMON=ON -DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_UTILS=OFF -DENABLE_MAC=OFF -DENABLE_TESTS=OFF -DENABLE_CLI=OFF
+        cmake --build $BuildDir --config Release --target transmission-daemon -j4
+    } catch {
+        Write-Host "    Source build skipped/failed: $_. Reusing extracted MSI daemon."
+    }
+}
+
+if (Test-Path $PatchedSourceDaemon) {
+    Write-Host "==> Using verified patched transmission-daemon.exe from source build: $PatchedSourceDaemon"
+    Copy-Item -Path $PatchedSourceDaemon -Destination "$ResourceDir\transmission-daemon.exe" -Force
+} else {
+    # Copy daemon exe to resource dir from extracted MSI
+    Write-Host "==> Copying transmission-daemon.exe from MSI..."
+    Copy-Item -Path $DaemonExe.FullName -Destination "$ResourceDir\transmission-daemon.exe" -Force
+}
 
 # Copy required DLLs from the same directory as the daemon.
 # Transmission 4.x on Windows ships with its own OpenSSL, miniupnpc, etc.
@@ -105,6 +143,23 @@ Get-ChildItem -Path $DaemonDir -Filter "*.dll" | ForEach-Object {
     }
 }
 Write-Host "    Total DLLs copied: $Copied"
+
+# Probe binary to check whether it contains runtime identity override hooks
+$daemonBytes = [System.IO.File]::ReadAllBytes("$ResourceDir\transmission-daemon.exe")
+$needle = [System.Text.Encoding]::ASCII.GetBytes("TRANSMISSION_PEER_ID_PREFIX")
+$hasPatch = $false
+for ($i = 0; $i -le ($daemonBytes.Length - $needle.Length); $i++) {
+    $matched = $true
+    for ($j = 0; $j -lt $needle.Length; $j++) {
+        if ($daemonBytes[$i + $j] -ne $needle[$j]) { $matched = $false; break }
+    }
+    if ($matched) { $hasPatch = $true; break }
+}
+if ($hasPatch) {
+    Write-Host "    Capability check: transmission-daemon.exe contains TRANSMISSION_PEER_ID_PREFIX hook."
+} else {
+    Write-Host "    Capability check: transmission-daemon.exe lacks runtime identity hooks (will report stock identity)."
+}
 
 Write-Host ""
 Write-Host "==> Resource directory contents:"

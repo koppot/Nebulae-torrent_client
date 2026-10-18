@@ -33,31 +33,51 @@ echo "Target directory: $TARGET_DIR"
 mkdir -p "$STAGING_DIR" "$TARGET_DIR/lib"
 
 # --- 1. Locate or obtain transmission-daemon ---
+is_patched_daemon() {
+    local bin="$1"
+    [ -n "$bin" ] && [ -x "$bin" ] && \
+        grep -q -a "TRANSMISSION_PEER_ID_PREFIX" "$bin" && \
+        grep -q -a "TRANSMISSION_USER_AGENT" "$bin"
+}
+
 DAEMON_BIN=""
-if command -v transmission-daemon >/dev/null 2>&1; then
-    DAEMON_BIN=$(command -v transmission-daemon)
-elif [ -f "/opt/homebrew/bin/transmission-daemon" ]; then
-    DAEMON_BIN="/opt/homebrew/bin/transmission-daemon"
-elif [ -f "/usr/local/bin/transmission-daemon" ]; then
-    DAEMON_BIN="/usr/local/bin/transmission-daemon"
+
+# Check if a previously-built patched daemon is available in staging
+if [ -x "$STAGING_DIR/install/bin/transmission-daemon" ] && is_patched_daemon "$STAGING_DIR/install/bin/transmission-daemon"; then
+    echo "==> Reusing verified patched daemon from $STAGING_DIR/install"
+    DAEMON_BIN="$STAGING_DIR/install/bin/transmission-daemon"
+elif [ -x "$STAGING_DIR/build/daemon/transmission-daemon" ] && is_patched_daemon "$STAGING_DIR/build/daemon/transmission-daemon"; then
+    echo "==> Reusing verified patched daemon from $STAGING_DIR/build"
+    DAEMON_BIN="$STAGING_DIR/build/daemon/transmission-daemon"
 fi
 
+# Reject unpatched host/Homebrew binaries that bypass identity hooks
 if [ -z "$DAEMON_BIN" ]; then
-    echo "==> transmission-daemon not found on host. Attempting 'brew install transmission-cli'..."
-    if command -v brew >/dev/null 2>&1; then
-        brew install transmission-cli || true
-        if [ -f "/opt/homebrew/bin/transmission-daemon" ]; then
-            DAEMON_BIN="/opt/homebrew/bin/transmission-daemon"
-        elif [ -f "/usr/local/bin/transmission-daemon" ]; then
-            DAEMON_BIN="/usr/local/bin/transmission-daemon"
+    HOST_BIN=""
+    if command -v transmission-daemon >/dev/null 2>&1; then
+        HOST_BIN=$(command -v transmission-daemon)
+    elif [ -f "/opt/homebrew/bin/transmission-daemon" ]; then
+        HOST_BIN="/opt/homebrew/bin/transmission-daemon"
+    elif [ -f "/usr/local/bin/transmission-daemon" ]; then
+        HOST_BIN="/usr/local/bin/transmission-daemon"
+    fi
+
+    if [ -n "$HOST_BIN" ]; then
+        if is_patched_daemon "$HOST_BIN"; then
+            echo "==> Using verified patched transmission-daemon from host: $HOST_BIN"
+            DAEMON_BIN="$HOST_BIN"
+        else
+            echo "==> Host transmission-daemon at $HOST_BIN lacks identity override patch; building patched daemon from source..."
         fi
     fi
 fi
 
 if [ -z "$DAEMON_BIN" ]; then
-    echo "==> Building transmission-daemon v${VERSION} from pinned source tarball..."
+    echo "==> Building transmission-daemon v${VERSION} from pinned source tarball with identity patch..."
     TARBALL="$STAGING_DIR/transmission-${VERSION}.tar.xz"
-    curl -fsSL "$TARBALL_URL" -o "$TARBALL"
+    if [ ! -f "$TARBALL" ]; then
+        curl -fsSL "$TARBALL_URL" -o "$TARBALL"
+    fi
     ACTUAL_SHA256=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
     if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
         echo "ERROR: SHA-256 MISMATCH on source tarball"
@@ -72,10 +92,12 @@ if [ -z "$DAEMON_BIN" ]; then
     mkdir -p "$BUILD_ROOT" "$INSTALL_ROOT"
     tar -xJf "$TARBALL" -C "$STAGING_DIR"
     PATCH_FILE="$(pwd)/scripts/patches/transmission-${VERSION}-identity-override.patch"
-    if [ -f "$PATCH_FILE" ]; then
-        echo "==> Applying identity override patch..."
-        patch -d "$STAGING_DIR/transmission-${VERSION}" -p1 < "$PATCH_FILE" || true
+    if [ ! -f "$PATCH_FILE" ]; then
+        echo "ERROR: Identity override patch not found at: $PATCH_FILE"
+        exit 1
     fi
+    echo "==> Applying identity override patch..."
+    patch -d "$STAGING_DIR/transmission-${VERSION}" -p1 < "$PATCH_FILE"
     cmake -S "$STAGING_DIR/transmission-${VERSION}" -B "$BUILD_ROOT" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \
@@ -87,15 +109,24 @@ if [ -z "$DAEMON_BIN" ]; then
         -DENABLE_TESTS=OFF \
         -DENABLE_CLI=OFF
     cmake --build "$BUILD_ROOT" --target transmission-daemon -j4
-    cmake --install "$BUILD_ROOT" --component daemon
-    DAEMON_BIN="$INSTALL_ROOT/bin/transmission-daemon"
+    cmake --install "$BUILD_ROOT" --component daemon 2>/dev/null || true
+    if [ -x "$BUILD_ROOT/daemon/transmission-daemon" ]; then
+        DAEMON_BIN="$BUILD_ROOT/daemon/transmission-daemon"
+    elif [ -x "$INSTALL_ROOT/bin/transmission-daemon" ]; then
+        DAEMON_BIN="$INSTALL_ROOT/bin/transmission-daemon"
+    fi
 fi
 
 if [ ! -x "$DAEMON_BIN" ]; then
     echo "ERROR: Failed to locate or build transmission-daemon."
     exit 1
 fi
-echo "Source transmission-daemon binary: $DAEMON_BIN"
+
+if ! is_patched_daemon "$DAEMON_BIN"; then
+    echo "ERROR: transmission-daemon at $DAEMON_BIN is NOT patched with required identity overrides!"
+    exit 1
+fi
+echo "Source transmission-daemon binary (verified patched): $DAEMON_BIN"
 
 # Copy daemon binary
 cp -L "$DAEMON_BIN" "$TARGET_DIR/transmission-daemon"

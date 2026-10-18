@@ -626,6 +626,7 @@ pub struct TransmissionTorrentEngine {
     /// Kept on the struct to ensure the Arc outlives all background tasks.
     #[allow(dead_code)]
     peer_remove_unsupported: Arc<AtomicBool>,
+    daemon_version: Arc<Mutex<Option<String>>>,
 }
 
 /// Builds the transmission-daemon `settings.json` configuration structure with
@@ -1160,44 +1161,78 @@ impl TransmissionTorrentEngine {
 
         let daemon_supports_identity = crate::engine::identity::check_daemon_identity_support(&daemon_path);
         let app_version = crate::engine::identity::get_app_version();
-        let nebulae_ua = crate::engine::identity::derive_nebulae_user_agent(app_version);
-        let nebulae_prefix = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+        let nebulae_ua_res = crate::engine::identity::derive_nebulae_user_agent(app_version);
+        let nebulae_prefix_res = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+
+        let tr_default_ua = crate::engine::identity::get_bundled_transmission_user_agent();
+        let tr_default_prefix = crate::engine::identity::get_bundled_transmission_peer_id_prefix();
 
         let (spawned_profile, spawned_ua, spawned_prefix) = if !daemon_supports_identity {
             (
                 "transmission".to_string(),
-                crate::engine::identity::get_bundled_transmission_user_agent(),
-                crate::engine::identity::get_bundled_transmission_peer_id_prefix(),
+                tr_default_ua,
+                tr_default_prefix,
             )
         } else {
             match settings.engine_identity_profile.as_str() {
-                "nebulae" => (
-                    "nebulae".to_string(),
-                    nebulae_ua,
-                    nebulae_prefix,
-                ),
-                "custom" => (
-                    "custom".to_string(),
-                    if settings.custom_user_agent.trim().is_empty() {
-                        nebulae_ua
+                "nebulae" => match (nebulae_ua_res, nebulae_prefix_res) {
+                    (Ok(ua), Ok(prefix)) => ("nebulae".to_string(), ua, prefix),
+                    (Err(e), _) | (_, Err(e)) => {
+                        warn!("[identity] native Nebulae identity unavailable: {e}; falling back to stock Transmission");
+                        (
+                            "transmission".to_string(),
+                            tr_default_ua,
+                            tr_default_prefix,
+                        )
+                    }
+                },
+                "custom" => {
+                    let custom_ua = if settings.custom_user_agent.trim().is_empty() {
+                        crate::engine::identity::derive_nebulae_user_agent(app_version)
+                            .unwrap_or_else(|_| tr_default_ua.clone())
                     } else {
                         settings.custom_user_agent.trim().to_string()
-                    },
-                    if settings.custom_peer_id_prefix.trim().is_empty() {
-                        nebulae_prefix
+                    };
+                    let custom_prefix = if settings.custom_peer_id_prefix.trim().is_empty() {
+                        crate::engine::identity::derive_nebulae_peer_id_prefix(app_version)
+                            .unwrap_or_else(|_| tr_default_prefix.clone())
                     } else {
                         settings.custom_peer_id_prefix.trim().to_string()
-                    },
-                ),
+                    };
+
+                    if custom_prefix.len() == 8 {
+                        ("custom".to_string(), custom_ua, custom_prefix)
+                    } else {
+                        warn!(
+                            "[identity] custom peer-id prefix '{}' is not 8 bytes; falling back to stock Transmission",
+                            custom_prefix
+                        );
+                        (
+                            "transmission".to_string(),
+                            tr_default_ua,
+                            tr_default_prefix,
+                        )
+                    }
+                }
                 _ => (
                     "transmission".to_string(),
-                    crate::engine::identity::get_bundled_transmission_user_agent(),
-                    crate::engine::identity::get_bundled_transmission_peer_id_prefix(),
+                    tr_default_ua,
+                    tr_default_prefix,
                 ),
             }
         };
 
-        // Record spawned identity in DB
+        // Record active/spawned identity in DB
+        let _ = db.set_setting(
+            "active_engine_identity",
+            &serde_json::json!({
+                "profile": spawned_profile,
+                "user_agent": spawned_ua,
+                "peer_id_prefix": spawned_prefix,
+                "supports_overrides": daemon_supports_identity,
+            })
+            .to_string(),
+        );
         let _ = db.set_setting(
             "spawned_engine_identity",
             &serde_json::json!({
@@ -1227,6 +1262,8 @@ impl TransmissionTorrentEngine {
                 spawned_ua, spawned_prefix
             );
         } else {
+            cmd.env_remove("TRANSMISSION_USER_AGENT");
+            cmd.env_remove("TRANSMISSION_PEER_ID_PREFIX");
             info!("[identity] launched daemon with stock Transmission identity");
         }
         // transmission-daemon is a CONSOLE program: without CREATE_NO_WINDOW
@@ -1250,10 +1287,18 @@ impl TransmissionTorrentEngine {
         ));
 
         // 7. Verify daemon is responsive via session-get probe with backoff
+        let daemon_version_arc = Arc::new(Mutex::new(None));
         let mut ready = false;
         for _ in 0..20 {
             std::thread::sleep(Duration::from_millis(250));
-            if rpc_client.session_get().is_ok() {
+            if let Ok(resp) = rpc_client.session_get() {
+                if let Some(v) = resp
+                    .get("arguments")
+                    .and_then(|a| a.get("version"))
+                    .and_then(|v| v.as_str())
+                {
+                    *daemon_version_arc.lock().unwrap() = Some(v.to_string());
+                }
                 ready = true;
                 break;
             }
@@ -1341,6 +1386,9 @@ impl TransmissionTorrentEngine {
                         if daemon_supports_identity_watch && spawned_profile_watch != "transmission" {
                             cmd.env("TRANSMISSION_USER_AGENT", &spawned_ua_watch);
                             cmd.env("TRANSMISSION_PEER_ID_PREFIX", &spawned_prefix_watch);
+                        } else {
+                            cmd.env_remove("TRANSMISSION_USER_AGENT");
+                            cmd.env_remove("TRANSMISSION_PEER_ID_PREFIX");
                         }
                         #[cfg(target_os = "windows")]
                         {
@@ -1464,6 +1512,7 @@ impl TransmissionTorrentEngine {
             geo_resolver,
             rtt_prober,
             peer_remove_unsupported,
+            daemon_version: daemon_version_arc,
         })
     }
 
@@ -2648,6 +2697,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
             info!("[racing_mode] disabled on torrent {id} (restored peer-limit={user_peer_limit})");
         }
         Ok(())
+    }
+
+    fn engine_version(&self) -> Option<String> {
+        self.daemon_version.lock().unwrap().clone()
     }
 }
 

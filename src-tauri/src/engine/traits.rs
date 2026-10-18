@@ -108,4 +108,9 @@ pub trait TorrentEngine: Send + Sync {
     fn set_torrent_racing_mode(&self, _id: &str, _enabled: bool) -> Result<(), String> {
         Err("Racing Mode is not supported by this engine".to_string())
     }
+
+    /// Returns the live or detected engine daemon version, if available.
+    fn engine_version(&self) -> Option<String> {
+        None
+    }
 }

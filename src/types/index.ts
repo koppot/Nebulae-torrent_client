@@ -315,6 +315,8 @@ export interface EngineIdentityInfo {
   supports_runtime_overrides: boolean;
   restart_required: boolean;
   status_message: string;
+  version_encoding_supported?: boolean;
+  version_encoding_limitation?: string | null;
 }
 
 export interface CreateTorrentParams {

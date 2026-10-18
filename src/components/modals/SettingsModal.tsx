@@ -1238,20 +1238,26 @@ export const SettingsModal: React.FC = () => {
                           </div>
                         </label>
 
-                        <label className="flex items-start gap-2.5 cursor-pointer">
+                        <label className={`flex items-start gap-2.5 ${identityInfo?.version_encoding_supported === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                           <input
                             type="radio"
                             name="engine_identity_profile"
                             value="nebulae"
+                            disabled={identityInfo?.version_encoding_supported === false}
                             checked={settings.engine_identity_profile === 'nebulae'}
                             onChange={() => saveSettings({ engine_identity_profile: 'nebulae' })}
-                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0 disabled:opacity-40"
                           />
                           <div>
                             <span className="text-xs text-white font-medium block">Nebulae (Native)</span>
                             <span className="text-[11px] text-[#a3a3a3] block">
                               Native client identification: <code className="text-white">{identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}</code> with prefix <code className="text-white">{identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}</code> (derived dynamically from client version)
                             </span>
+                            {identityInfo?.version_encoding_supported === false && identityInfo.version_encoding_limitation && (
+                              <span className="text-[10px] text-amber-400 block mt-1">
+                                {identityInfo.version_encoding_limitation}
+                              </span>
+                            )}
                           </div>
                         </label>
 

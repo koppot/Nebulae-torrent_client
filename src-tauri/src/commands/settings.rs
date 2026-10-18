@@ -528,19 +528,34 @@ pub fn test_rtorrent_server_connection(
 pub fn get_engine_identity_info(
     db: State<Arc<Database>>,
     app: tauri::AppHandle,
+    engine: State<crate::engine::SharedEngine>,
 ) -> Result<crate::engine::identity::EngineIdentityInfo, String> {
     use tauri::Manager;
     let settings = load_user_settings(db.clone())?;
 
     let app_version = crate::engine::identity::get_app_version();
-    let nebulae_ua = crate::engine::identity::derive_nebulae_user_agent(app_version);
-    let nebulae_prefix = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+    let nebulae_ua_res = crate::engine::identity::derive_nebulae_user_agent(app_version);
+    let nebulae_prefix_res = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
 
-    let tr_version = crate::engine::identity::get_bundled_transmission_version().to_string();
-    let tr_ua = crate::engine::identity::get_bundled_transmission_user_agent();
-    let tr_prefix = crate::engine::identity::get_bundled_transmission_peer_id_prefix();
+    let (nebulae_ua, nebulae_prefix, version_encoding_supported, version_encoding_limitation) =
+        match (&nebulae_ua_res, &nebulae_prefix_res) {
+            (Ok(ua), Ok(prefix)) => (ua.clone(), prefix.clone(), true, None),
+            (Err(err), _) | (_, Err(err)) => (
+                format!("Nebulae/{app_version}"),
+                "-NE0000-".to_string(),
+                false,
+                Some(err.clone()),
+            ),
+        };
 
-    // Check daemon capabilities
+    // Obtain authoritative Transmission version from live daemon if running, or build-time pinned
+    let tr_version = engine
+        .engine_version()
+        .unwrap_or_else(|| crate::engine::identity::get_bundled_transmission_version().to_string());
+    let tr_ua = crate::engine::identity::derive_transmission_user_agent(&tr_version);
+    let tr_prefix = crate::engine::identity::derive_transmission_peer_id_prefix(&tr_version);
+
+    // Check daemon binary capabilities on disk
     let res_dir = app.path().resource_dir().ok();
     let daemon_path_res =
         crate::engine::transmission::find_transmission_daemon_binary(res_dir.as_deref());
@@ -568,74 +583,66 @@ pub fn get_engine_identity_info(
         _ => (tr_ua.clone(), tr_prefix.clone()),
     };
 
-    // Check what identity the running engine was spawned with
-    let spawned_info = db
-        .get_setting("spawned_engine_identity")
+    // Report active identity from the running engine session's actual applied configuration
+    let active_identity_info = db
+        .get_setting("active_engine_identity")
         .ok()
         .flatten()
+        .or_else(|| db.get_setting("spawned_engine_identity").ok().flatten())
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
 
-    let (active_ua, active_prefix, status_message) = if is_remote {
+    let (active_profile, active_ua, active_prefix, status_message) = if is_remote {
         (
+            "remote".to_string(),
             "rTorrent/remote".to_string(),
             "-RT----".to_string(),
             "Remote rTorrent server is active. Engine identity is managed server-side and cannot be overridden locally.".to_string(),
         )
     } else if !supports_overrides {
         (
+            "transmission".to_string(),
             tr_ua.clone(),
             tr_prefix.clone(),
-            if settings.engine_identity_profile == "transmission" {
-                "Transmission upstream engine active.".to_string()
-            } else {
-                "Bundled transmission-daemon is stock upstream and lacks runtime identity override hooks. Upstream Transmission identity is active. Apply Nebulae build patch to enable identity overrides.".to_string()
-            },
+            "Bundled transmission-daemon does not support runtime identity overrides. Upstream Transmission identity remains active.".to_string(),
         )
-    } else if let Some(info) = spawned_info {
-        let spawned_ua = info
+    } else if let Some(info) = active_identity_info {
+        let p = info
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("transmission")
+            .to_string();
+        let ua = info
             .get("user_agent")
             .and_then(|v| v.as_str())
             .unwrap_or(&tr_ua)
             .to_string();
-        let spawned_prefix = info
+        let prefix = info
             .get("peer_id_prefix")
             .and_then(|v| v.as_str())
             .unwrap_or(&tr_prefix)
             .to_string();
-        let spawned_profile = info
-            .get("profile")
-            .and_then(|v| v.as_str())
-            .unwrap_or("transmission");
 
-        let msg = match spawned_profile {
-            "nebulae" => format!("Native Nebulae v{} engine identity active.", app_version),
-            "custom" => "Custom engine identity active.".to_string(),
-            _ => "Transmission upstream engine identity active.".to_string(),
+        let msg = match p.as_str() {
+            "nebulae" => format!("Native Nebulae v{} engine identity active in running daemon.", app_version),
+            "custom" => "Custom engine identity active in running daemon.".to_string(),
+            _ => "Transmission upstream engine identity active in running daemon.".to_string(),
         };
-        (spawned_ua, spawned_prefix, msg)
+        (p, ua, prefix, msg)
     } else {
-        match settings.engine_identity_profile.as_str() {
-            "nebulae" => (
-                nebulae_ua.clone(),
-                nebulae_prefix.clone(),
-                format!("Native Nebulae v{} engine identity active.", app_version),
-            ),
-            "custom" => (
-                configured_ua.clone(),
-                configured_prefix.clone(),
-                "Custom engine identity active.".to_string(),
-            ),
-            _ => (
-                tr_ua.clone(),
-                tr_prefix.clone(),
-                "Transmission upstream engine identity active.".to_string(),
-            ),
-        }
+        (
+            "transmission".to_string(),
+            tr_ua.clone(),
+            tr_prefix.clone(),
+            "Transmission upstream engine identity active.".to_string(),
+        )
     };
 
+    // Restart is required when configured profile or identity strings differ from the active running daemon
     let restart_required = !is_remote
         && supports_overrides
-        && (configured_ua != active_ua || configured_prefix != active_prefix);
+        && (settings.engine_identity_profile != active_profile
+            || configured_ua != active_ua
+            || configured_prefix != active_prefix);
 
     Ok(crate::engine::identity::EngineIdentityInfo {
         profile: settings.engine_identity_profile,
@@ -652,6 +659,8 @@ pub fn get_engine_identity_info(
         supports_runtime_overrides: supports_overrides && !is_remote,
         restart_required,
         status_message,
+        version_encoding_supported,
+        version_encoding_limitation,
     })
 }
 
