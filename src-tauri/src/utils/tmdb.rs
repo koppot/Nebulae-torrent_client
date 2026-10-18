@@ -95,6 +95,9 @@ struct TmdbItem {
     // search results do not (defaults to None there).
     #[serde(default)]
     runtime: Option<u32>,
+    // /tv/{id} detail only: total episode count for total-runtime calculation.
+    #[serde(default)]
+    number_of_episodes: Option<u32>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -401,12 +404,17 @@ fn trakt_fallback(
         return Ok(None);
     }
     let body: Vec<TraktSearchResult> = resp.json().map_err(|e| format!("Trakt parse: {e}"))?;
-    let Some(hit) = body
-        .iter()
-        .find_map(|r| r.movie.as_ref().or(r.show.as_ref()))
-    else {
-        let _ = db.set_setting(cache_key, "");
-        return Ok(None);
+    // Determine which Trakt result type matched; this tells us whether to
+    // use the TMDB movie or TV endpoint (same id space, different schemas).
+    let (hit, is_show) = match body.iter().find_map(|r| {
+        r.show.as_ref().map(|s| (s, true))
+            .or_else(|| r.movie.as_ref().map(|m| (m, false)))
+    }) {
+        Some(pair) => pair,
+        None => {
+            let _ = db.set_setting(cache_key, "");
+            return Ok(None);
+        }
     };
     let Some(tmdb_id) = hit.ids.tmdb else {
         // Trakt matched but has no TMDB id: use its overview alone.
@@ -414,8 +422,8 @@ fn trakt_fallback(
         return Ok(None);
     };
 
-    // Map the Trakt match back to TMDB for art. Trakt matched movie OR show;
-    // try the movie detail first, then the TV detail (same TMDB id space).
+    // Map the Trakt match back to TMDB for art. Use the known type from the
+    // Trakt result; fall through to the other kind only if the primary fails.
     let api_key = effective_api_key().unwrap_or_default();
     let fetch_detail = |kind: &str| -> Result<Option<TmdbItem>, String> {
         let mut detail_url = url::Url::parse(&format!("{TMDB_BASE}/{kind}/{tmdb_id}")).unwrap();
@@ -433,7 +441,8 @@ fn trakt_fallback(
             .map(Some)
             .map_err(|e| format!("TMDB detail parse: {e}"))
     };
-    let detail: TmdbItem = match fetch_detail("movie").or_else(|_| fetch_detail("tv"))? {
+    let (primary, fallback) = if is_show { ("tv", "movie") } else { ("movie", "tv") };
+    let detail: TmdbItem = match fetch_detail(primary).or_else(|_| fetch_detail(fallback))? {
         Some(d) => d,
         None => {
             let _ = db.set_setting(cache_key, "");
@@ -449,6 +458,11 @@ fn trakt_fallback(
         .get(format!("{TMDB_IMAGE}{poster}"))
         .send()
         .map_err(|e| format!("TMDB image: {e}"))?;
+    // Check the HTTP status before reading; an error body is not a valid image.
+    if !img_resp.status().is_success() {
+        let _ = db.set_setting(cache_key, "");
+        return Ok(None);
+    }
     let bytes = img_resp
         .bytes()
         .map_err(|e| format!("TMDB image body: {e}"))?;
@@ -474,9 +488,17 @@ fn trakt_fallback(
         .or(detail.first_air_date.as_deref())
         .and_then(|d| d.get(0..4))
         .and_then(|y| y.parse::<i32>().ok());
-    let runtime = detail
-        .runtime
-        .or_else(|| detail.episode_run_time.first().copied());
+    // For TV shows: total runtime = episode_count × per-episode runtime,
+    // matching the computation in the main TMDB search path. For movies
+    // the flat `runtime` field applies.
+    let runtime = if is_show {
+        let per_ep = detail.episode_run_time.first().copied().or(detail.runtime).unwrap_or(0);
+        let eps = detail.number_of_episodes.unwrap_or(0);
+        let total = per_ep.saturating_mul(eps);
+        if total > 0 { Some(total) } else { None }
+    } else {
+        detail.runtime
+    };
     let _ = db.set_setting(cache_key, &webp_path.display().to_string());
     if let Some(ov) = &overview {
         let _ = db.set_setting(&format!("{cache_key}:overview"), ov);
@@ -495,9 +517,18 @@ fn trakt_fallback(
 const TRAKT_BASE: &str = "https://api.trakt.tv";
 
 /// Returns the cached TMDB overview for a release (for the hover panel).
+/// Must use the same versioned key that `fetch_tmdb_release` writes.
+/// Falls back to the v2 key for entries cached before the v3 migration.
 pub fn cached_overview(db: &crate::db::Database, lookup_key: &str) -> Option<String> {
-    let cache_key = format!("tmdb_poster:{}:overview", lookup_key.to_lowercase());
-    db.get_setting(&cache_key)
+    let key_lc = lookup_key.to_lowercase();
+    // v3 key (primary — written by current fetch_tmdb_release)
+    let v3_key = format!("tmdb_poster:v3:{key_lc}:overview");
+    if let Some(ov) = db.get_setting(&v3_key).ok().flatten().filter(|s| !s.is_empty()) {
+        return Some(ov);
+    }
+    // v2 key (legacy — entries cached before the runtime/TV fix)
+    let v2_key = format!("tmdb_poster:v2:{key_lc}:overview");
+    db.get_setting(&v2_key)
         .ok()
         .flatten()
         .filter(|s| !s.is_empty())

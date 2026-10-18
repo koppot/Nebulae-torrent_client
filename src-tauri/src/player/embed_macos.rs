@@ -41,6 +41,13 @@ objc2::define_class!(
                 // the manual frame/style-mask toggle.
                 if let Some(win) = this.window() {
                     toggle_fullscreen_win(&win);
+                    // Notify the frontend — same event emitted by the public
+                    // toggle_fullscreen() path (button / F key).
+                    if let Some(app) = overlay_app() {
+                        use tauri::Emitter;
+                        let is_fs = FULLSCREEN_ON.load(Ordering::SeqCst);
+                        let _ = app.emit("player://fullscreen-changed", is_fs);
+                    }
                 }
             } else if let Some(win) = this.window() {
                 // Become first responder so keyDown reaches us (keyboard
@@ -213,12 +220,14 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             toggle_fullscreen_win(&*ns_win);
-            let radius = if FULLSCREEN_ON.load(Ordering::SeqCst) {
-                0.0
-            } else {
-                10.0
-            };
+            let is_fs = FULLSCREEN_ON.load(Ordering::SeqCst);
+            let radius = if is_fs { 0.0 } else { 10.0 };
             apply_window_corner_radius(&app2, radius);
+            // Notify the frontend: Tauri's win.isFullscreen() always returns
+            // false for borderless windows toggled via manual frame resize.
+            // The frontend listens on this event to keep its icon in sync.
+            use tauri::Emitter;
+            let _ = app2.emit("player://fullscreen-changed", is_fs);
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))

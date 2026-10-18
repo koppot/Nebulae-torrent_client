@@ -491,13 +491,32 @@ export default function PlayerOverlay() {
   }, [player.open, poll.title, poll.title_count, Math.round(poll.length_ms / 30000)]);
 
   // Fullscreen state mirror for the button's icon.
+  // On macOS the player uses a manual NSWindow frame resize (not the native
+  // NSWindowStyleMaskFullScreen), so win.isFullscreen() always returns false.
+  // The backend emits player://fullscreen-changed with the authoritative bool.
+  // manualFsRef tracks whether we have received at least one such event; if so
+  // we suppress the onResized isFullscreen() poll which would reset the state.
+  // Windows/Linux use Tauri's native fullscreen and the onResized poll is the
+  // correct mechanism there.
+  const manualFsRef = useRef(false);
   useEffect(() => {
     const win = getCurrentWindow();
     win.isFullscreen().then(setIsFullscreen).catch(() => {});
+    // macOS manual-resize fullscreen authoritative event
+    let unlistenNative: (() => void) | undefined;
+    listen<boolean>('player://fullscreen-changed', (e) => {
+      manualFsRef.current = true;
+      setIsFullscreen(e.payload);
+    }).then((u) => { unlistenNative = u; }).catch(() => {});
+    // Tauri native fullscreen (Windows/Linux): skip poll when the macOS manual
+    // path is active — isFullscreen() returns false there and would clobber state.
     const un = win.onResized(() => {
-      win.isFullscreen().then(setIsFullscreen).catch(() => {});
+      if (!manualFsRef.current) {
+        win.isFullscreen().then(setIsFullscreen).catch(() => {});
+      }
     });
     return () => {
+      unlistenNative?.();
       un.then((f) => f()).catch(() => {});
     };
   }, []);
