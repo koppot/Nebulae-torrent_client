@@ -157,6 +157,7 @@
       "endpoints": [
         "https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json"
       ],
+      "dangerousInsecureTransportProtocol": true,
       "windows": {
         "installMode": "quiet"
       }

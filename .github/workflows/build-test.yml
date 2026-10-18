@@ -320,6 +320,17 @@ jobs:
           mkdir -p artifacts/
           cp "$DMG_NAME" "$DMG_NAME.sha256" "$APP_ZIP" "$APP_ZIP.sha256" artifacts/
 
+          # Collect Tauri updater bundles
+          UPDATER_TAR=$(find src-tauri/target -name "*.app.tar.gz" -o -name "Nebulae.app.tar.gz" -o -name "*.tar.gz" | head -n 1)
+          UPDATER_SIG=$(find src-tauri/target -name "*.app.tar.gz.sig" -o -name "Nebulae.app.tar.gz.sig" -o -name "*.tar.gz.sig" | head -n 1)
+          if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+            TARGET_TAR="$DMG_NAME-app.tar.gz"
+            TARGET_SIG="$DMG_NAME-app.tar.gz.sig"
+            cp "$UPDATER_TAR" "$TARGET_TAR"
+            cp "$UPDATER_SIG" "$TARGET_SIG"
+            cp "$TARGET_TAR" "$TARGET_SIG" artifacts/
+          fi
+
       # --- Prepare Artifacts (Windows) --------------------------------------
       - name: Prepare Named Artifacts (Windows)
         if: runner.os == 'Windows'
@@ -339,6 +350,11 @@ jobs:
               Copy-Item $name "artifacts/$name"
               Copy-Item "$name.sha256" "artifacts/$name.sha256"
             }
+          }
+
+          $sig = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*.sig" | Select-Object -First 1
+          if ($sig) {
+            Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
           }
 
       # --- Prepare Artifacts (Linux) ----------------------------------------
@@ -369,6 +385,13 @@ jobs:
             chmod +x "Nebulae-Linux-x86_64.AppImage"
             sha256sum "Nebulae-Linux-x86_64.AppImage" > "Nebulae-Linux-x86_64.AppImage.sha256"
             cp "Nebulae-Linux-x86_64.AppImage" "Nebulae-Linux-x86_64.AppImage.sha256" artifacts/
+          fi
+
+          UPDATER_TAR=$(find src-tauri/target -name "*.AppImage.tar.gz" | head -n 1)
+          UPDATER_SIG=$(find src-tauri/target -name "*.AppImage.tar.gz.sig" | head -n 1)
+          if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+            cp "$UPDATER_TAR" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz"
+            cp "$UPDATER_SIG" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz.sig"
           fi
 
           if [ -n "$BINARY_FILE" ]; then
@@ -425,3 +448,79 @@ jobs:
           fi
           gh release view test-builds --json isDraft,name,assets \
             --jq '{isDraft, name, assets: [.assets[].name]}'
+
+  manifest:
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate latest.json updater manifest for draft test-builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p artifacts
+          gh release download test-builds --pattern "*.sig" --dir artifacts || true
+
+          export APP_VERSION="$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
+          python3 -c '
+          import json, os, glob, datetime
+
+          repo_url = f"https://github.com/{os.environ.get(\"GH_REPO\", \"koppot/Nebulae-torrent_client\")}"
+          base_url = f"{repo_url}/releases/download/test-builds"
+          version = os.environ.get("APP_VERSION", "0.2.2").strip()
+
+          def read_sig(pattern):
+              matches = glob.glob(pattern, recursive=True)
+              if matches:
+                  with open(matches[0], "r", encoding="utf-8") as f:
+                      return f.read().strip()
+              return ""
+
+          manifest = {
+              "version": version,
+              "notes": f"Nebulae test build ({version}) with silent background auto-updates.",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": {}
+          }
+
+          sig_mac_arm = read_sig("artifacts/**/Nebulae-macOS-arm64*tar.gz.sig") or read_sig("artifacts/**/*arm64*.sig")
+          if sig_mac_arm:
+              manifest["platforms"]["darwin-aarch64"] = {
+                  "signature": sig_mac_arm,
+                  "url": f"{base_url}/Nebulae-macOS-arm64.dmg-app.tar.gz"
+              }
+
+          sig_mac_x64 = read_sig("artifacts/**/Nebulae-macOS-x64*tar.gz.sig") or read_sig("artifacts/**/*x64*darwin*.sig")
+          if sig_mac_x64:
+              manifest["platforms"]["darwin-x86_64"] = {
+                  "signature": sig_mac_x64,
+                  "url": f"{base_url}/Nebulae-macOS-x64.dmg-app.tar.gz"
+              }
+
+          sig_linux = read_sig("artifacts/**/Nebulae-Linux*AppImage.tar.gz.sig") or read_sig("artifacts/**/*linux*.sig")
+          if sig_linux:
+              manifest["platforms"]["linux-x86_64"] = {
+                  "signature": sig_linux,
+                  "url": f"{base_url}/Nebulae-Linux-x86_64.AppImage.tar.gz"
+              }
+
+          sig_win = read_sig("artifacts/**/Nebulae-Setup-x64.exe.sig") or read_sig("artifacts/**/*setup*.sig")
+          if sig_win:
+              manifest["platforms"]["windows-x86_64"] = {
+                  "signature": sig_win,
+                  "url": f"{base_url}/Nebulae-Setup-x64.exe"
+              }
+
+          with open("latest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+
+          print("Generated test-builds latest.json:")
+          print(json.dumps(manifest, indent=2))
+          '
+
+          gh release upload test-builds latest.json --clobber || true

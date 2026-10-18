@@ -25,8 +25,13 @@ pub fn spawn_silent_background_updater(app: &tauri::AppHandle, db: Arc<crate::db
     let handle = app.clone();
     let db_clone = db.clone();
     tauri::async_runtime::spawn(async move {
-        // Initial delay to avoid resource contention at boot
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        // Initial delay to avoid resource contention at boot; shorter in test mode
+        let initial_delay = if std::env::var("NEBULAE_UPDATER_TEST_ENDPOINT").is_ok() {
+            std::time::Duration::from_millis(500)
+        } else {
+            std::time::Duration::from_secs(10)
+        };
+        tokio::time::sleep(initial_delay).await;
 
         loop {
             run_single_silent_update_check(&handle, &db_clone).await;
@@ -88,8 +93,23 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
     }
 
     // Build updater with on_before_exit hook
-    let updater_res = handle
-        .updater_builder()
+    let mut builder = handle.updater_builder();
+    if let Ok(endpoint) = std::env::var("NEBULAE_UPDATER_TEST_ENDPOINT") {
+        if let Ok(url) = url::Url::parse(&endpoint) {
+            match builder.endpoints(vec![url]) {
+                Ok(b) => builder = b,
+                Err(e) => {
+                    warn!("Failed to override test updater endpoint: {e}");
+                    return;
+                }
+            }
+        }
+    }
+    if let Ok(pubkey) = std::env::var("NEBULAE_UPDATER_TEST_PUBKEY") {
+        builder = builder.pubkey(pubkey);
+    }
+
+    let updater_res = builder
         .on_before_exit(|| {
             info!("Running updater on_before_exit hook before installer execution.");
         })
@@ -103,11 +123,11 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
         }
     };
 
-    debug!("Checking for silent signed release via GitHub Releases...");
+    debug!("Checking for silent signed release via updater endpoint...");
     let update = match updater.check().await {
         Ok(Some(u)) => u,
         Ok(None) => {
-            debug!("Nebulae is up to date; no update available.");
+            info!("Nebulae is up to date; no update available.");
             return;
         }
         Err(e) => {
@@ -143,6 +163,10 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
             warn!("Failed to install staged update: {e}");
         } else {
             info!("Silent update staged on disk. Will take effect on next launch.");
+            if std::env::var("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED").as_deref() == Ok("1") {
+                info!("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED active: exiting cleanly to allow next launch verification.");
+                handle.exit(0);
+            }
         }
     }
 
@@ -155,6 +179,11 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
             if let Ok(mut lock) = state.0.lock() {
                 *lock = Some((update, bytes));
                 info!("Silent update staged in memory. Will apply automatically on app quit.");
+                if std::env::var("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED").as_deref() == Ok("1") {
+                    info!("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED active: exiting cleanly on Windows to trigger staged installer.");
+                    apply_staged_update_if_present(handle);
+                    handle.exit(0);
+                }
             }
         }
     }
