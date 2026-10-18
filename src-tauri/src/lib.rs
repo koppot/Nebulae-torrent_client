@@ -3,6 +3,7 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod tailscale;
 pub mod updater;
 pub mod utils;
 
@@ -10,12 +11,18 @@ use commands::diagnostics::EngineInitState;
 use db::Database;
 use engine::{RemoteServerEngine, SharedEngine};
 use std::sync::Arc;
+use tailscale::TsState;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
+
+pub static TS_STATE: std::sync::OnceLock<TsState> = std::sync::OnceLock::new();
 
 pub fn run() {
     // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
     SafeLogger::init_tracing();
+
+    // Embedded Tailscale (ADC-network) state container.
+    let _ = TS_STATE.set(TsState::default());
 
     // 1. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
@@ -464,6 +471,10 @@ pub fn run() {
             commands::torrent::add_torrent_bytes,
             commands::torrent::create_torrent_file,
             commands::torrent::export_torrent_file,
+            commands::tailscale::tailscale_status,
+            commands::tailscale::tailscale_enroll,
+            commands::tailscale::tailscale_disconnect,
+            commands::tailscale::adc_private_probe,
             commands::torrent::get_engine_status,
             commands::torrent::trigger_kill_switch_command,
             commands::torrent::reset_kill_switch_command,
@@ -525,6 +536,7 @@ pub fn run() {
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
             updater::apply_staged_update_if_present(_app_handle);
+            tailscale::shutdown(); // stop the embedded tailscaled
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         tauri::RunEvent::Opened { urls } => {
