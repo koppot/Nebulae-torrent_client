@@ -142,3 +142,25 @@ The Classpath Exception grants permission to link the JDK class libraries
 with independent modules that are not themselves derived works of the JDK.
 ```
 
+---
+
+## 5. MaxMind GeoLite2 Databases
+
+- **Component:** GeoLite2-Country.mmdb, GeoLite2-ASN.mmdb
+- **Provider:** MaxMind, Inc.
+- **License:** MaxMind GeoLite2 End User License Agreement
+- **License URL:** https://www.maxmind.com/en/geolite/eula
+- **Bundled Location:** `resources/geo/` inside the installed package
+
+Nebulae uses the GeoLite2 databases for offline IP geolocation (peer country and ASN classification in the torrent peer list). The databases are loaded at runtime via the `maxminddb` Rust crate. No modifications are made to the database files.
+
+Use of this MaxMind product is governed by MaxMind's GeoLite End User License Agreement, which can be viewed at https://www.maxmind.com/en/geolite/eula.
+
+### Incorporated Geographical Data — GeoNames
+
+This database incorporates GeoNames (https://www.geonames.org) geographical data, which is made available under the Creative Commons Attribution 4.0 License. To view a copy of this license, visit https://creativecommons.org/licenses/by/4.0/.
+
+**Attribution:** GeoNames — https://www.geonames.org  
+**License:** Creative Commons Attribution 4.0 International (CC BY 4.0)  
+**License URL:** https://creativecommons.org/licenses/by/4.0/
+
