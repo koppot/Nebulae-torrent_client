@@ -352,9 +352,16 @@ jobs:
             }
           }
 
-          $sig = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*.sig" | Select-Object -First 1
+          $sig = if ($exe -and (Test-Path "$($exe.FullName).sig")) {
+            Get-Item "$($exe.FullName).sig"
+          } else {
+            Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup*.sig" | Select-Object -First 1
+          }
           if ($sig) {
             Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
+            Write-Host "Matched Windows setup signature: $($sig.FullName)"
+          } else {
+            Write-Warning "No matching setup signature found in src-tauri\target"
           }
 
       # --- Prepare Artifacts (Linux) ----------------------------------------

@@ -2,8 +2,8 @@
 
 **Repository:** `koppot/Nebulae-torrent_client`  
 **Active branch:** `fix/cross-platform-repair`  
-**Current source commit:** [`94488b6`](https://github.com/koppot/Nebulae-torrent_client/commit/94488b6)  
-**Last updated:** 2026-10-18T19:54:00-04:00  
+**Current source commit:** [`ac2525b`](https://github.com/koppot/Nebulae-torrent_client/commit/ac2525b)  
+**Last updated:** 2026-10-18T20:48:00-04:00  
 
 ---
 
@@ -11,6 +11,8 @@
 
 | Commit SHA | Date | Summary |
 | :--- | :--- | :--- |
+| [`ac2525b`](https://github.com/koppot/Nebulae-torrent_client/commit/ac2525b) | 2026-10-18 | `feat(settings): add media mode toggle to BitTorrent tab to match torrent settings location` |
+| [`1b0cf06`](https://github.com/koppot/Nebulae-torrent_client/commit/1b0cf06) | 2026-10-18 | `docs(updater): update acceptance matrix with verified deliverables and add manifest generator script` |
 | [`94488b6`](https://github.com/koppot/Nebulae-torrent_client/commit/94488b6) | 2026-10-18 | `security(updater): gate test overrides behind test-updater feature and restore strict HTTPS` |
 | [`bf5e317`](https://github.com/koppot/Nebulae-torrent_client/commit/bf5e317) | 2026-10-18 | `feat(updater): verify consecutive silent updates A->B->C and configure CI test-build updater pipeline` |
 | [`f57b24b`](https://github.com/koppot/Nebulae-torrent_client/commit/f57b24b) | 2026-10-18 | `docs: finalize acceptance matrix with verified CI deliverables and precise test labels` |
@@ -79,24 +81,36 @@
 
 - **Standing Draft Release Target:** [`test-builds`](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0)
 
-### Verified Post-Fix CI Packages & Updater Feed (Run 39178297828 / Commit 94488b6)
-*Built with compile-time `test-updater` security gating, strict HTTPS enforcement, bundled runtimes (`jre/bin/java`, `transmission-daemon`, `libvlc`), Minisign signatures, and `latest.json` manifest:*
+### Verified Current Deliverables & Updater Feed (Run 39181055336 / Commit ac2525b)
+*Built with all intended current client changes (including BitTorrent-tab Media toggle), compile-time `test-updater` gating, strict HTTPS enforcement, bundled runtimes (`jre/bin/java`, `transmission-daemon`, `libvlc`), Minisign signatures, and `latest.json` manifest:*
 
 | Platform | Target File | Size | SHA-256 Checksum | Verified Build Info |
 | :--- | :--- | :--- | :--- | :--- |
-| **macOS Apple Silicon** | `Nebulae-macOS-arm64.dmg` | 110,234,766 bytes | `64d544ae3d41954a86ed9b9fd3dfd71c21665155d101a4383b6cdf777ca869f7` | `BUILD_INFO-Nebulae-macOS-arm64.dmg.txt` |
-| **macOS Intel** | `Nebulae-macOS-x64.dmg` | 111,766,529 bytes | `5ee59228b4edbb8f56e6b2dc26b12d32b77f74297739fa5dee8cd6b74ad66528` | `BUILD_INFO-Nebulae-macOS-x64.dmg.txt` |
-| **Windows x64** | `Nebulae-Setup-x64.exe` | 93,052,508 bytes | `1459e62a848fe354348f160df9b7851704344d0021e8eb504b66008e74ff0ef9` | `BUILD_INFO-Nebulae-Setup-x64.exe.txt` |
-| **Linux x86_64 AppImage** | `Nebulae-Linux-x86_64.AppImage` | 167,885,304 bytes | `f5e7dd7bc351b85233e1c4520b8b7f9338d296d2702c54e037d6a11589bb73a4` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
-| **Linux x86_64 DEB** | `Nebulae-Linux-x86_64.deb` | 81,715,378 bytes | `c85daf5217065561fd7d5ea1dd5b0c1751bde6b899a5db0b7fe658e07686a658` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
-| **Linux x86_64 RPM** | `Nebulae-Linux-x86_64.rpm` | 81,734,834 bytes | `6f96a5bdc48771188559cd52cdca0f2f3fe4534eebd4ec437d9c5655cdc76f5c` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+| **macOS Apple Silicon (RECOMMENDED)** | `Nebulae-macOS-arm64.dmg` | 110,235,178 bytes | `b80efd38772817d0aa3bad010ca66a458541dfc7783dbd706228ee49c6581b2c` | `BUILD_INFO-Nebulae-macOS-arm64.dmg.txt` |
+| **macOS Intel** | `Nebulae-macOS-x64.dmg` | 111,767,137 bytes | `48c822f3c6b287085ced6892dc129c34137a3cff74a21876d8bdb54756020602` | `BUILD_INFO-Nebulae-macOS-x64.dmg.txt` |
+| **Windows x64** | `Nebulae-Setup-x64.exe` | 93,052,508 bytes | `3f59da4d9a4208200e54a794cb29e4141ade5ecf94bf992b944fdc077672849a` | `BUILD_INFO-Nebulae-Setup-x64.exe.txt` |
+| **Linux x86_64 AppImage** | `Nebulae-Linux-x86_64.AppImage` | 167,885,304 bytes | `d51b0391f42d2f91c01d8add6a4610ea1c81f444adbf3ca5ae86c339824513b0` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+| **Linux x86_64 DEB** | `Nebulae-Linux-x86_64.deb` | 81,715,378 bytes | `1e31af3d20501a45233ac2d74186c0c7342e6708657593c684517e33cd4ae45d` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+| **Linux x86_64 RPM** | `Nebulae-Linux-x86_64.rpm` | 81,734,834 bytes | `99af35c8ad28de599fdc096070565ef92cb691722704daa1ace99ce02634f6f0` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
 
-#### Updater Bundles & Minisign Signatures (Uploaded to `test-builds`):
-- `Nebulae-macOS-arm64.dmg-app.tar.gz` (99,836,221 bytes) + `.sig` (424 bytes)
-- `Nebulae-macOS-x64.dmg-app.tar.gz` (100,352,333 bytes) + `.sig` (424 bytes)
-- `Nebulae-Setup-x64.exe` (93,052,508 bytes) + `.sig` (436 bytes)
-- `latest.json` (1,978 bytes, SHA-256: `e2f5ed20573452440dc31cb569eccc4d88fb4ba27733cb3bb0b33da01ac1472e`)
+#### Updater Bundles & Minisign Cryptographic Verification:
+- **macOS Apple Silicon:** `Nebulae-macOS-arm64.dmg-app.tar.gz` (99,836,388 bytes) + `.sig` (424 bytes)  
+  *Cryptographic Status:* **100% VERIFIED SUCCESSFUL** via `minisign-verify` engine. Ed25519 payload signature is cryptographically VALID; Minisign global signature over trusted comment (`file:Nebulae.app.tar.gz`, `version:0.2.2`) is VALID against compiled public key `452CAA8BBBBC6F41`.
+- **macOS Intel:** `Nebulae-macOS-x64.dmg-app.tar.gz` (100,352,492 bytes) + `.sig` (424 bytes)
+- **Windows x64:** `Nebulae-Setup-x64.exe` (93,052,508 bytes) + `.sig` (436 bytes)  
+  *Packaging Note:* In run 39181055336, the signature was collected from the MSI bundle (`Nebulae_0.2.2_x64_en-US.msi.sig`) due to alphabetical glob matching. A workflow fix in `.github/workflows/build-test.yml` was applied to explicitly pair `Nebulae-Setup-x64.exe` with its exact NSIS setup signature `Nebulae_0.2.2_x64-setup.exe.sig`.
+- **Feed Manifest:** `latest.json` (auto-generated by `scripts/generate-updater-manifest.py`, SHA-256: `6e618991fa9b265d6aa22e707dc8470a6c6ec2264627d2bf61d62c938d9600e1`).
+- **Release Target:** Standing draft release [`test-builds`](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0).
 
-- **Release Target:** [`test-builds`](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0) (superseded with run 39178297828 deliverables).
+---
+
+## 5. Technical Constraints & Test Limitations
+
+1. **macOS GUI Automation Boundary (WindowServer TCC):**  
+   Antigravity runs as a headless CLI subprocess. macOS WindowServer security policy (TCC) requires explicit user accessibility grants (`AXIsProcessTrusted`) and screen recording permissions. Synthetic mouse/keyboard events (`CGEventPost`, `AXUIElementPerformAction`) from background processes are intentionally blocked by WindowServer. Furthermore, global agent rules prohibit Linux-container browser tools on macOS. Therefore, the 6 interactive GUI items must be visually verified by the user in an interactive desktop session.
+2. **First-Run Profile Isolation (Cocoa WebKit Architecture):**  
+   Apple Foundation (`NSHomeDirectory()`) queries Darwin `getpwuid(getuid())` and ignores the terminal `$HOME` override. While `$HOME` isolates SQLite (`nebulae.db`), WKWebView continues using `/Users/dev/Library/WebKit/org.asiandvdclub.nebulae/`. Complete profile isolation without modifying the primary user data requires testing inside a dedicated test OS account or the macOS Guest account.
+3. **Factory Isolation on supermicro.local:**  
+   Factory is actively running test suite `nebtest6` (PID 4772, `nebulae-tailscale-test-e8d510b-win64`) in an active RDP session (`rdp-tcp#5`) on `supermicro.local`. No processes are stopped or modified during active Factory testing. Windows updater test execution will proceed during a designated exclusive window after Factory completes.
 
 
