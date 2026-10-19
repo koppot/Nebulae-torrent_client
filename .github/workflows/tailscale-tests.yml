@@ -81,7 +81,7 @@ jobs:
           path: src-tauri/resources/engine/tailscale
       - name: "Sanity: bundled version reports the pinned release"
         shell: bash
-        run: ./src-tauri/resources/engine/tailscale/tailscaled.exe --version | grep 1.104.1
+        run: ./src-tauri/resources/engine/tailscale/tailscaled.exe --version | grep 1.102.4
       - name: Start daemon on the app's private pipe and probe it
         shell: bash
         run: |
