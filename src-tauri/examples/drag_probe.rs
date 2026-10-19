@@ -1,5 +1,6 @@
 // Probe: do NSEvent class methods work from this process?
 // Prints mouseLocation and pressedMouseButtons every 500 ms for 5 s.
+#[cfg(target_os = "macos")]
 fn main() {
     for _ in 0..10 {
         unsafe {
@@ -10,4 +11,9 @@ fn main() {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    println!("drag_probe is macOS-only");
 }
