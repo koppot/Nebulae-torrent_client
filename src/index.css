@@ -16,6 +16,12 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* While the player is up the webview must paint nothing behind the video
+   overlay (video sits BELOW the webview); the opaque shell is unmounted. */
+body.player-active {
+  background-color: transparent;
+}
+
 /* Netflix Matte Charcoal Surface */
 .adc-watch-bg {
   background-color: #141414;

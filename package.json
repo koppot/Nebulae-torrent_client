@@ -1,14 +1,15 @@
 {
   "name": "nebulae-torrent-client",
   "private": true,
-  "version": "0.9.2",
+  "version": "0.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "lint": "eslint src",
     "build": "pnpm lint && tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:bundle": "tauri build && sh scripts/fix-dmg-icon.sh \"src-tauri/target/release/bundle/dmg/\"*\"aarch64.dmg\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

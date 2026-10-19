@@ -16,6 +16,7 @@ interface UiState {
   splashDismissed: boolean;
   activeManagerTab: ManagerTab;
   managerCategoryFilter: string;
+  managerTrackerFilter: string | null;
   searchQuery: string;
   initialAddTorrentSource: string | null;
   deleteModalTarget: { id: string; name: string } | null;
@@ -33,6 +34,7 @@ interface UiState {
   setSplashDismissed: (dismissed: boolean) => void;
   setActiveManagerTab: (tab: ManagerTab) => void;
   setManagerCategoryFilter: (filter: string) => void;
+  setManagerTrackerFilter: (tracker: string | null) => void;
   setSearchQuery: (query: string) => void;
   setInitialAddTorrentSource: (source: string | null) => void;
   setDeleteModalTarget: (target: { id: string; name: string } | null) => void;
@@ -64,6 +66,7 @@ export const useUiStore = create<UiState>((set) => ({
   splashDismissed: false,
   activeManagerTab: 'general',
   managerCategoryFilter: 'all',
+  managerTrackerFilter: null,
   searchQuery: '',
   initialAddTorrentSource: null,
   deleteModalTarget: null,
@@ -95,6 +98,7 @@ export const useUiStore = create<UiState>((set) => ({
   setSplashDismissed: (splashDismissed) => set({ splashDismissed }),
   setActiveManagerTab: (activeManagerTab) => set({ activeManagerTab }),
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),
+  setManagerTrackerFilter: (managerTrackerFilter) => set({ managerTrackerFilter }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
   setDeleteModalTarget: (deleteModalTarget) => set({ deleteModalTarget }),

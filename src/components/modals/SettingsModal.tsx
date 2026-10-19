@@ -7,6 +7,7 @@ import {
   AssociationStatus,
   DiscPlayerStatus,
   UserSettings,
+  EngineIdentityInfo,
 } from '../../types';
 import { errorMessage } from '../../utils/errors';
 import { invoke } from '@tauri-apps/api/core';
@@ -31,6 +32,9 @@ import {
   CheckCircle2,
   RefreshCw,
   Film,
+  Zap,
+  AlertCircle,
+  Fingerprint,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -47,10 +51,22 @@ type SettingsTab =
 
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
-  const { settings, saveSettings } = useSettingsStore();
+  const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
+  const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
+  const settings: UserSettings = {
+    ...persistedSettings,
+    ...pendingChanges,
+  };
+
+  const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
+  const [skipSplash, setSkipSplash] = useState(
+    () => localStorage.getItem('nebulae_pref_skip_splash') === '1',
+  );
 
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -60,6 +76,84 @@ export const SettingsModal: React.FC = () => {
   const [isTestingServer, setIsTestingServer] = useState(false);
   const [discPlayerStatus, setDiscPlayerStatus] = useState<DiscPlayerStatus | null>(null);
   const [isProbingPlayer, setIsProbingPlayer] = useState(false);
+
+  const [identityInfo, setIdentityInfo] = useState<EngineIdentityInfo | null>(null);
+  const [, setIsLoadingIdentity] = useState(false);
+  const [identityFeedback, setIdentityFeedback] = useState<string | null>(null);
+
+  const saveSettings = (patch: Partial<UserSettings>) => {
+    setStatusMessage(null);
+    setPendingChanges((prev) => {
+      const next = { ...prev, ...patch };
+      (Object.keys(patch) as Array<keyof UserSettings>).forEach((k) => {
+        if (persistedSettings[k] === next[k]) {
+          delete next[k];
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleApply = async (): Promise<boolean> => {
+    if (Object.keys(pendingChanges).length === 0 || isSaving) return true;
+    setIsSaving(true);
+    setStatusMessage(null);
+    try {
+      await storeSaveSettings(pendingChanges);
+      setPendingChanges({});
+      setStatusMessage('Preferences applied successfully');
+      setTimeout(() => setStatusMessage(null), 3500);
+      return true;
+    } catch (err: unknown) {
+      setStatusMessage(`Error saving settings: ${errorMessage(err, 'Failed to apply preferences')}`);
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDone = async () => {
+    if (Object.keys(pendingChanges).length > 0) {
+      const ok = await handleApply();
+      if (!ok) return;
+    }
+    setShowSettings(false);
+  };
+
+  const handleCancel = () => {
+    setPendingChanges({});
+    setShowSettings(false);
+  };
+
+  const fetchIdentityInfo = () => {
+    setIsLoadingIdentity(true);
+    invoke<EngineIdentityInfo>('get_engine_identity_info')
+      .then(setIdentityInfo)
+      .catch(() => {})
+      .finally(() => setIsLoadingIdentity(false));
+  };
+
+  const handleRestoreIdentityDefaults = async () => {
+    try {
+      await storeSaveSettings({
+        engine_identity_profile: 'transmission',
+        custom_user_agent: '',
+        custom_peer_id_prefix: '',
+      });
+      setPendingChanges((prev) => {
+        const next = { ...prev };
+        delete next.engine_identity_profile;
+        delete next.custom_user_agent;
+        delete next.custom_peer_id_prefix;
+        return next;
+      });
+      setIdentityFeedback('Restored Transmission upstream defaults. Restart required to apply.');
+      fetchIdentityInfo();
+      setTimeout(() => setIdentityFeedback(null), 4000);
+    } catch (err: unknown) {
+      setIdentityFeedback(`Failed: ${errorMessage(err)}`);
+    }
+  };
 
   const probePlayer = () => {
     setIsProbingPlayer(true);
@@ -75,6 +169,12 @@ export const SettingsModal: React.FC = () => {
       .catch(() => {});
     probePlayer();
   }, []);
+
+  useEffect(() => {
+    if (showSettings && activeTab === 'bittorrent') {
+      fetchIdentityInfo();
+    }
+  }, [showSettings, activeTab]);
 
   if (!showSettings) return null;
 
@@ -283,6 +383,18 @@ export const SettingsModal: React.FC = () => {
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
+                        checked={skipSplash}
+                        onChange={(e) => {
+                          setSkipSplash(e.target.checked);
+                          localStorage.setItem('nebulae_pref_skip_splash', e.target.checked ? '1' : '0');
+                        }}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Start program without splash screen</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
                         checked={settings.start_on_boot}
                         onChange={(e) => saveSettings({ start_on_boot: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
@@ -350,6 +462,45 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    Community Splash Screen
+                  </h3>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enable_splash}
+                        onChange={(e) => saveSettings({ enable_splash: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show community splash screen on startup</span>
+                    </label>
+                    {settings.enable_splash && (
+                      <div className="pl-5 space-y-2">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1">Splash message</label>
+                          <textarea
+                            value={settings.splash_message}
+                            onChange={(e) => saveSettings({ splash_message: e.target.value })}
+                            rows={2}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:outline-none focus:border-[#e50914] resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1">Splash URL</label>
+                          <input
+                            type="text"
+                            value={settings.splash_url}
+                            onChange={(e) => saveSettings({ splash_url: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -528,6 +679,29 @@ export const SettingsModal: React.FC = () => {
                       placeholder="/path/to/incomplete_downloads"
                       className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] disabled:opacity-40"
                     />
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Copy .torrent files to:</label>
+                      <input type="text" value={settings.copy_torrent_files_to}
+                        onChange={(e) => saveSettings({ copy_torrent_files_to: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Copy finished torrents to:</label>
+                      <input type="text" value={settings.copy_finished_torrents_to}
+                        onChange={(e) => saveSettings({ copy_finished_torrents_to: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Watched folder (auto-add .torrent files):</label>
+                      <input type="text" value={settings.watched_folder_directory}
+                        onChange={(e) => saveSettings({ watched_folder_directory: e.target.value })}
+                        placeholder="(leave blank to disable)"
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]" />
+                    </div>
                   </div>
                 </div>
 
@@ -792,7 +966,63 @@ export const SettingsModal: React.FC = () => {
                       />
                       <span className="text-white">Disable connections not supported by proxies</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_auth_enabled}
+                        onChange={(e) => saveSettings({ proxy_auth_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Proxy requires authentication</span>
+                    </label>
+                    {settings.proxy_auth_enabled && (
+                      <div className="grid grid-cols-2 gap-3 pl-5 font-mono">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Username</label>
+                          <input type="text" value={settings.proxy_username}
+                            onChange={(e) => saveSettings({ proxy_username: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Password</label>
+                          <input type="password" value={settings.proxy_password}
+                            onChange={(e) => saveSettings({ proxy_password: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_torrents}
+                        onChange={(e) => saveSettings({ proxy_torrents: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Use proxy for torrent connections</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={settings.proxy_rss}
+                        onChange={(e) => saveSettings({ proxy_rss: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                      <span className="text-white">Use proxy for RSS feeds</span>
+                    </label>
                   </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">IP Filtering</h3>
+                  <label className="flex items-center gap-2 cursor-pointer mb-2">
+                    <input type="checkbox" checked={settings.ip_filtering_enabled}
+                      onChange={(e) => saveSettings({ ip_filtering_enabled: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0" />
+                    <span className="text-white">Enable IP filter</span>
+                  </label>
+                  <input type="text" disabled={!settings.ip_filtering_enabled}
+                    value={settings.ip_filter_path}
+                    onChange={(e) => saveSettings({ ip_filter_path: e.target.value })}
+                    placeholder="/path/to/ipfilter.dat"
+                    className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:border-[#e50914] focus:outline-none disabled:opacity-40 mb-2" />
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" disabled={!settings.ip_filtering_enabled}
+                      checked={settings.ip_filter_apply_to_trackers}
+                      onChange={(e) => saveSettings({ ip_filter_apply_to_trackers: e.target.checked })}
+                      className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 disabled:opacity-40" />
+                    <span className="text-white">Apply filter to trackers too</span>
+                  </label>
                 </div>
               </div>
             )}
@@ -959,6 +1189,252 @@ export const SettingsModal: React.FC = () => {
             {/* 5. BITTORRENT */}
             {activeTab === 'bittorrent' && (
               <div className="space-y-4">
+                {/* Media Mode */}
+                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <Film className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span>Media Mode</span>
+                      </h3>
+                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                        Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch. Disabling hides the Media switch without deleting media collection data.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer ml-4 flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={settings.media_mode_enabled !== false}
+                        onChange={(e) => saveSettings({ media_mode_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white font-medium text-xs">Enable media mode</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Global BitTorrent Modes */}
+                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-4">
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>Global Swarm Modes</span>
+                    </h3>
+                    <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                      Configure high-performance swarm behavior and initial seeding distribution policies.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 pt-1">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.racing_mode_enabled}
+                        onChange={(e) => saveSettings({ racing_mode_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium text-xs">Enable racing mode</span>
+                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                          Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents.
+                        </p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.super_seeding_enabled}
+                        onChange={(e) => saveSettings({ super_seeding_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium text-xs">Enable super seeding</span>
+                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                          Initial seeding mode — forces peers to download and re-upload unique pieces across the swarm before receiving subsequent pieces. Applied to actively seeding torrents to maximize piece dispersion.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Engine Identification */}
+                <div className={`p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-3 ${isRemoteServer ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <Fingerprint className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span>Engine Identification</span>
+                      </h3>
+                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                        Configures tracker announce and peer handshake identification (User-Agent and Peer-ID prefix). Changes take effect on next engine restart.
+                      </p>
+                    </div>
+                    {!isRemoteServer && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreIdentityDefaults}
+                        className="px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-[11px] font-mono flex items-center gap-1 transition"
+                        title="Restore Transmission upstream defaults"
+                      >
+                        <RotateCcw className="w-3 h-3 text-[#a3a3a3]" />
+                        <span>Restore defaults</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {isRemoteServer && (
+                    <div className="p-2.5 rounded bg-[#1f1f1f] border border-[#333333] text-xs text-[#a3a3a3] flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                      <span>Engine identification is disabled for remote rTorrent. The remote daemon manages its own identity.</span>
+                    </div>
+                  )}
+
+                  {!isRemoteServer && identityInfo && !identityInfo.supports_runtime_overrides && (
+                    <div className="p-2.5 rounded bg-[#2a1f1f] border border-[#552222] text-xs text-[#d4d4d4] flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-white block mb-0.5">Stock Transmission Daemon Active</span>
+                        <p className="text-[11px] text-[#a3a3a3] leading-relaxed">
+                          The bundled transmission-daemon is standard upstream ({identityInfo.bundled_transmission_version}) and does not contain runtime identity hooks. Stock Transmission identity remains active. Custom and Nebulae identity profiles require a patched engine build.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {!isRemoteServer && (
+                    <>
+                      {/* Active Identity Readout */}
+                      <div className="p-2 rounded bg-[#161616] border border-[#2a2a2a] text-[11px] font-mono space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#a3a3a3]">Active Outgoing User-Agent:</span>
+                          <span className="text-white font-medium">{identityInfo?.active_user_agent || 'Transmission/4.1.3'}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#a3a3a3]">Active Outgoing Peer ID Prefix:</span>
+                          <span className="text-white font-medium">{identityInfo?.active_peer_id_prefix || '-TR4130-'}</span>
+                        </div>
+                        {((identityInfo?.restart_required) || (settings.engine_identity_profile !== identityInfo?.profile)) && (
+                          <div className="mt-1.5 pt-1.5 border-t border-[#2a2a2a] flex items-center gap-1.5 text-amber-400 text-[10px]">
+                            <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                            <span>Restart required to apply new identification settings</span>
+                          </div>
+                        )}
+                        {identityFeedback && (
+                          <div className="mt-1 text-emerald-400 text-[10px]">
+                            {identityFeedback}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Profile Options */}
+                      <div className="space-y-2 pt-1">
+                        <label className="flex items-start gap-2.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="transmission"
+                            checked={settings.engine_identity_profile === 'transmission'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'transmission' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                          />
+                          <div>
+                            <span className="text-xs text-white font-medium block">Transmission (Default)</span>
+                            <span className="text-[11px] text-[#a3a3a3] block">
+                              Unchanged upstream identity: <code className="text-white">Transmission/{identityInfo?.bundled_transmission_version || '4.1.3'}</code> with prefix <code className="text-white">{identityInfo?.bundled_transmission_peer_id_prefix || '-TR4130-'}</code>
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className={`flex items-start gap-2.5 ${identityInfo?.version_encoding_supported === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="nebulae"
+                            disabled={identityInfo?.version_encoding_supported === false}
+                            checked={settings.engine_identity_profile === 'nebulae'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'nebulae' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0 disabled:opacity-40"
+                          />
+                          <div>
+                            <span className="text-xs text-white font-medium block">Nebulae (Native)</span>
+                            <span className="text-[11px] text-[#a3a3a3] block">
+                              Native client identification: <code className="text-white">{identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}</code> with prefix <code className="text-white">{identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}</code> (derived dynamically from client version)
+                            </span>
+                            {identityInfo?.version_encoding_supported === false && identityInfo.version_encoding_limitation && (
+                              <span className="text-[10px] text-amber-400 block mt-1">
+                                {identityInfo.version_encoding_limitation}
+                              </span>
+                            )}
+                          </div>
+                        </label>
+
+                        <label className="flex items-start gap-2.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="engine_identity_profile"
+                            value="custom"
+                            checked={settings.engine_identity_profile === 'custom'}
+                            onChange={() => saveSettings({ engine_identity_profile: 'custom' })}
+                            className="mt-0.5 text-[#e50914] bg-[#1f1f1f] border-[#333333] focus:ring-0"
+                          />
+                          <div className="w-full">
+                            <span className="text-xs text-white font-medium block">Custom Override</span>
+                            <span className="text-[11px] text-[#a3a3a3] block mb-2">
+                              User-specified User-Agent and exactly 8-byte Peer-ID prefix when supported by the bundled engine.
+                            </span>
+
+                            {settings.engine_identity_profile === 'custom' && (
+                              <div className="p-2.5 rounded bg-[#161616] border border-[#2a2a2a] space-y-2 mt-1">
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="block text-[11px] text-[#a3a3a3]">Custom User-Agent:</label>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        saveSettings({
+                                          custom_user_agent: identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`,
+                                          custom_peer_id_prefix: identityInfo?.nebulae_peer_id_prefix || '-NE0220-',
+                                        })
+                                      }
+                                      className="text-[10px] text-[#e50914] hover:underline"
+                                    >
+                                      Use Nebulae v{identityInfo?.nebulae_version || '0.2.2'} values
+                                    </button>
+                                  </div>
+                                  <input
+                                    type="text"
+                                    value={settings.custom_user_agent}
+                                    placeholder={identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}
+                                    onChange={(e) => saveSettings({ custom_user_agent: e.target.value })}
+                                    className="w-full px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] text-[#a3a3a3] mb-1">
+                                    Custom Peer ID Prefix (exactly 8 characters):
+                                  </label>
+                                  <input
+                                    type="text"
+                                    maxLength={8}
+                                    value={settings.custom_peer_id_prefix}
+                                    placeholder={identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}
+                                    onChange={(e) => saveSettings({ custom_peer_id_prefix: e.target.value })}
+                                    className="w-48 px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                                  />
+                                  <p className="text-[10px] text-[#737373] mt-0.5">
+                                    Format: <code>-XX1230-</code>. 8-byte prefix + 12 random bytes = 20-byte BitTorrent Peer ID.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </label>
+                      </div>
+                    </>
+                  )}
+                </div>
+
                 <div>
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
                     Privacy, Swarm & Encryption
@@ -1057,6 +1533,33 @@ export const SettingsModal: React.FC = () => {
                       />
                     </div>
                   </div>
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.ignore_slow_torrents_in_queue}
+                        onChange={(e) => saveSettings({ ignore_slow_torrents_in_queue: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Do not count slow torrents in active limits</span>
+                    </label>
+                    {settings.ignore_slow_torrents_in_queue && (
+                      <div className="grid grid-cols-2 gap-3 pl-5 font-mono">
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Slow DL threshold (KiB/s):</label>
+                          <input type="number" value={settings.slow_torrent_dl_threshold_kib}
+                            onChange={(e) => saveSettings({ slow_torrent_dl_threshold_kib: Number(e.target.value) })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">Slow UL threshold (KiB/s):</label>
+                          <input type="number" value={settings.slow_torrent_ul_threshold_kib}
+                            onChange={(e) => saveSettings({ slow_torrent_ul_threshold_kib: Number(e.target.value) })}
+                            className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pt-3 border-t border-[#333333]">
@@ -1092,6 +1595,26 @@ export const SettingsModal: React.FC = () => {
                       </select>
                     </div>
                   </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 font-mono">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">When seeding time (min) reaches (-1 = unlimited):</label>
+                      <input type="number" value={settings.max_seeding_time_minutes}
+                        onChange={(e) => saveSettings({ max_seeding_time_minutes: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">Default Trackers (public torrents only)</h3>
+                  <textarea
+                    value={settings.default_trackers_list}
+                    onChange={(e) => saveSettings({ default_trackers_list: e.target.value })}
+                    rows={4}
+                    placeholder="https://tracker.example.com/announce"
+                    className="w-full px-3 py-2 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914] resize-none"
+                  />
+                  <p className="text-[10px] text-[#a3a3a3] mt-1">One URL per line. Applied to public torrents only; private torrents are protected and will never receive default trackers.</p>
                 </div>
               </div>
             )}
@@ -1534,6 +2057,83 @@ export const SettingsModal: React.FC = () => {
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-3 gap-3 font-mono mt-3">
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        File Pool Size
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.file_pool_size}
+                        onChange={(e) => saveSettings({ file_pool_size: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Stop Tracker Timeout (s)
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.stop_tracker_timeout_seconds}
+                        onChange={(e) => saveSettings({ stop_tracker_timeout_seconds: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Outgoing Ports Min
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.outgoing_ports_min}
+                        onChange={(e) => saveSettings({ outgoing_ports_min: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1 font-sans">
+                        Outgoing Ports Max
+                      </label>
+                      <input
+                        type="number"
+                        value={settings.outgoing_ports_max}
+                        onChange={(e) => saveSettings({ outgoing_ports_max: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.coalesce_reads_writes}
+                        onChange={(e) => saveSettings({ coalesce_reads_writes: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Coalesce reads and writes (optimize sequential I/O)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.embedded_tracker_enabled}
+                        onChange={(e) => saveSettings({ embedded_tracker_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Enable embedded tracker</span>
+                    </label>
+                    {settings.embedded_tracker_enabled && (
+                      <div className="pl-5">
+                        <label className="block text-[11px] text-[#a3a3a3] mb-1">Embedded tracker port</label>
+                        <input
+                          type="number"
+                          value={settings.embedded_tracker_port}
+                          onChange={(e) => saveSettings({ embedded_tracker_port: Number(e.target.value) })}
+                          className="w-48 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
 
@@ -1541,6 +2141,27 @@ export const SettingsModal: React.FC = () => {
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
                     Diagnostics & Storage Maintenance
                   </h3>
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.save_log_to_disk}
+                        onChange={(e) => saveSettings({ save_log_to_disk: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Save logs to disk</span>
+                    </label>
+                    <div>
+                      <label className="block text-[11px] text-[#a3a3a3] mb-1">Max log size (MiB)</label>
+                      <input
+                        type="number"
+                        value={settings.max_log_size_mib}
+                        disabled={!settings.save_log_to_disk}
+                        onChange={(e) => saveSettings({ max_log_size_mib: Number(e.target.value) })}
+                        className="w-full px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none disabled:opacity-40"
+                      />
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -1591,20 +2212,58 @@ export const SettingsModal: React.FC = () => {
 
         {/* Modal Footer */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
-          <div className="text-[11px] font-mono text-[#a3a3a3]">
-            {statusMessage ? (
-              <span className="text-[#e50914] font-semibold">{statusMessage}</span>
-            ) : (
-              <span>Nebulae Preferences · Changes applied automatically</span>
-            )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleResetSettings}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-white text-xs transition"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Restore Defaults</span>
+            </button>
+            <div className="text-[11px] font-mono text-[#a3a3a3]">
+              {statusMessage ? (
+                <span
+                  className={
+                    statusMessage.startsWith('Error')
+                      ? 'text-[#e50914] font-semibold'
+                      : 'text-emerald-400 font-semibold'
+                  }
+                >
+                  {statusMessage}
+                </span>
+              ) : Object.keys(pendingChanges).length > 0 ? (
+                <span className="text-amber-400 font-medium">Unsaved preference changes pending</span>
+              ) : (
+                <span>Nebulae Preferences</span>
+              )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowSettings(false)}
-            className="px-5 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white font-medium text-xs transition shadow"
-          >
-            Done
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="px-3.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-[#a3a3a3] hover:text-white font-medium text-xs transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={Object.keys(pendingChanges).length === 0 || isSaving}
+              onClick={handleApply}
+              className="px-4 py-1.5 rounded border border-[#444444] bg-[#2a2a2a] hover:bg-[#333333] disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-xs transition shadow-sm"
+              title="Apply pending preference changes live without closing Preferences"
+            >
+              {isSaving ? 'Applying...' : 'Apply'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDone}
+              className="px-5 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white font-medium text-xs transition shadow"
+            >
+              OK
+            </button>
+          </div>
         </div>
       </div>
     </div>

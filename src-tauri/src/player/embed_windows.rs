@@ -102,7 +102,14 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
-pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub fn sync_frame(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    _bar_height: f64,
+) -> Result<(), String> {
     let hwnd = app
         .state::<crate::player::PlayerState>()
         .overlay_view
@@ -128,4 +135,87 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
+/// Rounded corners are macOS-specific (owner, Movist style); no-op here.
+pub fn apply_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+/// Window drag: Tauri's startDragging works on Windows.
+pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.start_dragging().map_err(|e| format!("drag: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Fullscreen via the Tauri window API (works for standard windows).
+pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let fs = win.is_fullscreen().unwrap_or(false);
+        return win
+            .set_fullscreen(!fs)
+            .map_err(|e| format!("fullscreen: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Minimize via the Tauri window API.
+pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Native Win32 window controls: the Tauri JS window API is unreliable on
+/// the undecorated main window, so Minimize/Maximize/Close go through
+/// ShowWindow / WM_CLOSE on the real HWND.
+fn main_hwnd(app: &AppHandle) -> Result<HWND, String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    win.hwnd().map_err(|e| format!("hwnd: {e}"))
+}
+
+pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
+        let _ = ShowWindow(hwnd, SW_MINIMIZE);
+    }
+    Ok(())
+}
+
+pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, SW_MAXIMIZE, SW_RESTORE};
+        let zoomed = IsZoomed(hwnd).as_bool();
+        let _ = ShowWindow(hwnd, if zoomed { SW_RESTORE } else { SW_MAXIMIZE });
+    }
+    Ok(())
+}
+
+pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
+    Ok(())
+}
+
+pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+        Ok(IsZoomed(hwnd).as_bool())
+    }
 }

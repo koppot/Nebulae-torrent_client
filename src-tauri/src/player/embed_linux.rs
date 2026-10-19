@@ -148,7 +148,14 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     .map(|_| ())
 }
 
-pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub fn sync_frame(
+    app: &AppHandle,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    _bar_height: f64,
+) -> Result<(), String> {
     let scale = app
         .get_webview_window("main")
         .and_then(|w| w.scale_factor().ok())
@@ -165,4 +172,73 @@ pub fn sync_frame(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(),
         (xh.xlib.XFlush)(xh.display);
     })
     .map(|_| ())
+}
+
+/// Rounded corners are macOS-specific (owner, Movist style); no-op here.
+pub fn apply_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+    Ok(())
+}
+
+/// Window drag: Tauri's startDragging works on Windows.
+pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.start_dragging().map_err(|e| format!("drag: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Fullscreen via the Tauri window API (works for standard windows).
+pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let fs = win.is_fullscreen().unwrap_or(false);
+        return win
+            .set_fullscreen(!fs)
+            .map_err(|e| format!("fullscreen: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Minimize via the Tauri window API.
+pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+/// Window controls via the Tauri window API (works on Linux).
+pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let zoomed = win.is_maximized().unwrap_or(false);
+        if zoomed {
+            return win.unmaximize().map_err(|e| format!("unmaximize: {e}"));
+        }
+        return win.maximize().map_err(|e| format!("maximize: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.close().map_err(|e| format!("close: {e}"));
+    }
+    Err("main window not found".into())
+}
+
+pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("main") {
+        return win.is_maximized().map_err(|e| format!("is_maximized: {e}"));
+    }
+    Err("main window not found".into())
 }

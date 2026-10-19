@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
+import { usePlayerStore, playerStore, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
-import { useTorrentStore, smoothTelemetrySpeeds } from './stores/torrentStore';
+import { useTorrentStore, smoothTelemetrySpeeds, reconcileRecheckState } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
@@ -17,24 +18,201 @@ import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
 import { CreateTorrentModal } from './components/modals/CreateTorrentModal';
 import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
+import { PortForwardModal } from './components/modals/PortForwardModal';
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
 import { RecoveryScreen } from './components/recovery/RecoveryScreen';
 import PlayerOverlay from './components/player/PlayerOverlay';
-import { FileUp } from 'lucide-react';
+import { FileUp, Film, GripHorizontal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 export const App: React.FC = () => {
-  const { splashDismissed, openAddTorrentWithSource, viewMode } = useUiStore();
-  const { loadSettings, fetchEngineMode } = useSettingsStore();
+  const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
+  const playerOpen = usePlayerStore().open;
+
+  // The webview itself must go transparent while the player is up — the
+  // native video view sits BELOW it (see embed_macos.rs).
+  useEffect(() => {
+    document.body.classList.toggle('player-active', playerOpen);
+  }, [playerOpen]);
+
+  // Programmatic playback (engine-side autoplay, diagnostics) opens the
+  // player via a backend event rather than a frontend invoke.
+  // Feature label (clean title + year) for engine-adopted sessions: the
+  // engine only knows the disc folder name, so look the torrent up by the
+  // session path and use its media metadata.
+  const featureLabelForPath = (p: string): string | undefined => {
+    const torrents = useTorrentStore.getState().torrents;
+    // MOST-SPECIFIC match wins: a torrent saved at a broad parent (e.g. a
+    // whole volume) must not label every external disc under it with its
+    // own title - the longest save_path that still contains the session
+    // path identifies the release.
+    let best: { root: string; label: string } | null = null;
+    for (const t of torrents) {
+      const root = t.save_path?.replace(/\/+$/, '');
+      if (!root || !p.startsWith(root)) continue;
+      const mm = t.media_meta;
+      const label = mm?.clean_title
+        ? mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title
+        : t.name;
+      if (!best || root.length > best.root.length) best = { root, label };
+    }
+    return best?.label;
+  };
+  useEffect(() => {
+    const un = listen<PlayerOpenInfo>('player-opened', (e) => {
+      invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
+      if (e.payload.external) return;
+      // The event repeats several times per open; an explicit open already
+      // set the correct display title for THIS path (e.g. the import
+      // prompt's "Name (Year)") - don't overwrite it with a torrent guess.
+      const cur = playerStore.get();
+      if (cur.open && cur.resolvedPath === e.payload.resolved_path) return;
+      playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
+    });
+    // Belt-and-braces: poll the engine for a live session while the player
+    // UI is closed. Event delivery raced the webview's own loading in the
+    // autoplay path (owner: player UI never appeared).
+    const iv = window.setInterval(() => {
+      const ps = playerStore.get();
+      if (ps.open) return;
+      invoke<{ resolved_path: string; title: string; is_disc: boolean } | null>(
+        'player_engine_playback',
+      )
+        .then((s) => {
+          if (s && !playerStore.get().open) {
+            playerStore.open(
+              {
+                resolved_path: s.resolved_path,
+                title: s.title,
+                is_disc: s.is_disc,
+                external: false,
+              },
+              featureLabelForPath(s.resolved_path),
+            );
+          }
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => {
+      un.then((f) => f()).catch(() => {});
+      window.clearInterval(iv);
+    };
+  }, []);
+  const { settings, loadSettings, fetchEngineMode, saveSettings, isLoaded: settingsLoaded } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
   const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
   const [isDragging, setIsDragging] = useState(false);
   const [engineInitError, setEngineInitError] = useState<string | null>(null);
+  const [showFirstRunMediaModal, setShowFirstRunMediaModal] = useState(false);
+  const [savingMediaMode, setSavingMediaMode] = useState(false);
+  const [mediaModeError, setMediaModeError] = useState<string | null>(null);
+
+  // Drag position for Media Mode prompt modal
+  const [modalOffset, setModalOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragRef = React.useRef<{
+    isDragging: boolean;
+    startX: number;
+    startY: number;
+    initialOffsetX: number;
+    initialOffsetY: number;
+  }>({
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    initialOffsetX: 0,
+    initialOffsetY: 0,
+  });
+
+  useEffect(() => {
+    if (settingsLoaded) {
+      if (!settings.media_mode_decision_made) {
+        setShowFirstRunMediaModal(true);
+      } else {
+        setShowFirstRunMediaModal(false);
+      }
+    }
+  }, [settingsLoaded, settings.media_mode_decision_made]);
+
+  // Keep modal reachable and recoverable when window is resized
+  useEffect(() => {
+    const handleResize = () => {
+      setModalOffset((prev) => {
+        const maxX = Math.max(0, (window.innerWidth - 460) / 2);
+        const maxY = Math.max(0, (window.innerHeight - 300) / 2);
+        return {
+          x: Math.max(-maxX, Math.min(maxX, prev.x)),
+          y: Math.max(-maxY, Math.min(maxY, prev.y)),
+        };
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleMediaChoice = async (enable: boolean) => {
+    setSavingMediaMode(true);
+    setMediaModeError(null);
+    try {
+      await saveSettings({
+        media_mode_enabled: enable,
+        media_mode_decision_made: true,
+      });
+      localStorage.setItem('nebulae_media_mode_choice', enable ? 'yes' : 'no');
+      setViewMode(enable ? 'media' : 'manager');
+      setShowFirstRunMediaModal(false);
+    } catch (err: unknown) {
+      console.error('[media-mode] failed to save choice:', err);
+      setMediaModeError(
+        typeof err === 'string'
+          ? err
+          : 'Failed to save media mode decision. Please try again.'
+      );
+    } finally {
+      setSavingMediaMode(false);
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    dragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialOffsetX: modalOffset.x,
+      initialOffsetY: modalOffset.y,
+    };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current.isDragging) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    const maxX = Math.max(0, (window.innerWidth - 460) / 2);
+    const maxY = Math.max(0, (window.innerHeight - 300) / 2);
+    const targetX = dragRef.current.initialOffsetX + dx;
+    const targetY = dragRef.current.initialOffsetY + dy;
+    setModalOffset({
+      x: Math.max(-maxX, Math.min(maxX, targetX)),
+      y: Math.max(-maxY, Math.min(maxY, targetY)),
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current.isDragging) {
+      dragRef.current.isDragging = false;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
 
   useEffect(() => {
     invoke<string | null>('get_engine_init_error')
@@ -60,7 +238,7 @@ export const App: React.FC = () => {
     listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
       if (event.payload) {
         useTorrentStore.setState({
-          torrents: smoothTelemetrySpeeds(event.payload),
+          torrents: smoothTelemetrySpeeds(reconcileRecheckState(event.payload)),
           isLoading: false,
         });
       }
@@ -151,6 +329,9 @@ export const App: React.FC = () => {
       useUiStore.getState().setSplashDismissed(false);
     } else if (splashParam === 'false') {
       useUiStore.getState().setSplashDismissed(true);
+    } else if (localStorage.getItem('nebulae_pref_skip_splash') === '1') {
+      // Owner preference: start without the splash screen.
+      useUiStore.getState().setSplashDismissed(true);
     }
 
     if (viewParam === 'manager' || viewParam === 'media' || viewParam === 'compact') {
@@ -228,8 +409,15 @@ export const App: React.FC = () => {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="relative flex flex-col h-screen w-screen bg-[#141414] text-white overflow-hidden font-sans select-none"
+      className={`relative flex flex-col h-screen w-screen text-white overflow-hidden font-sans select-none ${
+        playerOpen ? '' : 'bg-[#141414]'
+      }`}
     >
+      {/* The embedded player replaces the whole interface: the video is the
+          native view UNDER this transparent webview, so nothing opaque may
+          be painted behind it. */}
+      {!playerOpen && (
+        <>
       {/* 1. Splash Screen */}
       {!splashDismissed && <SplashScreen />}
 
@@ -243,8 +431,10 @@ export const App: React.FC = () => {
         {viewMode === 'manager' && <TorrentManagerView />}
       </main>
 
-      {/* 4. Bottom Desktop Application Status Bar */}
-      <StatusBar />
+      {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}
+      {viewMode === 'manager' && <StatusBar />}
+        </>
+      )}
 
       {/* 4. Drag & Drop Full-Window Visual Overlay */}
       {isDragging && (
@@ -264,9 +454,74 @@ export const App: React.FC = () => {
       <AddTorrentModal />
       <CreateTorrentModal />
       <ConnectivityDoctorModal />
+      <PortForwardModal />
       <VpnManagerModal />
       <TrackerModal />
       <DeleteTorrentModal />
+
+      {/* First-Run Media Mode Choice */}
+      {splashDismissed && showFirstRunMediaModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 pointer-events-auto">
+          <div
+            className="bg-[#181818] border border-[#333333] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4"
+            style={{
+              transform: `translate3d(${modalOffset.x}px, ${modalOffset.y}px, 0)`,
+            }}
+          >
+            {/* Draggable header area */}
+            <div
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              className="cursor-grab active:cursor-grabbing select-none flex items-center justify-between pb-3 border-b border-[#262626] -mx-2 px-2"
+              title="Drag to reposition prompt"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-[#e50914]/10 text-[#e50914] border border-[#e50914]/20 pointer-events-none">
+                  <Film className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-white pointer-events-none">
+                  Would you like to enable media mode?
+                </h3>
+              </div>
+              <div className="text-[#555555] hover:text-[#888888] p-1">
+                <GripHorizontal className="w-4 h-4" />
+              </div>
+            </div>
+
+            <p className="text-xs text-[#cccccc] leading-relaxed select-text">
+              Nebulae’s Media Center lets you play DVDs, Blu-ray, and UHD discs with interactive disc menus, while organizing and managing your media collection in one place.
+            </p>
+
+            {mediaModeError && (
+              <div className="p-2.5 rounded bg-red-950/40 border border-red-800/60 text-red-300 text-xs">
+                {mediaModeError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={savingMediaMode}
+                onClick={() => void handleMediaChoice(false)}
+                className="px-4 py-2 rounded-lg bg-[#262626] hover:bg-[#333333] border border-[#333333] text-xs text-[#a3a3a3] hover:text-white font-medium transition disabled:opacity-50"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                autoFocus
+                disabled={savingMediaMode}
+                onClick={() => void handleMediaChoice(true)}
+                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition ring-1 ring-white/20 disabled:opacity-50"
+              >
+                {savingMediaMode ? 'Saving…' : 'Yes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

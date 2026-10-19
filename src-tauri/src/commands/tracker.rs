@@ -121,6 +121,7 @@ pub fn link_adc_account(
     if let Err(e) = store_secret(&secret_target, &passkey) {
         tracing::warn!("Failed to store passkey in OS keychain: {e}");
     }
+    let _ = db.set_setting("adc_passkey", &passkey);
 
     db.set_setting("adc_linked", "true")
         .map_err(|e| e.to_string())?;
@@ -148,6 +149,7 @@ pub fn unlink_adc_account(db: State<Arc<Database>>) -> Result<(), String> {
     if let Err(e) = delete_secret(&secret_target) {
         tracing::warn!("Failed to delete passkey from OS keychain: {e}");
     }
+    let _ = db.set_setting("adc_passkey", "");
 
     db.set_setting("adc_linked", "false")
         .map_err(|e| e.to_string())?;

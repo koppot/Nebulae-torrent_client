@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useConnectivityStore } from '../../stores/connectivityStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
 
 interface TailscaleStatus {
   connected: boolean;
   interface: string | null;
   tailnet_ip: string | null;
+  adc_reachable?: boolean | null;
+  adc_node?: string | null;
 }
 
 interface VolumeSpace {
@@ -23,10 +28,45 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
+  const { settings, saveSettings } = useSettingsStore();
+
+  const [isTogglingRacing, setIsTogglingRacing] = useState(false);
+  const [isTogglingSuperSeeding, setIsTogglingSuperSeeding] = useState(false);
+
+  const handleToggleRacingMode = async () => {
+    if (isTogglingRacing) return;
+    setIsTogglingRacing(true);
+    try {
+      await saveSettings({ racing_mode_enabled: !settings.racing_mode_enabled });
+    } catch (err) {
+      console.error('Failed to toggle racing mode:', err);
+    } finally {
+      setIsTogglingRacing(false);
+    }
+  };
+
+  const handleToggleSuperSeeding = async () => {
+    if (isTogglingSuperSeeding) return;
+    setIsTogglingSuperSeeding(true);
+    try {
+      await saveSettings({ super_seeding_enabled: !settings.super_seeding_enabled });
+    } catch (err) {
+      console.error('Failed to toggle super seeding:', err);
+    } finally {
+      setIsTogglingSuperSeeding(false);
+    }
+  };
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
+  const [vpn, setVpn] = useState<VpnStatus | null>(null);
+  const vpnConfigured = vpn ? vpn.mode !== 'NoVpn' : false;
   const [disk, setDisk] = useState<VolumeSpace | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('');
+
+  useEffect(() => {
+    getVersion().then((v) => setAppVersion(v)).catch(() => {});
+  }, []);
 
   const totalDlSpeed = torrents.reduce((acc, t) => acc + (t.download_rate || 0), 0);
   const totalUlSpeed = torrents.reduce((acc, t) => acc + (t.upload_rate || 0), 0);
@@ -54,10 +94,32 @@ export const StatusBar: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Egress source IP — the address the OS actually uses for outbound
+  // connections (owner request: hovering "Connected" shows the current
+  // address through which the client accesses other servers, NOT the
+  // Tailscale address). Follows default-route/VPN changes automatically.
+  const [egressIp, setEgressIp] = useState<string | null>(null);
+  useEffect(() => {
+    const resolve = () =>
+      invoke<string | null>('get_egress_source_ip')
+        .then((ip) => setEgressIp(ip ?? null))
+        .catch(() => {});
+    resolve();
+    const timer = setInterval(resolve, 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     const poll = () => invoke<VolumeSpace>('get_volume_disk_space').then(setDisk).catch(() => {});
     poll();
     const timer = setInterval(poll, 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const poll = () => invoke<VpnStatus>('get_vpn_status').then(setVpn).catch(() => {});
+    poll();
+    const timer = setInterval(poll, 15 * 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -75,17 +137,21 @@ export const StatusBar: React.FC = () => {
       (t.peers > 0 || t.trackers?.some((tr) => tr.status === 'Working') || (t.seeds ?? 0) > 0)
   );
   const connected = isPortOpen || swarmActive;
-  const connectionBasis = isPortOpen
-    ? 'Inbound port verified reachable'
-    : swarmActive
-      ? 'Swarm activity live (port not re-verified yet — runs the doctor every 10 min)'
-      : 'No port verification and no swarm activity';
 
   return (
-    <footer className="h-6 bg-[#141414] border-t border-[#262626] flex items-center justify-between px-3 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
-      {/* Left: Swarm Connectivity, DHT, Port, Tailscale */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5" title={connectionBasis}>
+    <footer className="min-h-[24px] h-auto py-1 px-3 bg-[#141414] border-t border-[#262626] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
+      {/* Left: Connectivity, Port, Tailscale, VPN, Modes */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div
+          className="flex items-center gap-1.5"
+          title={
+            connected
+              ? egressIp
+                ? `Connected — outbound via ${egressIp}`
+                : 'Connected'
+              : 'Disconnected'
+          }
+        >
           <span
             className={`w-2 h-2 rounded-full transition-colors ${
               connected
@@ -100,17 +166,33 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#333333]">|</span>
 
-        <span
-          title="Private tracker swarm: DHT/PEX/LPD are disabled at the engine and can never be enabled for ADC transfers"
+        <button
+          type="button"
+          onClick={() => {
+            // Owner: the Connectivity Doctor / port window opens ONLY from
+            // this click — never automatically on a closed port.
+            window.dispatchEvent(new CustomEvent('nebulae:port-closed-info'));
+          }}
+          className="flex items-center hover:text-white transition cursor-pointer"
+          title={`Inbound Listening Port ${port} — ${
+            reportFresh
+              ? portState === 'Open'
+                ? 'verified reachable'
+                : 'verified closed — click for port help'
+              : 'not verified yet (doctor runs every 10 min) — click for port help'
+          }`}
         >
-          DHT: Off · private
-        </span>
-
-        <span className="text-[#333333]">|</span>
-
-        <span title="Inbound Listening Port">
-          Port: {port} <span className="text-white">[{portState}]</span>
-        </span>
+          <span
+            className={`w-2 h-2 rounded-full inline-block mr-1.5 ${
+              !reportFresh
+                ? 'bg-[#333333]'
+                : portState === 'Open'
+                  ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                  : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          Port: {port}
+        </button>
 
         <span className="text-[#333333]">|</span>
 
@@ -118,79 +200,183 @@ export const StatusBar: React.FC = () => {
           className="flex items-center gap-1.5"
           title={
             tailscale?.connected
-              ? `Secure Network active on ${tailscale.interface} (${tailscale.tailnet_ip})`
-              : 'Secure Network (Tailscale) not detected'
+              ? tailscale.adc_reachable === false
+                ? 'ADC host offline'
+                : `Tailnet connected — IP ${tailscale.tailnet_ip ?? ''}`
+              : 'Tailnet is not connected'
           }
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              tailscale?.connected ? 'bg-emerald-500' : 'bg-[#333333]'
+              tailscale?.connected
+                ? tailscale.adc_reachable === false
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+                : 'bg-[#333333]'
             }`}
           />
-          <span className={tailscale?.connected ? 'text-white' : ''}>
-            Tailscale: {tailscale?.connected ? tailscale.tailnet_ip : '—'}
-          </span>
-        </div>
-      </div>
-
-      {/* Center: Global Transfer Throughput */}
-      <div className="flex items-center gap-4">
-        <div
-          className="flex items-center gap-1.5"
-          title="Global Download Rate & Total Downloaded"
-        >
-          <span
-            className={`font-bold transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
-            }`}
-          >
-            ▼
-          </span>
-          <span
-            className={`transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
-          >
-            {formatSpeed(totalDlSpeed)}
-          </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
+          <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
+          {tailscale?.connected && tailscale.adc_reachable === false && (
+            <span className="text-amber-500">· ADC host offline</span>
+          )}
         </div>
 
         <span className="text-[#333333]">|</span>
 
         <div
-          className="flex items-center gap-1.5"
-          title="Global Upload Rate & Total Uploaded"
+          className={`flex items-center gap-1.5 ${vpnConfigured ? '' : 'opacity-40'}`}
+          title={
+            !vpnConfigured
+              ? 'No VPN profile configured'
+              : vpn?.connected
+                ? `VPN active on ${vpn.interface_name} (${vpn.assigned_ip})`
+                : 'VPN profile configured, but not connected'
+          }
         >
           <span
-            className={`font-bold transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+            className={`w-2 h-2 rounded-full ${
+              !vpnConfigured
+                ? 'bg-[#333333]'
+                : vpn?.connected
+                  ? 'bg-emerald-500'
+                  : 'bg-red-500'
             }`}
-          >
-            ▲
+          />
+          <span className={vpnConfigured && vpn?.connected ? 'text-white' : ''}>
+            VPN: {vpnConfigured ? (vpn?.connected ? vpn?.assigned_ip || 'connected' : 'disconnected') : 'not configured'}
           </span>
-          <span
-            className={`transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
-          >
-            {formatSpeed(totalUlSpeed)}
-          </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
         </div>
-      </div>
-
-      {/* Right: Storage & Application State */}
-      <div className="flex items-center gap-3">
-        <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
-          Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
-        </span>
 
         <span className="text-[#333333]">|</span>
 
-        <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
-          uTP + TCP
-        </span>
+        <button
+          type="button"
+          onClick={handleToggleRacingMode}
+          disabled={isTogglingRacing}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
+          title={
+            settings.racing_mode_enabled
+              ? 'Racing mode enabled (click to disable)'
+              : 'Racing mode disabled (click to enable)'
+          }
+          aria-label={
+            settings.racing_mode_enabled
+              ? 'Disable racing mode'
+              : 'Enable racing mode'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full transition-colors ${
+              settings.racing_mode_enabled
+                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          <span className={settings.racing_mode_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
+            Racing mode
+          </span>
+        </button>
+
+        <span className="text-[#333333]">|</span>
+
+        <button
+          type="button"
+          onClick={handleToggleSuperSeeding}
+          disabled={isTogglingSuperSeeding}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
+          title={
+            settings.super_seeding_enabled
+              ? 'Super seeding enabled (click to disable)'
+              : 'Super seeding disabled (click to enable)'
+          }
+          aria-label={
+            settings.super_seeding_enabled
+              ? 'Disable super seeding'
+              : 'Enable super seeding'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full transition-colors ${
+              settings.super_seeding_enabled
+                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          <span className={settings.super_seeding_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
+            Super seeding
+          </span>
+        </button>
+      </div>
+
+      {/* Right-aligned container: Global Throughput and Storage/System State */}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+        {/* Center: Global Transfer Throughput */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Download Rate & Total Downloaded"
+          >
+            <span
+              className={`font-bold transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▼
+            </span>
+            <span
+              className={`transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalDlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
+          </div>
+
+          <span className="text-[#333333]">|</span>
+
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Upload Rate & Total Uploaded"
+          >
+            <span
+              className={`font-bold transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▲
+            </span>
+            <span
+              className={`transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalUlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
+          </div>
+        </div>
+
+        <span className="text-[#333333]">|</span>
+
+        {/* Right: Storage & Application State */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
+            Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
+          </span>
+
+          <span className="text-[#333333]">|</span>
+
+          <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
+            uTP + TCP
+          </span>
+
+          <span className="text-[#333333]">|</span>
+
+          <span className="text-[#a3a3a3]" title="Nebulae application version">
+            Nebulae v{appVersion || '…'}
+          </span>
+        </div>
       </div>
     </footer>
   );

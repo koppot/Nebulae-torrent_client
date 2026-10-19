@@ -80,4 +80,37 @@ pub trait TorrentEngine: Send + Sync {
     fn check_port_open(&self) -> Option<bool> {
         None
     }
+
+    /// Push peer limit settings to the engine session.
+    ///
+    /// Called whenever `PeeringSettings` are saved. Engines that do not
+    /// support session-level peer limits may leave this as the default no-op.
+    fn apply_peering_settings(
+        &self,
+        _settings: &crate::models::peering::PeeringSettings,
+    ) -> Result<(), String> {
+        Ok(()) // default: no-op
+    }
+
+    /// Push all active session settings (speed, ratio, queue, cache, trackers,
+    /// incomplete-dir, alt-speed, script, watch-dir, Racing Mode overrides) to
+    /// the live engine whenever the user saves Settings. Engines that do not
+    /// support live session-set may leave this as the default no-op.
+    fn apply_global_settings(
+        &self,
+        _settings: &crate::commands::settings::UserSettings,
+    ) -> Result<(), String> {
+        Ok(()) // default: no-op
+    }
+
+    /// Toggle Racing Mode for a single torrent (per-torrent peer limit,
+    /// bandwidth priority, and session-limit bypass). Default: unsupported.
+    fn set_torrent_racing_mode(&self, _id: &str, _enabled: bool) -> Result<(), String> {
+        Err("Racing Mode is not supported by this engine".to_string())
+    }
+
+    /// Returns the live or detected engine daemon version, if available.
+    fn engine_version(&self) -> Option<String> {
+        None
+    }
 }

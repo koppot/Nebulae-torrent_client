@@ -62,6 +62,13 @@ rm -rf "$BUILD_ROOT" "$INSTALL_ROOT"
 mkdir -p "$BUILD_ROOT" "$INSTALL_ROOT"
 tar -xJf "$TARBALL" -C "$STAGING_DIR"
 SRC_DIR="$STAGING_DIR/transmission-${VERSION}"
+PATCH_FILE="$(pwd)/scripts/patches/transmission-${VERSION}-identity-override.patch"
+if [ ! -f "$PATCH_FILE" ]; then
+    echo "ERROR: Identity override patch not found at: $PATCH_FILE"
+    exit 1
+fi
+echo "==> Applying identity override patch..."
+patch -d "$SRC_DIR" -p1 < "$PATCH_FILE"
 
 echo "==> Configuring (daemon only, no GUI/Qt/GTK/utils)..."
 cmake -S "$SRC_DIR" -B "$BUILD_ROOT" \
@@ -103,7 +110,13 @@ if [ -z "$DAEMON_BIN" ] || [ ! -x "$DAEMON_BIN" ]; then
     find "$INSTALL_ROOT" -type f
     exit 1
 fi
-echo "    Found daemon binary: $DAEMON_BIN"
+
+if ! grep -q -a "TRANSMISSION_PEER_ID_PREFIX" "$DAEMON_BIN" || \
+   ! grep -q -a "TRANSMISSION_USER_AGENT" "$DAEMON_BIN"; then
+    echo "ERROR: Built transmission-daemon at $DAEMON_BIN lacks required identity overrides!"
+    exit 1
+fi
+echo "    Found verified patched daemon binary: $DAEMON_BIN"
 
 # --- Walk ldd, copy non-glibc/non-system libs, patch RPATH ---
 echo "==> Copying daemon binary to resource dir..."

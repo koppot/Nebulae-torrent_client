@@ -49,7 +49,7 @@ jobs:
             - `Nebulae-macOS-x64.dmg-app.tar.gz` (silent auto-update payload)
 
           ### Embedded Optical Disc Cinema Engine
-          - Bundled self-contained media player (`mpv` + `libbluray` + `libdvdnav` + bundled JRE) with native DVD, Blu-ray, and 4K UHD interactive menu playback.
+          - Embedded VLC player with native DVD, Blu-ray, and 4K UHD interactive menu playback.
           - Zero third-party player dependencies required on a clean OS; Nebulae uses only its bundled engine.
           - Commercial encrypted discs (AACS/BD+) require prior decryption; raw image dumps and unprotected disc structures are fully supported.
 
@@ -144,9 +144,22 @@ jobs:
             binutils \
             xvfb \
             desktop-file-utils \
-            mpv \
             libdvdnav4 \
-            libbluray2
+            libbluray2 \
+            libvlc5 \
+            vlc-plugin-base \
+            vlc-plugin-video-output
+
+      # Full portability on Linux too: stage the runner's VLC runtime into
+      # resources (lib/ + plugins/) exactly like the mac/windows bundles.
+      - name: Bundle libVLC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p src-tauri/resources/vlc/lib src-tauri/resources/vlc/plugins
+          cp -rL /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
+          cp -rL /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          chmod -R u+rwX,go+rX src-tauri/resources/vlc
+          ls src-tauri/resources/vlc/lib | head -3
 
       - name: Cache cargo dependencies
         uses: swatinem/rust-cache@v2
@@ -161,27 +174,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Bundle optical disc player (Windows x64)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          ./scripts/bundle-windows-mpv.ps1
-
-      - name: Bundle optical disc player (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          ./scripts/bundle-linux-mpv.sh
-
-      - name: Install mpv on macOS runner
-        if: runner.os == 'macOS'
-        run: |
-          brew install mpv || brew upgrade mpv || true
-
-      - name: Bundle optical disc player (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          ./scripts/bundle-macos-mpv.sh
 
       # --- Transmission-daemon sidecar bundling (Phase A1) ------------------
       # Follows the exact mpv precedent: staging dir outside target/, pinned
@@ -207,6 +199,51 @@ jobs:
         run: |
           ./scripts/bundle-macos-transmission.sh
 
+      # Playback parity with Windows: libVLC is bundled INSIDE the app
+      # (engine.rs prefers <bundle>/Contents/Resources/resources/vlc/lib)
+      # so no system VLC install is required on macOS either.
+      - name: Bundle libVLC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
+          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
+          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
+          mkdir -p src-tauri/resources/vlc
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
+          hdiutil detach /tmp/vlcmnt -quiet || true
+          ls src-tauri/resources/vlc
+
+      # Full portability: a private JRE ships inside the app so BD-J / UHD
+      # disc menus work with zero system Java (libbluray honours JAVA_HOME).
+      - name: Bundle JRE (BD-J/UHD menus)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=mac || true; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
+          else
+            A=x64
+          fi
+          curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
+          mkdir -p jrex src-tauri/resources/jre
+          if [ "$EXT" = "zip" ]; then
+            unzip -q jre.$EXT -d jrex || tar xf jre.$EXT -C jrex
+          else
+            tar xzf jre.$EXT -C jrex
+          fi
+          # macOS tarballs nest the runtime in Contents/Home.
+          HOME_DIR=$(find jrex -type d -name Home -path '*Contents*' | head -1 || true)
+          if [ -z "$HOME_DIR" ]; then
+            BIN_DIR=$(find jrex -type d -name bin | head -1)
+            HOME_DIR=$(dirname "$BIN_DIR")
+          fi
+          cp -a "$HOME_DIR"/. src-tauri/resources/jre/
+          chmod -R u+rwX,go+rX src-tauri/resources/jre || true
+          test -e src-tauri/resources/jre/bin/java || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
+          ls src-tauri/resources/jre/bin | head -3
+
       # --- Linux split build ------------------------------------------------
       # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
       # auto-scans AppDir/usr/lib recursively: the bundled player library
@@ -218,23 +255,29 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm tauri build --bundles deb,rpm
 
-      - name: Build Linux AppImage without player/engine resources
+      - name: Build Linux AppImage without engine resources
         if: runner.os == 'Linux'
         run: |
           # Stage OUTSIDE target/: rust-cache restores target/ between runs and
           # strips the non-cargo blobs, which would nest the move and break
           # the injection probe (squashfs nesting incident, engine parallel).
-          rm -rf src-tauri/player-staging
-          mv src-tauri/resources/player src-tauri/player-staging
+          # The player is libVLC (bundled) - engine, VLC and JRE are staged
+          # OUT of resources/ because linuxdeploy fails scanning their trees;
+          # they are injected into the squashfs afterwards.
           rm -rf src-tauri/transmission-staging-appimage
-          mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          if [ -d src-tauri/resources/engine ]; then
+            mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          fi
+          rm -rf src-tauri/vlc-staging-appimage src-tauri/jre-staging-appimage
+          mv src-tauri/resources/vlc src-tauri/vlc-staging-appimage
+          mv src-tauri/resources/jre src-tauri/jre-staging-appimage
           pnpm tauri build --bundles appimage
 
       - name: Inject bundled player + engine into AppImage (and refresh updater bundle)
         if: runner.os == 'Linux'
         run: |
-          ./scripts/appimage-inject-player.sh
-          # Also inject the transmission engine resources
+          # The player is libVLC (user's VLC) - only the transmission
+          # engine is injected into the AppImage squashfs.
           APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
           OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
           dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
@@ -242,6 +285,10 @@ jobs:
           mkdir -p squashfs-root/usr/share/nebulae/resources/engine
           rm -rf squashfs-root/usr/share/nebulae/resources/engine
           cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          # Same treatment for the bundled VLC runtime and JRE.
+          rm -rf squashfs-root/usr/share/nebulae/resources/vlc squashfs-root/usr/share/nebulae/resources/jre
+          cp -a src-tauri/vlc-staging-appimage squashfs-root/usr/share/nebulae/resources/vlc
+          cp -a src-tauri/jre-staging-appimage squashfs-root/usr/share/nebulae/resources/jre
           # Verify engine daemon is present
           if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
             echo "ERROR: transmission-daemon missing from AppImage engine staging"
@@ -255,9 +302,8 @@ jobs:
           rm -rf squashfs-root
           # Verify both player and engine in final image
           LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
-          printf '%s\n' "$LISTING" | grep -q "resources/player/mpv" || { echo "ERROR: mpv missing from repacked AppImage"; exit 1; }
           printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
-          echo "SUCCESS: player + engine injected into $APPIMAGE_PATH"
+          echo "SUCCESS: engine injected into $APPIMAGE_PATH"
           cd "$(dirname "$APPIMAGE_PATH")"
           NAME="$(basename "$APPIMAGE_PATH")"
           # Regenerate the updater payload from the INJECTED AppImage so
@@ -270,6 +316,21 @@ jobs:
       # artifacts - the duplicate asset list confusion). The release itself
       # is created by the create-release job; canonical assets are uploaded
       # by the platform prepare steps below.
+      # Playback must work out of the box: libVLC is bundled INSIDE the
+      # Windows installer (engine.rs prefers resources/vlc/libvlc.dll),
+      # so no system VLC install is required.
+      - name: Bundle libVLC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
+          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+          Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
+
       - name: Build Tauri Application
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}
@@ -408,62 +469,33 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
           APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
-          DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          TAURI_DMG=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
           ICON_PATH="$(pwd)/src-tauri/icons/icon.icns"
           DMG_NAME="${{ matrix.artifact_name }}"
           DMG_ABS="$(pwd)/$DMG_NAME"
 
-          echo "=== Building DMG with Embedded Volume Icon ==="
+          echo "=== Building DMG (volume icon + outer file icon + verification) ==="
           if [ -n "$APP_DIR" ]; then
-            STAGING_DIR=$(mktemp -d)
-            cp -R "$APP_DIR" "$STAGING_DIR/Nebulae.app"
-            ln -s /Applications "$STAGING_DIR/Applications"
-            cp "$ICON_PATH" "$STAGING_DIR/.VolumeIcon.icns"
-            SetFile -c icnC "$STAGING_DIR/.VolumeIcon.icns" || true
-            rm -f "$DMG_NAME" "$DMG_NAME.rw.dmg"
-            # HFS+ is required for the custom-icon flag: hdiutil defaults to
-            # APFS on recent runners, where SetFile cannot persist Finder
-            # flags and Finder ignores .VolumeIcon.icns (generic white icon,
-            # seen in the v0.9.0 release). Build read-write, set the flag ON
-            # THE MOUNTED VOLUME ROOT (a srcfolder flag does not survive
-            # hdiutil create), then compress to the final UDZO image.
-            hdiutil create -volname "Nebulae" -srcfolder "$STAGING_DIR" -fs HFS+ -ov -format UDRW "$DMG_NAME.rw.dmg"
-            DMG_MNT="$(mktemp -d)/volume"
-            hdiutil attach "$DMG_NAME.rw.dmg" -mountpoint "$DMG_MNT" -nobrowse -noautoopen
-            SetFile -a C "$DMG_MNT"
-            hdiutil detach "$DMG_MNT"
-            hdiutil convert "$DMG_NAME.rw.dmg" -format UDZO -o "$DMG_NAME" -ov
-            rm -rf "$STAGING_DIR" "$DMG_NAME.rw.dmg"
-            # Verify the flag survived the roundtrip (HFS+ synthesizes
-            # FinderInfo into the xattr listing; absence means Finder will
-            # show a generic white icon).
-            DMG_VERIFY_MNT="$(mktemp -d)/volume"
-            hdiutil attach "$DMG_NAME" -mountpoint "$DMG_VERIFY_MNT" -nobrowse -readonly
-            xattr -l "$DMG_VERIFY_MNT" 2>/dev/null | grep -q "com.apple.FinderInfo" || {
-              echo "ERROR: custom icon flag missing from DMG volume"
-              hdiutil detach "$DMG_VERIFY_MNT" || true
-              exit 1
-            }
-            hdiutil detach "$DMG_VERIFY_MNT"
-            echo "DMG volume icon verified."
-          elif [ -n "$DMG_FILE" ]; then
-            cp "$DMG_FILE" "$DMG_NAME"
+            # All packaging logic lives in the tracked script (volume icon,
+            # HFS+ flag roundtrip, read-only verification, outer file icon).
+            # Editing the generated bundle_dmg.sh under target/ would not
+            # persist: the tauri CLI regenerates it per build.
+            LAYOUT_ARGS=()
+            if [ -n "$TAURI_DMG" ]; then
+              # Keep the DMG window layout configured in tauri.conf.json by
+              # carrying over the bundler's .DS_Store.
+              LAYOUT_ARGS+=(--layout-from "$TAURI_DMG")
+            fi
+            ./scripts/package-macos-dmg.sh \
+              --app "$APP_DIR" \
+              --output "$DMG_NAME" \
+              --icon "$ICON_PATH" \
+              "${LAYOUT_ARGS[@]}"
+          elif [ -n "$TAURI_DMG" ]; then
+            cp "$TAURI_DMG" "$DMG_NAME"
           fi
 
           if [ -f "$DMG_NAME" ]; then
-            echo "=== Applying Custom Icon to DMG File ==="
-            osascript -l JavaScript -e "
-              ObjC.import('AppKit');
-              var img = $.NSImage.alloc.initWithContentsOfFile('$ICON_PATH');
-              if (img) {
-                var res = $.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$DMG_ABS', 0);
-                console.log('Applied icon to DMG file:', res);
-              } else {
-                console.log('Failed to load icon from:', '$ICON_PATH');
-              }
-            " || true
-            SetFile -a C "$DMG_ABS" || true
-
             shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
 
             UPLOAD_FILES=("$DMG_NAME" "$DMG_NAME.sha256")
@@ -538,16 +570,30 @@ jobs:
           }
 
           # Stage or re-sign Tauri updater signature (.sig)
-          $sig = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*.sig" | Select-Object -First 1
-          if ($sig) {
-            Copy-Item $sig.FullName -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          $expectedSig = if ($exe) { "$($exe.FullName).sig" } else { $null }
+          if ($expectedSig -and (Test-Path $expectedSig)) {
+            Copy-Item $expectedSig -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          } elseif (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "FATAL: Required signature adjacent to installer missing: $expectedSig"
           }
+
           if ($env:TAURI_SIGNING_PRIVATE_KEY) {
             Write-Host "Re-signing final Windows installer with Tauri minisign..."
             pnpm tauri signer sign -k "$env:TAURI_SIGNING_PRIVATE_KEY" Nebulae-Setup-x64.exe
           }
+
           if (Test-Path 'Nebulae-Setup-x64.exe.sig') {
+            # Pre-publication verification: signature trusted comment must match installer file
+            $sigContent = Get-Content -Raw 'Nebulae-Setup-x64.exe.sig'
+            $sigDecoded = try { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($sigContent.Trim())) } catch { $sigContent }
+            if ($exe -and ($sigDecoded -notmatch [regex]::Escape($exe.Name)) -and ($sigDecoded -notmatch "Nebulae-Setup-x64.exe")) {
+              throw "FATAL: Signature trusted comment does not match installer file '$($exe.Name)'! Refusing to publish unverified signature."
+            }
+            Write-Host "SUCCESS: Windows setup signature verified for publication."
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature Nebulae-Setup-x64.exe Nebulae-Setup-x64.exe.sig
             gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
+          } else {
+            throw "FATAL: Nebulae-Setup-x64.exe.sig missing before release upload!"
           }
 
       - name: Prepare, test, and upload Linux packages (Ubuntu 22.04 baseline)

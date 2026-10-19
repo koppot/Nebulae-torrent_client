@@ -37,6 +37,7 @@ export interface InspectTorrentResult {
   created_by: string;
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
+  metainfo_bytes?: number[];
 }
 
 export interface TorrentContentFileMatch {
@@ -128,7 +129,7 @@ export interface TorrentItem {
   download_rate: number;
   upload_rate: number;
   progress: number;
-  status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Error';
+  status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Queued for checking' | 'Error';
   eta_seconds?: number;
   // null = unknown (no successful tracker scrape yet) - rendered as a dash
   seeds: number | null;
@@ -148,6 +149,9 @@ export interface TorrentItem {
   sequential_download: boolean;
   first_last_piece_prio: boolean;
   super_seeding: boolean;
+  bandwidthPriority?: number; // 1 = high, 0 = normal, -1 = low
+  peerLimit?: number;
+  racingMode?: boolean;
   tags: string[];
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
@@ -287,6 +291,38 @@ export interface UserSettings {
 
   // 10. BitTorrent Engine
   engine?: 'transmission';
+
+  // 11. Racing Mode — maximizes piece acquisition and peer connectivity
+  racing_mode_enabled: boolean;
+  super_seeding_enabled: boolean;
+
+  // 12. Engine Identification
+  engine_identity_profile: 'transmission' | 'nebulae' | 'custom';
+  custom_user_agent: string;
+  custom_peer_id_prefix: string;
+
+  // 13. Media Mode
+  media_mode_enabled: boolean;
+  media_mode_decision_made: boolean;
+}
+
+export interface EngineIdentityInfo {
+  profile: 'transmission' | 'nebulae' | 'custom';
+  configured_user_agent: string;
+  configured_peer_id_prefix: string;
+  active_user_agent: string;
+  active_peer_id_prefix: string;
+  bundled_transmission_version: string;
+  bundled_transmission_user_agent: string;
+  bundled_transmission_peer_id_prefix: string;
+  nebulae_version: string;
+  nebulae_user_agent: string;
+  nebulae_peer_id_prefix: string;
+  supports_runtime_overrides: boolean;
+  restart_required: boolean;
+  status_message: string;
+  version_encoding_supported?: boolean;
+  version_encoding_limitation?: string | null;
 }
 
 export interface CreateTorrentParams {
@@ -345,6 +381,7 @@ export interface InspectTorrentResult {
   created_by: string;
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
+  metainfo_bytes?: number[];
 }
 
 export * from './peering';

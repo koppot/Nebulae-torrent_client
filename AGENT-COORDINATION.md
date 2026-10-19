@@ -1431,3 +1431,266 @@ both save_path shapes (root + subfolder).
   codesign --force --deep --sign E3A26A990308798F8DE4B7C49A3E27BFEF192623
   /Applications/Nebulae.app
   so the firewall identity stays stable across rebuilds.
+
+## 2026-10-16 — Context-menu correctness batch (baaf4a4)
+
+- File priority NEVER worked: the engine setter hardcoded
+  `priority-normal` regardless of the chosen bucket, and the list mapper
+  never read fileStats[].priority (it only mapped wanted→1/!wanted→0), so
+  the dropdown always displayed "Normal". Setter now maps 1→normal,
+  2/3→high (Transmission has no "maximum"); the mapper reads the real
+  priority and renders it on the UI's 0/1/2 scale.
+- Owner-reported 5-10s lag on pause/resume/menu actions: the 5s telemetry
+  poll + 500ms push could revert optimistic state before the engine
+  reflected it. Every mutating store action now fetches engine truth
+  immediately after the RPC and logs failures instead of swallowing them.
+- Sequential-download toggle only appears in the context menu while the
+  torrent is downloading; the files-tab summary line
+  ("N files · M folders · size") was removed as duplicate.
+- UI: Nebulae version added to the status bar's lower-right
+  (getVersion from @tauri-apps/api/app); title-bar X now MINIMIZES to the
+  dock/taskbar (close_to_tray=true path) so the window is restorable,
+  matching the owner's directive; the "uploaded / of total" progress
+  label is centered.
+- Gates: tsc clean, clippy 0 findings, cargo tests green, pushed baaf4a4.
+
+## 2026-10-16 — UI polish + media menu batch (f69fc20, 0cb5b85)
+
+- Mode switcher flips to Expand inside compact mode; the compact bar now
+  counts and highlights errored transfers (owner: "errors pointing out").
+- Traffic lights: 24px hit areas around the 12px dots (the dots were
+  near-unclickable); yellow always minimizes; X minimizes to the dock.
+- Rename Folder/File = icon-only with tooltips. Swarm Controls: 1st/Last
+  and Super-Seed removed (transmission RPC no-ops - they never worked);
+  Sequential kept as an icon toggle with a full tooltip.
+- Media cards: "Disc" wording; labeled Resume re-opens the last-played
+  disc per boxset (localStorage nebulae_last_played_discs, wins as the
+  card face until another disc tab is picked). Media menu decluttered:
+  Add Media / Manager / free-space gauge removed (owner: duplicates).
+- New src/thumbs.rs: disc artwork scans downscale to 360px + WebP cache
+  (image crate, path+size+mtime keyed) wired into
+  LibraryCleaner::get_or_create_thumbnail; the frontend now calls
+  get_media_thumbnail per item and prefers structure cover > WebP cache >
+  poster URL. Cards restyled airier (w-80, rounded-2xl, hover lift).
+- Gates: tsc clean, eslint clean, clippy 0, 91 tests, CI green for both
+  pushes; installed 0cb5b85 arm64 build + deep re-signed (Team 2YJ32CEY87),
+  engine listening on 41413.
+
+## Session 2026-10-16 — posters render, disc specs accurate, Canva-proportioned media view
+
+Owner findings worked: "Where's the poster?", "only DVD-9 shown although there
+are two discs", "no visible folder", "did not follow the Canva proportions",
+"mouse over should present information same way as canvas proposed".
+
+- POSTER ROOT CAUSE: the webview cannot load raw file:// URLs from its
+  tauri:// origin — enabled tauri.conf assetProtocol (scope $HOME, /Volumes,
+  /tmp) + protocol-asset feature, and the view now maps local covers through
+  convertFileSrc. WebP/TMDB poster paths finally render.
+- Silent-failure ban: detect_disc_set / get_media_thumbnail / fetch_tmdb_release
+  now tracing-log results (disc-set summary, cache path, TMDB match/miss);
+  frontend effect catches emit [frontend] breadcrumbs via log_frontend.
+- Tracing→file hardening: DualGuard flushes complete lines to the session log
+  inside write() (no reliance on subscriber flush) + regression test
+  test_tracing_events_reach_the_session_file.
+- Disc accuracy: shared classify_disc_bytes ladder — 2.2 GB / 3.4 GB ISOs are
+  DVD-5 (the dir branch mislabelled any sub-9.5 GB image DVD-9, the exact
+  owner complaint); BD-25 tier added; regression test pins the real Banner
+  of the Stars III sizes.
+- Media view rebuilt to the Canva proportions (dark bg kept per owner
+  override): Nebulae wordmark + "Search library..." pill, small-caps section
+  headers with count chips, fluid auto-fill poster grid (~6-7 per row),
+  clean card faces (poster + status/spec pills + title + thin bar with %),
+  hover elevates the card and opens the panel BELOW the poster with title,
+  year·discs·spec·size, "ADC: ratio · Seed time" line (seed-time records),
+  the release folder (click opens), TMDB synopsis, disc pills for BOTH
+  boxsets and single-torrent multi-ISO sets (individually playable),
+  Play/Resume/Pause/Details/Open-Folder (Details jumps to Manager, selected).
+- Gates: tsc clean, eslint clean, clippy 0, 86 lib tests green.
+
+## Session 2026-10-16 (cont.) — hover/disc/chapters/resume batch
+
+Owner reports that drove this batch: hover dead, Details dead, Resume
+re-drops at the disc menu, no disc picker, no chapters, "Disc Menu" label
+dead, and Canva geometry still not followed.
+
+- HOVER ROOT CAUSE: the hover panel was absolutely positioned INSIDE the
+  scroll container — clipped at the bottom shelf and pointer-events-none
+  while invisible, so Details could never be clicked either. Rebuilt as a
+  fixed-position createPortal panel (240px, attached below the poster,
+  flips up at the viewport bottom, closes on scroll, 250ms hover delay).
+- Canva geometry applied from a full-res export: 112px cards, 22px column
+  gaps, poster radius 8, 13px titles, 4px progress bar + %, small-caps
+  headers, bare card faces (elevation lives in the portal).
+- Disc picker: the control-bar title is a button — popup lists every disc
+  of the playing release (detect_disc_set) with size, click switches discs.
+- Chapters: player_chapters state joined the poll (title/chapter counts);
+  chapters popover grid + prev/next wire to new player_set_chapter;
+  "Disc Menu" is a real button (player_set_title(0) = dvdnav menu domain).
+- Resume past the menu: the overlay poller persists position per resolved
+  path (nebulae_resume_pos:*, >30s, 5s throttle); resumeInPlayer waits for
+  the feature title to engage (length > 5 min) then seeks to the position.
+- Gates: tsc/eslint clean, clippy 0, 86 lib tests green.
+
+## Session 2026-10-16 (cont. 2) — exact reference dimensions applied
+
+Owner supplied the design export at full res (Nebulae Media Library.png,
+5280x2970) and asked for THESE dimensions. Measured (x1.25 to the 1280
+window): 160px cards / 20px gaps (7 per row) / poster aspect 4:5 (NOT 2:3)
+/ radius 6 / 14px titles / 5px bar + 12px % / 14px small-caps section
+headers with 22px square chips / ~28px header-to-cards / ~64px section gap
+/ top bar: 22px dot + 24px wordmark, 212px search rounded-lg / hover card
+220px with 4:5 poster + panel below (14px title, 12px meta, Play filled +
+Details outlined-accent) + progress line under the panel. Ready-to-Watch
+faces show title ONLY (no bar), per the reference.
+
+## Session 2026-10-16 (cont. 3) — black poster fixed (ISO mount + VOB), keychain re-trust
+
+- ROOT CAUSE of the black card art: ffmpeg's generic demuxer cannot seek a
+  raw ISO — every -ss re-decoded frame 0 (three identical 2.2KB black JPEGs
+  at 5/12 min proved it). Fix (macOS): mount the ISO read-only via hdiutil
+  to a temp mountpoint, extract from the LARGEST VOB inside (seekable),
+  detach; deep-seek ladder 5/12/20 min with a >15KB non-black heuristic.
+  Verified on the owner's real disc: 55.9KB feature frame extracted.
+- KEYCHAIN: the repeated codesign re-signs broke the items' ACLs — the new
+  [tmdb] no-API-key warn exposed it; all four items re-granted with
+  -T /Applications/Nebulae.app -T /usr/bin/security (values never
+  displayed).
+- After the owner's server reboot: CI green for a74b0b8 chain; app
+  relaunched; listener back on 41413 both stacks.
+
+## Session 2026-10-16 (cont. 4) — owner's card dimensions (660×800)
+
+Owner supplied three reference crops + explicit units: the card tile is
+660×800 design px = 330×400 CSS; poster height identical across shelves;
+poster width adjustable to available data but NEVER below 660 design px
+(330 CSS); the picture TRIMS (object-cover) to fill; the hover card keeps
+the poster frame visible (top-cropped ~230px) above the panel; shelves are
+HORIZONTAL SCROLL ROWS, not a wrapped grid.
+
+- Card: w-[330px] flex-shrink-0, poster aspect-[660/800] object-cover,
+  title 16px, downloading faces show % right-aligned (14px) above a
+  full-width 5px bar — exactly screenshot 1's structure.
+- Shelves: flex gap-6 overflow-x-auto rows (was a wrapped grid).
+- Hover portal: W=415 (≈1.26× card per the Foundation crop), poster frame
+  top-cropped 230px, panel type scaled up (title 20px, meta 15px, ADC
+  14px, Play/Details 16px pills), progress line 6px/14px.
+
+## Batch: player controls + port negotiator (owner reports)
+
+Owner: disc switcher shows "Disc 1" (numbered only), popup lists Disc 1/2/…,
+Disc Menu + chapters buttons dead; AND "try different ports until one is open";
+AND "660 by 800 represents proportions, not the size" — cards follow the
+reference page proportions (~176px wide), poster keeps the 660:800 aspect.
+
+- ROOT CAUSE (switcher + popups): the native video overlay covers the ENTIRE
+  webview area above the control bar; absolutely-positioned popovers
+  (bottom-16) rendered BEHIND the video — the log PROVED the title button
+  fired (detect_disc_set at 12:35:58/12:38:21) while nothing appeared.
+  Disc Menu/Chapters never rendered: gated on title_count>0, and dvdnav
+  reports 0.
+- Popups now render INSIDE the control bar (rows above the buttons); the
+  bar grows, the video hole shrinks, the ResizeObserver re-syncs the native
+  view.
+- Title = "Disc N" (matched from the disc set vs resolvedPath in either
+  direction; resolve returns the FOLDER, play_target is the ISO inside).
+  Popup lists "Disc N" only. Chapters gated on chapter_count>1 only.
+- Disc Menu → new `player_return_to_menu`: set_title(0) → 1.2s grace →
+  if the title didn't change, restart the disc fresh (dvdnav ignores
+  set_title on some builds; a fresh open always shows the menu).
+  PlayerState now carries current_path/current_resolved; player_open
+  refactored into start_playback().
+- Cards rescaled to reference proportions: w-[176px], aspect-[660/800],
+  title 14px, % 12px, bar 4px; hover portal W=248, poster 148px, title
+  16/meta 12/ADC 12, buttons 13px. (660:800 kept as the aspect.)
+- Port negotiator (owner directive): background thread tries the configured
+  peer port then +1/+2/+3/+5/+11, applying each live via session-set and
+  testing with Transmission's external port-test; first reachable port is
+  persisted (user_settings_json + daemon settings.json). If none opens, the
+  log states the router-refuses-mappings verdict (manual forward required).
+
+## Batch: media page redesign (owner spec, Canva mock DAHYMDJ7xCQ)
+
+Owner: title on the midline BELOW the poster; hover replaces the LOWER HALF
+of the poster with grayscale info (title, year, DVD-5/DVD-9xN, total size,
+total duration, Details + Play/Resume); right-click menu (Show in Finder,
+Play, Resume + extras); Details popup pulls ADC website info when available,
+else TMDB/Trakt summary; no duplicate/extra info; SVG icons.
+
+- SimpleMediaView: portal hover REPLACED by an in-poster bottom-half overlay
+  (grayscale: black/85, gray text, light-gray buttons; single Play OR Resume
+  button per owner's "two buttons"); title centered under the poster;
+  removed folder line, ADC line, synopsis and disc pills from the card
+  (duplicate info); downloading faces keep % + thin bar.
+- Right-click menu: Show in Finder / Play / Resume (when a last-played disc
+  exists) / Details / Copy Path / Open in Manager; closes on click, scroll,
+  resize, or right-click elsewhere.
+- Details popup: fetch_adc_page (new command, asiandvdclub.org host
+  allowlist, stored session cookie if any, HTML->text excerpt, login-gate
+  detection) + ADC seed stats; falls back to TMDB/Trakt overview; the popup
+  labels its source; "no summary available" is stated honestly.
+- tmdb.rs: TmdbMatch gains runtime (from /movie/{id}, DB-cached) -> the
+  hover meta line shows "4h 12m" when the catalogue provides it.
+
+## Batch: hover slim-down + anamorphic fix + Discs chip removal
+
+Owner (mock + notes): hover slide-up must NOT carry extended info — NO title
+(it lives below the poster), ONLY the disc/meta line ("DVD-9 ×2" count-after
+format per the mock) + Play/Resume + Details. Details summary (TMDB/Trakt)
+was invisible. Banner looked distorted ("width and height do not
+correspond"). Remove the pink "DISCS" chip in the player bar.
+
+- Hover overlay: title removed; meta line only, "DVD-9 ×2" format (also in
+  the Details modal).
+- Anamorphic fix: DVD frames are stored 720x480 with non-square pixels —
+  extract_frame now runs scale=trunc(iw*sar/2)*2:ih so 16:9/4:3 frames get
+  square pixels (no squished subject).
+- Summary invisible root causes: (1) keychain trust reset by the reinstall
+  — needs the owner's Always Allow; (2) fetch_poster searched MOVIES only —
+  now falls back to /search/tv (+ /tv/{id} detail, episode_run_time),
+  Trakt detail tries movie then tv. TV/OVA titles now resolve.
+- PlayerOverlay: DISCS chip removed (Layers icon import dropped).
+
+## Batch: player bar — chapter ticks, skip arrows, gray Menu
+
+Owner: chapters not as a menu but as TICKS on the play bar; single forward
+arrow = chapter switch, double = episode (title) switch; "Disc N" chip gets
+a border in its font color; "Disc Menu" renamed "Menu", pink -> the bar's
+gray.
+
+- Seek bar: even-interval chapter ticks (engine exposes the count, not
+  per-chapter offsets), 2px gray marks above the track.
+- Skip cluster around Play: ChevronLeft/-Right = chapter ±1,
+  ChevronsLeft/-Right = title ∓1 (episodes). Titles clamp >= 1 (0 is the
+  menu domain).
+- Chapters popup + List button removed with their state.
+- "Disc N" chip: border-[#a3a3a3] (same as its text); "Menu" button:
+  border-[#333333]/text-[#a3a3a3]/hover gray — no accent color.
+
+## 2026-10-19 — Antigravity Client Repairs Completed (DURABLE HANDOFF TO FACTORY)
+
+**TO: Factory (Droid)**  
+**FROM: Antigravity**  
+**ACTIVE REPAIR BRANCH:** `fix/owner-ui-repairs`  
+**SUPERSEDED BASELINE SHA:** `b558c480918d075d1b30d8f7bfdef13c1d8332a5` (DO NOT MERGE DIRECTLY)  
+**FINAL REPAIR COMMIT SHA:** `d366edbdb09cda2430a91d8f5f023700d21c9b81`  
+**STATUS:** **READY FOR INTEGRATION**
+
+Client repairs have been implemented, verified, packaged, deployed, and pushed to `origin fix/owner-ui-repairs`:
+1. **Non-blocking UHD playback start:** Removed the blocking 8-second sleep loop in `start_playback_inner` that hung Tokio workers and destroyed disc sessions. Heavy language probes are deferred until feature playback and isolated in `tokio::task::spawn_blocking`.
+2. **Accurate HDR color rendering:** Applied Hable filmic tone mapping (`--tone-mapping=3`) in `VlcSession`, supported natively by the bundled macOS `libcaopengllayer_plugin.dylib` placebo shader pipeline for wide-gamut BT.2020 PQ streams, leaving SDR playback untouched.
+3. **Interactive disc menu navigation:** Preserved navigable disc sessions; updated `player_menu_navigate` clamp to support `libvlc_navigate_popup` (`mode 5`), and refactored `player_return_to_menu` to safely return to disc menus without deadlocking mutex guards.
+4. **Media Mode Details modal:** Redesigned both external and library Details modals to match the reference layout: `Title (Year)`, format and runtime pills, synopsis, 2x2 facts card (Duration, Total Size, Discs, Format), per-disc breakdown rows, and platform-appropriate action buttons (`Play` + `Show in Finder` / `Show in Explorer`).
+5. **Clean poster cards:** Removed overlay badges from poster cards, keeping only clean artwork and hover action buttons.
+6. **Playback screen title & release year:** Formatted top-left player overlay to display `Title (Year)`. Missing year in metadata is cleanly omitted rather than invented.
+7. **Preserved earlier fixes:** Super-seeding opt-in dialogue, full settings restoration and live session push with Racing Mode, responsive wrapped status bar with "Tailnet" label, draggable first-run media mode modal.
+
+### Verification Status:
+- `cargo test --lib`: 107 passed, 0 failed.
+- `npx tsc --noEmit` & `eslint`: 0 errors.
+- `npm run build`: built in 1.62s.
+- `package-macos-dmg.sh`: release DMG `Nebulae_0.2.2_macOS_arm64.dmg` packaged with custom volume icon and file metadata icon.
+- Local deployment: installed to `/Applications/Nebulae.app` and copied to `~/Downloads/Nebulae-macOS-arm64.dmg`.
+
+Factory may now fast-forward or merge `fix/owner-ui-repairs` (`d366edb`) into `main`.
+
+

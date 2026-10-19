@@ -24,10 +24,12 @@ export const usePeeringStore = create<PeeringState>((set) => ({
       set({
         settings: {
           mode: 'Balanced',
-          enable_locality_preference: true,
-          enable_geographic_metadata: true,
-          enable_rate_limited_probes: false,
-          max_connections_per_torrent: 50,
+          locality_enabled: true,
+          max_peers_per_torrent: 80,
+          max_global_peers: 500,
+          prefer_utp: true,
+          require_encryption: true,
+          probe_rtt_enabled: false,
         },
       });
     }

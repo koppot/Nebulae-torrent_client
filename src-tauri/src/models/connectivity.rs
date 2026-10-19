@@ -34,6 +34,17 @@ pub struct ConnectivityReport {
     pub tracker_auth_ok: bool,
     pub inbound_connections: u32,
     pub outbound_connections: u32,
+    /// How the port verdict was reached. The old doctor blended three very
+    /// different signals into one "Open"/"Closed" flag, which produced
+    /// contradictory answers ("open" while no external peer could connect).
+    /// Evidence kinds:
+    /// - "transmission-self-test": the daemon connected to its own public IP
+    ///   (needs NAT hairpin — can pass when real inbound is blocked);
+    /// - "inbound-peers": peers are currently connected (they may have
+    ///   connected over IPv6 or earlier, when a path existed);
+    /// - "local-listener": the port is merely bound locally;
+    /// - "no-evidence": nothing indicates reachability.
+    pub port_open_evidence: Option<String>,
     pub certificate_text: String,
     pub plain_language_findings: Vec<String>,
     pub suggested_fixes: Vec<String>,

@@ -75,6 +75,15 @@ pub struct TorrentItem {
     pub upload_limit_kib: u32,
     #[serde(default)]
     pub ratio_limit: f32,
+    /// Transmission torrent bandwidth priority: 1 = high, 0 = normal, -1 = low
+    #[serde(default, rename = "bandwidthPriority")]
+    pub bandwidth_priority: Option<i8>,
+    /// Per-torrent peer limit reported by the engine
+    #[serde(default, rename = "peerLimit")]
+    pub peer_limit: Option<u32>,
+    /// Explicit Racing Mode state: true only when both bandwidthPriority == 1 AND peerLimit >= 150
+    #[serde(default, rename = "racingMode")]
+    pub racing_mode: Option<bool>,
     #[serde(default)]
     pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }
@@ -104,6 +113,8 @@ pub struct InspectTorrentResult {
     pub created_by: String,
     pub files: Vec<TorrentFileItem>,
     pub trackers: Vec<TorrentTrackerItem>,
+    #[serde(default)]
+    pub metainfo_bytes: Option<Vec<u8>>,
 }
 
 #[tauri::command]
@@ -126,6 +137,7 @@ pub fn inspect_torrent_file(
                 created_by: parsed.created_by,
                 files: parsed.files,
                 trackers: parsed.trackers,
+                metainfo_bytes: Some(raw),
             });
         }
     }
@@ -163,6 +175,7 @@ pub fn inspect_torrent_file(
                         created_by: parsed.created_by,
                         files: parsed.files,
                         trackers: parsed.trackers,
+                        metainfo_bytes: Some(decoded),
                     });
                 }
             }
@@ -192,14 +205,28 @@ pub fn inspect_torrent_file(
                 created_by: "Nebulae Metainfo Tool".to_string(),
                 files: vec![],
                 trackers: vec![],
+                metainfo_bytes: None,
             });
         }
 
         // Disk path?
         let norm_path = crate::engine::mock::normalize_source_path(trimmed);
-        if norm_path.exists() {
-            if norm_path.is_file() {
-                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_file(&norm_path) {
+        let disk_path = if norm_path.is_file() {
+            Some(norm_path.clone())
+        } else if let Some(dl_dir) = dirs::download_dir() {
+            let candidate = dl_dir.join(trimmed);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(target_path) = disk_path {
+            if let Ok(raw_bytes) = std::fs::read(&target_path) {
+                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw_bytes) {
                     return Ok(InspectTorrentResult {
                         name: parsed.name,
                         total_bytes: parsed.total_bytes,
@@ -211,55 +238,58 @@ pub fn inspect_torrent_file(
                         created_by: parsed.created_by,
                         files: parsed.files,
                         trackers: parsed.trackers,
+                        metainfo_bytes: Some(raw_bytes),
                     });
                 }
-                if let Ok(meta) = norm_path.metadata() {
-                    let total_bytes = meta.len();
-                    let file_name = norm_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Local File".to_string());
-                    let piece_size = recommended_piece_size_bytes(total_bytes);
-                    return Ok(InspectTorrentResult {
-                        name: file_name.clone(),
-                        total_bytes,
-                        piece_size,
-                        total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
-                        info_hash: format!("local_{:x}", total_bytes),
-                        is_private: true,
-                        comment: "Local Storage File".to_string(),
-                        created_by: "Nebulae Metainfo Tool".to_string(),
-                        files: vec![crate::commands::torrent::TorrentFileItem {
-                            index: 0,
-                            name: file_name,
-                            size_bytes: total_bytes,
-                            progress: 1.0,
-                            priority: 1,
-                        }],
-                        trackers: vec![],
-                    });
-                }
-            } else if norm_path.is_dir() {
-                let files = crate::engine::mock::scan_directory_files(&norm_path)?;
-                let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
-                let dir_name = norm_path
+            }
+            if let Ok(meta) = target_path.metadata() {
+                let total_bytes = meta.len();
+                let file_name = target_path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Local Directory".to_string());
+                    .unwrap_or_else(|| "Local File".to_string());
                 let piece_size = recommended_piece_size_bytes(total_bytes);
                 return Ok(InspectTorrentResult {
-                    name: dir_name,
+                    name: file_name.clone(),
                     total_bytes,
                     piece_size,
                     total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
                     info_hash: format!("local_{:x}", total_bytes),
                     is_private: true,
-                    comment: "Local Storage Directory".to_string(),
+                    comment: "Local Storage File".to_string(),
                     created_by: "Nebulae Metainfo Tool".to_string(),
-                    files,
+                    files: vec![crate::commands::torrent::TorrentFileItem {
+                        index: 0,
+                        name: file_name,
+                        size_bytes: total_bytes,
+                        progress: 1.0,
+                        priority: 1,
+                    }],
                     trackers: vec![],
+                    metainfo_bytes: None,
                 });
             }
+        } else if norm_path.is_dir() {
+            let files = crate::engine::mock::scan_directory_files(&norm_path)?;
+            let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
+            let dir_name = norm_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Local Directory".to_string());
+            let piece_size = recommended_piece_size_bytes(total_bytes);
+            return Ok(InspectTorrentResult {
+                name: dir_name,
+                total_bytes,
+                piece_size,
+                total_pieces: total_bytes.div_ceil(piece_size as u64) as u32,
+                info_hash: format!("local_{:x}", total_bytes),
+                is_private: true,
+                comment: "Local Storage Directory".to_string(),
+                created_by: "Nebulae Metainfo Tool".to_string(),
+                files,
+                trackers: vec![],
+                metainfo_bytes: None,
+            });
         }
     }
 
@@ -282,8 +312,11 @@ pub fn recommended_piece_size_bytes(total_bytes: u64) -> u32 {
 }
 
 #[tauri::command]
-pub fn list_torrents(engine: State<SharedEngine>) -> Result<Vec<TorrentItem>, String> {
-    engine.list_torrents()
+pub async fn list_torrents(engine: State<'_, SharedEngine>) -> Result<Vec<TorrentItem>, String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.list_torrents())
+        .await
+        .map_err(|e| format!("list_torrents task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -291,7 +324,7 @@ pub fn add_torrent(
     source: String,
     download_dir: Option<String>,
     bytes: Option<Vec<u8>>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     if let Some(raw) = bytes {
         if !raw.is_empty() {
@@ -305,7 +338,7 @@ pub fn add_torrent(
 pub fn add_torrent_bytes(
     bytes: Vec<u8>,
     download_dir: Option<String>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
 }
@@ -584,46 +617,67 @@ fn apply_torrent_renames_impl(
 pub fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.remove_torrent(&id, delete_files.unwrap_or(false))
 }
 
 #[tauri::command]
-pub fn pause_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
-    engine.pause_torrent(&id)
+pub async fn pause_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.pause_torrent(&id))
+        .await
+        .map_err(|e| format!("pause_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn resume_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
-    engine.resume_torrent(&id)
+pub async fn resume_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.resume_torrent(&id))
+        .await
+        .map_err(|e| format!("resume_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn pause_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
-    engine.pause_all()
+pub async fn pause_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.pause_all())
+        .await
+        .map_err(|e| format!("pause_all task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn resume_all_torrents(engine: State<SharedEngine>) -> Result<(), String> {
-    engine.resume_all()
+pub async fn resume_all_torrents(engine: State<'_, SharedEngine>) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.resume_all())
+        .await
+        .map_err(|e| format!("resume_all task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn force_recheck_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
-    engine.force_recheck(&id)
+pub async fn force_recheck_torrent(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.force_recheck(&id))
+        .await
+        .map_err(|e| format!("force_recheck task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn reannounce_torrent(id: String, engine: State<SharedEngine>) -> Result<(), String> {
-    engine.reannounce(&id)
+pub async fn reannounce_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.reannounce(&id))
+        .await
+        .map_err(|e| format!("reannounce task failed: {e}"))?
 }
 
 #[tauri::command]
 pub fn set_torrent_location(
     id: String,
     new_path: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_location(&id, &new_path)
 }
@@ -632,7 +686,7 @@ pub fn set_torrent_location(
 pub fn set_torrent_category(
     id: String,
     category: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_category(&id, &category)
 }
@@ -643,27 +697,42 @@ pub fn set_torrent_speed_limits(
     dl_kib: u32,
     ul_kib: u32,
     ratio_limit: f32,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_torrent_limits(&id, dl_kib, ul_kib, ratio_limit)
 }
 
 #[tauri::command]
-pub fn toggle_torrent_sequential(id: String, engine: State<SharedEngine>) -> Result<bool, String> {
+pub async fn toggle_torrent_sequential(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<bool, String> {
     engine.toggle_sequential_download(&id)
 }
 
 #[tauri::command]
-pub fn toggle_torrent_first_last(id: String, engine: State<SharedEngine>) -> Result<bool, String> {
+pub async fn toggle_torrent_first_last(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<bool, String> {
     engine.toggle_first_last_piece_priority(&id)
 }
 
 #[tauri::command]
 pub fn toggle_torrent_super_seeding(
     id: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
     engine.toggle_super_seeding(&id)
+}
+
+#[tauri::command]
+pub fn set_torrent_racing_mode(
+    id: String,
+    enabled: bool,
+    engine: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    engine.set_torrent_racing_mode(&id, enabled)
 }
 
 #[tauri::command]
@@ -671,7 +740,7 @@ pub fn set_file_priority(
     id: String,
     file_index: u32,
     priority: u8,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.set_file_priority(&id, file_index, priority)
 }
@@ -680,7 +749,7 @@ pub fn set_file_priority(
 pub fn rename_torrent(
     id: String,
     new_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent(&id, &new_name)
 }
@@ -690,7 +759,7 @@ pub fn rename_torrent_file(
     id: String,
     file_index: u32,
     new_file_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent_file(&id, file_index, &new_file_name)
 }
@@ -700,7 +769,7 @@ pub fn rename_torrent_folder(
     id: String,
     old_folder_path: String,
     new_folder_name: String,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
     engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
 }
@@ -783,11 +852,63 @@ pub async fn create_torrent_file(
     Ok(target_file_str)
 }
 
+/// "Save torrent file as...": native save dialog (owner request) then write
+/// the metainfo where the user picked.
+///
+/// The AppKit save panel MUST be shown on the main thread on macOS, so the
+/// dialog runs via run_on_main_thread and the (possibly slow) file write
+/// happens on a blocking thread - the UI never stalls.
+#[tauri::command]
+pub async fn save_torrent_file_as(
+    app: tauri::AppHandle,
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<String, String> {
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = engine.export_torrent_bytes(&id)?;
+        let torrents = engine.list_torrents()?;
+        let item = torrents.iter().find(|t| t.id == id);
+        let raw_name = item.map(|t| t.name.clone()).unwrap_or_else(|| id.clone());
+        let clean_name = raw_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+        let filename = if clean_name.to_lowercase().ends_with(".torrent") {
+            clean_name
+        } else {
+            format!("{clean_name}.torrent")
+        };
+
+        // Native save dialog on the main thread (rfd requirement on macOS).
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        let dialog_name = filename.clone();
+        app.run_on_main_thread(move || {
+            let picked = rfd::FileDialog::new()
+                .set_file_name(&dialog_name)
+                .add_filter("Torrent files", &["torrent"])
+                .save_file();
+            let _ = tx.send(picked);
+        })
+        .map_err(|e| format!("Dialog unavailable: {e}"))?;
+        let target = rx
+            .recv()
+            .map_err(|_| "Dialog did not return a result".to_string())?;
+
+        let Some(target_path) = target else {
+            return Err("cancelled".into());
+        };
+
+        std::fs::write(&target_path, &bytes)
+            .map_err(|e| format!("Failed to write .torrent file: {e}"))?;
+        Ok(target_path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {e}"))?
+}
+
 #[tauri::command]
 pub fn export_torrent_file(
     id: String,
     destination_path: Option<String>,
-    engine: State<SharedEngine>,
+    engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     let bytes = engine.export_torrent_bytes(&id)?;
     let torrents = engine.list_torrents()?;
@@ -827,18 +948,67 @@ pub fn export_torrent_file(
 }
 
 #[tauri::command]
-pub fn get_engine_status(engine: State<SharedEngine>) -> Result<EngineStatus, String> {
+pub async fn get_engine_status(engine: State<'_, SharedEngine>) -> Result<EngineStatus, String> {
     Ok(engine.engine_status())
 }
 
 #[tauri::command]
-pub fn trigger_kill_switch_command(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn trigger_kill_switch_command(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.trigger_kill_switch()
 }
 
 #[tauri::command]
-pub fn reset_kill_switch_command(engine: State<SharedEngine>) -> Result<(), String> {
+pub async fn reset_kill_switch_command(engine: State<'_, SharedEngine>) -> Result<(), String> {
     engine.reset_kill_switch()
+}
+
+/// Pick a disc image (ISO) for external playback. Any file can be chosen;
+/// the caller validates the extension.
+#[tauri::command]
+pub async fn select_iso_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "macos")]
+        {
+            let script = r#"
+            with timeout of 86400 seconds
+                try
+                    tell application (path to frontmost application as text)
+                        activate
+                        return POSIX path of (choose file with prompt "Select a disc image (ISO)")
+                    end tell
+                on error
+                    return ""
+                end try
+            end timeout
+            "#;
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output()
+                .map_err(|e| format!("Failed to open file picker: {e}"))?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| format!("picker join error: {e}"))?
+    .map(|v: Option<String>| {
+        v.filter(|p| {
+            std::path::Path::new(p)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("iso"))
+                .unwrap_or(false)
+        })
+    })
 }
 
 #[tauri::command]
@@ -869,6 +1039,7 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.FolderBrowserDialog
             $f.Description = "Select Folder for Torrent Creation"
@@ -918,6 +1089,7 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.OpenFileDialog
             $f.Title = "Select File for Torrent Creation"
@@ -972,6 +1144,7 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
             $f = New-Object System.Windows.Forms.OpenFileDialog
             $f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
@@ -1159,14 +1332,17 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
         #[cfg(target_os = "windows")]
         {
             let script = r#"
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
             Add-Type -AssemblyName System.Windows.Forms
+            $form = New-Object System.Windows.Forms.Form
+            $form.TopMost = $true
             $f = New-Object System.Windows.Forms.FolderBrowserDialog
             $f.Description = "Select Download Directory"
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
                 $f.SelectedPath
             }
             "#;
-            let output = crate::utils::process::run_hidden_powershell(script)
+            let output = crate::utils::process::run_hidden_powershell_dialog(script)
                 .map_err(|e| format!("Failed to open directory picker: {e}"))?;
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() {
@@ -1211,14 +1387,26 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
 pub fn open_torrent_folder(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if !p.exists() {
-        return Err(format!("Folder does not exist: {path}"));
+        return Err(format!("Path does not exist on disk: {path}"));
     }
     #[cfg(target_os = "macos")]
-    let opened = std::process::Command::new("open").arg(&p).status();
+    let opened = if p.is_dir() {
+        std::process::Command::new("open").arg(&p).status()
+    } else {
+        std::process::Command::new("open").arg("-R").arg(&p).status()
+    };
     #[cfg(target_os = "windows")]
-    let opened = std::process::Command::new("explorer").arg(&p).status();
+    let opened = if p.is_dir() {
+        std::process::Command::new("explorer").arg(&p).status()
+    } else {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", p.display()))
+            .status()
+    };
     #[cfg(all(unix, not(target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open").arg(&p).status();
+    let opened = std::process::Command::new("xdg-open")
+        .arg(if p.is_dir() { &p } else { p.parent().unwrap_or(&p) })
+        .status();
     match opened {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(format!("File manager exited with {s}")),
@@ -1408,4 +1596,166 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("zenity: command not found"));
     }
+
+    #[test]
+    fn test_inspect_torrent_file_returns_metainfo_bytes() {
+        let raw_meta = crate::engine::metainfo::RawMetainfo {
+            announce: Some("http://tracker.example.com/announce".to_string()),
+            announce_list: None,
+            comment: Some("Test Comment".to_string()),
+            created_by: Some("Nebulae Test".to_string()),
+            creation_date: Some(1234567890),
+            info: crate::engine::metainfo::RawInfo {
+                name: Some("test_video.mkv".to_string()),
+                piece_length: Some(262144),
+                pieces: vec![0u8; 20],
+                length: Some(1048576),
+                files: None,
+                private: Some(1),
+            },
+        };
+        let bencode_bytes = serde_bencode::to_bytes(&raw_meta).unwrap();
+        let res = inspect_torrent_file(None, Some(bencode_bytes.clone())).unwrap();
+        assert_eq!(res.name, "test_video.mkv");
+        assert_eq!(res.total_bytes, 1048576);
+        assert!(res.is_private);
+        assert_eq!(res.metainfo_bytes, Some(bencode_bytes));
+    }
+}
+
+/// One dialog for external playback: accepts a release ROOT folder
+/// (containing all disc folders, like a torrent download) or an ISO
+/// disc image. Files and folders must both be selectable, so a plain
+/// `choose folder`/`choose file` pair cannot be used. The panel is
+/// presented NATIVELY on the app's main thread: an osascript-hosted
+/// panel opens beneath the app window (invisible), which read as
+/// "nothing happens".
+#[tauri::command]
+pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+
+    #[cfg(target_os = "macos")]
+    {
+        app.run_on_main_thread(move || {
+            let picked = unsafe { present_disc_panel() };
+            let _ = tx.send(picked);
+        })
+        .map_err(|e| format!("main thread unavailable: {e}"))?;
+        return Ok(rx.recv().map_err(|_| "panel channel lost".to_string())?);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = &tx;
+        // Windows: file dialog for ISO first; folder dialog for a release
+        // root when the file dialog is cancelled.
+        let iso = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $form = New-Object System.Windows.Forms.Form
+        $form.TopMost = $true
+        $f = New-Object System.Windows.Forms.OpenFileDialog
+        $f.Title = "Add Movie - select an ISO disc image (or cancel for a folder)"
+        $f.Filter = "Disc images (*.iso;*.img)|*.iso;*.img|All files|*.*"
+        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.FileName }
+        "#;
+        if let Ok(out) = crate::utils::process::run_hidden_powershell_dialog(iso) {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(Some(path));
+            }
+        }
+        let folder = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $form = New-Object System.Windows.Forms.Form
+        $form.TopMost = $true
+        $f = New-Object System.Windows.Forms.FolderBrowserDialog
+        $f.Description = "Add Movie - select the release ROOT folder that holds ALL of its disc folders"
+        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }
+        "#;
+        let out = crate::utils::process::run_hidden_powershell_dialog(folder)
+            .map_err(|e| format!("Failed to open folder picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok(if path.is_empty() { None } else { Some(path) })
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = &tx;
+        // Linux: zenity file selection (ISO); directory selection when
+        // the file dialog is cancelled.
+        let out = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title",
+                "Add Movie - select an ISO disc image",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to open picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() && !path.is_empty() {
+            return Ok(Some(path));
+        }
+        let out = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--directory",
+                "--title",
+                "Add Movie - select the release ROOT folder",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to open picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok(if out.status.success() && !path.is_empty() {
+            Some(path)
+        } else {
+            None
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn present_disc_panel() -> Option<String> {
+    use objc2::runtime::{Class, Object};
+    let cstr_cls = |name: &str| Class::get(std::ffi::CString::new(name).unwrap().as_c_str());
+    let cls = cstr_cls("NSOpenPanel")?;
+    let panel: *mut Object = objc2::msg_send![cls, openPanel];
+    if panel.is_null() {
+        return None;
+    }
+    let ns_string = cstr_cls("NSString").unwrap();
+    let ns_str = |s: &str| -> *mut Object {
+        let c = std::ffi::CString::new(s).unwrap();
+        objc2::msg_send![ns_string, stringWithUTF8String: c.as_ptr()]
+    };
+    let _: () = objc2::msg_send![panel, setCanChooseFiles: true];
+    let _: () = objc2::msg_send![panel, setCanChooseDirectories: true];
+    let _: () = objc2::msg_send![panel, setAllowsMultipleSelection: false];
+    let _: () = objc2::msg_send![panel, setPrompt: ns_str("Add Movie")];
+    let _: () = objc2::msg_send![panel, setMessage: ns_str(
+        "Select the release ROOT folder that holds ALL of its disc folders (like a torrent download) — or an ISO disc image. Picking a single disc folder plays only that disc."
+    )];
+    let rc: i64 = objc2::msg_send![panel, runModal];
+    // NSModalResponseOK is 1 (the old NSOKButton); 1000 was wrong and
+    // silently discarded every successful selection.
+    if rc != 1 {
+        return None; // cancelled
+    }
+    let url: *mut Object = objc2::msg_send![panel, URL];
+    if url.is_null() {
+        return None;
+    }
+    let path: *mut Object = objc2::msg_send![url, path];
+    if path.is_null() {
+        return None;
+    }
+    let cstr: *const std::os::raw::c_char = objc2::msg_send![path, UTF8String];
+    if cstr.is_null() {
+        return None;
+    }
+    Some(
+        std::ffi::CStr::from_ptr(cstr)
+            .to_string_lossy()
+            .into_owned(),
+    )
 }

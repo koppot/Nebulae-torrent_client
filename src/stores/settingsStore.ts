@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 interface SettingsState {
   settings: UserSettings;
   isLoading: boolean;
+  isLoaded: boolean;
   /** Session engine mode reported by the backend: 'local' (transmission)
    *  or 'rtorrent_server'. The GUI hides options the engine cannot fulfill. */
   engineMode: 'local' | 'rtorrent_server';
@@ -58,7 +59,7 @@ export const defaultSettings: UserSettings = {
   max_global_connections: 500,
   max_connections_per_torrent: 100,
   max_global_upload_slots: 8,
-  max_upload_slots_per_torrent: 4,
+  max_upload_slots_per_torrent: 14,
   proxy_type: 'None',
   proxy_host: '',
   proxy_port: 8080,
@@ -142,11 +143,25 @@ export const defaultSettings: UserSettings = {
 
   // 10. BitTorrent Engine
   engine: 'transmission',
+
+  // 11. Racing Mode (tuning preset, disabled by default)
+  racing_mode_enabled: false,
+  super_seeding_enabled: false,
+
+  // 12. Engine Identification
+  engine_identity_profile: 'transmission',
+  custom_user_agent: '',
+  custom_peer_id_prefix: '',
+
+  // 13. Media Mode
+  media_mode_enabled: true,
+  media_mode_decision_made: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaultSettings,
   isLoading: false,
+  isLoaded: false,
   engineMode: 'local',
 
   fetchEngineMode: async () => {
@@ -164,9 +179,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ isLoading: true });
     try {
       const data = await invoke<UserSettings>('load_user_settings');
-      set({ settings: { ...defaultSettings, ...data }, isLoading: false });
+      set({ settings: { ...defaultSettings, ...data }, isLoading: false, isLoaded: true });
     } catch {
-      set({ settings: defaultSettings, isLoading: false });
+      set({ settings: defaultSettings, isLoading: false, isLoaded: true });
     }
   },
 
@@ -176,8 +191,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings: merged });
     try {
       await invoke('save_user_settings', { settings: merged });
-    } catch {
-      // Fallback
+    } catch (err) {
+      set({ settings: current });
+      throw err;
     }
   },
 
