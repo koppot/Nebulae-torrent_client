@@ -499,7 +499,18 @@ fn cli_on(paths: &Paths, args: &[&str], timeout: Duration) -> Result<String, Str
 /// default control plane; ADC-network mode passes its Headscale URL.
 pub fn enroll(auth_key: &str, login_server: Option<&str>) -> Result<(), String> {
     let node = node_name();
-    let mut args: Vec<&str> = vec!["up", "--authkey", auth_key, "--hostname", node.as_str()];
+    // Flags here MUST match resume_saved_profile's set exactly: `up`
+    // refuses to change any non-default setting that is not re-mentioned
+    // (verified live on Windows). accept-dns=false is the app's canonical
+    // setting on every platform.
+    let mut args: Vec<&str> = vec![
+        "up",
+        "--authkey",
+        auth_key,
+        "--hostname",
+        node.as_str(),
+        "--accept-dns=false",
+    ];
     if let Some(url) = login_server {
         args.push("--login-server");
         args.push(url);
