@@ -2,8 +2,8 @@
 
 **Repository:** `koppot/Nebulae-torrent_client`  
 **Active branch:** `fix/cross-platform-repair`  
-**Current source commit:** [`ff3b458`](https://github.com/koppot/Nebulae-torrent_client/commit/ff3b458)  
-**Last updated:** 2026-10-18T18:54:00-04:00  
+**Current source commit:** [`94488b6`](https://github.com/koppot/Nebulae-torrent_client/commit/94488b6)  
+**Last updated:** 2026-10-18T19:54:00-04:00  
 
 ---
 
@@ -11,6 +11,9 @@
 
 | Commit SHA | Date | Summary |
 | :--- | :--- | :--- |
+| [`94488b6`](https://github.com/koppot/Nebulae-torrent_client/commit/94488b6) | 2026-10-18 | `security(updater): gate test overrides behind test-updater feature and restore strict HTTPS` |
+| [`bf5e317`](https://github.com/koppot/Nebulae-torrent_client/commit/bf5e317) | 2026-10-18 | `feat(updater): verify consecutive silent updates A->B->C and configure CI test-build updater pipeline` |
+| [`f57b24b`](https://github.com/koppot/Nebulae-torrent_client/commit/f57b24b) | 2026-10-18 | `docs: finalize acceptance matrix with verified CI deliverables and precise test labels` |
 | [`ff3b458`](https://github.com/koppot/Nebulae-torrent_client/commit/ff3b458) | 2026-10-18 | `ci: add workflow concurrency group and release upload supersede safeguard` |
 | [`b46db3f`](https://github.com/koppot/Nebulae-torrent_client/commit/b46db3f) | 2026-10-18 | `test(ui): add isolated first-run media mode lifecycle verification test` |
 | [`d5a982b`](https://github.com/koppot/Nebulae-torrent_client/commit/d5a982b) | 2026-10-18 | `docs(acceptance): add persistent acceptance matrix and refine first-run and racing mode UI` |
@@ -36,7 +39,7 @@
 | **6. Racing Mode Status Indicator**<br>Bottom status bar: `[green/red dot] Racing mode`. Green enabled, red disabled. Follows saved settings immediately and after restart. No unrequested click-to-toggle in status bar. | **IMPLEMENTED / VERIFIED** | `src/components/layout/StatusBar.tsx`<br>`src/components/modals/SettingsModal.tsx`<br>`src-tauri/src/engine/transmission.rs` | Pure display indicator in `StatusBar.tsx`: `bg-emerald-500` (enabled) / `bg-red-500` (disabled). Settings checkbox in BitTorrent tab toggles mode immediately via RPC session set (256MB cache, 150/1000 peers, 14 upload slots, 2-min stall threshold, high priority). Persisted in DB and restored on boot. | None. Implemented and verified. |
 | **7. Persistent "Enable media mode" Checkbox**<br>Checkbox in Settings. Disabling immediately hides top Media navigation switch without deleting media collection data. Returning from Media switches to Manager. | **IMPLEMENTED / VERIFIED** | `src/components/modals/SettingsModal.tsx`<br>`src/components/layout/TitleBar.tsx` | Checkbox labeled "Enable media mode". `TitleBar.tsx` reactive effect: hides button when false, redirects active view to Manager. Database records and thumbnails preserved. | None. Implemented and verified. |
 | **8. Windows Empty-Library Media Import**<br>When library is initially empty, UI displays "Add Movie / Disc" opening native picker supporting folders and ISO images. | **IMPLEMENTED / UNVERIFIED (WIN)** | `src/components/media/SimpleMediaView.tsx`<br>`src-tauri/src/commands/torrent.rs` | Empty state renders `Add Movie / Disc`. Windows PowerShell dialog flow implemented: OpenFileDialog (`*.iso;*.img;*.*`) falling back to FolderBrowserDialog. `importExternal` parses Windows path separators (`split(/[/\\]/)`). | Runtime execution on native Windows hardware is unverified; requires testing on physical Windows machine. |
-| **9. Consecutive Silent Auto-Updates (A -> B -> C)**<br>Silent background check, download, and staging across two consecutive version hops with zero dialogs and all settings/data preserved. | **IMPLEMENTED / VERIFIED (CONSECUTIVE UPDATE HOPS)** | `src-tauri/src/updater.rs`<br>`src-tauri/tauri.conf.json`<br>`.github/workflows/build-test.yml`<br>`scripts/test-consecutive-silent-updates.py` | Verified via `scripts/test-consecutive-silent-updates.py` across 2 consecutive hops:<br>• **Hop 1 (0.2.2 &rarr; 0.2.3)**: Background discovery, downloaded 97.7MB payload, verified Minisign cryptographic signature, staged in-place application bundle swap, `Info.plist` updated to `0.2.3`.<br>• **Hop 2 (0.2.3 &rarr; 0.2.4)**: Background discovery, downloaded 97.7MB payload, verified Minisign cryptographic signature, staged in-place bundle swap, `Info.plist` updated to `0.2.4`.<br>• **Hop 3 (Up-to-Date check)**: App 0.2.4 checked manifest and confirmed `Nebulae is up to date; no update available.`<br>• **Data preservation**: SQLite `nebulae.db` records (2 seeded torrents, external media row, and user settings JSON) 100% verified intact across all hops.<br>• **CI Pipeline**: `.github/workflows/build-test.yml` updated with `.tar.gz` and `.sig` artifact collection and automated `latest.json` manifest generation for the `test-builds` release. | None. Automated consecutive multi-hop silent update verification is 100% passed. |
+| **9. Consecutive Silent Auto-Updates (A -> B -> C)**<br>Silent background check, download, and staging across two consecutive version hops with zero dialogs and all settings/data preserved.<br>• Strict HTTPS and immutable hardcoded public key in production release builds.<br>• Test-updater overrides isolated behind compile-time Cargo feature `test-updater` (disabled by default).<br>• Zero ephemeral private keys committed or packaged. | **IMPLEMENTED / VERIFIED (MACOS CONSECUTIVE UPDATE HOPS) / UNVERIFIED (WIN NATIVE HARDWARE)** | `src-tauri/src/updater.rs`<br>`src-tauri/tauri.conf.json`<br>`src-tauri/Cargo.toml`<br>`.github/workflows/build-test.yml`<br>`scripts/test-consecutive-silent-updates.py` | • **Security Isolation ([`94488b6`](https://github.com/koppot/Nebulae-torrent_client/commit/94488b6))**: Normal release builds strictly enforce HTTPS (`dangerousInsecureTransportProtocol` removed). Release updater builder cannot be redirected or swapped via environment variables. `test-updater` Cargo feature is disabled by default.<br>• **macOS Multi-Hop Verification**: Verified via `scripts/test-consecutive-silent-updates.py` across 2 consecutive hops:<br>  - **Hop 1 (0.2.2 &rarr; 0.2.3)**: Background discovery, downloaded 97.7MB payload, verified Minisign cryptographic signature, staged in-place application bundle swap, `Info.plist` updated to `0.2.3`.<br>  - **Hop 2 (0.2.3 &rarr; 0.2.4)**: Background discovery, downloaded 97.7MB payload, verified Minisign cryptographic signature, staged in-place bundle swap, `Info.plist` updated to `0.2.4`.<br>  - **Hop 3 (Up-to-Date check)**: App 0.2.4 checked manifest and confirmed `Nebulae is up to date; no update available.`<br>  - **Data preservation**: SQLite `nebulae.db` records (2 seeded torrents, external media row, and user settings JSON) 100% verified intact across all hops.<br>• **CI Pipeline**: `.github/workflows/build-test.yml` updated with `.tar.gz` and `.sig` artifact collection and automated `latest.json` manifest generation for the `test-builds` release. | • **Windows Native Verification**: Windows quiet installer execution (NSIS `/S` staged installer, quit-time execution) is unverified on physical Windows hardware; macOS bundle replacement cannot be generalized to Windows.<br>• **Hosted Channel Blocker**: GitHub Draft releases return HTTP 404 to unauthenticated clients; public updater verification requires a published public release. |
 | **10. Linux Resource Discovery**<br>Tauri resource resolution resolves `/usr/lib/Nebulae/resources/` with exact case preservation. | **IMPLEMENTED / VERIFIED (CI)** | `src-tauri/src/utils/paths.rs`<br>`src-tauri/src/player/engine.rs` | Case-preserving Tauri `path::resolve` with fallback to `/usr/lib/Nebulae/resources/` and `/usr/share/nebulae/resources/`. Ubuntu 22.04 CI package passes. | None. Verified in CI. |
 | **11. Unicode `.torrent` Modal Validation**<br>Accepts Unicode `.torrent` and `.adc` files; rejects folders and non-torrent files with clear actionable error. | **IMPLEMENTED / VERIFIED** | `src/components/modals/AddTorrentModal.tsx`<br>`scripts/verify-modal-sequence.js` | Verified via `node scripts/verify-modal-sequence.js`: rejects folder paths, accepts Unicode anime torrents, clears stale errors. Note: this script tests state transitions and regex logic, not real browser UI automation. | None. Implemented and verified. |
 | **12. Engine Identification & Upstream Defaults**<br>Default Transmission 4.1.3 (`-TR4130-`); Native Nebulae 0.2.2 (`-NE0220-`). Consistent peer_id across announce & handshake. | **IMPLEMENTED / VERIFIED** | `src-tauri/src/engine/identity.rs`<br>`src-tauri/src/engine/transmission.rs` | Verified via `scripts/verify-engine-identity.py` and `scripts/check-installed-app-settings.py` against installed `/Applications/Nebulae.app`. | None. Confirmed. |
@@ -45,18 +48,25 @@
 
 ---
 
-## 3. Platform Updater Limitations
+## 3. Platform Updater Limitations & Hosted Feed Realities
 
-1. **macOS:** In-place silent updates require `/Applications` write permissions. Applications run directly from a mounted read-only DMG cannot self-update in place.
-2. **Windows:** Silent updates apply cleanly for per-user installations in `%LOCALAPPDATA%\Programs\Nebulae`. Machine-wide installations under `C:\Program Files` require administrator UAC elevation, preventing zero-interaction silent updates unless running as elevated service.
+1. **macOS:** In-place silent updates require write permissions to the installation target (`/Applications`). Applications run directly from a mounted read-only DMG cannot self-update in place.
+2. **Windows (Unverified on Native Hardware):**
+   - Silent updates apply cleanly for per-user installations in `%LOCALAPPDATA%\Programs\Nebulae`.
+   - Machine-wide installations under `C:\Program Files` require administrator UAC elevation, preventing zero-interaction silent updates unless running as an elevated service.
+   - NSIS `/S` quiet installer execution upon application exit has not been verified on physical Windows hardware; test execution on native hardware is required and must not be inferred from macOS bundle replacement.
+   - Coordinate testing with Factory to ensure the Windows shared test environment is not simultaneously modified.
 3. **Linux:** DEB and RPM packages are managed by system package managers (`apt`, `dnf`); only standalone AppImage builds support self-updating.
+4. **Hosted Channel Availability (GitHub Draft Release Behavior):**
+   - GitHub Draft release assets return HTTP 404 to unauthenticated clients. Standard in-app updaters without GitHub authentication headers cannot retrieve `latest.json` or update payloads from draft releases.
+   - Testing against hosted GitHub update feeds requires either publishing the release publicly or proxying the feed with authentication.
 
 ---
 
 ## 4. Package Provenance & Artifact Status
 
-### GitHub Actions CI Deliverables (Run 39174118184 / Commit ff3b458)
-All packages built from clean source tree with embedded assets and bundled runtimes (`jre/bin/java`, `transmission-daemon`, `libvlc`):
+### Standing Draft Release Packages (Pre-Fix / Run 39174118184 / Commit ff3b458)
+*Available for general regression testing (UI menus, Force Recheck, Dual Audio, BD-J probe, First-run prompt):*
 
 | Platform | Target File | Size | SHA-256 Checksum | Verified Build Info |
 | :--- | :--- | :--- | :--- | :--- |
@@ -68,6 +78,25 @@ All packages built from clean source tree with embedded assets and bundled runti
 | **Linux x86_64 RPM** | `Nebulae-Linux-x86_64.rpm` | 81,734,842 bytes | `8be9d646dac6dd18d069be5d0620758469c0eb19bbfba1d7a5ad33f22f0577c8` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
 
 - **Standing Draft Release Target:** [`test-builds`](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0)
-- **Provenance Safeguard:** Pre-upload branch check (`git ls-remote`) and concurrency group verified active in CI workflow.
+
+### Verified Post-Fix CI Packages & Updater Feed (Run 39178297828 / Commit 94488b6)
+*Built with compile-time `test-updater` security gating, strict HTTPS enforcement, bundled runtimes (`jre/bin/java`, `transmission-daemon`, `libvlc`), Minisign signatures, and `latest.json` manifest:*
+
+| Platform | Target File | Size | SHA-256 Checksum | Verified Build Info |
+| :--- | :--- | :--- | :--- | :--- |
+| **macOS Apple Silicon** | `Nebulae-macOS-arm64.dmg` | 110,234,766 bytes | `64d544ae3d41954a86ed9b9fd3dfd71c21665155d101a4383b6cdf777ca869f7` | `BUILD_INFO-Nebulae-macOS-arm64.dmg.txt` |
+| **macOS Intel** | `Nebulae-macOS-x64.dmg` | 111,766,529 bytes | `5ee59228b4edbb8f56e6b2dc26b12d32b77f74297739fa5dee8cd6b74ad66528` | `BUILD_INFO-Nebulae-macOS-x64.dmg.txt` |
+| **Windows x64** | `Nebulae-Setup-x64.exe` | 93,052,508 bytes | `1459e62a848fe354348f160df9b7851704344d0021e8eb504b66008e74ff0ef9` | `BUILD_INFO-Nebulae-Setup-x64.exe.txt` |
+| **Linux x86_64 AppImage** | `Nebulae-Linux-x86_64.AppImage` | 167,885,304 bytes | `f5e7dd7bc351b85233e1c4520b8b7f9338d296d2702c54e037d6a11589bb73a4` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+| **Linux x86_64 DEB** | `Nebulae-Linux-x86_64.deb` | 81,715,378 bytes | `c85daf5217065561fd7d5ea1dd5b0c1751bde6b899a5db0b7fe658e07686a658` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+| **Linux x86_64 RPM** | `Nebulae-Linux-x86_64.rpm` | 81,734,834 bytes | `6f96a5bdc48771188559cd52cdca0f2f3fe4534eebd4ec437d9c5655cdc76f5c` | `BUILD_INFO-Nebulae-Linux-x86_64.txt` |
+
+#### Updater Bundles & Minisign Signatures (Uploaded to `test-builds`):
+- `Nebulae-macOS-arm64.dmg-app.tar.gz` (99,836,221 bytes) + `.sig` (424 bytes)
+- `Nebulae-macOS-x64.dmg-app.tar.gz` (100,352,333 bytes) + `.sig` (424 bytes)
+- `Nebulae-Setup-x64.exe` (93,052,508 bytes) + `.sig` (436 bytes)
+- `latest.json` (1,978 bytes, SHA-256: `e2f5ed20573452440dc31cb569eccc4d88fb4ba27733cb3bb0b33da01ac1472e`)
+
+- **Release Target:** [`test-builds`](https://github.com/koppot/Nebulae-torrent_client/releases/tag/untagged-1cf31dd6aba21ef114c0) (superseded with run 39178297828 deliverables).
 
 
