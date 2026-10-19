@@ -3,25 +3,25 @@
 scripts/test-consecutive-silent-updates-genuine.py
 
 Executes a real consecutive silent automatic update test across two consecutive
-version hops using genuine compiled packages and the production/authentic Minisign key:
+version hops using genuine compiled packages, the live approved HTTPS test endpoint,
+and the authentic compiled Minisign public key (452CAA8BBBBC6F41):
   Hop 1: Version A (0.2.2) -> Version B (0.2.3)
   Hop 2: Version B (0.2.3) -> Version C (0.2.4)
   Final: Version C (0.2.4) confirmed up to date
 
 Key Verification:
+- Live approved HTTPS endpoint: https://asiandvdclub.org/app-update-test-a7f92e4c91b5/latest.json
 - NO ephemeral test keys: uses authentic compiled-in public key (452CAA8BBBBC6F41)
 - NO public key environment variable override
 - Genuine versioned binaries compiled from source (0.2.2, 0.2.3, 0.2.4)
 - Full data preservation check on SQLite database
 """
 
-import http.server
 import json
 import os
 import plistlib
 import queue
 import shutil
-import socketserver
 import sqlite3
 import subprocess
 import sys
@@ -29,33 +29,31 @@ import threading
 import time
 
 TEST_DIR = "/private/tmp/nebulae-genuine-consecutive-test"
-PORT = 9754
+REMOTE_HOST = "root@45.135.163.139"
+REMOTE_DIR = "/var/www/html/app-update-test-a7f92e4c91b5"
 ARTIFACT_DIR = "/tmp/app-update-test-a7f92e4c91b5"
+HTTPS_ENDPOINT = "https://asiandvdclub.org/app-update-test-a7f92e4c91b5/latest.json"
 
-current_manifest = {}
-
-class UpdateHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=ARTIFACT_DIR, **kwargs)
-
-    def do_GET(self):
-        if self.path == "/latest.json":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            payload = json.dumps(current_manifest, indent=2).encode("utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-        else:
-            super().do_GET()
-
-    def log_message(self, format, *args):
-        pass
+def set_remote_manifest(stage_filename):
+    print(f"      [REMOTE] Setting active remote manifest to {stage_filename}...")
+    cmd = [
+        "ssh", "-i", os.path.expanduser("~/.ssh/id_rsa"),
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        REMOTE_HOST,
+        f"cp {REMOTE_DIR}/{stage_filename} {REMOTE_DIR}/latest.json"
+    ]
+    subprocess.run(cmd, check=True)
+    # Validate via HTTPS
+    res = subprocess.run(["curl", "-s", HTTPS_ENDPOINT], capture_output=True, text=True, check=True)
+    data = json.loads(res.stdout)
+    print(f"      [REMOTE] Active HTTPS manifest now advertises version: {data.get('version')}")
+    return data
 
 def main():
-    global current_manifest
     print("=" * 70)
     print("  GENUINE CONSECUTIVE SILENT UPDATE ACCEPTANCE TEST (A -> B -> C)")
+    print("  Live HTTPS Endpoint: https://asiandvdclub.org/app-update-test-a7f92e4c91b5/")
     print("  Authentic Minisign Key: 452CAA8BBBBC6F41 (No Key Override)")
     print("=" * 70)
 
@@ -97,29 +95,10 @@ def main():
     print(f"      ✓ Version A Info.plist reports CFBundleShortVersionString: {pl_a.get('CFBundleShortVersionString')}")
     assert pl_a.get("CFBundleShortVersionString") == "0.2.2"
 
-    # 4. Load authentic signatures from stage manifests
-    with open(os.path.join(ARTIFACT_DIR, "manifest_stage1_hop_b.json"), "r") as f:
-        stage1_data = json.load(f)
-    sig_b = stage1_data["platforms"]["darwin-aarch64"]["signature"]
-
-    with open(os.path.join(ARTIFACT_DIR, "manifest_stage2_hop_c.json"), "r") as f:
-        stage2_data = json.load(f)
-    sig_c = stage2_data["platforms"]["darwin-aarch64"]["signature"]
-
-    print(f"\n[3/6] Verified authentic signatures from manifest stages:")
-    print(f"      - Hop 1 (0.2.3) Minisign Signature Length: {len(sig_b)} bytes")
-    print(f"      - Hop 2 (0.2.4) Minisign Signature Length: {len(sig_c)} bytes")
-
-    # 5. Start local test HTTP server to serve the genuine artifacts
-    server = socketserver.TCPServer(("127.0.0.1", PORT), UpdateHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    print(f"      ✓ Test server running at http://127.0.0.1:{PORT}")
-
     test_env = os.environ.copy()
     test_env["HOME"] = home_dir
-    test_env["NEBULAE_UPDATER_TEST_ENDPOINT"] = f"http://127.0.0.1:{PORT}/latest.json"
-    # IMPORTANT: Do NOT set NEBULAE_UPDATER_TEST_PUBKEY! Must use authentic compiled-in key!
+    test_env["NEBULAE_UPDATER_TEST_ENDPOINT"] = HTTPS_ENDPOINT
+    # Ensure NO test pubkey override exists
     if "NEBULAE_UPDATER_TEST_PUBKEY" in test_env:
         del test_env["NEBULAE_UPDATER_TEST_PUBKEY"]
     test_env["NEBULAE_UPDATER_TEST_QUIT_ON_STAGED"] = "1"
@@ -150,7 +129,7 @@ def main():
         t.start()
 
         start_time = time.time()
-        while time.time() - start_time < 35:
+        while time.time() - start_time < 45:
             try:
                 line = q.get(timeout=0.1)
                 s = line.strip()
@@ -184,19 +163,9 @@ def main():
     # EXECUTE HOP 1: A (0.2.2) -> B (0.2.3)
     # =========================================================================
     print("\n" + "=" * 70)
-    print("  [4/6] HOP 1: Executing update Version A (0.2.2) -> Version B (0.2.3)")
+    print("  [3/6] HOP 1: Executing update Version A (0.2.2) -> Version B (0.2.3)")
     print("=" * 70)
-    current_manifest = {
-        "version": "0.2.3",
-        "notes": "Nebulae genuine test update Version B (0.2.3).",
-        "pub_date": "2026-10-19T10:12:42Z",
-        "platforms": {
-            "darwin-aarch64": {
-                "signature": sig_b,
-                "url": f"http://127.0.0.1:{PORT}/Nebulae-macOS-arm64-v0.2.3.tar.gz"
-            }
-        }
-    }
+    set_remote_manifest("manifest_stage1_hop_b.json")
 
     logs_1, code_1 = run_app_instance("Hop 1", "A -> B")
     assert any("Silent update downloaded and verified" in l for l in logs_1), f"Signature verification must pass for B: logs={logs_1}"
@@ -233,19 +202,9 @@ def main():
     # EXECUTE HOP 2: B (0.2.3) -> C (0.2.4)
     # =========================================================================
     print("\n" + "=" * 70)
-    print("  [5/6] HOP 2: Executing update Version B (0.2.3) -> Version C (0.2.4)")
+    print("  [4/6] HOP 2: Executing update Version B (0.2.3) -> Version C (0.2.4)")
     print("=" * 70)
-    current_manifest = {
-        "version": "0.2.4",
-        "notes": "Nebulae genuine test update Version C (0.2.4).",
-        "pub_date": "2026-10-19T10:12:42Z",
-        "platforms": {
-            "darwin-aarch64": {
-                "signature": sig_c,
-                "url": f"http://127.0.0.1:{PORT}/Nebulae-macOS-arm64-v0.2.4.tar.gz"
-            }
-        }
-    }
+    set_remote_manifest("manifest_stage2_hop_c.json")
 
     logs_2, code_2 = run_app_instance("Hop 2", "B -> C")
     assert any("Silent update downloaded and verified" in l for l in logs_2), f"Signature verification must pass for C: logs={logs_2}"
@@ -279,19 +238,19 @@ def main():
     print("  ✓ Database integrity verified: all torrents, media records, and settings intact.")
 
     # =========================================================================
-    # STEP 6: Launch C and verify Up-to-Date check
+    # STEP 5: Launch C and verify Up-to-Date check
     # =========================================================================
     print("\n" + "=" * 70)
-    print("  [6/6] FINAL CHECK: Launching Version C (0.2.4) to verify Up-to-Date state")
+    print("  [5/6] FINAL CHECK: Launching Version C (0.2.4) to verify Up-to-Date state")
     print("=" * 70)
     test_env["NEBULAE_UPDATER_TEST_QUIT_ON_STAGED"] = "0"
     logs_3, code_3 = run_app_instance("Final", "C Check")
     assert any("Nebulae is up to date" in l for l in logs_3), f"App C must confirm it is up to date: logs={logs_3}"
     print("  ✓ App C discovered no newer updates; confirmed up to date.")
 
-    # Shutdown HTTP server
-    server.shutdown()
-    server.server_close()
+    # Reset remote manifest back to stage 1 for subsequent Windows test
+    print("\n[6/6] Resetting remote manifest to stage 1 for subsequent tests...")
+    set_remote_manifest("manifest_stage1_hop_b.json")
 
     print("\n" + "=" * 70)
     print("  ALL CONSECUTIVE SILENT UPDATE ACCEPTANCE TESTS PASSED (100% SUCCESS)")
