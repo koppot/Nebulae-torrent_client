@@ -825,8 +825,13 @@ pub fn status() -> TsStatus {
                     .map(String::from);
             }
             if let Some(peers) = v.get("Peer").and_then(|p| p.as_object()) {
-                for peer in peers.values() {
-                    let is_adc = ["DNSName", "HostName"].iter().any(|k| {
+                // The tailnet's DNS suffix is asiandvdclub.org, so EVERY
+                // peer's DNSName contains that string (verified live: the
+                // selector matched a client peer first). The ADC SERVER is
+                // the peer that advertises the subnet route; prefer it,
+                // fall back to the name match only.
+                let name_match = |peer: &serde_json::Value| {
+                    ["DNSName", "HostName"].iter().any(|k| {
                         peer.get(k)
                             .and_then(|x| x.as_str())
                             .map(|s| {
@@ -835,26 +840,49 @@ pub fn status() -> TsStatus {
                                     .contains("asiandvdclub")
                             })
                             .unwrap_or(false)
-                    });
-                    if is_adc {
+                    })
+                };
+                let routes_of = |peer: &serde_json::Value| {
+                    peer.get("PrimaryRoutes")
+                        .and_then(|r| r.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|r| r.as_str())
+                        .and_then(|r| r.split('/').next())
+                        .map(String::from)
+                };
+                let mut fallback: Option<serde_json::Value> = None;
+                for peer in peers.values() {
+                    if !name_match(peer) {
+                        continue;
+                    }
+                    match routes_of(peer) {
+                        Some(route_ip) => {
+                            // The server peer: name match + advertised route.
+                            st.adc_node = peer
+                                .get("TailscaleIPs")
+                                .and_then(|i| i.as_array())
+                                .and_then(|a| a.first())
+                                .and_then(|i| i.as_str())
+                                .map(String::from);
+                            st.adc_route_ip = Some(route_ip);
+                            break;
+                        }
+                        None => {
+                            if fallback.is_none() {
+                                fallback = Some(peer.clone());
+                            }
+                        }
+                    }
+                }
+                if st.adc_node.is_none() {
+                    if let Some(peer) = fallback {
                         st.adc_node = peer
                             .get("TailscaleIPs")
                             .and_then(|i| i.as_array())
                             .and_then(|a| a.first())
                             .and_then(|i| i.as_str())
                             .map(String::from);
-                        // Prefer the advertised SUBNET IP for data-path
-                        // pinning: the node's own tailnet IP has no listener
-                        // (verified live), while the subnet route forwards
-                        // into the real service.
-                        st.adc_route_ip = peer
-                            .get("PrimaryRoutes")
-                            .and_then(|r| r.as_array())
-                            .and_then(|a| a.first())
-                            .and_then(|r| r.as_str())
-                            .and_then(|r| r.split('/').next())
-                            .map(String::from);
-                        break;
+                        st.adc_route_ip = routes_of(peer);
                     }
                 }
             }
