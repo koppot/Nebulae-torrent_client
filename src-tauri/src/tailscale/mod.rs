@@ -362,6 +362,9 @@ pub fn start_supervisor_once(state: &Arc<TsState>, paths: Paths) -> bool {
 /// when wanted, restarts it if it dies, tears it down on disconnect or app
 /// exit. PR_SET_PDEATHSIG makes hard app death clean up the child on unix.
 fn supervise_loop(state: Arc<TsState>, paths: Paths) {
+    // Tracks whether the current daemon (owned or adopted) already had its
+    // saved profile resumed, so adoption does not spam resume attempts.
+    let mut resumed = false;
     loop {
         if !state.wanted.load(Ordering::SeqCst) {
             let mut guard = state.child.lock().unwrap();
@@ -382,28 +385,53 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                 if !state.wanted.load(Ordering::SeqCst) {
                     return;
                 }
-                tracing::warn!("[tailscale] tailscaled exited; restarting");
-                match daemon_command(&paths).spawn() {
-                    Ok(child) => {
-                        *guard = Some(child);
-                        // Respawned daemons never auto-resume the saved
-                        // profile on Windows (verified live): resume in the
-                        // background so the loop keeps supervising.
+                // ADOPTION: on Windows a hard-killed app leaves the daemon
+                // running (no pdeathsig). Its pipe still answers, so a blind
+                // spawn fails on the busy pipe and would loop forever
+                // (verified live: 18 failed respawns in 90s). When the pipe
+                // already serves a daemon, adopt it: supervise by probe,
+                // resume its profile once, spawn nothing.
+                if cli_on(&paths, &["status", "--json"], Duration::from_secs(3)).is_ok() {
+                    if !resumed {
+                        resumed = true;
                         let p2 = paths.clone();
                         std::thread::spawn(move || {
-                            if let Err(e) = wait_for_ready(&p2, Duration::from_secs(60)) {
-                                tracing::warn!("[tailscale] respawn readiness: {e}");
+                            if let Err(e) = wait_for_ready(&p2, Duration::from_secs(30)) {
+                                tracing::warn!("[tailscale] adopt readiness: {e}");
                                 return;
                             }
                             match resume_saved_profile(&p2) {
-                                Ok(()) => tracing::info!("[tailscale] respawned daemon resumed"),
-                                Err(e) => tracing::warn!("[tailscale] respawn resume: {e}"),
+                                Ok(()) => tracing::info!("[tailscale] adopted daemon resumed"),
+                                Err(e) => tracing::warn!("[tailscale] adopt resume: {e}"),
                             }
                         });
                     }
-                    Err(e) => {
-                        tracing::warn!("[tailscale] tailscaled spawn failed: {e}");
-                        *guard = None;
+                    *guard = None;
+                } else {
+                    tracing::warn!("[tailscale] tailscaled exited; restarting");
+                    match daemon_command(&paths).spawn() {
+                        Ok(child) => {
+                            *guard = Some(child);
+                            resumed = false;
+                            // Respawned daemons never auto-resume the saved
+                            // profile on Windows (verified live): resume in
+                            // the background so the loop keeps supervising.
+                            let p2 = paths.clone();
+                            std::thread::spawn(move || {
+                                if let Err(e) = wait_for_ready(&p2, Duration::from_secs(60)) {
+                                    tracing::warn!("[tailscale] respawn readiness: {e}");
+                                    return;
+                                }
+                                match resume_saved_profile(&p2) {
+                                    Ok(()) => tracing::info!("[tailscale] respawned daemon resumed"),
+                                    Err(e) => tracing::warn!("[tailscale] respawn resume: {e}"),
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!("[tailscale] tailscaled spawn failed: {e}");
+                            *guard = None;
+                        }
                     }
                 }
             }
