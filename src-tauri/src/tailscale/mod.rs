@@ -58,6 +58,11 @@ pub struct TsStatus {
     pub socks_proxy: Option<String>,
     ///ADC node (peer whose name contains asiandvdclub) tailnet IP, if seen.
     pub adc_node: Option<String>,
+    /// First subnet IP the ADC node advertises (PrimaryRoutes), e.g.
+    /// 45.135.163.139 for the server's public IP. Requests pinned here ride
+    /// the mesh AND reach a real listener; the tailnet IP itself has no
+    /// listener (verified live). None when the node advertises no subnets.
+    pub adc_route_ip: Option<String>,
 }
 
 #[derive(Clone)]
@@ -574,6 +579,7 @@ pub fn status() -> TsStatus {
         tailnet_name: None,
         socks_proxy: None,
         adc_node: None,
+        adc_route_ip: None,
     };
     if !daemon_running {
         return st;
@@ -614,6 +620,17 @@ pub fn status() -> TsStatus {
                             .and_then(|i| i.as_array())
                             .and_then(|a| a.first())
                             .and_then(|i| i.as_str())
+                            .map(String::from);
+                        // Prefer the advertised SUBNET IP for data-path
+                        // pinning: the node's own tailnet IP has no listener
+                        // (verified live), while the subnet route forwards
+                        // into the real service.
+                        st.adc_route_ip = peer
+                            .get("PrimaryRoutes")
+                            .and_then(|r| r.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|r| r.as_str())
+                            .and_then(|r| r.split('/').next())
                             .map(String::from);
                         break;
                     }
@@ -725,10 +742,16 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
     let mut builder = reqwest::blocking::Client::builder()
         .proxy(proxy)
         .timeout(Duration::from_secs(8));
-    // Pin ADC hostnames to the node's TAILNET IP so requests ride the mesh
-    // by construction. TLS SNI + certificate/hostname validation stay on the
-    // public name (resolve() only affects the connection target).
-    if let Some(node_ip) = st.adc_node.clone() {
+    // Pin ADC hostnames to the ADC node's ADVERTISED SUBNET IP when it has
+    // one (the server's public IP rides the approved subnet route through
+    // the mesh), else to the node's tailnet IP. TLS SNI + certificate/
+    // hostname validation stay on the public name (resolve() only affects
+    // the connection target).
+    let pin = st
+        .adc_route_ip
+        .clone()
+        .or_else(|| st.adc_node.clone());
+    if let Some(node_ip) = pin {
         if let Ok(addr) = node_ip.parse() {
             builder = builder.resolve("asiandvdclub.org", addr);
         }
