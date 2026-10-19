@@ -1666,21 +1666,31 @@ gray.
 - "Disc N" chip: border-[#a3a3a3] (same as its text); "Menu" button:
   border-[#333333]/text-[#a3a3a3]/hover gray — no accent color.
 
-## 2026-10-19 — Antigravity Client Repairs in Progress (COORDINATION NOTICE TO FACTORY)
+## 2026-10-19 — Antigravity Client Repairs Completed (DURABLE HANDOFF TO FACTORY)
 
 **TO: Factory (Droid)**  
 **FROM: Antigravity**  
 **ACTIVE REPAIR BRANCH:** `fix/owner-ui-repairs`  
-**BASELINE SHA:** `b558c480918d075d1b30d8f7bfdef13c1d8332a5` (OLDER BASELINE ONLY)  
-**STATUS:** CLIENT REPAIR WORK IN PROGRESS — DO NOT MERGE BASELINE `b558c48` TO MAIN.
+**SUPERSEDED BASELINE SHA:** `b558c480918d075d1b30d8f7bfdef13c1d8332a5` (DO NOT MERGE DIRECTLY)  
+**FINAL REPAIR COMMIT SHA:** `d366edbdb09cda2430a91d8f5f023700d21c9b81`  
+**STATUS:** **READY FOR INTEGRATION**
 
-Factory may prepare integration planning, but MUST NOT merge `main` using `b558c48` as though it includes the active repairs. The active repair work addressing the following items is being committed to `fix/owner-ui-repairs`:
-1. Non-blocking UHD playback start (eliminates AppKit main thread / Tokio executor freezes and beachballing over SMB network shares).
-2. Accurate HDR color rendering via libvlc Hable filmic tone mapping (`--tone-mapping=3`) and perceptual rendering.
-3. Interactive disc menu preservation (removal of premature demux fallback to raw `.m2ts` files) and working Menu button navigation (`mode 5` popup / top menu).
-4. Media Mode Details modal alignment matching the owner's reference screenshot (clean poster cards without badges, 2x2 facts card for Duration/Total Size/Discs/Format, per-disc breakdown rows, Play / Show in Finder buttons).
-5. Top-left playback screen display of clean title and release year from metadata `Title (Year)`.
-6. Preserved prior fixes: sequential download toggle persistence, responsive wrapped status bar with "Tailnet" label, draggable first-run media mode modal with state persistence.
+Client repairs have been implemented, verified, packaged, deployed, and pushed to `origin fix/owner-ui-repairs`:
+1. **Non-blocking UHD playback start:** Removed the blocking 8-second sleep loop in `start_playback_inner` that hung Tokio workers and destroyed disc sessions. Heavy language probes are deferred until feature playback and isolated in `tokio::task::spawn_blocking`.
+2. **Accurate HDR color rendering:** Applied Hable filmic tone mapping (`--tone-mapping=3`) in `VlcSession`, supported natively by the bundled macOS `libcaopengllayer_plugin.dylib` placebo shader pipeline for wide-gamut BT.2020 PQ streams, leaving SDR playback untouched.
+3. **Interactive disc menu navigation:** Preserved navigable disc sessions; updated `player_menu_navigate` clamp to support `libvlc_navigate_popup` (`mode 5`), and refactored `player_return_to_menu` to safely return to disc menus without deadlocking mutex guards.
+4. **Media Mode Details modal:** Redesigned both external and library Details modals to match the reference layout: `Title (Year)`, format and runtime pills, synopsis, 2x2 facts card (Duration, Total Size, Discs, Format), per-disc breakdown rows, and platform-appropriate action buttons (`Play` + `Show in Finder` / `Show in Explorer`).
+5. **Clean poster cards:** Removed overlay badges from poster cards, keeping only clean artwork and hover action buttons.
+6. **Playback screen title & release year:** Formatted top-left player overlay to display `Title (Year)`. Missing year in metadata is cleanly omitted rather than invented.
+7. **Preserved earlier fixes:** Super-seeding opt-in dialogue, full settings restoration and live session push with Racing Mode, responsive wrapped status bar with "Tailnet" label, draggable first-run media mode modal.
 
-A durable handoff and updated SHA will be posted once all verification is completed. Avoid competing changes or live desktop sessions on the shared test environments.
+### Verification Status:
+- `cargo test --lib`: 107 passed, 0 failed.
+- `npx tsc --noEmit` & `eslint`: 0 errors.
+- `npm run build`: built in 1.62s.
+- `package-macos-dmg.sh`: release DMG `Nebulae_0.2.2_macOS_arm64.dmg` packaged with custom volume icon and file metadata icon.
+- Local deployment: installed to `/Applications/Nebulae.app` and copied to `~/Downloads/Nebulae-macOS-arm64.dmg`.
+
+Factory may now fast-forward or merge `fix/owner-ui-repairs` (`d366edb`) into `main`.
+
 
