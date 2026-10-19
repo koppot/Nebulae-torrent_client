@@ -282,6 +282,36 @@ impl DiscDetector {
         if let Ok(entries) = fs::read_dir(path) {
             let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
             children.sort();
+            // If path contains many subdirectories (> 12) or its name is a known library root
+            // (e.g. "Blu-ray", "DVD", "Movies"), do not scan it as a single disc set to prevent
+            // crawling an entire 300TB library and freezing the system.
+            let subdirs_count = children.iter().filter(|c| c.is_dir()).count();
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let is_library_root = matches!(
+                dir_name.as_str(),
+                "blu-ray"
+                    | "bluray"
+                    | "dvd"
+                    | "movies"
+                    | "films"
+                    | "media"
+                    | "cinema"
+                    | "downloads"
+                    | "torrents"
+                    | "uhd"
+                    | "4k"
+            );
+            if subdirs_count > 12 || is_library_root {
+                tracing::warn!(
+                    "[disc-detector] Skipping library-level crawl on '{}' (subdirs: {subdirs_count})",
+                    path.display()
+                );
+                return Vec::new();
+            }
             for child in children {
                 if child.is_file() {
                     let ext = child
@@ -317,10 +347,48 @@ impl DiscDetector {
         discs
     }
 
-    /// Recursively calculate total size in bytes of file or directory.
+    /// Calculate total size in bytes of file or directory with network-share optimizations.
     fn calculate_total_bytes(path: &Path) -> u64 {
         if path.is_file() {
             return path.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+        // Direct stream directory optimizations for fast calculation on network shares
+        for stream_cand in &["BDMV/STREAM", "bdmv/stream", "BDMV/stream", "bdmv/STREAM"] {
+            let stream_dir = path.join(stream_cand);
+            if stream_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&stream_dir) {
+                    let total: u64 = entries
+                        .flatten()
+                        .filter_map(|e| e.metadata().ok())
+                        .map(|m| m.len())
+                        .sum();
+                    if total > 0 {
+                        return total;
+                    }
+                }
+            }
+        }
+        for vts_cand in &["VIDEO_TS", "video_ts"] {
+            let vts_dir = path.join(vts_cand);
+            if vts_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&vts_dir) {
+                    let total: u64 = entries
+                        .flatten()
+                        .filter_map(|e| e.metadata().ok())
+                        .map(|m| m.len())
+                        .sum();
+                    if total > 0 {
+                        return total;
+                    }
+                }
+            }
+        }
+        Self::calculate_dir_bytes_bounded(path, 0, 3)
+    }
+
+    fn calculate_dir_bytes_bounded(path: &Path, depth: usize, max_depth: usize) -> u64 {
+        if depth > max_depth {
+            return 0;
         }
         let mut total = 0;
         if let Ok(entries) = fs::read_dir(path) {
@@ -329,7 +397,7 @@ impl DiscDetector {
                 if p.is_file() {
                     total += p.metadata().map(|m| m.len()).unwrap_or(0);
                 } else if p.is_dir() {
-                    total += Self::calculate_total_bytes(&p);
+                    total += Self::calculate_dir_bytes_bounded(&p, depth + 1, max_depth);
                 }
             }
         }

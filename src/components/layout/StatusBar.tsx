@@ -28,7 +28,34 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
-  const { settings } = useSettingsStore();
+  const { settings, saveSettings } = useSettingsStore();
+
+  const [isTogglingRacing, setIsTogglingRacing] = useState(false);
+  const [isTogglingSuperSeeding, setIsTogglingSuperSeeding] = useState(false);
+
+  const handleToggleRacingMode = async () => {
+    if (isTogglingRacing) return;
+    setIsTogglingRacing(true);
+    try {
+      await saveSettings({ racing_mode_enabled: !settings.racing_mode_enabled });
+    } catch (err) {
+      console.error('Failed to toggle racing mode:', err);
+    } finally {
+      setIsTogglingRacing(false);
+    }
+  };
+
+  const handleToggleSuperSeeding = async () => {
+    if (isTogglingSuperSeeding) return;
+    setIsTogglingSuperSeeding(true);
+    try {
+      await saveSettings({ super_seeding_enabled: !settings.super_seeding_enabled });
+    } catch (err) {
+      console.error('Failed to toggle super seeding:', err);
+    } finally {
+      setIsTogglingSuperSeeding(false);
+    }
+  };
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
@@ -112,9 +139,9 @@ export const StatusBar: React.FC = () => {
   const connected = isPortOpen || swarmActive;
 
   return (
-    <footer className="h-6 bg-[#141414] border-t border-[#262626] flex items-center justify-between px-3 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
-      {/* Left: Connectivity, Port, Tailscale, VPN */}
-      <div className="flex items-center gap-3">
+    <footer className="min-h-[24px] h-auto py-1 px-3 bg-[#141414] border-t border-[#262626] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
+      {/* Left: Connectivity, Port, Tailscale, VPN, Modes */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <div
           className="flex items-center gap-1.5"
           title={
@@ -175,8 +202,8 @@ export const StatusBar: React.FC = () => {
             tailscale?.connected
               ? tailscale.adc_reachable === false
                 ? 'ADC host offline'
-                : `Tailscale connected — IP ${tailscale.tailnet_ip ?? ''}`
-              : 'Tailscale is not connected'
+                : `Tailnet connected — IP ${tailscale.tailnet_ip ?? ''}`
+              : 'Tailnet is not connected'
           }
         >
           <span
@@ -188,7 +215,7 @@ export const StatusBar: React.FC = () => {
                 : 'bg-[#333333]'
             }`}
           />
-          <span className={tailscale?.connected ? 'text-white' : ''}>Tailscale</span>
+          <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
           {tailscale?.connected && tailscale.adc_reachable === false && (
             <span className="text-amber-500">· ADC host offline</span>
           )}
@@ -222,12 +249,20 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#333333]">|</span>
 
-        <div
-          className="flex items-center gap-1.5"
+        <button
+          type="button"
+          onClick={handleToggleRacingMode}
+          disabled={isTogglingRacing}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
           title={
             settings.racing_mode_enabled
-              ? 'Racing mode active — aggressive peer limits, high bandwidth priority, large disk cache'
-              : 'Racing mode disabled'
+              ? 'Racing mode enabled (click to disable)'
+              : 'Racing mode disabled (click to enable)'
+          }
+          aria-label={
+            settings.racing_mode_enabled
+              ? 'Disable racing mode'
+              : 'Enable racing mode'
           }
         >
           <span
@@ -240,73 +275,108 @@ export const StatusBar: React.FC = () => {
           <span className={settings.racing_mode_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
             Racing mode
           </span>
-        </div>
-      </div>
+        </button>
 
-      {/* Center: Global Transfer Throughput */}
-      <div className="flex items-center gap-4">
-        <div
-          className="flex items-center gap-1.5"
-          title="Global Download Rate & Total Downloaded"
+        <span className="text-[#333333]">|</span>
+
+        <button
+          type="button"
+          onClick={handleToggleSuperSeeding}
+          disabled={isTogglingSuperSeeding}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
+          title={
+            settings.super_seeding_enabled
+              ? 'Super seeding enabled (click to disable)'
+              : 'Super seeding disabled (click to enable)'
+          }
+          aria-label={
+            settings.super_seeding_enabled
+              ? 'Disable super seeding'
+              : 'Enable super seeding'
+          }
         >
           <span
-            className={`font-bold transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+            className={`w-2 h-2 rounded-full transition-colors ${
+              settings.super_seeding_enabled
+                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
             }`}
-          >
-            ▼
+          />
+          <span className={settings.super_seeding_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
+            Super seeding
           </span>
-          <span
-            className={`transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
-          >
-            {formatSpeed(totalDlSpeed)}
-          </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
-        </div>
-
-        <span className="text-[#333333]">|</span>
-
-        <div
-          className="flex items-center gap-1.5"
-          title="Global Upload Rate & Total Uploaded"
-        >
-          <span
-            className={`font-bold transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
-            }`}
-          >
-            ▲
-          </span>
-          <span
-            className={`transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
-          >
-            {formatSpeed(totalUlSpeed)}
-          </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
-        </div>
+        </button>
       </div>
 
-      {/* Right: Storage & Application State */}
-      <div className="flex items-center gap-3">
-        <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
-          Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
-        </span>
+      {/* Right-aligned container: Global Throughput and Storage/System State */}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+        {/* Center: Global Transfer Throughput */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Download Rate & Total Downloaded"
+          >
+            <span
+              className={`font-bold transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▼
+            </span>
+            <span
+              className={`transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalDlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
+          </div>
+
+          <span className="text-[#333333]">|</span>
+
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Upload Rate & Total Uploaded"
+          >
+            <span
+              className={`font-bold transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▲
+            </span>
+            <span
+              className={`transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalUlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
+          </div>
+        </div>
 
         <span className="text-[#333333]">|</span>
 
-        <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
-          uTP + TCP
-        </span>
+        {/* Right: Storage & Application State */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
+            Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
+          </span>
 
-        <span className="text-[#333333]">|</span>
+          <span className="text-[#333333]">|</span>
 
-        <span className="text-[#a3a3a3]" title="Nebulae application version">
-          Nebulae v{appVersion || '…'}
-        </span>
+          <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
+            uTP + TCP
+          </span>
+
+          <span className="text-[#333333]">|</span>
+
+          <span className="text-[#a3a3a3]" title="Nebulae application version">
+            Nebulae v{appVersion || '…'}
+          </span>
+        </div>
       </div>
     </footer>
   );

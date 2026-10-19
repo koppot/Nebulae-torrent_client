@@ -21,6 +21,7 @@ import {
   RotateCw,
   Radio,
   Copy,
+  Check,
   Edit2,
   ShieldCheck,
   AlertCircle,
@@ -578,9 +579,18 @@ export const TorrentManagerView: React.FC = () => {
     });
   };
 
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const handleCopy = (text: string, fieldName: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedField(fieldName);
+    setTimeout(() => setCopiedField((prev) => (prev === fieldName ? null : prev)), 2000);
+  };
+
   const handleCopyHash = () => {
     if (selectedTorrent?.info_hash) {
-      navigator.clipboard.writeText(selectedTorrent.info_hash);
+      handleCopy(selectedTorrent.info_hash, 'info_hash');
     }
   };
 
@@ -1097,7 +1107,19 @@ export const TorrentManagerView: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-2 px-2.5">
-                      <span className="text-[11px] font-sans text-white">{t.status}</span>
+                      {t.status === 'Downloading' && t.racingMode ? (
+                        <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-[#e50914] flex-shrink-0" fill="currentColor" />
+                          <span>Racing mode</span>
+                        </span>
+                      ) : t.status === 'Seeding' && t.super_seeding ? (
+                        <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="currentColor" />
+                          <span>Super seeding</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-sans text-white">{t.status}</span>
+                      )}
                     </td>
                     <td className="py-2 px-2.5 text-white">{formatSpeed(t.download_rate)}</td>
                     <td className="py-2 px-2.5">{formatSpeed(t.upload_rate)}</td>
@@ -1165,87 +1187,174 @@ export const TorrentManagerView: React.FC = () => {
           <div className="flex-1 p-3 overflow-y-auto text-xs bg-[#141414]">
             {selectedTorrent ? (
               activeManagerTab === 'general' ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-xs">
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">Size</span>
-                      <span className="text-white">{formatBytes(selectedTorrent.total_bytes)}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Downloaded
-                      </span>
-                      <span className="text-white">
-                        {formatBytes(selectedTorrent.downloaded_bytes)}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Uploaded
-                      </span>
-                      <span className="text-white">
-                        {formatBytes(selectedTorrent.uploaded_bytes)}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Share Ratio
-                      </span>
-                      <span className="text-white font-bold">{formatRatio(selectedTorrent.ratio)}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Save Path
-                      </span>
-                      <span className="text-white truncate block max-w-xs" title={selectedTorrent.save_path}>
-                        {selectedTorrent.save_path}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Info Hash
-                      </span>
-                      <span className="text-white truncate block max-w-xs font-mono text-[10px]">
-                        {selectedTorrent.info_hash}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Tracker Status
-                      </span>
-                      <span
-                        className="text-white text-[11px] truncate block max-w-xs"
-                        title={announceStatus}
-                      >
-                        {announceStatus}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Last Announce
-                      </span>
-                      <span className="text-white text-[11px]" title={announceTimes.lastAbs || ''}>
-                        {announceTimes.lastRel}
-                      </span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                        Next Announce
-                      </span>
-                      <span className="text-white text-[11px]" title={announceTimes.nextAbs || ''}>
-                        {announceTimes.nextRel}
-                      </span>
-                    </div>
-                    {!isRemoteServer && (
-                      <>
-                        <div className="space-y-1">
-                          <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                            Speed Limits
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-white text-[11px]">
-                              {selectedTorrent.download_limit_kib > 0 ? `DL: ${selectedTorrent.download_limit_kib}K` : 'DL: Max'} / {selectedTorrent.upload_limit_kib > 0 ? `UL: ${selectedTorrent.upload_limit_kib}K` : 'UL: Max'}
-                            </span>
+                (() => {
+                  const trackersAllFailing = trackersAllFailingCheck(selectedTorrent);
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {/* Card 1: Transfer */}
+                      <div className="bg-[#1b1b1b] rounded-lg border border-[#2a2a2a] p-3 flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="border-b border-[#262626] pb-1.5 mb-2.5 flex items-center justify-between">
+                            <h4 className="text-[11px] font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                              <Activity className="w-3.5 h-3.5 text-[#e50914]" />
+                              <span>Transfer</span>
+                            </h4>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 font-mono text-xs">
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Time Active
+                              </span>
+                              <span className="text-white">
+                                {selectedTorrent.added_on > 0 ? formatAnnounceDelta(selectedTorrent.added_on) : '—'}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                ETA
+                              </span>
+                              <span className="text-white">
+                                {formatEta(selectedTorrent.eta_seconds)}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Downloaded
+                              </span>
+                              <span className="text-white">
+                                {formatBytes(selectedTorrent.downloaded_bytes)} ({(selectedTorrent.progress * 100).toFixed(1)}%)
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Uploaded
+                              </span>
+                              <span className="text-white">
+                                {formatBytes(selectedTorrent.uploaded_bytes)} ({formatRatio(selectedTorrent.ratio)})
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                DL Speed
+                              </span>
+                              <span className="text-white">
+                                {formatSpeed(selectedTorrent.download_rate)}
+                                {selectedTorrent.download_limit_kib > 0 ? ` [${selectedTorrent.download_limit_kib}K]` : ''}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                UL Speed
+                              </span>
+                              <span className="text-white">
+                                {formatSpeed(selectedTorrent.upload_rate)}
+                                {selectedTorrent.upload_limit_kib > 0 ? ` [${selectedTorrent.upload_limit_kib}K]` : ''}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Seeds
+                              </span>
+                              <span className="text-white">
+                                {trackersAllFailing ? '—' : (selectedTorrent.seeds ?? '—')}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Peers
+                              </span>
+                              <span className="text-white">
+                                {trackersAllFailing ? '—' : selectedTorrent.peers}
+                                {selectedTorrent.peerLimit ? ` (${selectedTorrent.peerLimit} max)` : ''}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 2: Connections & Trackers */}
+                      <div className="bg-[#1b1b1b] rounded-lg border border-[#2a2a2a] p-3 flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="border-b border-[#262626] pb-1.5 mb-2.5 flex items-center justify-between">
+                            <h4 className="text-[11px] font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                              <Layers className="w-3.5 h-3.5 text-[#e50914]" />
+                              <span>Connections & Trackers</span>
+                            </h4>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 font-mono text-xs">
+                            <div className="col-span-2 space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Status
+                              </span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-white font-medium">{selectedTorrent.status}</span>
+                                {selectedTorrent.status === 'Downloading' && selectedTorrent.racingMode && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-950/80 text-red-400 border border-red-700/50">
+                                    <Zap className="w-2.5 h-2.5 text-red-500 fill-current" />
+                                    <span>Racing mode</span>
+                                  </span>
+                                )}
+                                {selectedTorrent.status === 'Seeding' && selectedTorrent.super_seeding && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50">
+                                    <Zap className="w-2.5 h-2.5 text-emerald-500 fill-current" />
+                                    <span>Super seeding</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="col-span-2 space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Tracker Message
+                              </span>
+                              <span
+                                className="text-white text-[11px] truncate block"
+                                title={announceStatus}
+                              >
+                                {announceStatus}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Last Announce
+                              </span>
+                              <span className="text-white text-[11px]" title={announceTimes.lastAbs || ''}>
+                                {announceTimes.lastRel}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Next Announce
+                              </span>
+                              <span className="text-white text-[11px]" title={announceTimes.nextAbs || ''}>
+                                {announceTimes.nextRel}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {!isRemoteServer && (
+                          <div className="pt-2 border-t border-[#262626] flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await toggleSequential(selectedTorrent.id);
+                                } catch (err: unknown) {
+                                  alert(`Could not toggle sequential download:\n${err}`);
+                                }
+                              }}
+                              className={`px-2 py-1 rounded border text-[11px] flex items-center gap-1.5 transition ${
+                                selectedTorrent.sequential_download
+                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
+                              }`}
+                              title={`Sequential Downloading (Stream in order) — ${
+                                selectedTorrent.sequential_download ? 'ON' : 'OFF'
+                              }`}
+                            >
+                              <Zap className="w-3.5 h-3.5" />
+                              <span>Sequential {selectedTorrent.sequential_download ? 'ON' : 'OFF'}</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() =>
@@ -1257,41 +1366,118 @@ export const TorrentManagerView: React.FC = () => {
                                   ratioLimit: selectedTorrent.ratio_limit,
                                 })
                               }
-                              className="px-1.5 py-0.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[10px] text-white flex items-center gap-1 transition"
+                              className="px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[11px] text-white flex items-center gap-1.5 transition"
+                              title="Edit speed and ratio limits"
                             >
-                              <Sliders className="w-3 h-3 text-[#e50914]" />
-                              <span>Edit</span>
+                              <Sliders className="w-3.5 h-3.5 text-[#e50914]" />
+                              <span>Edit Limits</span>
                             </button>
                           </div>
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                            Swarm Controls
-                          </span>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {/* Sequential is the only swarm toggle Transmission's
-                                RPC actually supports; 1st/Last and Super-Seed
-                                were silent no-ops and are removed. */}
-                            <button
-                              type="button"
-                              onClick={() => toggleSequential(selectedTorrent.id)}
-                              className={`p-1.5 rounded border transition ${
-                                selectedTorrent.sequential_download
-                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                                  : 'bg-[#1f1f1f] text-[#a3a3a3] border-[#333333] hover:text-white'
-                              }`}
-                              title={`Sequential Downloading (Stream in order) — ${
-                                selectedTorrent.sequential_download ? 'ON' : 'OFF'
-                              }`}
-                            >
-                              <Zap className="w-3.5 h-3.5" />
-                            </button>
+                        )}
+                      </div>
+
+                      {/* Card 3: Torrent Information */}
+                      <div className="bg-[#1b1b1b] rounded-lg border border-[#2a2a2a] p-3 flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="border-b border-[#262626] pb-1.5 mb-2.5 flex items-center justify-between">
+                            <h4 className="text-[11px] font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-[#e50914]" />
+                              <span>Torrent Information</span>
+                            </h4>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 font-mono text-xs">
+                            <div className="col-span-2 space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Total Size
+                              </span>
+                              <span className="text-white">
+                                {formatBytes(selectedTorrent.total_bytes)} ({selectedTorrent.total_pieces} pieces × {formatBytes(selectedTorrent.piece_size)})
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Added On
+                              </span>
+                              <span className="text-white">
+                                {selectedTorrent.added_on > 0 ? new Date(selectedTorrent.added_on * 1000).toLocaleString() : '—'}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Completed On
+                              </span>
+                              <span className="text-white">
+                                {selectedTorrent.completed_on && selectedTorrent.completed_on > 0
+                                  ? new Date(selectedTorrent.completed_on * 1000).toLocaleString()
+                                  : '—'}
+                              </span>
+                            </div>
+                            <div className="col-span-2 space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Save Path
+                              </span>
+                              <div className="flex items-center justify-between gap-1.5 bg-[#141414] px-2 py-1 rounded border border-[#262626]">
+                                <span className="text-white truncate block text-[11px] font-mono" title={selectedTorrent.save_path}>
+                                  {selectedTorrent.save_path}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(selectedTorrent.save_path, 'save_path')}
+                                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition flex-shrink-0"
+                                  title="Copy Save Path"
+                                >
+                                  {copiedField === 'save_path' ? (
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3 h-3" />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="col-span-2 space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Info Hash
+                              </span>
+                              <div className="flex items-center justify-between gap-1.5 bg-[#141414] px-2 py-1 rounded border border-[#262626]">
+                                <span className="text-white truncate block text-[10px] font-mono" title={selectedTorrent.info_hash}>
+                                  {selectedTorrent.info_hash}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(selectedTorrent.info_hash, 'info_hash')}
+                                  className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition flex-shrink-0"
+                                  title="Copy Info Hash"
+                                >
+                                  {copiedField === 'info_hash' ? (
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3 h-3" />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Created By
+                              </span>
+                              <span className="text-white truncate block text-[11px]" title={selectedTorrent.created_by || '—'}>
+                                {selectedTorrent.created_by || '—'}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Comment
+                              </span>
+                              <span className="text-white truncate block text-[11px]" title={selectedTorrent.comment || '—'}>
+                                {selectedTorrent.comment || '—'}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </>
-                    )}
-                  </div>
-                </div>
+                      </div>
+                    </div>
+                  );
+                })()
               ) : activeManagerTab === 'files' ? (
                 /* Files & Folder Content Tab with Tree/Flat View & Folder/File Renaming */
                 <div className="flex flex-col h-full space-y-2">
@@ -1655,10 +1841,15 @@ export const TorrentManagerView: React.FC = () => {
           )}
           <button
             onClick={async () => {
-              const res = await forceRecheck(contextMenu.torrentId);
+              const targetId = contextMenu.torrentId;
               setContextMenu((prev) => ({ ...prev, visible: false }));
-              if (!res.success && res.error) {
-                alert(`Could not start verification:\n${res.error}`);
+              try {
+                const res = await forceRecheck(targetId);
+                if (!res.success && res.error) {
+                  console.warn(`[TorrentManager] Could not start verification for ${targetId}:`, res.error);
+                }
+              } catch (err) {
+                console.error(`[TorrentManager] forceRecheck failed:`, err);
               }
             }}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
@@ -1751,9 +1942,14 @@ export const TorrentManagerView: React.FC = () => {
             if (t?.status !== 'Downloading') return null;
             return (
               <button
-                onClick={() => {
-                  toggleSequential(contextMenu.torrentId);
+                onClick={async () => {
+                  const tid = contextMenu.torrentId;
                   setContextMenu((prev) => ({ ...prev, visible: false }));
+                  try {
+                    await toggleSequential(tid);
+                  } catch (err: unknown) {
+                    alert(`Could not toggle sequential download:\n${err}`);
+                  }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
               >

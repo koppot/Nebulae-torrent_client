@@ -24,7 +24,7 @@ import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
 import { RecoveryScreen } from './components/recovery/RecoveryScreen';
 import PlayerOverlay from './components/player/PlayerOverlay';
-import { FileUp, Film } from 'lucide-react';
+import { FileUp, Film, GripHorizontal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
@@ -76,7 +76,8 @@ export const App: React.FC = () => {
     // UI is closed. Event delivery raced the webview's own loading in the
     // autoplay path (owner: player UI never appeared).
     const iv = window.setInterval(() => {
-      if (playerStore.get().open) return;
+      const ps = playerStore.get();
+      if (ps.open) return;
       invoke<{ resolved_path: string; title: string; is_disc: boolean } | null>(
         'player_engine_playback',
       )
@@ -100,7 +101,7 @@ export const App: React.FC = () => {
       window.clearInterval(iv);
     };
   }, []);
-  const { loadSettings, fetchEngineMode, saveSettings } = useSettingsStore();
+  const { settings, loadSettings, fetchEngineMode, saveSettings, isLoaded: settingsLoaded } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
@@ -108,6 +109,110 @@ export const App: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [engineInitError, setEngineInitError] = useState<string | null>(null);
   const [showFirstRunMediaModal, setShowFirstRunMediaModal] = useState(false);
+  const [savingMediaMode, setSavingMediaMode] = useState(false);
+  const [mediaModeError, setMediaModeError] = useState<string | null>(null);
+
+  // Drag position for Media Mode prompt modal
+  const [modalOffset, setModalOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragRef = React.useRef<{
+    isDragging: boolean;
+    startX: number;
+    startY: number;
+    initialOffsetX: number;
+    initialOffsetY: number;
+  }>({
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    initialOffsetX: 0,
+    initialOffsetY: 0,
+  });
+
+  useEffect(() => {
+    if (settingsLoaded) {
+      if (!settings.media_mode_decision_made) {
+        setShowFirstRunMediaModal(true);
+      } else {
+        setShowFirstRunMediaModal(false);
+      }
+    }
+  }, [settingsLoaded, settings.media_mode_decision_made]);
+
+  // Keep modal reachable and recoverable when window is resized
+  useEffect(() => {
+    const handleResize = () => {
+      setModalOffset((prev) => {
+        const maxX = Math.max(0, (window.innerWidth - 460) / 2);
+        const maxY = Math.max(0, (window.innerHeight - 300) / 2);
+        return {
+          x: Math.max(-maxX, Math.min(maxX, prev.x)),
+          y: Math.max(-maxY, Math.min(maxY, prev.y)),
+        };
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleMediaChoice = async (enable: boolean) => {
+    setSavingMediaMode(true);
+    setMediaModeError(null);
+    try {
+      await saveSettings({
+        media_mode_enabled: enable,
+        media_mode_decision_made: true,
+      });
+      localStorage.setItem('nebulae_media_mode_choice', enable ? 'yes' : 'no');
+      setViewMode(enable ? 'media' : 'manager');
+      setShowFirstRunMediaModal(false);
+    } catch (err: unknown) {
+      console.error('[media-mode] failed to save choice:', err);
+      setMediaModeError(
+        typeof err === 'string'
+          ? err
+          : 'Failed to save media mode decision. Please try again.'
+      );
+    } finally {
+      setSavingMediaMode(false);
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    dragRef.current = {
+      isDragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialOffsetX: modalOffset.x,
+      initialOffsetY: modalOffset.y,
+    };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current.isDragging) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    const maxX = Math.max(0, (window.innerWidth - 460) / 2);
+    const maxY = Math.max(0, (window.innerHeight - 300) / 2);
+    const targetX = dragRef.current.initialOffsetX + dx;
+    const targetY = dragRef.current.initialOffsetY + dy;
+    setModalOffset({
+      x: Math.max(-maxX, Math.min(maxX, targetX)),
+      y: Math.max(-maxY, Math.min(maxY, targetY)),
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current.isDragging) {
+      dragRef.current.isDragging = false;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
 
   useEffect(() => {
     invoke<string | null>('get_engine_init_error')
@@ -124,10 +229,6 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
-
-    if (!localStorage.getItem('nebulae_media_mode_choice')) {
-      setShowFirstRunMediaModal(true);
-    }
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
@@ -330,8 +431,8 @@ export const App: React.FC = () => {
         {viewMode === 'manager' && <TorrentManagerView />}
       </main>
 
-      {/* 4. Bottom Desktop Application Status Bar */}
-      <StatusBar />
+      {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}
+      {viewMode === 'manager' && <StatusBar />}
         </>
       )}
 
@@ -360,46 +461,62 @@ export const App: React.FC = () => {
 
       {/* First-Run Media Mode Choice */}
       {splashDismissed && showFirstRunMediaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#181818] border border-[#333333] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-lg bg-[#e50914]/10 text-[#e50914] border border-[#e50914]/20">
-                <Film className="w-6 h-6" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 pointer-events-auto">
+          <div
+            className="bg-[#181818] border border-[#333333] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4"
+            style={{
+              transform: `translate3d(${modalOffset.x}px, ${modalOffset.y}px, 0)`,
+            }}
+          >
+            {/* Draggable header area */}
+            <div
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              className="cursor-grab active:cursor-grabbing select-none flex items-center justify-between pb-3 border-b border-[#262626] -mx-2 px-2"
+              title="Drag to reposition prompt"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-[#e50914]/10 text-[#e50914] border border-[#e50914]/20 pointer-events-none">
+                  <Film className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-white pointer-events-none">
+                  Would you like to enable media mode?
+                </h3>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Would you like to enable media mode?</h3>
+              <div className="text-[#555555] hover:text-[#888888] p-1">
+                <GripHorizontal className="w-4 h-4" />
               </div>
             </div>
 
-            <p className="text-xs text-[#cccccc] leading-relaxed">
+            <p className="text-xs text-[#cccccc] leading-relaxed select-text">
               Nebulae’s Media Center lets you play DVDs, Blu-ray, and UHD discs with interactive disc menus, while organizing and managing your media collection in one place.
             </p>
+
+            {mediaModeError && (
+              <div className="p-2.5 rounded bg-red-950/40 border border-red-800/60 text-red-300 text-xs">
+                {mediaModeError}
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => {
-                  void saveSettings({ media_mode_enabled: false });
-                  setViewMode('manager');
-                  localStorage.setItem('nebulae_media_mode_choice', 'no');
-                  setShowFirstRunMediaModal(false);
-                }}
-                className="px-4 py-2 rounded-lg bg-[#262626] hover:bg-[#333333] border border-[#333333] text-xs text-[#a3a3a3] hover:text-white font-medium transition"
+                disabled={savingMediaMode}
+                onClick={() => void handleMediaChoice(false)}
+                className="px-4 py-2 rounded-lg bg-[#262626] hover:bg-[#333333] border border-[#333333] text-xs text-[#a3a3a3] hover:text-white font-medium transition disabled:opacity-50"
               >
                 No
               </button>
               <button
                 type="button"
                 autoFocus
-                onClick={() => {
-                  void saveSettings({ media_mode_enabled: true });
-                  setViewMode('media');
-                  localStorage.setItem('nebulae_media_mode_choice', 'yes');
-                  setShowFirstRunMediaModal(false);
-                }}
-                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition ring-1 ring-white/20"
+                disabled={savingMediaMode}
+                onClick={() => void handleMediaChoice(true)}
+                className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition ring-1 ring-white/20 disabled:opacity-50"
               >
-                Yes
+                {savingMediaMode ? 'Saving…' : 'Yes'}
               </button>
             </div>
           </div>

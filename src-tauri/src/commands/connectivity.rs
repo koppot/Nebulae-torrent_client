@@ -349,10 +349,23 @@ pub struct TailscaleStatus {
     pub adc_node: Option<String>,
 }
 
+/// Truthful tailscale status for the status bar: the EMBEDDED daemon's
+/// state first (userspace, no TUN — "interface" is descriptive); the legacy
+/// system-TUN detection is only a fallback for an embedded daemon that has
+/// not started.
 #[tauri::command]
 pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
-    // Process spawns (tailscale status --json, ADC TCP probe) must stay off
-    // the main thread.
+    let ts = crate::tailscale::status();
+    if ts.backend_state == "Running" {
+        return Ok(TailscaleStatus {
+            connected: true,
+            interface: Some("nebulae-embedded (userspace)".into()),
+            tailnet_ip: ts.tailnet_ip,
+            adc_reachable: Some(ts.adc_route_ip.is_some()),
+            adc_node: ts.adc_node,
+        });
+    }
+
     tokio::task::spawn_blocking(|| {
         if crate::utils::network::detect_tailscale().is_none() {
             // Stopped at login (observed after network-extension updates):

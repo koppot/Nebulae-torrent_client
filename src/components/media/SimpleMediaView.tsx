@@ -59,6 +59,8 @@ interface PlayableDisc {
   torrent: TorrentItem; // progress/status source
 }
 
+const isMac = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('mac');
+
 /**
  * The torrent's ACTUAL content path. `save_path` is the download ROOT (the
  * engine reports the download dir), so disc-set detection, thumbnails, folder
@@ -220,10 +222,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     externalMedia.forEach((m) => {
       if (m.path in externalPosterMap) return;
       setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
-      invoke<FetchTmdbResult>('fetch_tmdb_release', {
-        title: m.title,
-        year: m.year ?? undefined,
-      })
+      invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: m.title })
+        .then((parsed) =>
+          invoke<FetchTmdbResult>('fetch_tmdb_release', {
+            title: parsed.clean_title || m.title,
+            year: parsed.year ?? m.year ?? undefined,
+          }),
+        )
         .then((res) => {
           setExternalPosterMap((prev) => ({ ...prev, [m.path]: res?.poster_webp ?? undefined }));
           if (res) {
@@ -242,6 +247,26 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         });
     });
   }, [externalMedia, externalPosterMap]);
+
+  // Inspect optical disc format for external media items
+  useEffect(() => {
+    externalMedia.forEach((m) => {
+      if (!(m.path in discSetMap)) {
+        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: m.path })
+          .then((set) => {
+            setDiscSetMap((prev) => ({ ...prev, [m.path]: set }));
+            const primary = set[0];
+            if (primary) {
+              setDiscMetaMap((prev) => ({ ...prev, [m.path]: primary }));
+            }
+          })
+          .catch(() => {
+            setDiscSetMap((prev) => ({ ...prev, [m.path]: [] }));
+          });
+      }
+    });
+  }, [externalMedia, discSetMap]);
+
   // Details popup for an external title (owner: same options/details as
   // the library).
   const [extDetails, setExtDetails] = useState<
@@ -260,15 +285,18 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
       invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: p });
     probe(extDetails.path)
       .then(async (set) => {
-        // Imports can record the FIRST DISC's folder; when only one disc
-        // comes back, re-probe the parent release root so multi-disc
-        // sets report every disc.
-        if (set.length <= 1) {
+        // Only probe parent if NO disc structure found in path AND parent is not a library root
+        if (set.length === 0) {
+          const libraryNames = new Set([
+            'blu-ray', 'bluray', 'dvd', 'movies', 'films', 'media', 'cinema',
+            'downloads', 'torrents', 'uhd', '4k', 'volumes'
+          ]);
           const parent = extDetails.path.replace(/[/\\]+$/, '').split(/[/\\]/).slice(0, -1).join('/');
-          if (parent && parent !== extDetails.path) {
+          const parentName = parent.split(/[/\\]/).pop()?.toLowerCase() || '';
+          if (parent && parent !== extDetails.path && !libraryNames.has(parentName)) {
             try {
               const parentSet = await probe(parent);
-              if (parentSet.length > set.length) {
+              if (parentSet.length > 0) {
                 setExtDiscSet(parentSet);
                 return;
               }
@@ -395,6 +423,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     groupId?: string,
     targetPath?: string,
     displayTitle?: string,
+    year?: number | string | null,
   ) => {
     if (isLaunchingDisc) return;
     setIsLaunchingDisc(true);
@@ -402,8 +431,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     invoke('log_frontend', {
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
     }).catch(() => {});
+    const allGroups = groupItems([...activeDownloads, ...readyToWatch]);
+    const g = groupId ? allGroups.find((x) => x.id === groupId) : undefined;
+    const resolvedYear = year ?? g?.year;
     try {
-      const info = await openInPlayer(playPath, { displayTitle });
+      const info = await openInPlayer(playPath, { displayTitle, year: resolvedYear });
       if (groupId) {
         // Remember the RESOLVED path (the actual ISO/VIDEO_TS) — the resume
         // position map and the disc pills key off exactly this path.
@@ -424,13 +456,21 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
 
   // Resume = skip the disc menu and continue the feature where the poller
   // saved it (owner: "Resume forwards me to the disc menu again").
-  const handleResumeDisc = async (groupId: string, resumePath: string, displayTitle?: string) => {
+  const handleResumeDisc = async (
+    groupId: string,
+    resumePath: string,
+    displayTitle?: string,
+    year?: number | string | null,
+  ) => {
+    const allGroups = groupItems([...activeDownloads, ...readyToWatch]);
+    const g = allGroups.find((x) => x.id === groupId);
+    const resolvedYear = year ?? g?.year;
     const savedMs = savedPositionMs(resumePath);
     invoke('log_frontend', {
       message: `resume clicked: path=${resumePath} savedMs=${savedMs}`,
     }).catch(() => {});
     try {
-      const info = await resumeInPlayer(resumePath, savedMs, displayTitle);
+      const info = await resumeInPlayer(resumePath, savedMs, displayTitle, resolvedYear);
       rememberLastDisc(groupId, info.resolved_path || resumePath);
       setFeedbackNotice(null);
       setExternalDiscError(null);
@@ -446,9 +486,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     try {
       await invoke('open_torrent_folder', { path });
       const name = path.split(/[/\\]/).filter(Boolean).pop() || path;
-      setFeedbackNotice({ type: 'info', message: `Revealed in Finder: ${name}` });
+      const target = isMac ? 'Finder' : 'Explorer';
+      setFeedbackNotice({ type: 'info', message: `Revealed in ${target}: ${name}` });
     } catch (err: unknown) {
-      const msg = errorMessage(err, `Could not reveal folder in Finder: ${path}`);
+      const target = isMac ? 'Finder' : 'Explorer';
+      const msg = errorMessage(err, `Could not reveal folder in ${target}: ${path}`);
       setFeedbackNotice({ type: 'error', message: msg });
     }
   };
@@ -546,15 +588,33 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   const titleFromName = (p: string): string | null => {
     // Split on both / and \ to handle macOS/Linux and Windows paths.
     const name = p.split(/[/\\]/).filter(Boolean).pop() || p;
-    const m = name.match(/^(.+?)\s*\((\d{4})\)\s*$/);
-    return m ? `${m[1]} (${m[2]})` : null;
+    // Check if name has (Year) or [Year] (e.g. "A Few Moments of Cheers (2024) UHD")
+    const m = name.match(/^(.+?)\s*[\(\[](\d{4})[\)\]]/);
+    if (m) {
+      return `${m[1].trim()} (${m[2]})`;
+    }
+    // Also check parent folder if the selected item is a subfolder like BDMV or DISC_1
+    const segments = p.split(/[/\\]/).filter(Boolean);
+    if (segments.length >= 2) {
+      const parentName = segments[segments.length - 2];
+      const pm = parentName.match(/^(.+?)\s*[\(\[](\d{4})[\)\]]/);
+      if (pm) {
+        return `${pm[1].trim()} (${pm[2]})`;
+      }
+    }
+    return null;
   };
   const importExternal = async (p: string) => {
     const known = titleFromName(p);
     if (known) {
-      await openInPlayer(p, { displayTitle: known });
+      const ym = known.match(/[\(\[](\d{4})[\)\]]/);
+      const year = ym ? ym[1] : undefined;
+      await openInPlayer(p, { displayTitle: known, year });
+      void refreshExternalMedia();
     } else {
-      setExternalTitlePrompt({ path: p, guess: (p.split(/[/\\]/).filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
+      const name = p.split(/[/\\]/).filter(Boolean).pop() || '';
+      const guess = name.replace(/[._]/g, ' ').replace(/\.[^.]+$/, '').trim();
+      setExternalTitlePrompt({ path: p, guess });
     }
   };
   // ONE entry point (owner): the dialog accepts the release ROOT folder
@@ -865,8 +925,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 const { path } = externalTitlePrompt;
                 setExternalTitlePrompt(null);
                 setExternalTitleInput('');
+                const ym = title.match(/[\(\[](\d{4})[\)\]]/);
+                const year = ym ? ym[1] : undefined;
                 try {
-                  await openInPlayer(path, { displayTitle: title || undefined });
+                  await openInPlayer(path, { displayTitle: title || undefined, year });
                   void refreshExternalMedia();
                 } catch (err) {
                   setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
@@ -886,8 +948,10 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                   const { path } = externalTitlePrompt;
                   setExternalTitlePrompt(null);
                   setExternalTitleInput('');
+                  const ym = title.match(/[\(\[](\d{4})[\)\]]/);
+                  const year = ym ? ym[1] : undefined;
                   try {
-                    await openInPlayer(path, { displayTitle: title || undefined });
+                    await openInPlayer(path, { displayTitle: title || undefined, year });
                     void refreshExternalMedia();
                   } catch (err) {
                     setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
@@ -912,74 +976,86 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           {/* Same card geometry and options as the Library shelf (owner):
               150px posters, hover Play, right-click menu. */}
           <div className="flex flex-wrap gap-4">
-            {externalMedia.map((m) => (
-              <div
-                key={m.path}
-                className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
-                onMouseEnter={() => setExtHovered(m.path)}
-                onMouseLeave={() => setExtHovered((prev) => (prev === m.path ? null : prev))}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setExtCtx({ x: e.clientX, y: e.clientY, path: m.path, title: m.title });
-                }}
-              >
-                <div className="rounded-lg overflow-hidden">
-                  <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
-                    {externalPosterMap[m.path] ? (
-                      <img
-                        src={localSrc(externalPosterMap[m.path] as string)}
-                        alt={m.title}
-                        className="w-full h-full object-cover"
-                        draggable={false}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-[#0d0d0d]">
-                        <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
-                      </div>
-                    )}
-                    {extHovered === m.path && (
-                      <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
-                        <button
-                          onClick={async () => {
-                            try {
-                              await openInPlayer(m.path, { displayTitle: m.title });
-                              void refreshExternalMedia();
-                            } catch (err) {
-                              setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+            {externalMedia.map((m) => {
+              const discInfo = discMetaMap[m.path];
+              const extCover = discInfo?.cover_image || externalPosterMap[m.path];
+              return (
+                <div
+                  key={m.path}
+                  className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
+                  onMouseEnter={() => setExtHovered(m.path)}
+                  onMouseLeave={() => setExtHovered((prev) => (prev === m.path ? null : prev))}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setExtCtx({ x: e.clientX, y: e.clientY, path: m.path, title: m.title });
+                  }}
+                >
+                  <div className="rounded-lg overflow-hidden">
+                    <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
+                      {extCover ? (
+                        <img
+                          src={localSrc(extCover as string)}
+                          alt={m.title}
+                          className="w-full h-full object-cover"
+                          draggable={false}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-[#0d0d0d]">
+                          <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+                        </div>
+                      )}
+                      {extHovered === m.path && (
+                        <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
+                          <button
+                            onClick={async () => {
+                              try {
+                                await openInPlayer(m.path, {
+                                  displayTitle: m.title,
+                                  year: m.year ?? externalMetaMap[m.path]?.year,
+                                });
+                                void refreshExternalMedia();
+                              } catch (err) {
+                                setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                              }
+                            }}
+                            className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                            title="Play (interactive disc menus)"
+                          >
+                            <Play className="w-3 h-3 fill-black" />
+                            <span>Play</span>
+                          </button>
+                          <button
+                            onClick={() =>
+                              setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
                             }
-                          }}
-                          className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                          title="Play (interactive disc menus)"
-                        >
-                          <Play className="w-3 h-3 fill-black" />
-                          <span>Play</span>
-                        </button>
-                        <button
-                          onClick={() =>
-                            setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
-                          }
-                          className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
-                          title="Detailed movie information"
-                        >
-                          Details
-                        </button>
-                      </div>
-                    )}
+                            className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
+                            title="Detailed movie information"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="pt-2">
+                    <h4
+                      className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
+                      title={m.title}
+                    >
+                      {m.title}
+                      {(externalMetaMap[m.path]?.year ?? m.year) ? (
+                        <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
+                      ) : null}
+                    </h4>
+                    {discInfo?.total_bytes ? (
+                      <p className="text-[10px] font-mono text-[#8c8c8c] text-center mt-0.5">
+                        {formatBytes(discInfo.total_bytes)}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
-                <div className="pt-2">
-                  <h4
-                    className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
-                    title={m.title}
-                  >
-                    {m.title}
-                    {(externalMetaMap[m.path]?.year ?? m.year) ? (
-                      <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
-                    ) : null}
-                  </h4>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -1024,9 +1100,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                   Downloading
                 </h3>
-                <span className="text-[11px] font-mono text-white px-2 rounded-md bg-[#1f1f1f] border border-[#333333] flex items-center h-[22px]">
-                  {activeDownloads.length}
-                </span>
               </div>
               <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-thin">
                 {visibleGroups(groupItems(activeDownloads)).map((g) => renderGroupCard(g, 'active'))}
@@ -1134,129 +1207,192 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           TMDB - the same source the library Details uses. */}
       {extDetails && (
         <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
           onClick={() => setExtDetails(null)}
         >
           <div
-            className="w-[420px] rounded-xl bg-[#1c1c1c] border border-[#333333] shadow-2xl shadow-black/80 overflow-hidden"
+            className="w-full max-w-[480px] rounded-2xl bg-[#141414] border border-[#262626] shadow-2xl shadow-black/80 p-6 space-y-4 text-white"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex gap-4 p-4">
-              <div className="w-[110px] flex-shrink-0">
-                {externalPosterMap[extDetails.path] ? (
-                  <img
-                    src={localSrc(externalPosterMap[extDetails.path] as string)}
-                    alt={extDetails.title}
-                    className="w-full rounded-lg"
-                    draggable={false}
-                  />
-                ) : (
-                  <div className="aspect-[2/3] rounded-lg bg-[#0d0d0d] flex items-center justify-center">
-                    <Disc className="w-8 h-8 text-[#333333]" />
+            {(() => {
+              const cover = discMetaMap[extDetails.path]?.cover_image || externalPosterMap[extDetails.path];
+              const discInfo = discMetaMap[extDetails.path];
+              const totalBytes = extDiscSet.reduce((a, d) => a + (d.total_bytes || 0), 0) || (discInfo?.total_bytes || 0);
+              const discCount = extDiscSet.length > 0 ? extDiscSet.length : (discInfo ? 1 : 0);
+              const specs = extDiscSet.length > 0
+                ? Array.from(new Set(extDiscSet.map((d) => d.layer_spec).filter(Boolean)))
+                : (discInfo?.layer_spec ? [discInfo.layer_spec] : []);
+              const formatBadge = specs.length
+                ? specs.length === 1
+                  ? `${discCount > 1 ? `${discCount}x ` : ''}${layerLabel(specs[0])}`
+                  : specs.map(layerLabel).join(' + ')
+                : (discInfo?.layer_spec ? layerLabel(discInfo.layer_spec) : (extDetails.kind || 'Disc'));
+              const formatStr = specs.length
+                ? specs.length === 1
+                  ? `${discCount > 1 ? `${discCount}× ` : ''}${layerLabel(specs[0])}`
+                  : specs.map(layerLabel).join(' + ')
+                : (discInfo?.layer_spec ? layerLabel(discInfo.layer_spec) : (extDetails.kind || 'Disc'));
+              const durationStr = extMeta?.runtime ? (fmtRuntime(extMeta.runtime) ?? `${extMeta.runtime}m`) : '—';
+              const totalSizeStr = totalBytes > 0 ? formatBytes(totalBytes) : '—';
+
+              const discRows = extDiscSet.length > 0
+                ? extDiscSet.map((d, i) => {
+                    const name = d.title || (d.root_path ? (d.root_path.split(/[/\\]/).filter(Boolean).pop() || `Disc ${d.disc_number ?? i + 1}`) : `Disc ${d.disc_number ?? i + 1}`);
+                    return {
+                      key: d.root_path || i,
+                      title: name,
+                      spec: layerLabel(d.layer_spec),
+                      size: formatBytes(d.total_bytes),
+                    };
+                  })
+                : discInfo
+                  ? [{
+                      key: extDetails.path,
+                      title: extDetails.path.split(/[/\\]/).filter(Boolean).pop() || extDetails.title,
+                      spec: layerLabel(discInfo.layer_spec),
+                      size: formatBytes(discInfo.total_bytes || totalBytes),
+                    }]
+                  : [];
+
+              return (
+                <>
+                  <div className="flex gap-4 items-start">
+                    <div className="w-[110px] shrink-0">
+                      <div className="aspect-[2/3] w-full rounded-xl overflow-hidden bg-[#0d0d0d] border border-[#262626]">
+                        {cover ? (
+                          <img
+                            src={localSrc(cover as string)}
+                            alt={extDetails.title}
+                            className="w-full h-full object-cover"
+                            draggable={false}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Disc className="w-8 h-8 text-[#333333]" />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="text-base font-bold text-white leading-tight">
+                          {extDetails.title}
+                          {extYear ? <span className="text-[#a3a3a3] font-normal"> ({extYear})</span> : null}
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => setExtDetails(null)}
+                          className="p-1 -mr-1 -mt-1 text-[#737373] hover:text-white transition"
+                          title="Close"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 font-mono">
+                        {formatBadge && (
+                          <span className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4]">
+                            {formatBadge}
+                          </span>
+                        )}
+                        {extMeta?.runtime ? (
+                          <span className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4]">
+                            {extMeta.runtime} min
+                          </span>
+                        ) : null}
+                      </div>
+                      {extMeta?.overview ? (
+                        <p className="text-xs text-[#a3a3a3] leading-relaxed line-clamp-4">
+                          {extMeta.overview}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-[#737373] italic">
+                          No TMDB summary available for this title.
+                        </p>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-bold text-white leading-tight">
-                  {extDetails.title}
-                  {extYear ? <span className="text-[#a3a3a3] font-normal"> ({extYear})</span> : null}
-                </h4>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
-                    {extDetails.kind}
-                  </span>
-                  {extMeta?.runtime ? (
-                    <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
-                      {extMeta.runtime} min
-                    </span>
-                  ) : null}
-                </div>
-                {extMeta?.overview ? (
-                  <p className="mt-2 text-[11px] leading-relaxed text-[#d4d4d4] line-clamp-6">
-                    {extMeta.overview}
-                  </p>
-                ) : (
-                  <p className="mt-2 text-[11px] text-[#737373] italic">
-                    No TMDB summary available for this title.
-                  </p>
-                )}
-              </div>
-            </div>
-            {/* Facts + disc rows (owner): the same details the library popup
-                shows for downloaded titles. */}
-            <div className="px-4 pb-4 space-y-2">
-              <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
-                {(() => {
-                  const facts: { label: string; value: string }[] = [];
-                  if (extMeta?.runtime)
-                    facts.push({ label: 'Duration', value: fmtRuntime(extMeta.runtime) ?? `${extMeta.runtime} min` });
-                  const totalBytes = extDiscSet.reduce((a, d) => a + (d.total_bytes || 0), 0);
-                  if (totalBytes > 0) facts.push({ label: 'Total size', value: formatBytes(totalBytes) });
-                  if (extDiscSet.length > 0) facts.push({ label: 'Discs', value: String(extDiscSet.length) });
-                  const fmts = extDiscSet.map((d) => layerLabel(d.layer_spec)).filter(Boolean);
-                  if (fmts.length > 0) facts.push({ label: 'Format', value: fmts.join(' + ') });
-                  return facts.map((f) => (
-                    <div key={f.label} className="space-y-0.5">
-                      <span className="block text-[9px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                        {f.label}
-                      </span>
-                      <span className="block text-[12px] text-[#d4d4d4] font-mono">{f.value}</span>
+
+                  {/* Facts 2x2 Grid */}
+                  <div className="rounded-xl bg-[#0f0f0f] border border-[#262626] p-4">
+                    <div className="grid grid-cols-2 gap-y-3 gap-x-4 font-mono">
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">DURATION</span>
+                        <span className="block text-sm text-white">{durationStr}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">TOTAL SIZE</span>
+                        <span className="block text-sm text-white">{totalSizeStr}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">DISCS</span>
+                        <span className="block text-sm text-white">{discCount}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">FORMAT</span>
+                        <span className="block text-sm text-white">{formatStr}</span>
+                      </div>
                     </div>
-                  ));
-                })()}
-              </div>
-              {extDiscSet.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                    Discs
-                  </span>
-                  {extDiscSet.map((d, i) => (
-                    <div
-                      key={d.root_path || i}
-                      className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-[#111111] border border-[#262626]"
+                  </div>
+
+                  {/* Discs list */}
+                  {discRows.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="block text-[10px] font-mono tracking-wider text-[#737373] uppercase">DISCS</span>
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+                        {discRows.map((d, i) => (
+                          <div
+                            key={d.key || i}
+                            className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#0f0f0f] border border-[#262626] font-mono text-xs"
+                          >
+                            <span className="text-white font-medium truncate pr-2">
+                              {d.title}
+                            </span>
+                            <span className="text-[#8c8c8c] shrink-0">
+                              {d.spec} · {d.size}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setExtDetails(null);
+                        try {
+                          await openInPlayer(extDetails.path, { displayTitle: extDetails.title, year: extYear });
+                          void refreshExternalMedia();
+                        } catch (err) {
+                          setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                        }
+                      }}
+                      className="w-full py-2.5 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition text-center"
                     >
-                      <span className="text-[12px] text-white font-medium">
-                        {d.title || `Disc ${d.disc_number ?? i + 1}`}
-                      </span>
-                      <span className="text-[10px] font-mono text-[#8c8c8c]">
-                        {layerLabel(d.layer_spec)} · {formatBytes(d.total_bytes)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="px-4 pb-4 flex gap-2">
-              <button
-                onClick={async () => {
-                  setExtDetails(null);
-                  try {
-                    await openInPlayer(extDetails.path, { displayTitle: extDetails.title });
-                    void refreshExternalMedia();
-                  } catch (err) {
-                    setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
-                  }
-                }}
-                className="flex-1 px-3 py-2 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition"
-              >
-                Play
-              </button>
-              <button
-                onClick={() => {
-                  setExtDetails(null);
-                  invoke('open_torrent_folder', { path: extDetails.path }).catch(() => {});
-                }}
-                className="flex-1 px-3 py-2 rounded-lg bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5e5e5] text-xs font-medium transition"
-              >
-                Show in Finder
-              </button>
-            </div>
+                      Play
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExtDetails(null);
+                        invoke('open_torrent_folder', { path: extDetails.path }).catch(() => {});
+                      }}
+                      className="w-full py-2.5 rounded-lg bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition text-center"
+                    >
+                      {isMac ? 'Show in Finder' : 'Show in Explorer'}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
 
       {/* Right-click menu on an EXTERNAL poster: same options as the
-          library where they apply (Show in Finder, Play) + Remove. */}
+          library where they apply (Show in Finder / Explorer, Play) + Remove. */}
       {extCtx && (
         <div
           className="fixed inset-0 z-[190]"
@@ -1286,14 +1422,17 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       void handleOpenFolder(extCtx.path);
                     }}
                   >
-                    <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
+                    <FolderOpen className="w-3.5 h-3.5" /> {isMac ? 'Show in Finder' : 'Show in Explorer'}
                   </button>
                   <button
                     className={act}
                     onClick={async () => {
                       setExtCtx(null);
                       try {
-                        await openInPlayer(extCtx.path, { displayTitle: extCtx.title });
+                        await openInPlayer(extCtx.path, {
+                          displayTitle: extCtx.title,
+                          year: externalMetaMap[extCtx.path]?.year,
+                        });
                         void refreshExternalMedia();
                         setFeedbackNotice(null);
                       } catch (err) {
@@ -1389,13 +1528,13 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       handleRevealRelease(item);
                     }}
                   >
-                    <FolderOpen className="w-3.5 h-3.5" /> Show in Finder
+                    <FolderOpen className="w-3.5 h-3.5" /> {isMac ? 'Show in Finder' : 'Show in Explorer'}
                   </button>
                   <button
                     className={act}
                     onClick={() => {
                       setCtxMenu(null);
-                      handlePlayDisc(item, group.id, undefined, featureLabel(group.id));
+                      handlePlayDisc(item, group.id, undefined, featureLabel(group.id), group.year);
                     }}
                   >
                     <Play className="w-3.5 h-3.5" /> Play
@@ -1405,7 +1544,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                       className={act}
                       onClick={() => {
                         setCtxMenu(null);
-                        handleResumeDisc(group.id, resumeTarget, featureLabel(group.id));
+                        handleResumeDisc(group.id, resumeTarget, featureLabel(group.id), group.year);
                       }}
                     >
                       <Play className="w-3.5 h-3.5" /> Resume
@@ -1445,15 +1584,14 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         </div>
       )}
 
-      {/* Details popup: ADC website info when available, otherwise the
-          TMDB/Trakt summary (owner). Grayscale. */}
+      {/* Details popup: reference layout matching external popup */}
       {detailsFor && (
         <div
           className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
           onClick={() => setDetailsFor(null)}
         >
           <div
-            className="w-full max-w-[460px] rounded-xl bg-[#1c1c1c] border border-[#333333] shadow-2xl p-5 space-y-3"
+            className="w-full max-w-[480px] rounded-2xl bg-[#141414] border border-[#262626] shadow-2xl shadow-black/80 p-6 space-y-4 text-white"
             onClick={(e) => e.stopPropagation()}
           >
             {(() => {
@@ -1493,142 +1631,176 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 );
               }
               const set = discSetMap[item.id] ?? [];
-              const specs = Array.from(new Set(set.map((d) => d.layer_spec)));
-              const count = set.length || group.items.length;
-              const badge = specs.length
+              const discInfo = discMetaMap[item.id];
+              const specs = set.length > 0
+                ? Array.from(new Set(set.map((d) => d.layer_spec).filter(Boolean)))
+                : (discInfo?.layer_spec ? [discInfo.layer_spec] : []);
+              const count = set.length || group.items.length || 1;
+              const formatBadge = specs.length
+                ? specs.length === 1
+                  ? `${count > 1 ? `${count}x ` : ''}${layerLabel(specs[0])}`
+                  : specs.map(layerLabel).join(' + ')
+                : (discInfo?.layer_spec ? layerLabel(discInfo.layer_spec) : 'Disc');
+              const formatStr = specs.length
                 ? specs.length === 1
                   ? `${count > 1 ? `${count}× ` : ''}${layerLabel(specs[0])}`
                   : specs.map(layerLabel).join(' + ')
-                : null;
+                : (discInfo?.layer_spec ? layerLabel(discInfo.layer_spec) : 'Disc');
+              const durationStr = detailsData?.runtimeMin ? (fmtRuntime(detailsData.runtimeMin) ?? `${detailsData.runtimeMin}m`) : '—';
+              const totalSizeStr = formatBytes(group.total_bytes);
+
+              const cover =
+                (discSetMap[item.id] ?? [])[0]?.cover_image ||
+                thumbMap[item.id] ||
+                tmdbMap[group.id]?.poster ||
+                item.poster_url;
+
+              const discRows = set.length > 0
+                ? set.map((d, i) => {
+                    const name = d.title || (d.root_path ? (d.root_path.split(/[/\\]/).filter(Boolean).pop() || `Disc ${d.disc_number ?? i + 1}`) : `Disc ${d.disc_number ?? i + 1}`);
+                    return {
+                      key: d.root_path || i,
+                      title: name,
+                      spec: layerLabel(d.layer_spec),
+                      size: formatBytes(d.total_bytes),
+                    };
+                  })
+                : discInfo
+                  ? [{
+                      key: item.id,
+                      title: item.name,
+                      spec: layerLabel(discInfo.layer_spec),
+                      size: formatBytes(item.total_bytes),
+                    }]
+                  : [];
+
               return (
                 <>
-                  {/* EXTERNAL-STYLE layout (owner): poster left; title,
-                      year, pills and the overview beside it. */}
-                  <div className="flex gap-4">
-                    <div className="w-[110px] flex-shrink-0">
-                      {(() => {
-                        // Same chain the poster card uses: the disc's own
-                        // cover art, the extracted thumbnail, then TMDB.
-                        const cover =
-                          (discSetMap[item.id] ?? [])[0]?.cover_image ||
-                          thumbMap[item.id] ||
-                          tmdbMap[group.id]?.poster ||
-                          item.poster_url;
-                        return cover ? (
+                  <div className="flex gap-4 items-start">
+                    <div className="w-[110px] shrink-0">
+                      <div className="aspect-[2/3] w-full rounded-xl overflow-hidden bg-[#0d0d0d] border border-[#262626]">
+                        {cover ? (
                           <img
                             src={localSrc(cover)}
                             alt={group.clean_title}
-                            className="w-full rounded-lg"
+                            className="w-full h-full object-cover"
                             draggable={false}
                           />
                         ) : (
-                          <div className="aspect-[2/3] rounded-lg bg-[#0d0d0d] flex items-center justify-center">
+                          <div className="w-full h-full flex items-center justify-center">
                             <Disc className="w-8 h-8 text-[#333333]" />
                           </div>
-                        );
-                      })()}
+                        )}
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-[15px] font-bold text-white leading-tight">
+                        <h3 className="text-base font-bold text-white leading-tight">
                           {group.clean_title}
                           {group.year ? (
                             <span className="text-[#a3a3a3] font-normal"> ({group.year})</span>
                           ) : null}
                         </h3>
                         <button
+                          type="button"
                           onClick={() => setDetailsFor(null)}
-                          className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
+                          className="p-1 -mr-1 -mt-1 text-[#737373] hover:text-white transition"
+                          title="Close"
                         >
                           <X className="w-4 h-4" />
                         </button>
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {badge && (
-                          <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
-                            {badge}
+                      <div className="flex flex-wrap gap-1.5 font-mono">
+                        {formatBadge && (
+                          <span className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4]">
+                            {formatBadge}
                           </span>
                         )}
                         {detailsData?.runtimeMin ? (
-                          <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[10px] text-[#a3a3a3]">
+                          <span className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4]">
                             {detailsData.runtimeMin} min
                           </span>
                         ) : null}
                       </div>
                       {detailsLoading ? (
-                        <p className="mt-2 text-[11px] text-[#737373] italic">Fetching details…</p>
+                        <p className="text-xs text-[#737373] italic">Fetching details…</p>
                       ) : detailsData?.overview ? (
-                        <p className="mt-2 text-[11px] leading-relaxed text-[#d4d4d4] line-clamp-6">
+                        <p className="text-xs text-[#a3a3a3] leading-relaxed line-clamp-4">
                           {detailsData.overview}
                         </p>
                       ) : (
-                        <p className="mt-2 text-[11px] text-[#737373] italic">
+                        <p className="text-xs text-[#737373] italic">
                           No summary available for this title.
                         </p>
                       )}
                     </div>
                   </div>
 
-                  {/* Facts grid: duration, size, disc count, format. */}
-                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#111111] border border-[#262626] p-3">
-                    {(() => {
-                      const facts: { label: string; value: string }[] = [];
-                      if (detailsData?.runtimeMin) facts.push({ label: 'Duration', value: fmtRuntime(detailsData.runtimeMin) ?? '—' });
-                      facts.push({ label: 'Total size', value: formatBytes(group.total_bytes) });
-                      facts.push({ label: 'Discs', value: String(count) });
-                      if (badge) facts.push({ label: 'Format', value: badge });
-                      return facts.map((f) => (
-                        <div key={f.label} className="space-y-0.5">
-                          <span className="block text-[9px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                            {f.label}
-                          </span>
-                          <span className="block text-[12px] text-[#d4d4d4] font-mono">{f.value}</span>
-                        </div>
-                      ));
-                    })()}
+                  {/* Facts 2x2 Grid */}
+                  <div className="rounded-xl bg-[#0f0f0f] border border-[#262626] p-4">
+                    <div className="grid grid-cols-2 gap-y-3 gap-x-4 font-mono">
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">DURATION</span>
+                        <span className="block text-sm text-white">{durationStr}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">TOTAL SIZE</span>
+                        <span className="block text-sm text-white">{totalSizeStr}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">DISCS</span>
+                        <span className="block text-sm text-white">{count}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] tracking-wider text-[#737373] uppercase mb-1">FORMAT</span>
+                        <span className="block text-sm text-white">{formatStr}</span>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Per-disc rows. */}
-                  {set.length > 0 && (
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                        Discs
-                      </span>
-                      {set.map((d, i) => (
-                        <div
-                          key={d.root_path || i}
-                          className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-[#111111] border border-[#262626]"
-                        >
-                          <span className="text-[12px] text-white font-medium">
-                            {d.title || `Disc ${d.disc_number ?? i + 1}`}
-                          </span>
-                          <span className="text-[10px] font-mono text-[#8c8c8c]">
-                            {layerLabel(d.layer_spec)} · {formatBytes(d.total_bytes)}
-                          </span>
-                        </div>
-                      ))}
+                  {/* Discs list */}
+                  {discRows.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="block text-[10px] font-mono tracking-wider text-[#737373] uppercase">DISCS</span>
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-0.5">
+                        {discRows.map((d, i) => (
+                          <div
+                            key={d.key || i}
+                            className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#0f0f0f] border border-[#262626] font-mono text-xs"
+                          >
+                            <span className="text-white font-medium truncate pr-2">
+                              {d.title}
+                            </span>
+                            <span className="text-[#8c8c8c] shrink-0">
+                              {d.spec} · {d.size}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  {/* Actions: same as the External popup. */}
-                  <div className="flex gap-2 pt-1">
+                  {/* Action buttons */}
+                  <div className="grid grid-cols-2 gap-3 pt-1">
                     <button
+                      type="button"
                       onClick={() => {
                         setDetailsFor(null);
-                        handlePlayDisc(item, group.id, undefined, featureLabel(group.id));
+                        handlePlayDisc(item, group.id, undefined, featureLabel(group.id), group.year);
                       }}
-                      className="flex-1 px-3 py-2 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition"
+                      className="w-full py-2.5 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition text-center"
                     >
                       Play
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setDetailsFor(null);
                         handleOpenFolder(folderOf(item));
                       }}
-                      className="flex-1 px-3 py-2 rounded-lg bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5e5e5] text-xs font-medium transition"
+                      className="w-full py-2.5 rounded-lg bg-[#1a1a1a] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition text-center"
                     >
-                      Show in Finder
+                      {isMac ? 'Show in Finder' : 'Show in Explorer'}
                     </button>
                   </div>
                 </>

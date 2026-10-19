@@ -203,7 +203,9 @@ pub async fn announce_http_tracker(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
-        .danger_accept_invalid_certs(true)
+        // FULL certificate/hostname validation, everywhere: an invalid or
+        // misconfigured tracker cert fails the announce loudly instead of
+        // being silently accepted (fail-closed contract).
         .user_agent("qBittorrent/4.6.5")
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;

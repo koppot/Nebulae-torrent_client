@@ -4,16 +4,21 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod tailscale;
 pub mod thumbs;
 pub mod updater;
 pub mod utils;
+pub mod webview_recovery;
 
 use commands::diagnostics::EngineInitState;
 use db::Database;
 use engine::{RemoteServerEngine, SharedEngine};
 use std::sync::Arc;
+use tailscale::TsState;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
+
+pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> = std::sync::OnceLock::new();
 
 pub fn run() {
     // Portable BD-J: point libbluray (inside the bundled VLC plugins) at the
@@ -52,6 +57,36 @@ pub fn run() {
             }
         }
     }
+
+    // Stale WebView2 cleanup BEFORE any window exists: a previously
+    // hard-killed app can leave webview runtimes holding the EBWebView
+    // profile lock, which fails WebView2 init on the next launch. The
+    // pass is ownership-scoped (our marker + dead parent only) and never
+    // touches the profile on disk.
+    {
+        let stale = webview_recovery::recover_stale_webviews();
+        if !stale.is_empty() {
+            SafeLogger::log_to_file(
+                &AppPaths::init().map(|p| p.logs_dir).unwrap_or_default(),
+                "INFO",
+                &format!("Recovered stale WebView2 runtimes: {:?}", stale),
+            );
+        }
+    }
+
+    // Embedded Tailscale (ADC-network) state container + app-owned
+    // lifecycle: start the bundled daemon at launch (readiness-waited on a
+    // background thread; missing binaries are logged loudly, never silent).
+    let _ = TS_STATE.set(std::sync::Arc::new(TsState::default()));
+    std::thread::Builder::new()
+        .name("tailscale-startup".into())
+        .spawn(|| {
+            if let Err(e) = tailscale::ensure_daemon() {
+                tracing::warn!("[tailscale] not started at launch: {e}");
+            }
+        })
+        .ok();
+
     // 0. Initialize isolated internal directory layout: Nebulae/internal/
     let paths = match AppPaths::init() {
         Ok(p) => Arc::new(p),
@@ -363,6 +398,28 @@ pub fn run() {
                 println!("[diag] main window url = {url}");
             }
 
+            // Main window is created in code so a TEST build can opt into a
+            // WebView2/CDP debugging port via NEBULAE_TEST_CDP=1 (never set
+            // in production; keeps packaged behavior identical).
+            {
+                let mut builder = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::default(),
+                )
+                .title("Nebulae — Torrent Client by Asian DVD Club")
+                .inner_size(1280., 840.)
+                .min_inner_size(980., 640.)
+                .decorations(false)
+                .center();
+                if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
+                    builder = builder.additional_browser_args(
+                        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",
+                    );
+                }
+                builder.build()?;
+            }
+
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
             engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
@@ -593,6 +650,11 @@ pub fn run() {
             commands::torrent::create_torrent_file,
             commands::torrent::export_torrent_file,
             commands::torrent::save_torrent_file_as,
+            commands::tailscale::tailscale_status,
+            commands::tailscale::tailscale_enroll,
+            commands::tailscale::tailscale_disconnect,
+            commands::tailscale::adc_private_probe,
+            commands::tailscale::tailscale_adc_fetch,
             commands::torrent::get_engine_status,
             commands::torrent::trigger_kill_switch_command,
             commands::torrent::reset_kill_switch_command,
@@ -644,6 +706,7 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_disc_chapters,
+            commands::media::player_set_always_on_top,
             commands::media::player_always_on_top,
             commands::media::add_external_media,
             commands::media::list_external_media,
@@ -689,6 +752,7 @@ pub fn run() {
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
             updater::apply_staged_update_if_present(_app_handle);
+            tailscale::shutdown(); // stop the embedded tailscaled
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         tauri::RunEvent::Opened { urls } => {

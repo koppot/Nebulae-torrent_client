@@ -294,6 +294,7 @@ export interface UserSettings {
 
   // 11. Racing Mode — maximizes piece acquisition and peer connectivity
   racing_mode_enabled: boolean;
+  super_seeding_enabled: boolean;
 
   // 12. Engine Identification
   engine_identity_profile: 'transmission' | 'nebulae' | 'custom';
@@ -302,6 +303,7 @@ export interface UserSettings {
 
   // 13. Media Mode
   media_mode_enabled: boolean;
+  media_mode_decision_made: boolean;
 }
 
 export interface EngineIdentityInfo {

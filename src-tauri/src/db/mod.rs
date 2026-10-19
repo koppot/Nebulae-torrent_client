@@ -250,6 +250,21 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_torrent_super_seeding(&self, info_hash: &str, enabled: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE torrent_metadata SET super_seeding = ?1 WHERE info_hash = ?2",
+            params![if enabled { 1 } else { 0 }, info_hash],
+        )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT INTO torrent_metadata (info_hash, super_seeding) VALUES (?1, ?2)",
+                params![info_hash, if enabled { 1 } else { 0 }],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn get_torrent_metadata(&self, info_hash: &str) -> Result<Option<TorrentDbMetadata>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

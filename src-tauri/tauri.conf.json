@@ -10,19 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Nebulae — Client by Asian DVD Club",
-        "width": 1280,
-        "height": 840,
-        "minWidth": 980,
-        "minHeight": 640,
-        "decorations": false,
-        "transparent": true,
-        "center": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null,
       "assetProtocol": {

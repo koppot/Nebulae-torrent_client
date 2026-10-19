@@ -364,11 +364,9 @@ export default function PlayerOverlay() {
     subs: [],
   });
   useEffect(() => {
-    // Fetch for every session state, including the disc's menu title: the
-    // backend falls back to the feature playlist (most distinct audio
-    // languages) when the reported duration matches nothing, so the Audio
-    // popover shows real languages even before playback starts.
-    if (!player.open) return;
+    // Only probe once playback engages with a known feature title or duration,
+    // avoiding heavy libbluray network I/O during initial disc menu startup.
+    if (!player.open || (player.isDisc && poll.title === 0 && poll.length_ms <= 0)) return;
     // The poll fires every second; only re-probe when the session, title,
     // or duration state (unknown→known) actually changes. The menu→feature
     // transition changes the answer; a duration transition from 0 to a
@@ -442,14 +440,31 @@ export default function PlayerOverlay() {
       return false;
     };
     (async () => {
-      for (let i = parts.length - 1; i >= 3; i--) {
-        const dir = parts.slice(0, i).join('/');
+      // Bound the walk: probe the resolved disc folder itself, and at most
+      // its immediate parent folder if the disc folder is e.g. DISC_1 under a release folder.
+      // Never walk above the release root into library directories (e.g. Blu-ray, Media, Movies).
+      const libraryNames = new Set([
+        'blu-ray', 'bluray', 'dvd', 'movies', 'films', 'media', 'cinema',
+        'downloads', 'torrents', 'uhd', '4k', 'volumes'
+      ]);
+      const isLibraryDir = (p: string) => {
+        const seg = p.split(/[/\\]/).filter(Boolean).pop()?.toLowerCase() || '';
+        return libraryNames.has(seg) || p === '/' || p === '';
+      };
+
+      // 1. Probe the disc path itself
+      try {
+        if (await tryDir(player.resolvedPath)) return;
+      } catch {}
+
+      // 2. Probe immediate parent only if not a library root
+      const parentDir = parts.slice(0, parts.length - 1).join('/');
+      if (parentDir && !isLibraryDir(parentDir) && parts.length > 2) {
         try {
-          if (await tryDir(dir)) return;
-        } catch {
-          /* keep walking up */
-        }
+          if (await tryDir(parentDir)) return;
+        } catch {}
       }
+
       if (alive) setDiscChoices(null);
     })();
     return () => {
@@ -600,6 +615,22 @@ export default function PlayerOverlay() {
      
   }, [player.open, poll.title]);
 
+  // Top-left now playing title & release year (owner instruction):
+  // Format: "Title (Year)" when reliable metadata is available; omit if missing.
+  const displayTitleInfo = useMemo(() => {
+    let clean = (player.title || '').trim();
+    let year = player.year ? String(player.year) : null;
+    if (!year) {
+      const match = clean.match(/\s*\((\d{4})\)$/);
+      if (match) {
+        year = match[1];
+        clean = clean.replace(/\s*\(\d{4}\)$/, '').trim();
+      }
+    } else {
+      clean = clean.replace(new RegExp(`\\s*\\(${year}\\)$`), '').trim();
+    }
+    return { title: clean || player.title, year };
+  }, [player.title, player.year]);
 
   if (!player.open) return null;
 
@@ -1220,7 +1251,7 @@ export default function PlayerOverlay() {
         </div>
       </div>
 
-      {/* Now playing (owner): current title in the top-left corner, fading
+      {/* Now playing (owner): current title and release year in the top-left corner, fading
           with the controls. */}
       <div
         className={`absolute top-3 left-4 z-20 max-w-[60%] truncate text-sm text-white font-medium transition ${
@@ -1229,9 +1260,12 @@ export default function PlayerOverlay() {
         style={{
           filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
         }}
-        title={player.title}
+        title={`${displayTitleInfo.title}${displayTitleInfo.year ? ` (${displayTitleInfo.year})` : ''}`}
       >
-        {player.title}
+        <span>{displayTitleInfo.title}</span>
+        {displayTitleInfo.year ? (
+          <span className="text-[#a3a3a3] font-normal"> ({displayTitleInfo.year})</span>
+        ) : null}
       </div>
 
       {/* Close (owner): white X, pinned to the top-right corner of the
