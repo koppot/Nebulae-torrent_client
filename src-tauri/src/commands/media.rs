@@ -23,31 +23,39 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
 /// Every disc inside the release (multi-ISO torrents return one entry per
 /// disc, each classified by its own size) — powers the aggregated badge.
 #[tauri::command]
-pub fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        tracing::warn!("[disc-set] path missing: {file_path}");
-        return Err(format!("Media path does not exist: {file_path}"));
-    }
-    let set = DiscDetector::inspect_all(path);
-    tracing::info!(
-        "[disc-set] {file_path} -> {} disc(s): {}",
-        set.len(),
-        set.iter()
-            .map(|d| format!("{:?}/{:?}", d.disc_type, d.layer_spec))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    Ok(set)
+pub async fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&file_path);
+        if !path.exists() {
+            tracing::warn!("[disc-set] path missing: {file_path}");
+            return Err(format!("Media path does not exist: {file_path}"));
+        }
+        let set = DiscDetector::inspect_all(path);
+        tracing::info!(
+            "[disc-set] {file_path} -> {} disc(s): {}",
+            set.len(),
+            set.iter()
+                .map(|d| format!("{:?}/{:?}", d.disc_type, d.layer_spec))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(set)
+    })
+    .await
+    .map_err(|e| format!("detect_disc_set join error: {e}"))?
 }
 
 #[tauri::command]
-pub fn scan_disc_artwork(file_path: String) -> Result<Option<String>, String> {
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        return Err(format!("Media path does not exist: {file_path}"));
-    }
-    Ok(DiscDetector::find_cover_image(path))
+pub async fn scan_disc_artwork(file_path: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&file_path);
+        if !path.exists() {
+            return Err(format!("Media path does not exist: {file_path}"));
+        }
+        Ok(DiscDetector::find_cover_image(path))
+    })
+    .await
+    .map_err(|e| format!("scan_disc_artwork join error: {e}"))?
 }
 
 use serde::{Deserialize, Serialize};
@@ -554,75 +562,6 @@ fn start_playback_inner(
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
                     // can fail inside the demuxer while libvlc_media_player_play
                     // still reports success (reproduced: black screen, no
-                    // playback on the Fuuka folder Blu-ray). If the disc
-                    // demuxer produced no titles shortly after start, fall
-                    // back to the main feature as a plain file so playback
-                    // never silently dies.
-                    if resolved.is_disc {
-                        // ISOs have no in-folder feature file to fall back
-                        // to, and killing the session would kill a demuxer
-                        // that may still be initializing (observed: "disc
-                        // demux failed and no feature found" on ISOs).
-                        let is_iso = [resolved.resolved_path.as_str(), file_path]
-                            .iter()
-                            .any(|p| {
-                                Path::new(p)
-                                    .extension()
-                                    .map(|e| e.eq_ignore_ascii_case("iso"))
-                                    .unwrap_or(false)
-                            });
-                        // Poll patiently: standalone probes show titles appear
-                        // within 1 s, but the embedded instance may initialize
-                        // the bluray demuxer later. Log every reading so the
-                        // session log records the demux timeline.
-                        let mut title_count = 0;
-                        for attempt in 0..16u32 {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            title_count = unsafe {
-                                (lib.libvlc_media_player_get_title_count)(
-                                    session.media_player as *mut c_void,
-                                )
-                            };
-                            tracing::info!(
-                                "player_open: disc probe {attempt}: titles={title_count}"
-                            );
-                            if title_count > 0 {
-                                break;
-                            }
-                        }
-                        if title_count <= 0 && !is_iso {
-                            session.close(&lib);
-                            *poison(&state.media_player) = 0;
-                            tracing::warn!(
-                                "player_open: disc demux produced no titles for '{}'; falling back to main feature",
-                                resolved.resolved_path
-                            );
-                            let fallback = find_main_video(Path::new(&resolved.resolved_path))
-                                .ok_or_else(|| {
-                                    "disc demux failed and no feature found".to_string()
-                                })?;
-                            let fb_session = VlcSession::open_shared(
-                                &lib,
-                                &state.shared_instance,
-                                &fallback.display().to_string(),
-                                view,
-                            )?;
-                            *poison(&state.instance) = fb_session.instance;
-                            *poison(&state.media) = fb_session.media;
-                            *poison(&state.media_player) = fb_session.media_player;
-                            *poison(&state.started) = true;
-                            tracing::info!(
-                                "player_open: PLAYING '{}' (disc: false, feature fallback)",
-                                fallback.display()
-                            );
-                            return Ok(ResolvedPlayback {
-                                resolved_path: fallback.display().to_string(),
-                                title: resolved.title,
-                                is_disc: false,
-                                external: false,
-                            });
-                        }
-                    }
                     tracing::info!(
                         "player_open: PLAYING '{}' (disc: {})",
                         resolved.resolved_path,
@@ -835,44 +774,45 @@ pub async fn player_return_to_menu(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     tracing::info!("[player] return_to_menu: requested");
-    let mp_guard = state
-        .media_player_cell
-        .lock()
-        .map_err(|_| "player state poisoned")?;
-    let mp = *poison(&state.media_player);
-    let lib = loaded_lib(&state)?;
-    // On Blu-ray title 0 is the FIRST-PLAY playlist (the whole disc), not
-    // the menu: selecting it starts full-disc playback. A freshly opened
-    // disc already sits at the interactive menu, so do nothing there.
+    let (mp, lib) = {
+        let _mp_guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        let mp = *poison(&state.media_player);
+        let lib = loaded_lib(&state)?;
+        (mp, lib)
+    };
     if mp != 0 {
         let title = unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) };
         if title == 0 {
             tracing::info!("[player] return_to_menu: already at menu title");
             return Ok(());
         }
+        // Send both popup navigation (Blu-ray popup/root menu) and set_title(0)
         unsafe {
+            (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5); // libvlc_navigate_popup
             (lib.libvlc_media_player_set_title)(mp as *mut std::ffi::c_void, 0);
         }
-        tracing::info!("[player] return_to_menu: set_title(0) sent");
+        tracing::info!("[player] return_to_menu: navigate(popup) and set_title(0) sent");
     }
-    std::thread::sleep(std::time::Duration::from_millis(1200));
-    let at_menu =
-        mp != 0 && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let at_menu = {
+        let _mp_guard = state.media_player_cell.lock().ok();
+        let mp = *poison(&state.media_player);
+        mp != 0 && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0
+    };
     if at_menu {
         tracing::info!("[player] return_to_menu: now at menu title");
         return Ok(());
     }
-    // dvdnav ignored set_title(0) — or this is a Blu-ray, where title 0 is
-    // the first-play playlist (playing it would start the whole disc). A
-    // fresh open always presents the interactive menu, so restart.
+    // If navigation mid-title was ignored by the demuxer, restart playback fresh to land at the interactive menu.
     let path = poison(&state.current_path).clone().unwrap_or_default();
     if path.is_empty() {
         tracing::warn!("[player] return_to_menu: no current path to restart");
         return Err("no current media to restart".into());
     }
-    tracing::info!("[player] return_to_menu: restarting '{path}'");
-    // Release the guard before teardown takes it (stop_session).
-    drop(mp_guard);
+    tracing::info!("[player] return_to_menu: restarting disc '{path}'");
     stop_session(&app, &state);
     start_playback(&app, &state, &path, false).map(|_| ())
 }
@@ -943,22 +883,26 @@ pub async fn player_track_languages(
     if path.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let probe_path = probe_root(&path);
-    let video_ts_ifo = probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO");
-    let is_dvd = video_ts_ifo.is_file() || probe_path.join("VIDEO_TS.IFO").is_file();
-    if is_dvd {
-        let t = title.unwrap_or(1);
-        tracing::info!("[player] track languages (dvd, title {t})");
-        player::dvd_meta::disc_stream_languages_dvd(&probe_path.to_string_lossy(), t)
-    } else {
-        // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
-        // falls back to the feature playlist (most distinct audio
-        // languages) and returns the real track names.
-        let r =
-            player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
-        tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
-        r
-    }
+    tokio::task::spawn_blocking(move || {
+        let probe_path = probe_root(&path);
+        let video_ts_ifo = probe_path.join("VIDEO_TS").join("VIDEO_TS.IFO");
+        let is_dvd = video_ts_ifo.is_file() || probe_path.join("VIDEO_TS.IFO").is_file();
+        if is_dvd {
+            let t = title.unwrap_or(1);
+            tracing::info!("[player] track languages (dvd, title {t})");
+            player::dvd_meta::disc_stream_languages_dvd(&probe_path.to_string_lossy(), t)
+        } else {
+            // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
+            // falls back to the feature playlist (most distinct audio
+            // languages) and returns the real track names.
+            let r =
+                player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
+            tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
+            r
+        }
+    })
+    .await
+    .map_err(|e| format!("track languages join error: {e}"))?
 }
 
 #[tauri::command]
@@ -1065,7 +1009,7 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
         return Ok(());
     }
     let lib = loaded_lib(&state)?;
-    let mode = mode.clamp(0, 4);
+    let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
@@ -2077,20 +2021,15 @@ pub fn add_external_media(
     if items.iter().any(|m| m.path == path) {
         return Ok(());
     }
-    // "Name (Year)" from the import prompt is split so TMDB metadata
-    // (the library banner/poster) resolves the same way as downloads.
-    let clean = title.trim().to_string();
-    let year = clean.rfind('(').and_then(|i| {
-        let inner = &clean[i + 1..];
-        inner
-            .strip_suffix(')')
-            .map(|y| y.trim().parse::<i32>().ok())
-            .unwrap_or(None)
-    });
-    let title_clean = match clean.rfind('(') {
-        Some(i) if year.is_some() => clean[..i].trim().to_string(),
-        _ => clean,
+    // Use MediaTitleParser so TMDB metadata (library banner, poster, overview, runtime)
+    // resolves properly for external discs and folders with various naming patterns.
+    let parsed = crate::utils::media_parser::MediaTitleParser::parse(&title);
+    let title_clean = if !parsed.clean_title.is_empty() {
+        parsed.clean_title
+    } else {
+        title.trim().to_string()
     };
+    let year = parsed.year.map(|y| y as i32);
     // One poster per movie (owner): the same title can arrive twice -
     // auto-adopted on play AND added manually - at different folder
     // levels. Keep the FIRST entry; later duplicates are dropped.

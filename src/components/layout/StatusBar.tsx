@@ -202,8 +202,8 @@ export const StatusBar: React.FC = () => {
             tailscale?.connected
               ? tailscale.adc_reachable === false
                 ? 'ADC host offline'
-                : `Tailscale connected — IP ${tailscale.tailnet_ip ?? ''}`
-              : 'Tailscale is not connected'
+                : `Tailnet connected — IP ${tailscale.tailnet_ip ?? ''}`
+              : 'Tailnet is not connected'
           }
         >
           <span
@@ -215,7 +215,7 @@ export const StatusBar: React.FC = () => {
                 : 'bg-[#333333]'
             }`}
           />
-          <span className={tailscale?.connected ? 'text-white' : ''}>Tailscale</span>
+          <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
           {tailscale?.connected && tailscale.adc_reachable === false && (
             <span className="text-amber-500">· ADC host offline</span>
           )}
@@ -308,70 +308,75 @@ export const StatusBar: React.FC = () => {
         </button>
       </div>
 
-      {/* Center: Global Transfer Throughput */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <div
-          className="flex items-center gap-1.5"
-          title="Global Download Rate & Total Downloaded"
-        >
-          <span
-            className={`font-bold transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
-            }`}
+      {/* Right-aligned container: Global Throughput and Storage/System State */}
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+        {/* Center: Global Transfer Throughput */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Download Rate & Total Downloaded"
           >
-            ▼
-          </span>
-          <span
-            className={`transition-colors ${
-              totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
+            <span
+              className={`font-bold transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▼
+            </span>
+            <span
+              className={`transition-colors ${
+                totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalDlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
+          </div>
+
+          <span className="text-[#333333]">|</span>
+
+          <div
+            className="flex items-center gap-1.5"
+            title="Global Upload Rate & Total Uploaded"
           >
-            {formatSpeed(totalDlSpeed)}
-          </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalDownloaded)})</span>
+            <span
+              className={`font-bold transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
+              }`}
+            >
+              ▲
+            </span>
+            <span
+              className={`transition-colors ${
+                totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
+              }`}
+            >
+              {formatSpeed(totalUlSpeed)}
+            </span>
+            <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
+          </div>
         </div>
 
         <span className="text-[#333333]">|</span>
 
-        <div
-          className="flex items-center gap-1.5"
-          title="Global Upload Rate & Total Uploaded"
-        >
-          <span
-            className={`font-bold transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-500' : 'text-[#e50914]'
-            }`}
-          >
-            ▲
+        {/* Right: Storage & Application State */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
+            Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
           </span>
-          <span
-            className={`transition-colors ${
-              totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
-            }`}
-          >
-            {formatSpeed(totalUlSpeed)}
+
+          <span className="text-[#333333]">|</span>
+
+          <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
+            uTP + TCP
           </span>
-          <span className="text-[#a3a3a3]">({formatBytes(totalUploaded)})</span>
+
+          <span className="text-[#333333]">|</span>
+
+          <span className="text-[#a3a3a3]" title="Nebulae application version">
+            Nebulae v{appVersion || '…'}
+          </span>
         </div>
-      </div>
-
-      {/* Right: Storage & Application State */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
-          Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
-        </span>
-
-        <span className="text-[#333333]">|</span>
-
-        <span className="text-[#a3a3a3]" title="Protocol: BitTorrent Dual-Stack uTP/TCP">
-          uTP + TCP
-        </span>
-
-        <span className="text-[#333333]">|</span>
-
-        <span className="text-[#a3a3a3]" title="Nebulae application version">
-          Nebulae v{appVersion || '…'}
-        </span>
       </div>
     </footer>
   );

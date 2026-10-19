@@ -477,6 +477,19 @@ impl VlcSession {
                 std::env::temp_dir().join("nebulae-vlc.log").display()
             ))
             .unwrap(),
+            // Network share & high-bitrate UHD Blu-ray buffer tuning:
+            // Default libvlc caching (300ms) starves on SMB shares. 3000ms prevents stutter and freezes.
+            CString::new("--file-caching=3000").unwrap(),
+            CString::new("--network-caching=3000").unwrap(),
+            CString::new("--disc-caching=3000").unwrap(),
+            CString::new("--live-caching=3000").unwrap(),
+            // HDR Tone-Mapping:
+            // When playing BT.2020 PQ (ST2084) HDR content, apply Hable filmic tone-mapping
+            // so contrast, saturation, and highlight roll-off render accurately without washed-out colors.
+            // On standard SDR content (BT.709), this setting remains inactive.
+            CString::new("--tone-mapping=3").unwrap(),
+            CString::new("--tone-mapping-param=1.0").unwrap(),
+            CString::new("--tone-mapping-desat=0.5").unwrap(),
         ];
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {

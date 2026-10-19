@@ -6,6 +6,7 @@ on:
     branches:
       - 'ag/transmission-engine'
       - 'fix/cross-platform-repair'
+      - 'fix/owner-ui-repairs'
 
 concurrency:
   group: build-test-${{ github.ref }}

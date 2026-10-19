@@ -21,11 +21,12 @@ interface PlayerPollShape {
 interface PlayerStoreState {
   open: boolean;
   title: string;
+  year?: number | string | null;
   resolvedPath: string;
   isDisc: boolean;
 }
 
-let state: PlayerStoreState = { open: false, title: '', resolvedPath: '', isDisc: false };
+let state: PlayerStoreState = { open: false, title: '', year: null, resolvedPath: '', isDisc: false };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -33,10 +34,11 @@ function emit() {
 }
 
 export const playerStore = {
-  open(info: PlayerOpenInfo, displayTitle?: string) {
+  open(info: PlayerOpenInfo, displayTitle?: string, year?: number | string | null) {
     state = {
       open: true,
       title: displayTitle || info.title,
+      year: year ?? null,
       resolvedPath: info.resolved_path,
       isDisc: info.is_disc,
     };
@@ -70,7 +72,7 @@ let isOpening = false;
  */
 export async function openInPlayer(
   filePath: string,
-  opts?: { resume?: boolean; seekTo?: number; displayTitle?: string },
+  opts?: { resume?: boolean; seekTo?: number; displayTitle?: string; year?: number | string | null },
 ): Promise<PlayerOpenInfo> {
   if (isOpening) {
     console.warn('[playerStore] openInPlayer ignored: already opening');
@@ -94,7 +96,7 @@ export async function openInPlayer(
       resume,
     });
   if (!info.external) {
-    playerStore.open(info, opts?.displayTitle);
+    playerStore.open(info, opts?.displayTitle, opts?.year);
     // Media collection (owner): every externally-opened item is saved as a
     // persistent title, EXCEPT anything inside a downloaded torrent's
     // folder - those already appear as downloaded cards.
@@ -180,10 +182,11 @@ export async function resumeInPlayer(
   filePath: string,
   timeMs: number,
   displayTitle?: string,
+  year?: number | string | null,
 ): Promise<PlayerOpenInfo> {
   // Explicit resume: skip the menu entirely (engine flag) and continue the
   // feature at the saved position.
-  return openInPlayer(filePath, { resume: true, seekTo: timeMs, displayTitle });
+  return openInPlayer(filePath, { resume: true, seekTo: timeMs, displayTitle, year });
 }
 
 /**

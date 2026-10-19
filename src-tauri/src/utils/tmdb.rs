@@ -209,6 +209,12 @@ pub fn fetch_poster(
             .trim_end_matches(|c: char| c.is_whitespace())
             .to_string();
         let mut variants: Vec<(String, Option<i32>)> = vec![(title.to_string(), year)];
+        let parsed = crate::utils::media_parser::MediaTitleParser::parse(title);
+        if !parsed.clean_title.is_empty() && !parsed.clean_title.eq_ignore_ascii_case(title) {
+            let p_year = parsed.year.map(|y| y as i32).or(year);
+            variants.push((parsed.clean_title.clone(), p_year));
+            variants.push((parsed.clean_title, None));
+        }
         if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case(title) {
             variants.push((cleaned, None));
         }

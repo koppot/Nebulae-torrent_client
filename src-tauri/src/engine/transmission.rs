@@ -2267,13 +2267,24 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn toggle_sequential_download(&self, id: &str) -> Result<bool, String> {
-        let current = self
-            .metadata_cache
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|m| m.sequential_download)
-            .unwrap_or(false);
+        let hash = if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            id.to_lowercase()
+        } else if let Ok(torrents) = self.rpc_client.torrent_get(Some(vec![rpc_id(id)])) {
+            torrents
+                .first()
+                .and_then(|t| t.get("hashString"))
+                .and_then(|h| h.as_str())
+                .unwrap_or(id)
+                .to_lowercase()
+        } else {
+            id.to_lowercase()
+        };
+
+        let current = if let Ok(cache) = self.metadata_cache.lock() {
+            cache.get(&hash).map(|m| m.sequential_download).unwrap_or(false)
+        } else {
+            false
+        };
         let new_val = !current;
 
         // Transmission 4.1.3 RPC spec uses snake_case: "sequential_download".
@@ -2286,12 +2297,15 @@ impl TorrentEngine for TransmissionTorrentEngine {
         )?;
 
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
-                meta.sequential_download = new_val;
-                let _ = self.db.upsert_torrent_metadata(meta);
-            }
+            let meta = cache.entry(hash.clone()).or_insert_with(|| TorrentDbMetadata {
+                info_hash: hash.clone(),
+                ..Default::default()
+            });
+            meta.sequential_download = new_val;
+            let _ = self.db.upsert_torrent_metadata(meta);
         }
 
+        info!("[sequential_download] toggled for torrent {id} ({hash}) -> {new_val}");
         Ok(new_val)
     }
 

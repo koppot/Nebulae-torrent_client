@@ -1336,7 +1336,13 @@ export const TorrentManagerView: React.FC = () => {
                           <div className="pt-2 border-t border-[#262626] flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => toggleSequential(selectedTorrent.id)}
+                              onClick={async () => {
+                                try {
+                                  await toggleSequential(selectedTorrent.id);
+                                } catch (err: unknown) {
+                                  alert(`Could not toggle sequential download:\n${err}`);
+                                }
+                              }}
                               className={`px-2 py-1 rounded border text-[11px] flex items-center gap-1.5 transition ${
                                 selectedTorrent.sequential_download
                                   ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
@@ -1936,9 +1942,14 @@ export const TorrentManagerView: React.FC = () => {
             if (t?.status !== 'Downloading') return null;
             return (
               <button
-                onClick={() => {
-                  toggleSequential(contextMenu.torrentId);
+                onClick={async () => {
+                  const tid = contextMenu.torrentId;
                   setContextMenu((prev) => ({ ...prev, visible: false }));
+                  try {
+                    await toggleSequential(tid);
+                  } catch (err: unknown) {
+                    alert(`Could not toggle sequential download:\n${err}`);
+                  }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
               >

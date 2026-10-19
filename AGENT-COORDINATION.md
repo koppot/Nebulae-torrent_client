@@ -1665,3 +1665,22 @@ gray.
 - Chapters popup + List button removed with their state.
 - "Disc N" chip: border-[#a3a3a3] (same as its text); "Menu" button:
   border-[#333333]/text-[#a3a3a3]/hover gray — no accent color.
+
+## 2026-10-19 — Antigravity Client Repairs in Progress (COORDINATION NOTICE TO FACTORY)
+
+**TO: Factory (Droid)**  
+**FROM: Antigravity**  
+**ACTIVE REPAIR BRANCH:** `fix/owner-ui-repairs`  
+**BASELINE SHA:** `b558c480918d075d1b30d8f7bfdef13c1d8332a5` (OLDER BASELINE ONLY)  
+**STATUS:** CLIENT REPAIR WORK IN PROGRESS — DO NOT MERGE BASELINE `b558c48` TO MAIN.
+
+Factory may prepare integration planning, but MUST NOT merge `main` using `b558c48` as though it includes the active repairs. The active repair work addressing the following items is being committed to `fix/owner-ui-repairs`:
+1. Non-blocking UHD playback start (eliminates AppKit main thread / Tokio executor freezes and beachballing over SMB network shares).
+2. Accurate HDR color rendering via libvlc Hable filmic tone mapping (`--tone-mapping=3`) and perceptual rendering.
+3. Interactive disc menu preservation (removal of premature demux fallback to raw `.m2ts` files) and working Menu button navigation (`mode 5` popup / top menu).
+4. Media Mode Details modal alignment matching the owner's reference screenshot (clean poster cards without badges, 2x2 facts card for Duration/Total Size/Discs/Format, per-disc breakdown rows, Play / Show in Finder buttons).
+5. Top-left playback screen display of clean title and release year from metadata `Title (Year)`.
+6. Preserved prior fixes: sequential download toggle persistence, responsive wrapped status bar with "Tailnet" label, draggable first-run media mode modal with state persistence.
+
+A durable handoff and updated SHA will be posted once all verification is completed. Avoid competing changes or live desktop sessions on the shared test environments.
+

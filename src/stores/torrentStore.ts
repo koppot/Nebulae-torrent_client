@@ -406,19 +406,18 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   toggleSequential: async (id: string) => {
-    let result = false;
     try {
-      result = await invoke<boolean>('toggle_torrent_sequential', { id });
-    } catch {
-      const item = get().torrents.find((t) => t.id === id);
-      result = !item?.sequential_download;
+      const result = await invoke<boolean>('toggle_torrent_sequential', { id });
+      set({
+        torrents: get().torrents.map((t) =>
+          t.id === id ? { ...t, sequential_download: result } : t
+        ),
+      });
+      return result;
+    } catch (err) {
+      console.error('[sequential] failed to toggle sequential download:', err);
+      throw err;
     }
-    set({
-      torrents: get().torrents.map((t) =>
-        t.id === id ? { ...t, sequential_download: result } : t
-      ),
-    });
-    return result;
   },
 
   toggleFirstLast: async (id: string) => {

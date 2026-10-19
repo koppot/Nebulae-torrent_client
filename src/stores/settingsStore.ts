@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 interface SettingsState {
   settings: UserSettings;
   isLoading: boolean;
+  isLoaded: boolean;
   /** Session engine mode reported by the backend: 'local' (transmission)
    *  or 'rtorrent_server'. The GUI hides options the engine cannot fulfill. */
   engineMode: 'local' | 'rtorrent_server';
@@ -160,6 +161,7 @@ export const defaultSettings: UserSettings = {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaultSettings,
   isLoading: false,
+  isLoaded: false,
   engineMode: 'local',
 
   fetchEngineMode: async () => {
@@ -177,9 +179,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ isLoading: true });
     try {
       const data = await invoke<UserSettings>('load_user_settings');
-      set({ settings: { ...defaultSettings, ...data }, isLoading: false });
+      set({ settings: { ...defaultSettings, ...data }, isLoading: false, isLoaded: true });
     } catch {
-      set({ settings: defaultSettings, isLoading: false });
+      set({ settings: defaultSettings, isLoading: false, isLoaded: true });
     }
   },
 
