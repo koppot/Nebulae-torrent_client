@@ -882,7 +882,7 @@ pub fn status() -> TsStatus {
                             .and_then(|a| a.first())
                             .and_then(|i| i.as_str())
                             .map(String::from);
-                        st.adc_route_ip = routes_of(peer);
+                        st.adc_route_ip = routes_of(&peer);
                     }
                 }
             }
