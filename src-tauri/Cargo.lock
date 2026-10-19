@@ -2749,6 +2749,7 @@ dependencies = [
  "libloading 0.8.9",
  "maxminddb",
  "md5",
+ "minisign-verify",
  "network-interface",
  "objc2",
  "objc2-app-kit",

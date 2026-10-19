@@ -328,6 +328,7 @@ jobs:
             TARGET_SIG="$DMG_NAME-app.tar.gz.sig"
             cp "$UPDATER_TAR" "$TARGET_TAR"
             cp "$UPDATER_SIG" "$TARGET_SIG"
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature "$TARGET_TAR" "$TARGET_SIG"
             cp "$TARGET_TAR" "$TARGET_SIG" artifacts/
           fi
 
@@ -372,6 +373,7 @@ jobs:
           }
 
           Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
+          cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature 'artifacts/Nebulae-Setup-x64.exe' 'artifacts/Nebulae-Setup-x64.exe.sig'
 
       # --- Prepare Artifacts (Linux) ----------------------------------------
       - name: Prepare Named Artifacts (Linux)
@@ -406,6 +408,7 @@ jobs:
           UPDATER_TAR=$(find src-tauri/target -name "*.AppImage.tar.gz" | head -n 1)
           UPDATER_SIG=$(find src-tauri/target -name "*.AppImage.tar.gz.sig" | head -n 1)
           if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature "$UPDATER_TAR" "$UPDATER_SIG"
             cp "$UPDATER_TAR" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz"
             cp "$UPDATER_SIG" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz.sig"
           fi

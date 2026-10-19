@@ -590,6 +590,7 @@ jobs:
               throw "FATAL: Signature trusted comment does not match installer file '$($exe.Name)'! Refusing to publish unverified signature."
             }
             Write-Host "SUCCESS: Windows setup signature verified for publication."
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature Nebulae-Setup-x64.exe Nebulae-Setup-x64.exe.sig
             gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
           } else {
             throw "FATAL: Nebulae-Setup-x64.exe.sig missing before release upload!"
