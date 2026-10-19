@@ -594,13 +594,13 @@ fn hostname_fallback() -> Option<String> {
 
 /// True status report assembled from `tailscale status --json`.
 pub fn status() -> TsStatus {
-    let daemon_running = crate::TS_STATE
+    let child_running = crate::TS_STATE
         .get()
         .map(|s| s.child.lock().map(|g| g.is_some()).unwrap_or(false))
         .unwrap_or(false);
 
     let mut st = TsStatus {
-        daemon_running,
+        daemon_running: child_running,
         backend_state: String::new(),
         tailnet_ip: None,
         control_server: None,
@@ -609,11 +609,13 @@ pub fn status() -> TsStatus {
         adc_node: None,
         adc_route_ip: None,
     };
-    if !daemon_running {
-        return st;
-    }
-
-    if let Ok(json) = cli(&["status", "--json"], CLI_TIMEOUT) {
+    // An ADOPTED daemon (orphan serving the pipe; see supervise_loop) has no
+    // child handle but is perfectly functional: report it as running when
+    // the pipe answers. One CLI call serves both the probe and the parse.
+    if let Ok(json) = cli(&["status", "--json"], if child_running { CLI_TIMEOUT } else { Duration::from_secs(5) }) {
+        if !child_running {
+            st.daemon_running = true;
+        }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
             st.backend_state = v
                 .get("BackendState")
