@@ -278,13 +278,9 @@ pub fn start_with_paths(paths: &Paths, state: &Arc<TsState>) -> Result<(), Strin
     // It outlives this call, so PR_SET_PDEATHSIG (set at spawn) tears the
     // daemon down if the app process dies hard.
     wait_for_ready(paths, Duration::from_secs(30))?;
-    // Resume the SAVED profile. Windows dev-mode daemons never auto-resume
-    // (verified on real hardware: the backend sits in NoState until a client
-    // runs `up`); on mac/linux this is an idempotent no-op when already
-    // Running. Enrolled state only — a fresh install stays NeedsLogin.
-    if let Err(e) = resume_saved_profile(paths) {
-        tracing::warn!("[tailscale] profile resume: {e}");
-    }
+    // The supervisor thread owns resuming the SAVED profile after every
+    // (re)spawn (Windows dev-mode daemons never auto-resume - verified on
+    // real hardware). Enrolled state only; a fresh install stays NeedsLogin.
     tracing::info!("[tailscale] embedded tailscaled is running");
     Ok(())
 }
@@ -376,7 +372,29 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                     return;
                 }
                 tracing::warn!("[tailscale] tailscaled exited; restarting");
-                *guard = daemon_command(&paths).spawn().ok();
+                match daemon_command(&paths).spawn() {
+                    Ok(child) => {
+                        *guard = Some(child);
+                        // Respawned daemons never auto-resume the saved
+                        // profile on Windows (verified live): resume in the
+                        // background so the loop keeps supervising.
+                        let p2 = paths.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = wait_for_ready(&p2, Duration::from_secs(60)) {
+                                tracing::warn!("[tailscale] respawn readiness: {e}");
+                                return;
+                            }
+                            match resume_saved_profile(&p2) {
+                                Ok(()) => tracing::info!("[tailscale] respawned daemon resumed"),
+                                Err(e) => tracing::warn!("[tailscale] respawn resume: {e}"),
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("[tailscale] tailscaled spawn failed: {e}");
+                        *guard = None;
+                    }
+                }
             }
         }
         std::thread::sleep(Duration::from_secs(5));
