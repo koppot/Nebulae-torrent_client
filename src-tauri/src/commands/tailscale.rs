@@ -104,9 +104,9 @@ pub struct AdcPrivateProbe {
 
 #[tauri::command]
 pub async fn adc_private_probe() -> Result<AdcPrivateProbe, String> {
-    Ok(tokio::task::spawn_blocking(adc_private_probe_sync)
+    tokio::task::spawn_blocking(adc_private_probe_sync)
         .await
-        .map_err(|e| format!("join: {e}"))?)
+        .map_err(|e| format!("join: {e}"))
 }
 
 /// Synchronous probe body (unit-testable without the Tauri runtime).

@@ -18,7 +18,7 @@
 
 use std::io::Read;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -168,7 +168,7 @@ impl Paths {
 
 /// Filesystem path of the private endpoint (unix); on Windows the
 /// endpoint is a named PIPE, so the path is unused (empty).
-pub fn socket_path(state_dir: &PathBuf) -> PathBuf {
+pub fn socket_path(state_dir: &Path) -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let _ = state_dir;
@@ -183,7 +183,7 @@ pub fn socket_path(state_dir: &PathBuf) -> PathBuf {
 /// Socket/pipe argument for the private daemon endpoint.
 /// Windows: a private NAMED PIPE (tailscale's Windows IPC transport);
 /// unix: a private unix socket inside the state dir.
-pub fn private_socket_arg(state_dir: &PathBuf) -> String {
+pub fn private_socket_arg(state_dir: &Path) -> String {
     #[cfg(target_os = "windows")]
     {
         let _ = state_dir;

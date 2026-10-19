@@ -257,7 +257,12 @@ impl VlcLib {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("vlc").join("lib").join("libvlc.dylib"));
-                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.dylib"));
+                    c.push(
+                        dir.join("resources")
+                            .join("vlc")
+                            .join("lib")
+                            .join("libvlc.dylib"),
+                    );
                     if let Some(res) = dir.parent().map(|p| p.join("Resources")) {
                         c.push(
                             res.join("resources")
@@ -309,11 +314,19 @@ impl VlcLib {
                 }
             }
             if let Ok(appdir) = std::env::var("APPDIR") {
-                c.push(PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
-                c.push(PathBuf::from(&appdir).join("usr/share/nebulae/resources/vlc/lib/libvlc.so.5"));
+                c.push(
+                    PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"),
+                );
+                c.push(
+                    PathBuf::from(&appdir).join("usr/share/nebulae/resources/vlc/lib/libvlc.so.5"),
+                );
             }
-            c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5"));
-            c.push(PathBuf::from("/usr/lib/Nebulae/resources/vlc/lib/libvlc.so"));
+            c.push(PathBuf::from(
+                "/usr/lib/Nebulae/resources/vlc/lib/libvlc.so.5",
+            ));
+            c.push(PathBuf::from(
+                "/usr/lib/Nebulae/resources/vlc/lib/libvlc.so",
+            ));
             c.push(PathBuf::from("src-tauri/resources/vlc/lib/libvlc.so.5"));
             c.push(PathBuf::from("resources/vlc/lib/libvlc.so.5"));
         }
@@ -344,7 +357,11 @@ impl VlcLib {
         {
             // Windows: resources/vlc/libvlc.dll -> resources/vlc/plugins (parent)
             // Linux: resources/vlc/lib/libvlc.so.5 -> resources/vlc/plugins (parent.parent)
-            if let Some(p) = lib_path.parent().map(|p| p.join("plugins")).filter(|p| p.exists()) {
+            if let Some(p) = lib_path
+                .parent()
+                .map(|p| p.join("plugins"))
+                .filter(|p| p.exists())
+            {
                 Some(p)
             } else if let Some(p) = lib_path
                 .parent()

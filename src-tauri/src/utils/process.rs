@@ -57,7 +57,6 @@ pub fn run_hidden_powershell_dialog(script: &str) -> io::Result<Output> {
     cmd.output()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

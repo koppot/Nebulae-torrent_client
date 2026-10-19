@@ -140,9 +140,7 @@ pub fn find_transmission_daemon_binary(resource_dir: Option<&Path>) -> Result<Pa
     }
 
     // Standard Linux packaged path (/usr/lib/Nebulae/resources/)
-    candidates.push(
-        PathBuf::from("/usr/lib/Nebulae/resources/engine/transmission").join(bin_name),
-    );
+    candidates.push(PathBuf::from("/usr/lib/Nebulae/resources/engine/transmission").join(bin_name));
 
     // AppImage support ($APPDIR)
     if let Ok(appdir) = std::env::var("APPDIR") {
@@ -669,8 +667,16 @@ pub fn build_transmission_settings(
     rpc_user: &str,
     rpc_password: &str,
 ) -> Value {
-    let cache_mb = if settings.disk_cache_size_mib <= 0 { 4i32 } else { settings.disk_cache_size_mib };
-    let prealloc: u8 = if settings.preallocate_disk_space { 1 } else { 0 };
+    let cache_mb = if settings.disk_cache_size_mib <= 0 {
+        4i32
+    } else {
+        settings.disk_cache_size_mib
+    };
+    let prealloc: u8 = if settings.preallocate_disk_space {
+        1
+    } else {
+        0
+    };
     let idle_seeding_enabled = settings.max_seeding_time_minutes >= 0;
     let idle_seeding_limit = settings.max_seeding_time_minutes.max(0) as u32;
 
@@ -1188,31 +1194,25 @@ impl TransmissionTorrentEngine {
             engine_dir.display()
         );
 
-        let daemon_supports_identity = crate::engine::identity::check_daemon_identity_support(&daemon_path);
+        let daemon_supports_identity =
+            crate::engine::identity::check_daemon_identity_support(&daemon_path);
         let app_version = crate::engine::identity::get_app_version();
         let nebulae_ua_res = crate::engine::identity::derive_nebulae_user_agent(app_version);
-        let nebulae_prefix_res = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+        let nebulae_prefix_res =
+            crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
 
         let tr_default_ua = crate::engine::identity::get_bundled_transmission_user_agent();
         let tr_default_prefix = crate::engine::identity::get_bundled_transmission_peer_id_prefix();
 
         let (spawned_profile, spawned_ua, spawned_prefix) = if !daemon_supports_identity {
-            (
-                "transmission".to_string(),
-                tr_default_ua,
-                tr_default_prefix,
-            )
+            ("transmission".to_string(), tr_default_ua, tr_default_prefix)
         } else {
             match settings.engine_identity_profile.as_str() {
                 "nebulae" => match (nebulae_ua_res, nebulae_prefix_res) {
                     (Ok(ua), Ok(prefix)) => ("nebulae".to_string(), ua, prefix),
                     (Err(e), _) | (_, Err(e)) => {
                         warn!("[identity] native Nebulae identity unavailable: {e}; falling back to stock Transmission");
-                        (
-                            "transmission".to_string(),
-                            tr_default_ua,
-                            tr_default_prefix,
-                        )
+                        ("transmission".to_string(), tr_default_ua, tr_default_prefix)
                     }
                 },
                 "custom" => {
@@ -1236,18 +1236,10 @@ impl TransmissionTorrentEngine {
                             "[identity] custom peer-id prefix '{}' is not 8 bytes; falling back to stock Transmission",
                             custom_prefix
                         );
-                        (
-                            "transmission".to_string(),
-                            tr_default_ua,
-                            tr_default_prefix,
-                        )
+                        ("transmission".to_string(), tr_default_ua, tr_default_prefix)
                     }
                 }
-                _ => (
-                    "transmission".to_string(),
-                    tr_default_ua,
-                    tr_default_prefix,
-                ),
+                _ => ("transmission".to_string(), tr_default_ua, tr_default_prefix),
             }
         };
 
@@ -1414,7 +1406,8 @@ impl TransmissionTorrentEngine {
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null());
 
-                        if daemon_supports_identity_watch && spawned_profile_watch != "transmission" {
+                        if daemon_supports_identity_watch && spawned_profile_watch != "transmission"
+                        {
                             cmd.env("TRANSMISSION_USER_AGENT", &spawned_ua_watch);
                             cmd.env("TRANSMISSION_PEER_ID_PREFIX", &spawned_prefix_watch);
                         } else {
@@ -1619,7 +1612,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .get_setting("user_settings_json")
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok())
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
             .unwrap_or_default();
         let user_peer_limit = user_settings.max_connections_per_torrent.max(1);
         let global_racing = user_settings.racing_mode_enabled;
@@ -1648,8 +1643,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
             let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
             let percent_done = t.get("percentDone").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let recheck_progress =
-                t.get("recheckProgress").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let recheck_progress = t
+                .get("recheckProgress")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
             let error_num = t.get("error").and_then(|v| v.as_i64()).unwrap_or(0);
             let error_string = t.get("errorString").and_then(|v| v.as_str()).unwrap_or("");
             let downloaded_ever = t
@@ -1885,41 +1882,52 @@ impl TorrentEngine for TransmissionTorrentEngine {
             // Policy synchronization:
             // 1. Actively downloading torrents: apply Racing mode if globally enabled, restore if disabled
             if is_downloading {
-                if global_racing && (bandwidth_priority != Some(1) || peer_limit.unwrap_or(0) < 150) {
-                    let _ = self.rpc_client.torrent_set(&id, serde_json::json!({
-                        "peer-limit": 150i64,
-                        "bandwidthPriority": 1i64,
-                        "honorsSessionLimits": true,
-                    }));
-                } else if !global_racing && (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150) {
-                    let _ = self.rpc_client.torrent_set(&id, serde_json::json!({
-                        "peer-limit": user_peer_limit as i64,
-                        "bandwidthPriority": 0i64,
-                        "honorsSessionLimits": true,
-                    }));
+                if global_racing && (bandwidth_priority != Some(1) || peer_limit.unwrap_or(0) < 150)
+                {
+                    let _ = self.rpc_client.torrent_set(
+                        &id,
+                        serde_json::json!({
+                            "peer-limit": 150i64,
+                            "bandwidthPriority": 1i64,
+                            "honorsSessionLimits": true,
+                        }),
+                    );
+                } else if !global_racing
+                    && (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150)
+                {
+                    let _ = self.rpc_client.torrent_set(
+                        &id,
+                        serde_json::json!({
+                            "peer-limit": user_peer_limit as i64,
+                            "bandwidthPriority": 0i64,
+                            "honorsSessionLimits": true,
+                        }),
+                    );
                 }
             } else if is_seeding {
                 // 2. Actively seeding torrents: must NEVER retain downloading Racing mode overrides
                 if bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150 {
-                    let _ = self.rpc_client.torrent_set(&id, serde_json::json!({
-                        "peer-limit": user_peer_limit as i64,
-                        "bandwidthPriority": 0i64,
-                        "honorsSessionLimits": true,
-                    }));
+                    let _ = self.rpc_client.torrent_set(
+                        &id,
+                        serde_json::json!({
+                            "peer-limit": user_peer_limit as i64,
+                            "bandwidthPriority": 0i64,
+                            "honorsSessionLimits": true,
+                        }),
+                    );
                 }
             }
 
             // Applied indicators (strictly following state applicability):
             // Racing mode applied: actively downloading AND has racing mode active
-            let is_racing_applied = is_downloading && (
-                global_racing || (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150)
-            );
+            let is_racing_applied = is_downloading
+                && (global_racing
+                    || (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150));
             let racing_mode = Some(is_racing_applied);
 
             // Super seeding applied: actively seeding AND has super seeding active
-            let is_super_seeding_applied = is_seeding && (
-                global_super_seeding || meta.map(|m| m.super_seeding).unwrap_or(false)
-            );
+            let is_super_seeding_applied = is_seeding
+                && (global_super_seeding || meta.map(|m| m.super_seeding).unwrap_or(false));
 
             items.push(TorrentItem {
                 id,
@@ -2281,7 +2289,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
         };
 
         let current = if let Ok(cache) = self.metadata_cache.lock() {
-            cache.get(&hash).map(|m| m.sequential_download).unwrap_or(false)
+            cache
+                .get(&hash)
+                .map(|m| m.sequential_download)
+                .unwrap_or(false)
         } else {
             false
         };
@@ -2297,10 +2308,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
         )?;
 
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            let meta = cache.entry(hash.clone()).or_insert_with(|| TorrentDbMetadata {
-                info_hash: hash.clone(),
-                ..Default::default()
-            });
+            let meta = cache
+                .entry(hash.clone())
+                .or_insert_with(|| TorrentDbMetadata {
+                    info_hash: hash.clone(),
+                    ..Default::default()
+                });
             meta.sequential_download = new_val;
             let _ = self.db.upsert_torrent_metadata(meta);
         }
@@ -2329,7 +2342,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
             id.to_string()
         };
 
-        let current = self.db.get_torrent_metadata(&hash)
+        let current = self
+            .db
+            .get_torrent_metadata(&hash)
             .ok()
             .flatten()
             .map(|m| m.super_seeding)
@@ -2712,11 +2727,17 @@ impl TorrentEngine for TransmissionTorrentEngine {
     ) -> Result<(), String> {
         use serde_json::json;
 
-        let cache_mb = if settings.disk_cache_size_mib <= 0 { 4i32 } else { settings.disk_cache_size_mib };
+        let cache_mb = if settings.disk_cache_size_mib <= 0 {
+            4i32
+        } else {
+            settings.disk_cache_size_mib
+        };
         let idle_seeding_enabled = settings.max_seeding_time_minutes >= 0;
         let idle_seeding_limit = settings.max_seeding_time_minutes.max(0) as u32;
         let ratio_enabled = settings.max_ratio_limit >= 0.0;
-        let seed_queue = settings.max_active_torrents.saturating_sub(settings.max_active_downloads);
+        let seed_queue = settings
+            .max_active_torrents
+            .saturating_sub(settings.max_active_downloads);
 
         // Derive peer + unchoke values from Racing Mode or user settings
         let (peer_per_torrent, peer_global, unchoke_slots, cache_mb_eff, stall_minutes) =
@@ -2744,7 +2765,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 v["peer-limit-global"] = json!(peer_global);
                 v["upload-slots-per-torrent"] = json!(unchoke_slots);
                 v["cache-size-mb"] = json!(cache_mb_eff);
-                v["preallocation"] = json!(if settings.preallocate_disk_space { 1u8 } else { 0u8 });
+                v["preallocation"] = json!(if settings.preallocate_disk_space {
+                    1u8
+                } else {
+                    0u8
+                });
                 v["incomplete-dir"] = json!(&settings.temp_incomplete_directory);
                 v["incomplete-dir-enabled"] = json!(settings.use_temp_incomplete_dir);
                 v["watch-dir"] = json!(&settings.watched_folder_directory);
@@ -2839,43 +2864,57 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let user_peer_limit = settings.max_connections_per_torrent.max(1);
         if let Ok(arr) = self.rpc_client.torrent_get(None) {
             for t in arr {
-                    let id = t.get("id").and_then(|v| v.as_i64());
-                    let hash = t.get("hashString").and_then(|v| v.as_str());
-                    let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let prio = t.get("bandwidthPriority").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let peer_limit = t.get("peer-limit").and_then(|v| v.as_i64()).unwrap_or(0);
+                let id = t.get("id").and_then(|v| v.as_i64());
+                let hash = t.get("hashString").and_then(|v| v.as_str());
+                let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
+                let prio = t
+                    .get("bandwidthPriority")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let peer_limit = t.get("peer-limit").and_then(|v| v.as_i64()).unwrap_or(0);
 
-                    let Some(id_val) = id else { continue };
-                    let id_str = id_val.to_string();
+                let Some(id_val) = id else { continue };
+                let id_str = id_val.to_string();
 
-                    // Status 3 (Download Wait) or 4 (Downloading)
-                    if status_num == 3 || status_num == 4 {
-                        if settings.racing_mode_enabled {
-                            if prio != 1 || peer_limit < 150 {
-                                let _ = self.rpc_client.torrent_set(&id_str, serde_json::json!({
+                // Status 3 (Download Wait) or 4 (Downloading)
+                if status_num == 3 || status_num == 4 {
+                    if settings.racing_mode_enabled {
+                        if prio != 1 || peer_limit < 150 {
+                            let _ = self.rpc_client.torrent_set(
+                                &id_str,
+                                serde_json::json!({
                                     "peer-limit": 150i64,
                                     "bandwidthPriority": 1i64,
                                     "honorsSessionLimits": true,
-                                }));
-                            }
-                        } else if prio == 1 && peer_limit >= 150 {
-                            let _ = self.rpc_client.torrent_set(&id_str, serde_json::json!({
+                                }),
+                            );
+                        }
+                    } else if prio == 1 && peer_limit >= 150 {
+                        let _ = self.rpc_client.torrent_set(
+                            &id_str,
+                            serde_json::json!({
                                 "peer-limit": user_peer_limit as i64,
                                 "bandwidthPriority": 0i64,
                                 "honorsSessionLimits": true,
-                            }));
-                        }
-                    } else if status_num == 5 || status_num == 6 {
-                        // Seeding torrents: remove any downloading racing overrides
-                        if prio == 1 && peer_limit >= 150 {
-                            let _ = self.rpc_client.torrent_set(&id_str, serde_json::json!({
+                            }),
+                        );
+                    }
+                } else if status_num == 5 || status_num == 6 {
+                    // Seeding torrents: remove any downloading racing overrides
+                    if prio == 1 && peer_limit >= 150 {
+                        let _ = self.rpc_client.torrent_set(
+                            &id_str,
+                            serde_json::json!({
                                 "peer-limit": user_peer_limit as i64,
                                 "bandwidthPriority": 0i64,
                                 "honorsSessionLimits": true,
-                            }));
-                        }
-                        if let Some(h) = hash {
-                        let _ = self.db.set_torrent_super_seeding(h, settings.super_seeding_enabled);
+                            }),
+                        );
+                    }
+                    if let Some(h) = hash {
+                        let _ = self
+                            .db
+                            .set_torrent_super_seeding(h, settings.super_seeding_enabled);
                     }
                 }
             }
@@ -2894,25 +2933,33 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .get_setting("user_settings_json")
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok())
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
             .map(|s| s.max_connections_per_torrent.max(1))
             .unwrap_or(100);
 
         if enabled {
             // Preserve session limits: global upload cap, alternate speed policy,
             // and queue limits must remain honored even when Racing Mode preset is active.
-            self.rpc_client.torrent_set(id, json!({
-                "peer-limit":          150i64,
-                "bandwidthPriority":   1i64,
-                "honorsSessionLimits": true,
-            }))?;
+            self.rpc_client.torrent_set(
+                id,
+                json!({
+                    "peer-limit":          150i64,
+                    "bandwidthPriority":   1i64,
+                    "honorsSessionLimits": true,
+                }),
+            )?;
             info!("[racing_mode] enabled on torrent {id}");
         } else {
-            self.rpc_client.torrent_set(id, json!({
-                "peer-limit":          user_peer_limit as i64,
-                "bandwidthPriority":   0i64,
-                "honorsSessionLimits": true,
-            }))?;
+            self.rpc_client.torrent_set(
+                id,
+                json!({
+                    "peer-limit":          user_peer_limit as i64,
+                    "bandwidthPriority":   0i64,
+                    "honorsSessionLimits": true,
+                }),
+            )?;
             info!("[racing_mode] disabled on torrent {id} (restored peer-limit={user_peer_limit})");
         }
         Ok(())
@@ -3010,7 +3057,7 @@ mod tests {
         assert_eq!(config["peer-port"], 52123);
         assert_eq!(config["port-forwarding-enabled"], true);
         assert_eq!(config["peer-limit-per-torrent"], 150); // clamped to 150 max
-        assert_eq!(config["peer-limit-global"], 600);      // within clamp(250,1000)
+        assert_eq!(config["peer-limit-global"], 600); // within clamp(250,1000)
         assert_eq!(config["upload-slots-per-torrent"], 10); // max(4) → 10
         assert_eq!(config["encryption"], 1);
         assert_eq!(config["utp-enabled"], true);
@@ -3168,10 +3215,19 @@ mod tests {
             "bandwidthPriority": 1,
             "peer-limit": 50,
         });
-        let bp1 = normal_high_prio.get("bandwidthPriority").and_then(|v| v.as_i64()).map(|p| p as i8);
-        let pl1 = normal_high_prio.get("peer-limit").and_then(|v| v.as_i64()).map(|p| p as u32);
+        let bp1 = normal_high_prio
+            .get("bandwidthPriority")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as i8);
+        let pl1 = normal_high_prio
+            .get("peer-limit")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as u32);
         let is_racing1 = bp1 == Some(1) && pl1.unwrap_or(0) >= 150;
-        assert!(!is_racing1, "Independently high-priority torrent must not be misidentified as Racing Mode");
+        assert!(
+            !is_racing1,
+            "Independently high-priority torrent must not be misidentified as Racing Mode"
+        );
 
         // High priority (1) and aggressive peer limit (>= 150) IS Racing Mode preset
         let racing_torrent = json!({
@@ -3181,10 +3237,19 @@ mod tests {
             "bandwidthPriority": 1,
             "peer-limit": 150,
         });
-        let bp2 = racing_torrent.get("bandwidthPriority").and_then(|v| v.as_i64()).map(|p| p as i8);
-        let pl2 = racing_torrent.get("peer-limit").and_then(|v| v.as_i64()).map(|p| p as u32);
+        let bp2 = racing_torrent
+            .get("bandwidthPriority")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as i8);
+        let pl2 = racing_torrent
+            .get("peer-limit")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as u32);
         let is_racing2 = bp2 == Some(1) && pl2.unwrap_or(0) >= 150;
-        assert!(is_racing2, "Torrent with both high priority and peer-limit >= 150 is recognized as Racing Mode");
+        assert!(
+            is_racing2,
+            "Torrent with both high priority and peer-limit >= 150 is recognized as Racing Mode"
+        );
 
         // Normal priority (0) with high peer limit (150) is NOT Racing Mode preset
         let normal_prio_high_peers = json!({
@@ -3194,10 +3259,19 @@ mod tests {
             "bandwidthPriority": 0,
             "peer-limit": 150,
         });
-        let bp3 = normal_prio_high_peers.get("bandwidthPriority").and_then(|v| v.as_i64()).map(|p| p as i8);
-        let pl3 = normal_prio_high_peers.get("peer-limit").and_then(|v| v.as_i64()).map(|p| p as u32);
+        let bp3 = normal_prio_high_peers
+            .get("bandwidthPriority")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as i8);
+        let pl3 = normal_prio_high_peers
+            .get("peer-limit")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as u32);
         let is_racing3 = bp3 == Some(1) && pl3.unwrap_or(0) >= 150;
-        assert!(!is_racing3, "Normal priority torrent must not be recognized as Racing Mode");
+        assert!(
+            !is_racing3,
+            "Normal priority torrent must not be recognized as Racing Mode"
+        );
     }
 
     #[test]

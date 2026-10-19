@@ -29,7 +29,11 @@ pub fn run() {
             jre_candidates.push(dir.join("resources").join("jre"));
             jre_candidates.push(dir.join("jre"));
             // Linux: /usr/bin/nebulae -> /usr/lib/Nebulae/resources/jre
-            jre_candidates.push(dir.parent().unwrap_or(dir).join("lib/Nebulae/resources/jre"));
+            jre_candidates.push(
+                dir.parent()
+                    .unwrap_or(dir)
+                    .join("lib/Nebulae/resources/jre"),
+            );
         }
         if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
             jre_candidates.push(parent.join("Resources/resources/jre"));
@@ -38,8 +42,10 @@ pub fn run() {
             jre_candidates.push(parent.join("lib/nebulae/resources/jre"));
         }
         if let Ok(appdir) = std::env::var("APPDIR") {
-            jre_candidates.push(std::path::PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/jre"));
-            jre_candidates.push(std::path::PathBuf::from(&appdir).join("usr/share/nebulae/resources/jre"));
+            jre_candidates
+                .push(std::path::PathBuf::from(&appdir).join("usr/lib/Nebulae/resources/jre"));
+            jre_candidates
+                .push(std::path::PathBuf::from(&appdir).join("usr/share/nebulae/resources/jre"));
         }
         jre_candidates.push(std::path::PathBuf::from("/usr/lib/Nebulae/resources/jre"));
         jre_candidates.push(std::path::PathBuf::from("src-tauri/resources/jre"));

@@ -1,6 +1,6 @@
+use minisign_verify::{PublicKey, Signature};
 use std::env;
 use std::fs;
-use minisign_verify::{PublicKey, Signature};
 
 const TRUSTED_PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1MkNBQThCQkJCQzZGNDEKUldSQmI3eTdpNm9zUmFSM2RQOVlHZllGeFM1dHlpNU5JRitYaytjK3BNMTFwMHYrZjBWcXllNVgK";
 
@@ -26,7 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sig_raw = fs::read_to_string(sig_path)
         .map_err(|e| format!("Failed to read signature {sig_path}: {e}"))?;
 
-    println!("Verifying target payload: {} ({} bytes)", payload_path, data.len());
+    println!(
+        "Verifying target payload: {} ({} bytes)",
+        payload_path,
+        data.len()
+    );
 
     let pub_key_decoded = base64_to_string(TRUSTED_PUBKEY_B64)?;
     let public_key = PublicKey::decode(&pub_key_decoded)
@@ -42,7 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to decode Minisign signature: {e}"))?;
 
     // Cryptographically verify payload data and global trusted comment
-    public_key.verify(&data, &signature, true)
+    public_key
+        .verify(&data, &signature, true)
         .map_err(|e| format!("CRYPTOGRAPHIC VERIFICATION FAILED: {e}"))?;
 
     println!("============================================================");

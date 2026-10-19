@@ -413,7 +413,9 @@ fn trakt_fallback(
     // Determine which Trakt result type matched; this tells us whether to
     // use the TMDB movie or TV endpoint (same id space, different schemas).
     let (hit, is_show) = match body.iter().find_map(|r| {
-        r.show.as_ref().map(|s| (s, true))
+        r.show
+            .as_ref()
+            .map(|s| (s, true))
             .or_else(|| r.movie.as_ref().map(|m| (m, false)))
     }) {
         Some(pair) => pair,
@@ -447,7 +449,11 @@ fn trakt_fallback(
             .map(Some)
             .map_err(|e| format!("TMDB detail parse: {e}"))
     };
-    let (primary, fallback) = if is_show { ("tv", "movie") } else { ("movie", "tv") };
+    let (primary, fallback) = if is_show {
+        ("tv", "movie")
+    } else {
+        ("movie", "tv")
+    };
     let detail: TmdbItem = match fetch_detail(primary).or_else(|_| fetch_detail(fallback))? {
         Some(d) => d,
         None => {
@@ -498,10 +504,19 @@ fn trakt_fallback(
     // matching the computation in the main TMDB search path. For movies
     // the flat `runtime` field applies.
     let runtime = if is_show {
-        let per_ep = detail.episode_run_time.first().copied().or(detail.runtime).unwrap_or(0);
+        let per_ep = detail
+            .episode_run_time
+            .first()
+            .copied()
+            .or(detail.runtime)
+            .unwrap_or(0);
         let eps = detail.number_of_episodes.unwrap_or(0);
         let total = per_ep.saturating_mul(eps);
-        if total > 0 { Some(total) } else { None }
+        if total > 0 {
+            Some(total)
+        } else {
+            None
+        }
     } else {
         detail.runtime
     };
@@ -529,7 +544,12 @@ pub fn cached_overview(db: &crate::db::Database, lookup_key: &str) -> Option<Str
     let key_lc = lookup_key.to_lowercase();
     // v3 key (primary — written by current fetch_tmdb_release)
     let v3_key = format!("tmdb_poster:v3:{key_lc}:overview");
-    if let Some(ov) = db.get_setting(&v3_key).ok().flatten().filter(|s| !s.is_empty()) {
+    if let Some(ov) = db
+        .get_setting(&v3_key)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+    {
         return Some(ov);
     }
     // v2 key (legacy — entries cached before the runtime/TV fix)

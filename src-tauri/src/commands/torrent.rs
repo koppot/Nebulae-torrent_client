@@ -226,7 +226,8 @@ pub fn inspect_torrent_file(
 
         if let Some(target_path) = disk_path {
             if let Ok(raw_bytes) = std::fs::read(&target_path) {
-                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw_bytes) {
+                if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw_bytes)
+                {
                     return Ok(InspectTorrentResult {
                         name: parsed.name,
                         total_bytes: parsed.total_bytes,
@@ -1393,7 +1394,10 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
     let opened = if p.is_dir() {
         std::process::Command::new("open").arg(&p).status()
     } else {
-        std::process::Command::new("open").arg("-R").arg(&p).status()
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&p)
+            .status()
     };
     #[cfg(target_os = "windows")]
     let opened = if p.is_dir() {
@@ -1405,7 +1409,11 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
     };
     #[cfg(all(unix, not(target_os = "macos")))]
     let opened = std::process::Command::new("xdg-open")
-        .arg(if p.is_dir() { &p } else { p.parent().unwrap_or(&p) })
+        .arg(if p.is_dir() {
+            &p
+        } else {
+            p.parent().unwrap_or(&p)
+        })
         .status();
     match opened {
         Ok(s) if s.success() => Ok(()),
@@ -1632,7 +1640,6 @@ mod tests {
 /// "nothing happens".
 #[tauri::command]
 pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri::Manager;
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
 
     #[cfg(target_os = "macos")]
@@ -1642,7 +1649,7 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
             let _ = tx.send(picked);
         })
         .map_err(|e| format!("main thread unavailable: {e}"))?;
-        return Ok(rx.recv().map_err(|_| "panel channel lost".to_string())?);
+        rx.recv().map_err(|_| "panel channel lost".to_string())
     }
 
     #[cfg(target_os = "windows")]
@@ -1716,15 +1723,15 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
 
 #[cfg(target_os = "macos")]
 unsafe fn present_disc_panel() -> Option<String> {
-    use objc2::runtime::{Class, Object};
-    let cstr_cls = |name: &str| Class::get(std::ffi::CString::new(name).unwrap().as_c_str());
+    use objc2::runtime::{AnyClass, AnyObject};
+    let cstr_cls = |name: &str| AnyClass::get(std::ffi::CString::new(name).unwrap().as_c_str());
     let cls = cstr_cls("NSOpenPanel")?;
-    let panel: *mut Object = objc2::msg_send![cls, openPanel];
+    let panel: *mut AnyObject = objc2::msg_send![cls, openPanel];
     if panel.is_null() {
         return None;
     }
     let ns_string = cstr_cls("NSString").unwrap();
-    let ns_str = |s: &str| -> *mut Object {
+    let ns_str = |s: &str| -> *mut AnyObject {
         let c = std::ffi::CString::new(s).unwrap();
         objc2::msg_send![ns_string, stringWithUTF8String: c.as_ptr()]
     };
@@ -1741,11 +1748,11 @@ unsafe fn present_disc_panel() -> Option<String> {
     if rc != 1 {
         return None; // cancelled
     }
-    let url: *mut Object = objc2::msg_send![panel, URL];
+    let url: *mut AnyObject = objc2::msg_send![panel, URL];
     if url.is_null() {
         return None;
     }
-    let path: *mut Object = objc2::msg_send![url, path];
+    let path: *mut AnyObject = objc2::msg_send![url, path];
     if path.is_null() {
         return None;
     }

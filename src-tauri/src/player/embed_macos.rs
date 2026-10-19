@@ -18,7 +18,7 @@ use objc2::rc::Retained;
 use objc2::{ClassType, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 
@@ -147,7 +147,7 @@ unsafe fn restore_player_window_frame(win: &NSWindow) {
     let raw = PLAYER_FRAME_BOX.load(Ordering::SeqCst) as *mut NSRect;
     if !raw.is_null() {
         let f = *raw;
-        let _: () = objc2::msg_send![win, setFrame: f display: true];
+        let _: () = objc2::msg_send![win, setFrame: f, display: true];
         let _ = Box::from_raw(raw);
         PLAYER_FRAME_BOX.store(0, Ordering::SeqCst);
     }
@@ -164,7 +164,7 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
         let raw = SAVED_BOX.load(Ordering::SeqCst) as *mut NSRect;
         if !raw.is_null() {
             let f = *raw;
-            let _: () = objc2::msg_send![win, setFrame:f display:true];
+            let _: () = objc2::msg_send![win, setFrame: f, display: true];
         }
     } else {
         let ptr = Box::into_raw(Box::new(win.frame()));
@@ -174,7 +174,7 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
         }
         if let Some(screen) = win.screen() {
             let f = screen.frame();
-            let _: () = objc2::msg_send![win, setFrame:f display:true];
+            let _: () = objc2::msg_send![win, setFrame: f, display: true];
         }
         FULLSCREEN_ON.store(true, Ordering::SeqCst);
     }
@@ -245,52 +245,51 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
         let Ok(raw) = win.ns_window() else {
             return;
         };
-        unsafe {
-            let ns_win = raw as *mut NSWindow;
-            if ns_win.is_null() {
-                return;
-            }
-            let start: NSPoint = objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation];
-            let origin = (*ns_win).frame().origin;
-            // Track the pointer on a worker thread; each tick moves the
-            // window on the main thread until the left button is released.
-            let win_addr = ns_win as usize;
-            std::thread::spawn(move || {
-                let ns_win = win_addr as *mut NSWindow;
-                let mut last_x = start.x;
-                let mut last_y = start.y;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                    let now: NSPoint =
-                        unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
-                    let buttons: usize = unsafe {
-                        objc2::msg_send![objc2_app_kit::NSEvent::class(), pressedMouseButtons]
-                    };
-                    if buttons & 1 == 0 {
-                        break;
-                    }
-                    let dx = now.x - last_x;
-                    let dy = now.y - last_y;
-                    last_x = now.x;
-                    last_y = now.y;
-                    if dx == 0.0 && dy == 0.0 {
-                        continue;
-                    }
-                    let app3 = app2.clone();
-                    let win_addr = ns_win as usize;
-                    let _ = app3.run_on_main_thread(move || unsafe {
-                        let ns_win = win_addr as *mut NSWindow;
-                        let o = (*ns_win).frame().origin;
-                        // Screen coords are bottom-left origin; Cocoa delta
-                        // already matches, but the trackpad y grows upward in
-                        // NSEvent coords while the window origin does too, so
-                        // subtract to follow the pointer downward.
-                        (*ns_win).setFrameOrigin(NSPoint::new(o.x + dx, o.y + dy));
-                    });
-                }
-                let _ = origin;
-            });
+        let ns_win = raw as *mut NSWindow;
+        if ns_win.is_null() {
+            return;
         }
+        let start: NSPoint =
+            unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
+        let origin = unsafe { (*ns_win).frame().origin };
+        // Track the pointer on a worker thread; each tick moves the
+        // window on the main thread until the left button is released.
+        let win_addr = ns_win as usize;
+        std::thread::spawn(move || {
+            let ns_win = win_addr as *mut NSWindow;
+            let mut last_x = start.x;
+            let mut last_y = start.y;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                let now: NSPoint =
+                    unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
+                let buttons: usize = unsafe {
+                    objc2::msg_send![objc2_app_kit::NSEvent::class(), pressedMouseButtons]
+                };
+                if buttons & 1 == 0 {
+                    break;
+                }
+                let dx = now.x - last_x;
+                let dy = now.y - last_y;
+                last_x = now.x;
+                last_y = now.y;
+                if dx == 0.0 && dy == 0.0 {
+                    continue;
+                }
+                let app3 = app2.clone();
+                let win_addr = ns_win as usize;
+                let _ = app3.run_on_main_thread(move || unsafe {
+                    let ns_win = win_addr as *mut NSWindow;
+                    let o = (*ns_win).frame().origin;
+                    // Screen coords are bottom-left origin; Cocoa delta
+                    // already matches, but the trackpad y grows upward in
+                    // NSEvent coords while the window origin does too, so
+                    // subtract to follow the pointer downward.
+                    (*ns_win).setFrameOrigin(NSPoint::new(o.x + dx, o.y + dy));
+                });
+            }
+            let _ = origin;
+        });
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
@@ -346,6 +345,9 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
+/// # Safety
+///
+/// Modifies NSView / CALayer properties on macOS and must be invoked on the main Cocoa thread.
 pub unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
     let Some(win) = app.get_webview_window("main") else {
         return;
@@ -385,7 +387,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         if !view.is_null() {
             (*view).setHidden(hidden);
             // Player window: 3 px corners; media/manager UI: 4 px corners.
-            apply_window_corner_radius(&app2, if hidden { 10.0 } else { 10.0 });
+            apply_window_corner_radius(&app2, 10.0);
             // The video view always covers the whole window; the frontend's
             // floating bar draws above it. Full-window frame here guarantees
             // sane geometry even before the first frontend sync arrives.
@@ -398,7 +400,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 // window (no AX entries, clicks land in the webview): hide
                 // them so the working webview controls stand alone.
                 for btn_id in [0u64, 1, 2] {
-                    let btn: *mut objc2::runtime::Object = objc2::msg_send![
+                    let btn: *mut objc2::runtime::AnyObject = objc2::msg_send![
                         &*win,
                         standardWindowButton: btn_id
                     ];
@@ -411,12 +413,12 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     // the traffic lights render grayed out and the FIRST
                     // click (which macOS spends on activating a
                     // non-key window) never reaches the ✕/bar buttons.
-                    let _: () = objc2::msg_send![&*win, makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::Object>()];
-                    let app_class = objc2::runtime::Class::get(
+                    let _: () = objc2::msg_send![&*win, makeKeyAndOrderFront: std::ptr::null::<objc2::runtime::AnyObject>()];
+                    let app_class = objc2::runtime::AnyClass::get(
                         std::ffi::CString::new("NSApplication").unwrap().as_c_str(),
                     )
                     .unwrap();
-                    let shared: *mut objc2::runtime::Object =
+                    let shared: *mut objc2::runtime::AnyObject =
                         objc2::msg_send![app_class, sharedApplication];
                     if !shared.is_null() {
                         let _: () = objc2::msg_send![shared, activateIgnoringOtherApps: true];
@@ -439,7 +441,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                             NSPoint::new(f.origin.x, f.origin.y + (f.size.height - new_h)),
                             NSSize::new(f.size.width, new_h),
                         );
-                        let _: () = objc2::msg_send![&*win, setFrame: new_frame display: true];
+                        let _: () = objc2::msg_send![&*win, setFrame: new_frame, display: true];
                     }
                 }
             }

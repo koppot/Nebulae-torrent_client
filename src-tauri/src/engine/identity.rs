@@ -96,12 +96,17 @@ pub fn derive_nebulae_user_agent(version_str: &str) -> Result<String, String> {
 
     let minor_str = parts[1];
     if minor_str.is_empty() || !minor_str.chars().all(|c| c.is_ascii_digit()) {
-        return Err(format!("Invalid minor version '{minor_str}': must be numeric"));
+        return Err(format!(
+            "Invalid minor version '{minor_str}': must be numeric"
+        ));
     }
 
     let patch_raw = parts[2].split('-').next().unwrap_or("");
     if patch_raw.is_empty() || !patch_raw.chars().all(|c| c.is_ascii_digit()) {
-        return Err(format!("Invalid patch version in '{}': must be numeric", parts[2]));
+        return Err(format!(
+            "Invalid patch version in '{}': must be numeric",
+            parts[2]
+        ));
     }
 
     Ok(format!("Nebulae/{version_str}"))
@@ -126,9 +131,18 @@ pub fn derive_transmission_user_agent(version: &str) -> String {
 /// For Transmission 4.1.3: `-TR4130-`
 pub fn derive_transmission_peer_id_prefix(version: &str) -> String {
     let parts: Vec<&str> = version.split('.').collect();
-    let major = parts.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(4);
-    let minor = parts.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
-    let patch = parts.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(3);
+    let major = parts
+        .first()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(4);
+    let minor = parts
+        .get(1)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
+    let patch = parts
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(3);
 
     format!("-TR{}{}{}0-", major % 10, minor % 10, patch % 10)
 }
@@ -237,7 +251,11 @@ mod tests {
 
         // Simulate full 20-byte Peer ID with 12 random alphanumeric characters
         let full_peer_id = format!("{prefix}a1b2c3d4e5f6");
-        assert_eq!(full_peer_id.len(), 20, "Full BitTorrent peer ID must be exactly 20 bytes");
+        assert_eq!(
+            full_peer_id.len(),
+            20,
+            "Full BitTorrent peer ID must be exactly 20 bytes"
+        );
     }
 
     #[test]
@@ -261,7 +279,11 @@ mod tests {
         );
 
         let full_peer_id = format!("{prefix}123456789012");
-        assert_eq!(full_peer_id.len(), 20, "Full BitTorrent peer ID must be exactly 20 bytes");
+        assert_eq!(
+            full_peer_id.len(),
+            20,
+            "Full BitTorrent peer ID must be exactly 20 bytes"
+        );
     }
 
     #[test]
@@ -308,6 +330,9 @@ mod tests {
 
         // Check dynamic derivation for other versions
         assert_eq!(derive_transmission_peer_id_prefix("4.0.5"), "-TR4050-");
-        assert_eq!(derive_transmission_user_agent("4.0.5"), "Transmission/4.0.5");
+        assert_eq!(
+            derive_transmission_user_agent("4.0.5"),
+            "Transmission/4.0.5"
+        );
     }
 }

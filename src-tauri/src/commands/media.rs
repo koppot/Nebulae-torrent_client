@@ -585,9 +585,7 @@ fn start_playback_inner(
                             for _ in 0..30 {
                                 std::thread::sleep(std::time::Duration::from_millis(500));
                                 if !state.menu_watch.load(std::sync::atomic::Ordering::SeqCst) {
-                                    tracing::info!(
-                                        "[player] menu watcher cancelled"
-                                    );
+                                    tracing::info!("[player] menu watcher cancelled");
                                     return;
                                 }
                                 // Hold the player pointer guard across the VLC
@@ -827,11 +825,11 @@ pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), 
     Ok(())
 }
 
-/// Audio/subtitle language names for the CURRENT title. Blu-ray: read from
-/// the disc playlists via libbluray (VLC mislabels streams from CLIPINFO
-/// metadata on some discs), matched by `duration_ms`. DVD: read from the
-/// IFO tables, where `title` (the VLC title index) maps directly to a
-/// title set - libbluray does not cover DVDs at all.
+// Audio/subtitle language names for the CURRENT title. Blu-ray: read from
+// the disc playlists via libbluray (VLC mislabels streams from CLIPINFO
+// metadata on some discs), matched by `duration_ms`. DVD: read from the
+// IFO tables, where `title` (the VLC title index) maps directly to a
+// title set - libbluray does not cover DVDs at all.
 
 /// Probe path for the language/chapter probes: prefer the RESOLVED disc
 /// root (a multi-disc release resolves to a disc subfolder, so walking up
@@ -895,8 +893,10 @@ pub async fn player_track_languages(
             // duration_ms <= 0 (disc menu) must NOT short-circuit: the probe
             // falls back to the feature playlist (most distinct audio
             // languages) and returns the real track names.
-            let r =
-                player::bluray_meta::disc_stream_languages(&probe_path.to_string_lossy(), duration_ms);
+            let r = player::bluray_meta::disc_stream_languages(
+                &probe_path.to_string_lossy(),
+                duration_ms,
+            );
             tracing::info!("[player] track languages for dur {duration_ms}: {:?}", r);
             r
         }
@@ -2087,7 +2087,10 @@ pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), 
 static PINNED_ON_TOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tauri::command]
-pub async fn player_set_always_on_top(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+pub async fn player_set_always_on_top(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<bool, String> {
     use tauri::Manager;
     if let Some(win) = app.get_webview_window("main") {
         win.set_always_on_top(enabled)

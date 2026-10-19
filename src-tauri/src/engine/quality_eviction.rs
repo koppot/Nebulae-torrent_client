@@ -93,8 +93,14 @@ pub fn spawn(
     geo_resolver: Option<Arc<GeoResolver>>,
 ) {
     tauri::async_runtime::spawn(async move {
-        run_eviction_loop(rpc_client, peer_ema_cache, db, peer_remove_unsupported, geo_resolver)
-            .await;
+        run_eviction_loop(
+            rpc_client,
+            peer_ema_cache,
+            db,
+            peer_remove_unsupported,
+            geo_resolver,
+        )
+        .await;
     });
 }
 
@@ -135,7 +141,13 @@ async fn run_eviction_loop(
         let ema_clone = Arc::clone(&ema_cache);
         let geo_clone = geo_resolver.clone();
         let result = tokio::task::spawn_blocking(move || {
-            run_eviction_cycle(&rpc_clone, &ema_clone, mode, threshold, geo_clone.as_deref())
+            run_eviction_cycle(
+                &rpc_clone,
+                &ema_clone,
+                mode,
+                threshold,
+                geo_clone.as_deref(),
+            )
         })
         .await;
 
@@ -259,8 +271,10 @@ fn run_eviction_cycle(
                     timeout_count: 0,
                     choke_events: 0,
                     client_name: String::new(),
-                    locality_tier: geo_resolver
-                        .map_or_else(|| classify_ip_locality(address), |g| g.classify_locality(address)),
+                    locality_tier: geo_resolver.map_or_else(
+                        || classify_ip_locality(address),
+                        |g| g.classify_locality(address),
+                    ),
                     country_code: geo_resolver.and_then(|g| g.country_code(address)),
                     asn: geo_resolver.and_then(|g| g.asn(address)),
                     utp: false,

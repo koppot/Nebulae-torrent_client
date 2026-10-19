@@ -402,6 +402,7 @@ pub fn save_user_settings(
 /// - macOS: a LaunchAgent plist with RunAtLoad.
 /// - Windows: the HKCU Run registry key (hidden console via `reg`).
 /// - Linux: an XDG autostart .desktop entry.
+///
 /// `start_minimized` passes a `--minimized` flag the app honours at boot.
 pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
     let exe = std::env::current_exe()
@@ -582,7 +583,10 @@ pub fn get_engine_identity_info(
     let daemon_path_res =
         crate::engine::transmission::find_transmission_daemon_binary(res_dir.as_deref());
     let (_daemon_found, supports_overrides) = match daemon_path_res {
-        Ok(path) => (true, crate::engine::identity::check_daemon_identity_support(&path)),
+        Ok(path) => (
+            true,
+            crate::engine::identity::check_daemon_identity_support(&path),
+        ),
         Err(_) => (false, false),
     };
 
@@ -645,7 +649,10 @@ pub fn get_engine_identity_info(
             .to_string();
 
         let msg = match p.as_str() {
-            "nebulae" => format!("Native Nebulae v{} engine identity active in running daemon.", app_version),
+            "nebulae" => format!(
+                "Native Nebulae v{} engine identity active in running daemon.",
+                app_version
+            ),
             "custom" => "Custom engine identity active in running daemon.".to_string(),
             _ => "Transmission upstream engine identity active in running daemon.".to_string(),
         };
@@ -685,7 +692,6 @@ pub fn get_engine_identity_info(
         version_encoding_limitation,
     })
 }
-
 
 #[cfg(test)]
 mod tests {

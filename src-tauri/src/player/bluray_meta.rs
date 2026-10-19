@@ -512,12 +512,16 @@ mod tests {
         }
 
         for i in 0..5 {
-            let (audio, subs) = disc_stream_languages(disc, 1454000).expect("stream languages probe");
+            let (audio, subs) =
+                disc_stream_languages(disc, 1454000).expect("stream languages probe");
             assert!(!audio.is_empty(), "Audio tracks must be discovered");
 
             let chapters = disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
             assert!(!chapters.is_empty(), "Chapters must be discovered");
-            println!("Iteration {i}: audio={audio:?} subs={subs:?} chapters={}", chapters.len());
+            println!(
+                "Iteration {i}: audio={audio:?} subs={subs:?} chapters={}",
+                chapters.len()
+            );
         }
     }
 }

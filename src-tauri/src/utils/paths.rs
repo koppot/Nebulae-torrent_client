@@ -111,7 +111,6 @@ pub fn resolve_bundled_resource_dir() -> PathBuf {
     PathBuf::from("resources")
 }
 
-
 /// Decodes standard base64 data into raw bytes.
 pub fn decode_base64_data(input: &str) -> Result<Vec<u8>, String> {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -145,8 +144,8 @@ pub fn normalize_source_path(source: &str) -> PathBuf {
     }
     if let Some(stripped) = s.strip_prefix("file://") {
         let decoded = percent_decode_path(stripped);
-        let cleaned = if decoded.starts_with("localhost/") {
-            &decoded["localhost/".len()..]
+        let cleaned = if let Some(stripped) = decoded.strip_prefix("localhost/") {
+            stripped
         } else {
             &decoded
         };
