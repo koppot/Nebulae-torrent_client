@@ -1140,6 +1140,30 @@ export const SettingsModal: React.FC = () => {
             {/* 5. BITTORRENT */}
             {activeTab === 'bittorrent' && (
               <div className="space-y-4">
+                {/* Media Mode */}
+                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <Film className="w-3.5 h-3.5 text-[#e50914]" />
+                        <span>Media Mode</span>
+                      </h3>
+                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                        Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch. Disabling hides the Media switch without deleting media collection data.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer ml-4 flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={settings.media_mode_enabled !== false}
+                        onChange={(e) => saveSettings({ media_mode_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white font-medium text-xs">Enabled</span>
+                    </label>
+                  </div>
+                </div>
+
                 {/* Racing Mode */}
                 <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2">
                   <div className="flex items-center justify-between">
