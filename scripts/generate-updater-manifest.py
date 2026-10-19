@@ -35,29 +35,62 @@ def main():
         "platforms": {}
     }
 
-    sig_mac_arm = read_sig("artifacts/**/Nebulae-macOS-arm64*tar.gz.sig") or read_sig("artifacts/**/*arm64*.sig") or read_sig("/tmp/nebulae-sigs/*arm64*.sig")
+    import base64
+
+    def verify_sig_comment(sig_str, expected_needle, platform_name):
+        if not sig_str:
+            return
+        decoded_text = sig_str
+        if not sig_str.startswith("untrusted comment"):
+            try:
+                decoded_text = base64.b64decode(sig_str.strip()).decode("utf-8", errors="ignore")
+            except Exception as e:
+                raise RuntimeError(f"FATAL: Could not base64 decode {platform_name} signature: {e}")
+        
+        # Verify trusted comment exists and contains expected needle
+        trusted_line = ""
+        for line in decoded_text.splitlines():
+            if line.startswith("trusted comment:"):
+                trusted_line = line
+                break
+        
+        if not trusted_line:
+            raise RuntimeError(f"FATAL: Missing trusted comment in {platform_name} signature!")
+        
+        if expected_needle.lower() not in trusted_line.lower():
+            raise RuntimeError(
+                f"FATAL: {platform_name} signature trusted comment ({trusted_line}) "
+                f"does not match expected file needle '{expected_needle}'! Aborting publication."
+            )
+        print(f"Verified {platform_name} signature: {trusted_line}")
+
+    sig_mac_arm = read_sig("artifacts/**/Nebulae-macOS-arm64*tar.gz.sig")
     if sig_mac_arm:
+        verify_sig_comment(sig_mac_arm, "Nebulae.app.tar.gz", "darwin-aarch64")
         manifest["platforms"]["darwin-aarch64"] = {
             "signature": sig_mac_arm,
             "url": f"{base_url}/Nebulae-macOS-arm64.dmg-app.tar.gz"
         }
 
-    sig_mac_x64 = read_sig("artifacts/**/Nebulae-macOS-x64*tar.gz.sig") or read_sig("artifacts/**/*x64*darwin*.sig") or read_sig("/tmp/nebulae-sigs/*macOS-x64*.sig")
+    sig_mac_x64 = read_sig("artifacts/**/Nebulae-macOS-x64*tar.gz.sig")
     if sig_mac_x64:
+        verify_sig_comment(sig_mac_x64, "Nebulae.app.tar.gz", "darwin-x86_64")
         manifest["platforms"]["darwin-x86_64"] = {
             "signature": sig_mac_x64,
             "url": f"{base_url}/Nebulae-macOS-x64.dmg-app.tar.gz"
         }
 
-    sig_linux = read_sig("artifacts/**/Nebulae-Linux*AppImage.tar.gz.sig") or read_sig("artifacts/**/*linux*.sig")
+    sig_linux = read_sig("artifacts/**/Nebulae-Linux*AppImage.tar.gz.sig")
     if sig_linux:
+        verify_sig_comment(sig_linux, "AppImage", "linux-x86_64")
         manifest["platforms"]["linux-x86_64"] = {
             "signature": sig_linux,
             "url": f"{base_url}/Nebulae-Linux-x86_64.AppImage.tar.gz"
         }
 
-    sig_win = read_sig("artifacts/**/Nebulae-Setup-x64.exe.sig") or read_sig("artifacts/**/*setup*.sig") or read_sig("/tmp/nebulae-sigs/*Setup*.sig")
+    sig_win = read_sig("artifacts/**/Nebulae-Setup-x64.exe.sig")
     if sig_win:
+        verify_sig_comment(sig_win, "setup.exe", "windows-x86_64")
         manifest["platforms"]["windows-x86_64"] = {
             "signature": sig_win,
             "url": f"{base_url}/Nebulae-Setup-x64.exe"

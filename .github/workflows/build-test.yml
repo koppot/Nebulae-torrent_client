@@ -337,7 +337,26 @@ jobs:
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
-          if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
+          if (-not $exe) {
+            throw "FATAL: Windows setup installer (*setup.exe) not found in src-tauri\target!"
+          }
+          Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force
+
+          # Require signature strictly adjacent to the selected installer
+          $adjacentSigPath = "$($exe.FullName).sig"
+          if (-not (Test-Path $adjacentSigPath)) {
+            throw "FATAL: Required signature adjacent to installer missing: $adjacentSigPath"
+          }
+          $sig = Get-Item $adjacentSigPath
+
+          # Pre-publication verification: signature trusted comment must match installer file
+          $sigContent = Get-Content -Raw $sig.FullName
+          $sigDecoded = try { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($sigContent.Trim())) } catch { $sigContent }
+          if ($sigDecoded -notmatch [regex]::Escape($exe.Name)) {
+            throw "FATAL: Signature trusted comment does not match installer file '$($exe.Name)'. Refusing to publish unverified signature."
+          }
+          Write-Host "SUCCESS: Verified adjacent signature ($($sig.FullName)) matches installer ($($exe.Name))."
+
           $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
           if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
 
@@ -352,17 +371,7 @@ jobs:
             }
           }
 
-          $sig = if ($exe -and (Test-Path "$($exe.FullName).sig")) {
-            Get-Item "$($exe.FullName).sig"
-          } else {
-            Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup*.sig" | Select-Object -First 1
-          }
-          if ($sig) {
-            Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
-            Write-Host "Matched Windows setup signature: $($sig.FullName)"
-          } else {
-            Write-Warning "No matching setup signature found in src-tauri\target"
-          }
+          Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
 
       # --- Prepare Artifacts (Linux) ----------------------------------------
       - name: Prepare Named Artifacts (Linux)

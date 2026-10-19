@@ -570,16 +570,29 @@ jobs:
           }
 
           # Stage or re-sign Tauri updater signature (.sig)
-          $sig = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*.sig" | Select-Object -First 1
-          if ($sig) {
-            Copy-Item $sig.FullName -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          $expectedSig = if ($exe) { "$($exe.FullName).sig" } else { $null }
+          if ($expectedSig -and (Test-Path $expectedSig)) {
+            Copy-Item $expectedSig -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          } elseif (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            throw "FATAL: Required signature adjacent to installer missing: $expectedSig"
           }
+
           if ($env:TAURI_SIGNING_PRIVATE_KEY) {
             Write-Host "Re-signing final Windows installer with Tauri minisign..."
             pnpm tauri signer sign -k "$env:TAURI_SIGNING_PRIVATE_KEY" Nebulae-Setup-x64.exe
           }
+
           if (Test-Path 'Nebulae-Setup-x64.exe.sig') {
+            # Pre-publication verification: signature trusted comment must match installer file
+            $sigContent = Get-Content -Raw 'Nebulae-Setup-x64.exe.sig'
+            $sigDecoded = try { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($sigContent.Trim())) } catch { $sigContent }
+            if ($exe -and ($sigDecoded -notmatch [regex]::Escape($exe.Name)) -and ($sigDecoded -notmatch "Nebulae-Setup-x64.exe")) {
+              throw "FATAL: Signature trusted comment does not match installer file '$($exe.Name)'! Refusing to publish unverified signature."
+            }
+            Write-Host "SUCCESS: Windows setup signature verified for publication."
             gh release upload "$tag" 'Nebulae-Setup-x64.exe.sig' --clobber
+          } else {
+            throw "FATAL: Nebulae-Setup-x64.exe.sig missing before release upload!"
           }
 
       - name: Prepare, test, and upload Linux packages (Ubuntu 22.04 baseline)
