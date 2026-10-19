@@ -1,0 +1,126 @@
+name: Build Windows Updater Test Artifacts
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-windows-updater-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    permissions:
+      contents: write
+    env:
+      WINDOWS_SIGN_PROVIDER: 'none'
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['0.2.2', '0.2.3', '0.2.4']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js & pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Temurin JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Bundle transmission-daemon engine (Windows x64)
+        shell: pwsh
+        run: ./scripts/bundle-windows-transmission.ps1
+
+      - name: Bundle libVLC (Windows)
+        shell: pwsh
+        run: |
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
+          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+
+      - name: Bundle JRE (BD-J/UHD menus)
+        shell: pwsh
+        run: |
+          $url = "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse"
+          Invoke-WebRequest -Uri $url -OutFile jre.zip
+          Expand-Archive -Path jre.zip -DestinationPath jrex
+          $binDir = (Get-ChildItem -Path jrex -Recurse -Filter "bin" | Select-Object -First 1).FullName
+          $homeDir = Split-Path -Parent $binDir
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/jre | Out-Null
+          Copy-Item -Path "$homeDir\*" -Destination src-tauri/resources/jre -Recurse -Force
+          if (-not (Test-Path "src-tauri/resources/jre/bin/java.exe")) { throw "JRE staging failed" }
+
+      - name: Set Package Version to ${{ matrix.version }}
+        shell: pwsh
+        run: |
+          $ver = "${{ matrix.version }}"
+          Write-Host "Updating Cargo.toml and tauri.conf.json to version $ver"
+          (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$ver`"" | Set-Content src-tauri/Cargo.toml
+          (Get-Content src-tauri/tauri.conf.json) -replace '"version": ".*"', "`"version`": `"$ver`"" | Set-Content src-tauri/tauri.conf.json
+          (Get-Content package.json) -replace '"version": ".*"', "`"version`": `"$ver`"," | Set-Content package.json
+
+      - name: Build Tauri Application with test-updater feature
+        run: pnpm tauri build --features test-updater
+
+      - name: Prepare and Cryptographically Verify Named Artifacts
+        shell: pwsh
+        run: |
+          $ver = "${{ matrix.version }}"
+          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $exe) { throw "FATAL: Setup installer not found!" }
+          $adjacentSig = "$($exe.FullName).sig"
+          if (-not (Test-Path $adjacentSig)) { throw "FATAL: Signature not found: $adjacentSig" }
+
+          # Verify signature file references this installer
+          $sigContent = Get-Content -Raw $adjacentSig
+          $sigDecoded = try { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($sigContent.Trim())) } catch { $sigContent }
+          if ($sigDecoded -notmatch [regex]::Escape($exe.Name)) {
+            throw "FATAL: Signature trusted comment mismatch: expected $($exe.Name)"
+          }
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $targetName = "Nebulae-Setup-x64-v$ver.exe"
+          Copy-Item $exe.FullName "artifacts\$targetName" -Force
+          Copy-Item $adjacentSig "artifacts\$targetName.sig" -Force
+
+          # SHA256 checksum
+          $hash = (Get-FileHash -Path "artifacts\$targetName" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $targetName" | Out-File -FilePath "artifacts\$targetName.sha256" -Encoding utf8
+          Write-Host "SUCCESS: Built and verified $targetName ($($exe.Length) bytes, SHA256: $hash)"
+
+      - name: Upload Artifacts to Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nebulae-Windows-v${{ matrix.version }}
+          path: artifacts/*
+
+      - name: Attach Artifacts to Draft Release test-builds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload test-builds artifacts/* --clobber
