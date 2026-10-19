@@ -19,6 +19,7 @@ import {
   Link as LinkIcon,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 export const AddTorrentModal: React.FC = () => {
   const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource, addTorrentRejection, setAddTorrentRejection } =
@@ -38,6 +39,8 @@ export const AddTorrentModal: React.FC = () => {
   const [category, setCategory] = useState('General');
   const [startImmediately, setStartImmediately] = useState(!settings.do_not_start_automatically);
   const [sequentialDownload, setSequentialDownload] = useState(false);
+  const [superSeedDialogDismissed, setSuperSeedDialogDismissed] = useState(false);
+  const [enableSuperSeeding, setEnableSuperSeeding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -51,6 +54,13 @@ export const AddTorrentModal: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  const applyInspectPreview = (preview: InspectTorrentResult | null) => {
+    setInspectPreview(preview);
+    if (preview?.metainfo_bytes && preview.metainfo_bytes.length > 0) {
+      setSelectedFileBytes(preview.metainfo_bytes);
+    }
+  };
 
   useEffect(() => {
     if (!showAddTorrent) return;
@@ -70,15 +80,21 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         if (!isAllowedMetainfoName(name)) {
           setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          setSelectedFileName(null);
+          setSelectedFileSize(null);
+          setSelectedFileBytes(null);
+          setInspectPreview(null);
+          setTorrentSource('');
           return;
         }
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
         setTorrentSource(filePath);
         setInspectLoading(true);
         inspectTorrent(filePath)
-          .then((preview) => setInspectPreview(preview))
+          .then(applyInspectPreview)
           .catch(() => setInspectPreview(null))
           .finally(() => setInspectLoading(false));
       }
@@ -92,15 +108,21 @@ export const AddTorrentModal: React.FC = () => {
         const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
         if (!isAllowedMetainfoName(name)) {
           setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
+          setSelectedFileName(null);
+          setSelectedFileSize(null);
+          setSelectedFileBytes(null);
+          setInspectPreview(null);
+          setTorrentSource('');
           return;
         }
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
         setTorrentSource(filePath);
         setInspectLoading(true);
         inspectTorrent(filePath)
-          .then((preview) => setInspectPreview(preview))
+          .then(applyInspectPreview)
           .catch(() => setInspectPreview(null))
           .finally(() => setInspectLoading(false));
       }
@@ -131,7 +153,7 @@ export const AddTorrentModal: React.FC = () => {
       setInitialAddTorrentSource(null);
       setInspectLoading(true);
       inspectTorrent(initialAddTorrentSource)
-        .then((preview) => setInspectPreview(preview))
+        .then(applyInspectPreview)
         .catch(() => setInspectPreview(null))
         .finally(() => setInspectLoading(false));
     }
@@ -158,6 +180,7 @@ export const AddTorrentModal: React.FC = () => {
           await applyTorrentRenames(targetDir, renames);
         }
       }
+      // TODO: apply enableSuperSeeding via toggleSuperSeeding after torrent is added
       await addTorrent(source, targetDir, selectedFileBytes || undefined);
       if (targetDir) {
         await addRecentDirectory(targetDir);
@@ -170,6 +193,8 @@ export const AddTorrentModal: React.FC = () => {
       setContentMatch(null);
       setRenameInputs({});
       setShowAddTorrent(false);
+      setSuperSeedDialogDismissed(false);
+      setEnableSuperSeeding(false);
     } catch (err: unknown) {
       setErrorMessage(toErrorMessage(err, 'Failed to add torrent'));
     } finally {
@@ -220,6 +245,69 @@ export const AddTorrentModal: React.FC = () => {
     setRenameInputs({});
   }, [torrentSource, downloadDir]);
 
+  // Native drag-and-drop with REAL absolute paths. The webview strips
+  // File.path from HTML5 drop events, so drops handled only by the inline
+  // onDrop produced a bare filename — "Find My Files" (Rename Existing
+  // Content to Seed) then received a cwd-relative path and could never
+  // match anything, which presented as a dead button. Tauri's webview-level
+  // drag-drop event carries the actual paths.
+  // Dedupe guard: the HTML5 drop fallback may also fire for the same drop.
+  const lastNativeDropRef = useRef(0);
+  useEffect(() => {
+    if (!showAddTorrent) return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop' || !alive) return;
+        const now = Date.now();
+        if (now - lastNativeDropRef.current < 800) return;
+        const paths = (event.payload as { type: string; paths?: string[] }).paths || [];
+        const path = paths.find((p) => isAllowedMetainfoName(p.split('/').pop() || p));
+        if (!path) {
+          if (paths.length > 0) {
+            const rejectedName = paths[0].split('/').pop()?.split('\\').pop() || paths[0];
+            setErrorMessage(`only .torrent or .adc files are accepted ('${rejectedName}' was ignored).`);
+            setSelectedFileName(null);
+            setSelectedFileSize(null);
+            setSelectedFileBytes(null);
+            setInspectPreview(null);
+            setTorrentSource('');
+          }
+          return;
+        }
+        lastNativeDropRef.current = now;
+        setErrorMessage(null);
+        const name = path.split('/').pop()?.split('\\').pop() || path;
+        setSelectedFileName(name);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setInspectPreview(null);
+        setTorrentSource(path);
+        setInspectLoading(true);
+        inspectTorrent(path)
+          .then((preview) => {
+            if (alive) applyInspectPreview(preview);
+          })
+          .catch(() => {
+            if (alive) setInspectPreview(null);
+          })
+          .finally(() => {
+            if (alive) setInspectLoading(false);
+          });
+      })
+      .then((un) => {
+        if (!alive) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (unlisten) unlisten();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddTorrent]);
+
   if (!showAddTorrent) return null;
 
   const formatFileSize = (bytes: number): string => {
@@ -233,14 +321,16 @@ export const AddTorrentModal: React.FC = () => {
       const nativePath = await selectTorrentFile();
       if (nativePath) {
         const name = nativePath.split('/').pop()?.split('\\').pop() || nativePath;
+        setErrorMessage(null);
         setSelectedFileName(name);
         setSelectedFileSize(null);
         setSelectedFileBytes(null);
+        setInspectPreview(null);
         setTorrentSource(nativePath);
         setInspectLoading(true);
         try {
           const preview = await inspectTorrent(nativePath);
-          setInspectPreview(preview);
+          applyInspectPreview(preview);
         } catch {
           setInspectPreview(null);
         } finally {
@@ -262,11 +352,23 @@ export const AddTorrentModal: React.FC = () => {
         setErrorMessage(
           `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
         );
+        setSelectedFileName(null);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setInspectPreview(null);
+        setTorrentSource('');
         e.target.value = '';
         return;
       }
+      setErrorMessage(null);
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
+      // The HTML5 file-input fallback cannot know the absolute path (the
+      // webview strips File.path). Keep the bare name for the byte-based
+      // inspect flow; "Find My Files" explains itself when the path is
+      // missing instead of failing silently.
       setTorrentSource(file.name);
 
       const reader = new FileReader();
@@ -277,7 +379,7 @@ export const AddTorrentModal: React.FC = () => {
           setInspectLoading(true);
           try {
             const preview = await inspectTorrent(undefined, bytes);
-            setInspectPreview(preview);
+            applyInspectPreview(preview);
           } catch {
             setInspectPreview(null);
           } finally {
@@ -298,11 +400,22 @@ export const AddTorrentModal: React.FC = () => {
         setErrorMessage(
           `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
         );
+        setSelectedFileName(null);
+        setSelectedFileSize(null);
+        setSelectedFileBytes(null);
+        setInspectPreview(null);
+        setTorrentSource('');
         return;
       }
+      setErrorMessage(null);
+      // The webview strips File.path on drops; the native drag-drop event
+      // (handled in the effect below) supplies the real absolute path. This
+      // inline handler stays as a fallback with the bare name only.
       const source = (file as FileWithPath).path || file.name;
       setSelectedFileName(file.name);
       setSelectedFileSize(file.size);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
       setTorrentSource(source);
 
       const reader = new FileReader();
@@ -313,7 +426,7 @@ export const AddTorrentModal: React.FC = () => {
           setInspectLoading(true);
           try {
             const preview = await inspectTorrent(undefined, bytes);
-            setInspectPreview(preview);
+            applyInspectPreview(preview);
           } catch {
             setInspectPreview(null);
           } finally {
@@ -351,6 +464,7 @@ export const AddTorrentModal: React.FC = () => {
 
   const handleClearSelectedFile = (e: React.MouseEvent) => {
     e.stopPropagation();
+    setErrorMessage(null);
     setSelectedFileName(null);
     setSelectedFileSize(null);
     setSelectedFileBytes(null);
@@ -358,6 +472,8 @@ export const AddTorrentModal: React.FC = () => {
     setTorrentSource('');
     setContentMatch(null);
     setRenameInputs({});
+    setSuperSeedDialogDismissed(false);
+    setEnableSuperSeeding(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -367,6 +483,15 @@ export const AddTorrentModal: React.FC = () => {
     const source = (torrentSource || selectedFileName || '').trim();
     const targetDir = (downloadDir || settings.download_directory || '').trim();
     if (!source || !targetDir || matchLoading) return;
+    // A bare filename (no directory component) means the webview could not
+    // give us the absolute path — explain that instead of failing with a
+    // generic scan error.
+    if (!source.includes('/') && !source.includes('\\')) {
+      setErrorMessage(
+        "The torrent file's location isn't available, so existing content can't be matched. Please pick the .torrent again using the file picker."
+      );
+      return;
+    }
     setMatchLoading(true);
     try {
       const match = await matchTorrentContent(source, targetDir);
@@ -536,7 +661,7 @@ export const AddTorrentModal: React.FC = () => {
                     if (val.trim().startsWith('magnet:') || val.trim().startsWith('http')) {
                       setInspectLoading(true);
                       inspectTorrent(val.trim())
-                        .then((preview) => setInspectPreview(preview))
+                        .then(applyInspectPreview)
                         .catch(() => setInspectPreview(null))
                         .finally(() => setInspectLoading(false));
                     } else {
@@ -769,6 +894,53 @@ export const AddTorrentModal: React.FC = () => {
                   className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
                 />
                 <span className="text-white">Download in sequential order (media stream preview)</span>
+              </label>
+            )}
+            {engineMode !== 'rtorrent_server' && !superSeedDialogDismissed && (
+              <div className="mt-2 p-3 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2">
+                    <span className="text-[#e50914] text-base leading-none mt-0.5">⚡</span>
+                    <div>
+                      <span className="font-semibold text-white block mb-0.5">Initial Seeder? Enable Super-Seeding</span>
+                      <p className="text-[#a3a3a3] text-[11px] leading-relaxed">
+                        Super-seeding (Initial Seeding mode) makes the swarm self-sufficient faster by sending each peer a
+                        unique piece, so every peer re-uploads something the others need. Use it when you are the
+                        <span className="text-white font-medium"> first or primary seeder</span> — a personal rip, a rare
+                        archive, or a release you are introducing to the swarm. Do not use it if you are downloading, or
+                        if the torrent already has many active seeds.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSuperSeedDialogDismissed(true)}
+                    className="text-[#737373] hover:text-white transition flex-shrink-0 text-base leading-none"
+                    title="Dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer pl-5">
+                  <input
+                    type="checkbox"
+                    checked={enableSuperSeeding}
+                    onChange={(e) => setEnableSuperSeeding(e.target.checked)}
+                    className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                  />
+                  <span className="text-white">Enable Super-Seeding for this torrent</span>
+                </label>
+              </div>
+            )}
+            {engineMode !== 'rtorrent_server' && superSeedDialogDismissed && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableSuperSeeding}
+                  onChange={(e) => setEnableSuperSeeding(e.target.checked)}
+                  className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                />
+                <span className="text-white">Super-seeding mode (initial seeder)</span>
               </label>
             )}
           </div>

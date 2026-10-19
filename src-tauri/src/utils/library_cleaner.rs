@@ -364,13 +364,30 @@ impl LibraryCleaner {
     /// Generates or fetches an authentic thumbnail for a media item.
     /// Checks optical disc artwork scans first, then cached thumbnails, then ffmpeg if installed.
     pub fn get_or_create_thumbnail(media_path: &Path, cache_dir: &Path) -> ThumbnailResult {
-        // 1. Check for optical disc cover artwork scans
+        // 1. Check for optical disc cover artwork scans. The raw scan is
+        // downscaled + re-encoded as WebP into the cache so the media grid
+        // never loads multi-MB originals (owner directive: WebP, small).
         if let Some(cover) = DiscDetector::find_cover_image(media_path) {
-            return ThumbnailResult {
-                thumbnail_path: Some(cover),
-                is_disc_artwork: true,
-                source: "disc_artwork".to_string(),
-            };
+            let cover_path = Path::new(&cover);
+            match crate::thumbs::ensure_thumbnail(cache_dir, cover_path) {
+                Ok(webp_path) => {
+                    return ThumbnailResult {
+                        thumbnail_path: Some(webp_path.display().to_string()),
+                        is_disc_artwork: true,
+                        source: "disc_artwork".to_string(),
+                    };
+                }
+                Err(e) => {
+                    // Non-fatal: fall back to the original scan rather than
+                    // showing no art at all.
+                    eprintln!("thumbnail webp encode failed: {e}");
+                    return ThumbnailResult {
+                        thumbnail_path: Some(cover),
+                        is_disc_artwork: true,
+                        source: "disc_artwork".to_string(),
+                    };
+                }
+            }
         }
 
         // 2. Compute stable cache file path
@@ -390,7 +407,10 @@ impl LibraryCleaner {
             };
         }
 
-        // 3. Attempt video frame extraction via ffmpeg if installed
+        // 3. Attempt video frame extraction via ffmpeg if installed.
+        // The source is the file itself (single-file torrent) or the largest
+        // video inside the release folder (a folder torrent whose video list
+        // is the ISO set). ISO handling is unified below.
         let target_video = if media_path.is_file() {
             Some(media_path.to_path_buf())
         } else if media_path.is_dir() {
@@ -401,30 +421,40 @@ impl LibraryCleaner {
         };
 
         if let Some(video) = target_video {
-            if let Ok(()) = fs::create_dir_all(&thumb_dir) {
-                let mut cmd = create_hidden_command("ffmpeg");
-                cmd.args([
-                    "-ss",
-                    "00:00:30",
-                    "-i",
-                    &video.to_string_lossy(),
-                    "-vframes",
-                    "1",
-                    "-q:v",
-                    "2",
-                    "-y",
-                    &cached_thumb.to_string_lossy(),
-                ]);
+            let ext = video
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
 
-                if let Ok(output) = cmd.output() {
-                    if output.status.success() && cached_thumb.exists() {
-                        return ThumbnailResult {
-                            thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
-                            is_disc_artwork: false,
-                            source: "video_frame".to_string(),
-                        };
+            #[cfg(target_os = "macos")]
+            if ext == "iso" || ext == "img" {
+                // The generic demuxer cannot seek a raw ISO — every -ss
+                // re-decodes frame 0, which is the black DVD-menu loop
+                // (three identical 2.2KB black frames at 5/12 min proved
+                // it). Mount the image read-only and extract from the
+                // largest VOB/video inside instead.
+                if let Some((mount_point, inner_video)) =
+                    Self::mount_disc_image_for_extraction(&video)
+                {
+                    let result = Self::extract_frame(&inner_video, &thumb_dir, &cached_thumb);
+                    let _ = create_hidden_command("hdiutil")
+                        .args(["detach", "-quiet", &mount_point.to_string_lossy()])
+                        .output();
+                    if let Some(r) = result {
+                        return r;
                     }
+                    return ThumbnailResult {
+                        thumbnail_path: None,
+                        is_disc_artwork: false,
+                        source: "none".to_string(),
+                    };
                 }
+                // Mount failed: try the raw image below.
+            }
+
+            if let Some(result) = Self::extract_frame(&video, &thumb_dir, &cached_thumb) {
+                return result;
             }
         }
 
@@ -433,6 +463,82 @@ impl LibraryCleaner {
             is_disc_artwork: false,
             source: "none".to_string(),
         }
+    }
+
+    /// Shared frame extraction: seeks deep past the DVD menu and retries
+    /// later positions while the frame is near-black (a black 720x480 JPEG
+    /// compresses to ~2KB; real content ~10x that).
+    fn extract_frame(
+        video: &Path,
+        thumb_dir: &Path,
+        cached_thumb: &Path,
+    ) -> Option<ThumbnailResult> {
+        if fs::create_dir_all(thumb_dir).is_err() {
+            return None;
+        }
+        let seeks = ["00:05:00", "00:12:00", "00:20:00", "00:00:30"];
+        for (idx, ss) in seeks.iter().enumerate() {
+            let mut cmd = create_hidden_command("ffmpeg");
+            cmd.args([
+                "-ss",
+                ss,
+                "-i",
+                &video.to_string_lossy(),
+                // DVDs store anamorphic frames (720x480 stretched to 16:9 or
+                // 4:3 on display). Without this correction the extracted
+                // poster looks horizontally squished ("width and height do
+                // not correspond" — owner). Scale to square pixels; SAR=1
+                // sources pass through unchanged.
+                "-vf",
+                "scale=trunc(iw*sar/2)*2:ih",
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
+                "-y",
+                &cached_thumb.to_string_lossy(),
+            ]);
+
+            if let Ok(output) = cmd.output() {
+                if output.status.success() && cached_thumb.exists() {
+                    let size = fs::metadata(cached_thumb).map(|m| m.len()).unwrap_or(0);
+                    if size > 15_000 || idx == seeks.len() - 1 {
+                        return Some(ThumbnailResult {
+                            thumbnail_path: Some(cached_thumb.to_string_lossy().to_string()),
+                            is_disc_artwork: false,
+                            source: "video_frame".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Mount a disc image read-only (macOS hdiutil) and return the largest
+    /// video file inside together with the mount point (the caller MUST
+    /// detach the mount point after extracting).
+    #[cfg(target_os = "macos")]
+    fn mount_disc_image_for_extraction(image: &Path) -> Option<(PathBuf, PathBuf)> {
+        let mount_point =
+            std::env::temp_dir().join(format!("neb-iso-mount-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&mount_point);
+        let ok = create_hidden_command("hdiutil")
+            .args([
+                "attach",
+                "-readonly",
+                "-nobrowse",
+                "-mountpoint",
+                &mount_point.to_string_lossy(),
+                &image.to_string_lossy(),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return None;
+        }
+        Some((mount_point.clone(), find_largest_video_file(&mount_point)?))
     }
 }
 

@@ -69,28 +69,7 @@ impl DiscDetector {
                     || lower_title.contains("4k")
                     || total_bytes > 55 * 1024 * 1024 * 1024;
 
-                let (disc_type, layer_spec) = if is_uhd {
-                    let spec = if total_bytes <= 66 * 1024 * 1024 * 1024 {
-                        DiscLayerSpec::UhdBd66
-                    } else {
-                        DiscLayerSpec::UhdBd100
-                    };
-                    (DiscType::UhdBluRay, spec)
-                } else if total_bytes > 9_500_000_000 {
-                    let spec = if total_bytes <= 25 * 1024 * 1024 * 1024 {
-                        DiscLayerSpec::Bd25
-                    } else {
-                        DiscLayerSpec::Bd50
-                    };
-                    (DiscType::BluRay, spec)
-                } else {
-                    let spec = if total_bytes <= 4_700_000_000 {
-                        DiscLayerSpec::Dvd5
-                    } else {
-                        DiscLayerSpec::Dvd9
-                    };
-                    (DiscType::DvdVideo, spec)
-                };
+                let (disc_type, layer_spec) = Self::classify_disc_bytes(total_bytes, is_uhd);
 
                 return Some(DiscStructureInfo {
                     disc_type,
@@ -241,13 +220,7 @@ impl DiscDetector {
                 let is_uhd = lower.contains("uhd")
                     || lower.contains("2160p")
                     || iso_bytes > 55 * 1024 * 1024 * 1024;
-                let (disc_type, layer_spec) = if is_uhd {
-                    (DiscType::UhdBluRay, DiscLayerSpec::UhdBd66)
-                } else if iso_bytes > 9_500_000_000 {
-                    (DiscType::BluRay, DiscLayerSpec::Bd50)
-                } else {
-                    (DiscType::DvdVideo, DiscLayerSpec::Dvd9)
-                };
+                let (disc_type, layer_spec) = Self::classify_disc_bytes(iso_bytes, is_uhd);
 
                 return Some(DiscStructureInfo {
                     disc_type,
@@ -265,6 +238,83 @@ impl DiscDetector {
         }
 
         None
+    }
+
+    /// Size-class ladder shared by every ISO classification path (the file
+    /// branch and the directory-branch image pick must agree, or a single-ISO
+    /// folder and its multi-ISO sibling badge differently). Nominal
+    /// capacities: DVD-5 ≈ 4.7 GB, DVD-9 ≈ 8.5 GB, BD-25 ≈ 25 GB, BD-50 ≈ 50 GB,
+    /// UHD-66/UHD-100 beyond. A 2.2 GB ISO is a DVD-5 — labelling it DVD-9 is
+    /// exactly the misrepresentation the owner reported.
+    fn classify_disc_bytes(bytes: u64, is_uhd: bool) -> (DiscType, DiscLayerSpec) {
+        if is_uhd {
+            if bytes <= 70 * 1024 * 1024 * 1024 {
+                (DiscType::UhdBluRay, DiscLayerSpec::UhdBd66)
+            } else {
+                (DiscType::UhdBluRay, DiscLayerSpec::UhdBd100)
+            }
+        } else if bytes <= 4_700_000_000 {
+            (DiscType::DvdVideo, DiscLayerSpec::Dvd5)
+        } else if bytes <= 9_400_000_000 {
+            (DiscType::DvdVideo, DiscLayerSpec::Dvd9)
+        } else if bytes <= 26_000_000_000 {
+            (DiscType::BluRay, DiscLayerSpec::Bd25)
+        } else if bytes <= 51_000_000_000 {
+            (DiscType::BluRay, DiscLayerSpec::Bd50)
+        } else {
+            (DiscType::UhdBluRay, DiscLayerSpec::UhdBd100)
+        }
+    }
+
+    /// Detect EVERY disc inside a torrent path: each ISO/IMG image plus each
+    /// subfolder carrying its own VIDEO_TS/BDMV structure. A multi-disc
+    /// release in one torrent (DISC_1.ISO + DISC_2.ISO) therefore yields a
+    /// per-disc spec (owner: the single "DVD-9" badge from the first image
+    /// misrepresents the set). Each disc is classified by ITS OWN size.
+    pub fn inspect_all(path: &Path) -> Vec<DiscStructureInfo> {
+        if !path.exists() {
+            return Vec::new();
+        }
+        if path.is_file() {
+            return Self::inspect(path).into_iter().collect();
+        }
+        let mut discs: Vec<DiscStructureInfo> = Vec::new();
+        if let Ok(entries) = fs::read_dir(path) {
+            let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            children.sort();
+            for child in children {
+                if child.is_file() {
+                    let ext = child
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|s| s.to_ascii_lowercase());
+                    if ext.as_deref() == Some("iso") || ext.as_deref() == Some("img") {
+                        if let Some(info) = Self::inspect(&child) {
+                            discs.push(info);
+                        }
+                    }
+                } else if child.is_dir()
+                    && (Self::find_subpath(&child, "VIDEO_TS").is_some()
+                        || Self::find_subpath(&child, "BDMV").is_some())
+                {
+                    if let Some(info) = Self::inspect(&child) {
+                        discs.push(info);
+                    }
+                }
+            }
+        }
+        if discs.is_empty() {
+            if let Some(info) = Self::inspect(path) {
+                discs.push(info);
+            }
+        }
+        // Number the set 1..n when the detector could not infer numbers.
+        let total = discs.len() as u32;
+        for (idx, d) in discs.iter_mut().enumerate() {
+            d.disc_number = d.disc_number.or(Some(idx as u32 + 1));
+            d.total_discs = d.total_discs.or(Some(total));
+        }
+        discs
     }
 
     /// Recursively calculate total size in bytes of file or directory.
@@ -447,6 +497,31 @@ mod tests {
         assert!(detected.has_menu);
 
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_inspect_all_multi_iso_counts_every_disc() {
+        // Owner's boxset layout: ONE torrent folder, TWO ISO images. The set
+        // must classify BOTH discs by their own sizes — 2.2 GB / 3.4 GB
+        // images are DVD-5 each, never a lone "DVD-9" from the first image.
+        let base = std::env::temp_dir().join(format!("neb-set-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        for (name, size) in [
+            ("DISC_1.ISO", 2_159_046_656u64),
+            ("DISC_2.ISO", 3_354_021_888u64),
+        ] {
+            let f = fs::File::create(base.join(name)).unwrap();
+            f.set_len(size).unwrap(); // sparse: reserves size without writing
+        }
+        let set = DiscDetector::inspect_all(&base);
+        assert_eq!(set.len(), 2, "both ISOs must be classified");
+        assert!(
+            set.iter().all(|d| d.layer_spec == DiscLayerSpec::Dvd5),
+            "both images are DVD-5-class, got {:?}",
+            set.iter().map(|d| d.layer_spec).collect::<Vec<_>>()
+        );
+        assert!(set[0].play_target.ends_with("DISC_1.ISO"));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

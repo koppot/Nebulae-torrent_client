@@ -18,6 +18,8 @@ export interface ConnectivityReport {
   tracker_auth_ok: boolean;
   inbound_connections: number;
   outbound_connections: number;
+  /** What produced the port verdict: transmission-self-test, inbound-peers, local-listener, or null. */
+  port_open_evidence?: string | null;
   certificate_text: string;
   plain_language_findings: string[];
   suggested_fixes: string[];

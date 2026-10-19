@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import AppInfoModal from './AppInfoModal';
+import brandLogo from '../../assets/brand-logo.png';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -21,6 +24,7 @@ import {
   LayoutGrid,
   Film,
   Minimize2,
+  Maximize2,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -43,7 +47,8 @@ export const TitleBar: React.FC = () => {
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
 
   const [isMaximized, setIsMaximized] = useState(false);
-  const [platform, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
+  const [showAppInfo, setShowAppInfo] = useState(false);
+  const [, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
 
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
@@ -59,10 +64,9 @@ export const TitleBar: React.FC = () => {
     (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const appWindow = getCurrentWindow();
-        setIsMaximized(await appWindow.isMaximized());
-        unlistenResize = await appWindow.onResized(async () => {
-          setIsMaximized(await appWindow.isMaximized());
+        setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
+        unlistenResize = await getCurrentWindow().onResized(async () => {
+          setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
         });
       } catch {
         // Fallback for non-tauri contexts
@@ -90,102 +94,202 @@ export const TitleBar: React.FC = () => {
 
   const { settings } = useSettingsStore();
 
+  useEffect(() => {
+    if (settings.media_mode_enabled === false && viewMode === 'media') {
+      setViewMode('manager');
+    }
+  }, [settings.media_mode_enabled, viewMode, setViewMode]);
+
+  // Window controls go through NATIVE backend commands (owner: the JS
+  // window API is unreliable on the undecorated Windows window).
   const handleMinimize = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      if (settings.minimize_to_tray) {
-        await win.hide();
-      } else {
-        await win.minimize();
-      }
+      await invoke('window_minimize_cmd');
     } catch (e) {
-      console.warn('Minimize not supported in web context', e);
+      console.warn('Minimize failed', e);
     }
   };
 
   const handleToggleMaximize = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const appWindow = getCurrentWindow();
-      await appWindow.toggleMaximize();
-      setIsMaximized(await appWindow.isMaximized());
+      await invoke('window_maximize_toggle_cmd');
+      setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
     } catch (e) {
-      console.warn('Toggle maximize not supported in web context', e);
+      console.warn('Toggle maximize failed', e);
     }
   };
 
   const handleClose = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
       if (settings.close_to_tray) {
-        await win.hide();
+        // Owner directive: the X button minimizes to the taskbar/dock (the
+        // engine keeps running); only explicit Quit ends the session.
+        await invoke('window_minimize_cmd');
       } else {
-        await win.close();
+        await invoke('window_close_cmd');
       }
     } catch (e) {
-      console.warn('Close not supported in web context', e);
+      console.warn('Close failed', e);
     }
   };
 
   return (
     <header
       data-tauri-drag-region
+      onMouseDown={(e) => {
+        // Tauri's startDragging (async IPC) fails to move borderless windows
+        // on current macOS; the backend synthesizes a native mouse-down and
+        // hands it to performWindowDragWithEvent on the main thread.
+        if (e.button === 0 && (e.target as HTMLElement).closest('button') === null) {
+          invoke('window_begin_drag').catch(() => {});
+        }
+      }}
       onDoubleClick={handleToggleMaximize}
-      className="h-10 border-b border-[#262626] bg-[#141414] flex items-center justify-between px-3 select-none z-30 flex-shrink-0"
+      className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
-      {/* Left: macOS Traffic Lights (if on Mac) + Unified Client Brand & Action Controls */}
-      <div className="flex items-center gap-1.5 min-w-0" data-tauri-drag-region>
-        {/* macOS Native-Style Window Traffic Lights */}
-        {platform === 'mac' && (
-          <div className="flex items-center gap-2 pr-2.5 pl-0.5 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 h-10" data-tauri-drag-region>
+        {/* Mode buttons (owner): TWO separate buttons, centered on the top
+            bar on both views, as colorful as Add/Create. The active mode
+            is red like Add; the other is gold-accented like Create. */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-0 h-10 flex items-stretch gap-2">
+          {settings.media_mode_enabled !== false && (
             <button
               type="button"
-              onClick={handleClose}
-              className="w-3 h-3 rounded-full bg-[#ff5f56] hover:brightness-90 flex items-center justify-center group transition"
-              title="Close"
+              onClick={() => setViewMode('media')}
+              className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+                viewMode === 'media'
+                  ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                  : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+              }`}
+              title="Media Center — your optical cinema gallery"
             >
-              <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              <Film className="w-4 h-4" />
+              <span>Media</span>
             </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setViewMode('manager')}
+            className={`flex items-center justify-center gap-2 w-32 my-1 rounded-lg text-sm font-semibold transition shadow-sm ${
+              viewMode === 'manager'
+                ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+            }`}
+            title="Torrent Manager — detailed swarm grid"
+          >
+            <LayoutGrid className="w-4 h-4" />
+            <span>Manager</span>
+          </button>
+        </div>
+        <div className="flex items-center gap-2.5 flex-shrink-0" data-tauri-drag-region>
+          {/* Nebula icon (owner): visible on BOTH views; opens the
+              release/app info popup with the Update button. */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowAppInfo(true); }}
+            className="flex-shrink-0 rounded-full hover:ring-2 hover:ring-[#e50914]/50 transition"
+            title="About this release"
+          >
+            <img src={brandLogo} alt="Nebulae" className="w-7 h-7 rounded-full" draggable={false} />
+          </button>
+          <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
+          <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
+            — Client by Asian DVD Club
+          </span>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+          {/* Add Movie button (owner): prominent in top bar during Media mode */}
+          {viewMode === 'media' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
+              }}
+              className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+              title="Add Movie / Disc — select release root folder or ISO image"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Movie</span>
+            </button>
+          )}
+
+          {/* Help (?) (owner): top bar, right before Settings — it carries
+            the installation/documentation info. Manager-only row gating
+            keeps it off the Media Center. */}
+          {viewMode !== 'media' && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
+              className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+              title="Documentation & Keyboard Shortcuts"
+            >
+              <HelpCircle className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Settings on the top bar (owner): no need to bury it in row 2. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Media view: the gear opens MEDIA preferences (player
+              // languages), not the manager's engine settings.
+              if (viewMode === 'media') {
+                window.dispatchEvent(new CustomEvent('nebulae:player-prefs'));
+              } else {
+                setShowSettings(true);
+              }
+            }}
+            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
+            title={viewMode === 'media' ? 'Media preferences — audio & subtitle languages' : 'Preferences & Torrent Engine Settings'}
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+
+          <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
+            {/* Minimize */}
             <button
               type="button"
               onClick={handleMinimize}
-              className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:brightness-90 flex items-center justify-center group transition"
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
               title="Minimize"
             >
-              <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100" />
+              <Minus className="w-3.5 h-3.5" />
             </button>
+
+            {/* Maximize / Restore */}
             <button
               type="button"
               onClick={handleToggleMaximize}
-              className="w-3 h-3 rounded-full bg-[#27c93f] hover:brightness-90 flex items-center justify-center group transition"
-              title="Zoom / Maximize"
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
+              title={isMaximized ? 'Restore' : 'Maximize'}
             >
-              <Square className="w-1.5 h-1.5 text-black/60 opacity-0 group-hover:opacity-100" />
+              {isMaximized ? (
+                <Copy className="w-3 h-3 rotate-180" />
+              ) : (
+                <Square className="w-3 h-3" />
+              )}
             </button>
-          </div>
-        )}
 
-        {/* Integrated Brand Monogram & Full Title Identity */}
-        <div
-          data-tauri-drag-region
-          className="flex items-center gap-2 pr-2.5 border-r border-[#262626] flex-shrink-0"
-        >
-          <img
-            src="/favicon-boxed.svg"
-            alt="Nebulae"
-            className="w-5 h-5 rounded object-cover border border-[#333333] flex-shrink-0 pointer-events-none"
-          />
-          <div className="flex items-baseline gap-1.5 min-w-0" data-tauri-drag-region>
-            <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
-            <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden md:inline truncate">
-              — Torrent Client by Asian DVD Club
-            </span>
-          </div>
+            {/* Close */}
+            <button
+              type="button"
+              onClick={handleClose}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#e81123] transition"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>          </div>
         </div>
-
-        {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete */}
+      </div>
+      {/* Second row (owner): manager-only — nothing on it belongs to
+          the Media Center. */}
+      {viewMode !== 'media' && <div className="flex items-center px-3 h-10" data-tauri-drag-region>
+        {/* Left slot (owner): the torrent controls float left on row 2. */}
+        {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
+            MANAGER ONLY (owner): none of the transfer actions belong to
+            the Media Center. */}
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
@@ -243,6 +347,9 @@ export const TitleBar: React.FC = () => {
           {/* Divider */}
           <div className="h-4 w-[1px] bg-[#262626] mx-1" />
 
+        </div>
+        {/* Utility dialogs (owner): centered on the second row. */}
+        <div className="flex-1 flex items-center justify-center gap-1 min-w-0">
           {/* Utility Workbench Dialogs: Doctor, VPN, Tracker, Settings, Help */}
           <button
             type="button"
@@ -271,81 +378,10 @@ export const TitleBar: React.FC = () => {
             <Radio className="w-3.5 h-3.5" />
           </button>
 
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowSettings(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Preferences & Torrent Engine Settings"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowHelp(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Documentation & Keyboard Shortcuts"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Middle: Expansive Draggable Region */}
-      <div
-        data-tauri-drag-region
-        onDoubleClick={handleToggleMaximize}
-        className="flex-1 h-full min-w-4 cursor-default"
-      />
-
-      {/* Right: Mode Switcher, Quick Search Filter & Desktop Window Controls */}
-      <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
-        {/* UI Mode Switcher (Media / Manager / Compact) */}
-        <div className="flex items-center p-0.5 rounded-lg bg-[#1f1f1f] border border-[#333333] text-xs">
-          <button
-            type="button"
-            onClick={() => setViewMode('media')}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
-              viewMode === 'media'
-                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
-                : 'text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Simple Media Mode (Asian Cinema Gallery)"
-          >
-            <Film className="w-3 h-3" />
-            <span className="hidden xl:inline">Media</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setViewMode('manager')}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
-              viewMode === 'manager'
-                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
-                : 'text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Torrent Manager Mode (Detailed Swarm Grid)"
-          >
-            <LayoutGrid className="w-3 h-3" />
-            <span className="hidden xl:inline">Manager</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setViewMode('compact')}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition ${
-              viewMode === 'compact'
-                ? 'bg-[#e50914] text-white font-semibold shadow-xs'
-                : 'text-[#a3a3a3] hover:text-white'
-            }`}
-            title="Compact Mini-Bar Mode"
-          >
-            <Minimize2 className="w-3 h-3" />
-            <span className="hidden xl:inline">Compact</span>
-          </button>
         </div>
 
-        {/* Compact Quick Filter */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+        {/* Compact Quick Filter — transfers only. */}
         <div className="relative w-44">
           <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#a3a3a3]" />
           <input
@@ -366,45 +402,22 @@ export const TitleBar: React.FC = () => {
           )}
         </div>
 
-        {/* Windows / Linux Desktop Window Control Buttons */}
-        {platform !== 'mac' && (
-          <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
-            {/* Minimize */}
-            <button
-              type="button"
-              onClick={handleMinimize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title="Minimize"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
+        </div>
 
-            {/* Maximize / Restore */}
-            <button
-              type="button"
-              onClick={handleToggleMaximize}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#222222] transition"
-              title={isMaximized ? 'Restore' : 'Maximize'}
+        <button
+          type="button"
+          onClick={() => setViewMode(viewMode === 'compact' ? 'manager' : 'compact')}
+              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#333333] transition"
+              title={viewMode === 'compact' ? 'Expand — Restore Full Manager View' : 'Compact Mini-Bar Mode'}
             >
-              {isMaximized ? (
-                <Copy className="w-3 h-3 rotate-180" />
+              {viewMode === 'compact' ? (
+                <Maximize2 className="w-3.5 h-3.5" />
               ) : (
-                <Square className="w-3 h-3" />
+                <Minimize2 className="w-3.5 h-3.5" />
               )}
-            </button>
-
-            {/* Close */}
-            <button
-              type="button"
-              onClick={handleClose}
-              className="h-10 w-11 flex items-center justify-center text-[#a3a3a3] hover:text-white hover:bg-[#e81123] transition"
-              title="Close"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-      </div>
+          </button>
+      </div>}
+      {showAppInfo && <AppInfoModal onClose={() => setShowAppInfo(false)} />}
     </header>
   );
 };

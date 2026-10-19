@@ -13,6 +13,13 @@ pub fn get_engine_init_error(state: State<EngineInitState>) -> Option<String> {
     state.0.lock().unwrap().clone()
 }
 
+/// Frontend breadcrumb: writes a webview-side message into the session log
+/// so clicks that never reach a command still leave a trace.
+#[tauri::command]
+pub fn log_frontend(message: String) {
+    tracing::info!("[frontend] {message}");
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiagnosticSummary {
     pub app_name: String,

@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - 'ag/transmission-engine'
+      - 'fix/cross-platform-repair'
+
+concurrency:
+  group: build-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:
@@ -72,7 +77,22 @@ jobs:
             dpkg \
             binutils \
             xvfb \
-            desktop-file-utils
+            desktop-file-utils \
+            libdvdnav4 \
+            libbluray2 \
+            libvlc5 \
+            vlc-plugin-base \
+            vlc-plugin-video-output
+
+      # Full portability on Linux: stage the runner's VLC runtime into resources
+      - name: Bundle libVLC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p src-tauri/resources/vlc/lib src-tauri/resources/vlc/plugins
+          cp -rL /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
+          cp -rL /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          chmod -R u+rwX,go+rX src-tauri/resources/vlc
+          ls src-tauri/resources/vlc/lib | head -3
 
       - name: Cache cargo dependencies
         uses: swatinem/rust-cache@v2
@@ -82,6 +102,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Setup Temurin JDK 21 (bundled JRE for BD-J/UHD menus)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # --- Transmission-daemon sidecar bundling -------------------------------
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -103,8 +130,61 @@ jobs:
         run: |
           ./scripts/bundle-macos-transmission.sh
 
+      # --- Media playback bundling (libVLC & JRE) -----------------------------
+      - name: Bundle libVLC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
+          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
+          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
+          mkdir -p src-tauri/resources/vlc
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
+          hdiutil detach /tmp/vlcmnt -quiet || true
+          ls src-tauri/resources/vlc
+
+      - name: Bundle libVLC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
+          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+          Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
+
+      - name: Bundle JRE (BD-J/UHD menus)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=mac || true; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
+          else
+            A=x64
+          fi
+          curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
+          mkdir -p jrex src-tauri/resources/jre
+          if [ "$EXT" = "zip" ]; then
+            unzip -q jre.$EXT -d jrex || tar xf jre.$EXT -C jrex
+          else
+            tar xzf jre.$EXT -C jrex
+          fi
+          # macOS tarballs nest the runtime in Contents/Home.
+          HOME_DIR=$(find jrex -type d -name Home -path '*Contents*' | head -1 || true)
+          if [ -z "$HOME_DIR" ]; then
+            BIN_DIR=$(find jrex -type d -name bin | head -1)
+            HOME_DIR=$(dirname "$BIN_DIR")
+          fi
+          cp -a "$HOME_DIR"/. src-tauri/resources/jre/
+          chmod -R u+rwX,go+rX src-tauri/resources/jre || true
+          test -e src-tauri/resources/jre/bin/java || test -e src-tauri/resources/jre/bin/java.exe || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
+          ls src-tauri/resources/jre/bin | head -3
+
       # --- Linux split build ------------------------------------------------
-      - name: Build Linux packages with bundled engine (deb, rpm)
+      - name: Build Linux packages with bundled player (deb, rpm)
         if: runner.os == 'Linux'
         run: pnpm tauri build --bundles deb,rpm
 
@@ -112,10 +192,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           rm -rf src-tauri/transmission-staging-appimage
-          mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          if [ -d src-tauri/resources/engine ]; then
+            mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          fi
+          rm -rf src-tauri/vlc-staging-appimage src-tauri/jre-staging-appimage
+          mv src-tauri/resources/vlc src-tauri/vlc-staging-appimage
+          mv src-tauri/resources/jre src-tauri/jre-staging-appimage
           pnpm tauri build --bundles appimage
 
-      - name: Inject bundled engine into AppImage
+      - name: Inject bundled player + engine into AppImage
         if: runner.os == 'Linux'
         run: |
           APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
@@ -125,6 +210,9 @@ jobs:
           mkdir -p squashfs-root/usr/share/nebulae/resources/engine
           rm -rf squashfs-root/usr/share/nebulae/resources/engine
           cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          rm -rf squashfs-root/usr/share/nebulae/resources/vlc squashfs-root/usr/share/nebulae/resources/jre
+          cp -a src-tauri/vlc-staging-appimage squashfs-root/usr/share/nebulae/resources/vlc
+          cp -a src-tauri/jre-staging-appimage squashfs-root/usr/share/nebulae/resources/jre
           if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
             echo "ERROR: transmission-daemon missing from AppImage engine staging"
             find squashfs-root/usr/share/nebulae/resources/ -maxdepth 3 | head -30
@@ -137,12 +225,50 @@ jobs:
           rm -rf squashfs-root
           LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
           printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
-          echo "SUCCESS: engine injected into $APPIMAGE_PATH"
+          printf '%s\n' "$LISTING" | grep -q "resources/vlc" || { echo "ERROR: vlc missing from repacked AppImage"; exit 1; }
+          printf '%s\n' "$LISTING" | grep -q "resources/jre/bin/java" || { echo "ERROR: jre missing from repacked AppImage"; exit 1; }
+          echo "SUCCESS: engine, vlc, and jre injected into $APPIMAGE_PATH"
 
       # --- macOS / Windows Build --------------------------------------------
       - name: Build Tauri Application
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}
+
+      # --- Post-Build Package Contents Verification -------------------------
+      - name: Verify Package Contents (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
+          if [ -z "$APP_DIR" ]; then echo "ERROR: Nebulae.app not found"; exit 1; fi
+          echo "=== Verifying macOS package contents in $APP_DIR ==="
+          test -f "$APP_DIR/Contents/Resources/resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing in app bundle"; exit 1; }
+          test -d "$APP_DIR/Contents/Resources/resources/vlc" || { echo "ERROR: vlc missing in app bundle"; exit 1; }
+          test -f "$APP_DIR/Contents/Resources/resources/jre/bin/java" || { echo "ERROR: jre/bin/java missing in app bundle"; exit 1; }
+          echo "SUCCESS: macOS app bundle contains transmission-daemon, vlc, and jre."
+
+      - name: Verify Package Contents (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "=== Verifying Windows staged resources and build outputs ==="
+          if (-not (Test-Path "src-tauri/resources/engine/transmission/transmission-daemon.exe")) { throw "transmission-daemon.exe missing from resources" }
+          if (-not (Test-Path "src-tauri/resources/vlc/libvlc.dll")) { throw "libvlc.dll missing from resources" }
+          if (-not (Test-Path "src-tauri/resources/jre/bin/java.exe")) { throw "java.exe missing from resources" }
+          $setup = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "Setup installer not found in target" }
+          Write-Host "SUCCESS: Windows staged resources verified. Setup size: $($setup.Length) bytes."
+
+      - name: Verify Package Contents (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "=== Verifying Linux package contents ==="
+          DEB_FILE=$(find src-tauri/target -name "*.deb" -type f | head -n 1)
+          if [ -n "$DEB_FILE" ]; then
+            dpkg-deb -c "$DEB_FILE" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing in deb"; exit 1; }
+            dpkg-deb -c "$DEB_FILE" | grep -q "resources/vlc" || { echo "ERROR: vlc missing in deb"; exit 1; }
+            dpkg-deb -c "$DEB_FILE" | grep -q "resources/jre/bin/java" || { echo "ERROR: jre missing in deb"; exit 1; }
+            echo "SUCCESS: deb package verified."
+          fi
 
       # --- Prepare Artifacts (macOS) ----------------------------------------
       - name: Prepare Named Artifacts (macOS)
@@ -152,7 +278,6 @@ jobs:
           DMG_FILE=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
           ICON_PATH="$(pwd)/src-tauri/icons/icon.icns"
           DMG_NAME="${{ matrix.artifact_name }}"
-          DMG_ABS="$(pwd)/$DMG_NAME"
 
           echo "=== Building DMG with Embedded Volume Icon ==="
           if [ -n "$APP_DIR" ]; then
@@ -195,13 +320,44 @@ jobs:
           mkdir -p artifacts/
           cp "$DMG_NAME" "$DMG_NAME.sha256" "$APP_ZIP" "$APP_ZIP.sha256" artifacts/
 
+          # Collect Tauri updater bundles
+          UPDATER_TAR=$(find src-tauri/target -name "*.app.tar.gz" -o -name "Nebulae.app.tar.gz" -o -name "*.tar.gz" | head -n 1)
+          UPDATER_SIG=$(find src-tauri/target -name "*.app.tar.gz.sig" -o -name "Nebulae.app.tar.gz.sig" -o -name "*.tar.gz.sig" | head -n 1)
+          if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+            TARGET_TAR="$DMG_NAME-app.tar.gz"
+            TARGET_SIG="$DMG_NAME-app.tar.gz.sig"
+            cp "$UPDATER_TAR" "$TARGET_TAR"
+            cp "$UPDATER_SIG" "$TARGET_SIG"
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature "$TARGET_TAR" "$TARGET_SIG"
+            cp "$TARGET_TAR" "$TARGET_SIG" artifacts/
+          fi
+
       # --- Prepare Artifacts (Windows) --------------------------------------
       - name: Prepare Named Artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
-          if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
+          if (-not $exe) {
+            throw "FATAL: Windows setup installer (*setup.exe) not found in src-tauri\target!"
+          }
+          Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force
+
+          # Require signature strictly adjacent to the selected installer
+          $adjacentSigPath = "$($exe.FullName).sig"
+          if (-not (Test-Path $adjacentSigPath)) {
+            throw "FATAL: Required signature adjacent to installer missing: $adjacentSigPath"
+          }
+          $sig = Get-Item $adjacentSigPath
+
+          # Pre-publication verification: signature trusted comment must match installer file
+          $sigContent = Get-Content -Raw $sig.FullName
+          $sigDecoded = try { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($sigContent.Trim())) } catch { $sigContent }
+          if ($sigDecoded -notmatch [regex]::Escape($exe.Name)) {
+            throw "FATAL: Signature trusted comment does not match installer file '$($exe.Name)'. Refusing to publish unverified signature."
+          }
+          Write-Host "SUCCESS: Verified adjacent signature ($($sig.FullName)) matches installer ($($exe.Name))."
+
           $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
           if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
 
@@ -215,6 +371,9 @@ jobs:
               Copy-Item "$name.sha256" "artifacts/$name.sha256"
             }
           }
+
+          Copy-Item $sig.FullName -Destination 'artifacts/Nebulae-Setup-x64.exe.sig' -Force
+          cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature 'artifacts/Nebulae-Setup-x64.exe' 'artifacts/Nebulae-Setup-x64.exe.sig'
 
       # --- Prepare Artifacts (Linux) ----------------------------------------
       - name: Prepare Named Artifacts (Linux)
@@ -246,6 +405,14 @@ jobs:
             cp "Nebulae-Linux-x86_64.AppImage" "Nebulae-Linux-x86_64.AppImage.sha256" artifacts/
           fi
 
+          UPDATER_TAR=$(find src-tauri/target -name "*.AppImage.tar.gz" | head -n 1)
+          UPDATER_SIG=$(find src-tauri/target -name "*.AppImage.tar.gz.sig" | head -n 1)
+          if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature "$UPDATER_TAR" "$UPDATER_SIG"
+            cp "$UPDATER_TAR" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz"
+            cp "$UPDATER_SIG" "artifacts/Nebulae-Linux-x86_64.AppImage.tar.gz.sig"
+          fi
+
           if [ -n "$BINARY_FILE" ]; then
             cp "$BINARY_FILE" "nebulae-linux-x86_64"
             chmod +x "nebulae-linux-x86_64"
@@ -255,20 +422,31 @@ jobs:
 
       # --- Private distribution ---------------------------------------------
       # Build outputs are attached to a standing DRAFT release ("test-builds").
-      # Draft releases and their assets are visible only to collaborators,
-      # so nothing built here is publicly downloadable. Each successful run
-      # replaces the previous good build set (assets are clobbered by name).
+      # Per-platform BUILD_INFO files are used so matrix jobs and separate runs
+      # never clobber each other's metadata.
       - name: Attach build to draft release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # Prevent older superseded runs from overwriting draft release assets
+          LATEST_SHA=$(git ls-remote origin "refs/heads/${{ github.ref_name }}" | cut -f1)
+          if [ -n "$LATEST_SHA" ] && [ "$LATEST_SHA" != "${{ github.sha }}" ]; then
+            echo "Skipping upload: current commit ${{ github.sha }} is superseded by $LATEST_SHA"
+            exit 0
+          fi
+
+          INFO_FILE="BUILD_INFO-${{ matrix.artifact_name }}.txt"
           {
             echo "commit: ${{ github.sha }}"
             echo "run: ${{ github.run_id }} (#${{ github.run_number }})"
+            echo "platform: ${{ matrix.platform }}"
+            echo "target: ${{ matrix.target }}"
+            echo "artifact: ${{ matrix.artifact_name }}"
             echo "date: $(date -u '+%Y-%m-%d %H:%M:%SZ')"
-          } > artifacts/BUILD_INFO.txt
+          } > "artifacts/$INFO_FILE"
+          rm -f artifacts/BUILD_INFO.txt
           gh release view test-builds >/dev/null 2>&1 || \
             gh release create test-builds --draft \
               --title "Test builds (private)" \
@@ -289,3 +467,22 @@ jobs:
           fi
           gh release view test-builds --json isDraft,name,assets \
             --jq '{isDraft, name, assets: [.assets[].name]}'
+
+  manifest:
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate latest.json updater manifest for draft test-builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p artifacts
+          gh release download test-builds --pattern "*.sig" --dir artifacts || true
+          python3 scripts/generate-updater-manifest.py
+          gh release upload test-builds latest.json --clobber || true

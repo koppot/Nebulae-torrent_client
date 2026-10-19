@@ -31,9 +31,20 @@ export interface PeerTelemetry {
 
 export interface PeeringSettings {
   mode: PeeringMode;
-  enable_locality_preference: boolean;
-  enable_geographic_metadata: boolean;
-  enable_rate_limited_probes: boolean;
-  max_connections_per_torrent: number;
-  preferred_country?: string;
+  /** Mirrors Rust PeeringSettings::locality_enabled */
+  locality_enabled: boolean;
+  /** Mirrors Rust PeeringSettings::max_peers_per_torrent */
+  max_peers_per_torrent: number;
+  /** Mirrors Rust PeeringSettings::max_global_peers */
+  max_global_peers: number;
+  /** Mirrors Rust PeeringSettings::prefer_utp */
+  prefer_utp: boolean;
+  /** Mirrors Rust PeeringSettings::require_encryption */
+  require_encryption: boolean;
+  /**
+   * Opt-in TCP RTT probing. Default false — enabling makes outbound TCP
+   * connections to every connected peer (privacy consideration).
+   */
+  probe_rtt_enabled: boolean;
 }
+

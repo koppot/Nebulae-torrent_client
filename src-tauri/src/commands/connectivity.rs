@@ -154,6 +154,19 @@ pub async fn run_connectivity_doctor_test(
         PortStatus::Closed
     };
 
+    // Record which signal produced the verdict — the three signals measure
+    // very different things and blending them produced misleading "Open"
+    // reports (see port_open_evidence docs on the report struct).
+    let port_open_evidence = if port_open_from_engine.is_some() {
+        Some("transmission-self-test".to_string())
+    } else if total_inbound_peers > 0 {
+        Some("inbound-peers".to_string())
+    } else if port_listening {
+        Some("local-listener".to_string())
+    } else {
+        None
+    };
+
     let nat_type = if upnp || nat_pmp {
         NatType::FullCone
     } else {
@@ -171,9 +184,23 @@ pub async fn run_connectivity_doctor_test(
 
     let mut plain_language_findings = Vec::new();
     if port_status == PortStatus::Open {
-        plain_language_findings.push(format!(
-            "Incoming BitTorrent port {listening_port} is open and active."
-        ));
+        // Be explicit about WHAT the verdict is based on — a transmission
+        // self-test or connected peers is NOT proof that new external peers
+        // can reach the port right now.
+        match port_open_evidence.as_deref() {
+            Some("transmission-self-test") => plain_language_findings.push(format!(
+                "Port {listening_port}: the engine's self-test passed, but this test connects from your own machine and can pass even when the internet cannot reach the port (no NAT loopback). Treat it as unverified."
+            )),
+            Some("inbound-peers") => plain_language_findings.push(format!(
+                "Port {listening_port}: {total_inbound_peers} peers are connected, but they may have connected earlier or over IPv6; this does not prove new inbound IPv4 connections work."
+            )),
+            Some("local-listener") => plain_language_findings.push(format!(
+                "Port {listening_port} is bound locally, but nothing has verified that the internet can reach it."
+            )),
+            _ => plain_language_findings.push(format!(
+                "Incoming BitTorrent port {listening_port} is open and active."
+            )),
+        }
     } else {
         plain_language_findings.push(format!(
             "Port {listening_port} is not currently open for incoming connections."
@@ -233,10 +260,56 @@ pub async fn run_connectivity_doctor_test(
         tracker_auth_ok: tracker_ok,
         inbound_connections: total_inbound_peers,
         outbound_connections: total_outbound_peers,
+        port_open_evidence,
         certificate_text,
         plain_language_findings,
         suggested_fixes,
     })
+}
+
+/// The port negotiator's latest verdict, for the front end's port-forward
+/// warning dialog. Written by `negotiate_reachable_port` at engine spawn.
+#[derive(Debug, Clone, Serialize)]
+pub struct PortNegotiationResult {
+    pub status: String,
+    pub configured_port: u16,
+    pub tried_ports: Vec<u16>,
+    pub checked_at_epoch_ms: u64,
+}
+
+#[tauri::command]
+pub fn get_port_negotiation_result(
+    db: State<'_, Arc<Database>>,
+) -> Result<Option<PortNegotiationResult>, String> {
+    let raw = db.get_setting("port_negotiation_result").ok().flatten();
+    let Some(raw) = raw else { return Ok(None) };
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) => Ok(Some(PortNegotiationResult {
+            status: v
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            configured_port: v
+                .get("configured_port")
+                .and_then(|p| p.as_u64())
+                .unwrap_or(0) as u16,
+            tried_ports: v
+                .get("tried_ports")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_u64().map(|n| n as u16))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            checked_at_epoch_ms: v
+                .get("checked_at_epoch_ms")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0),
+        })),
+        Err(_) => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -263,26 +336,51 @@ pub async fn get_connectivity_certificate(
 }
 
 /// Live Tailscale (Secure Network) detection for the status bar: reports the
-/// tailnet interface and member IP when the VPN data plane is up.
+/// tailnet interface and member IP when the VPN data plane is up, plus a
+/// live probe of the ADC server over the tailnet. When `adc_reachable` is
+/// `false` the tailnet path to ADC is down: the user must be told, since
+/// traffic then falls back to the default connection (or the Nebula VPN).
 #[derive(Debug, Clone, Serialize)]
 pub struct TailscaleStatus {
     pub connected: bool,
     pub interface: Option<String>,
     pub tailnet_ip: Option<String>,
+    pub adc_reachable: Option<bool>,
+    pub adc_node: Option<String>,
 }
 
 #[tauri::command]
-pub fn get_tailscale_status() -> Result<TailscaleStatus, String> {
-    Ok(match crate::utils::network::detect_tailscale() {
-        Some((interface, tailnet_ip)) => TailscaleStatus {
-            connected: true,
-            interface: Some(interface),
-            tailnet_ip: Some(tailnet_ip),
-        },
-        None => TailscaleStatus {
-            connected: false,
-            interface: None,
-            tailnet_ip: None,
-        },
+pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
+    // Process spawns (tailscale status --json, ADC TCP probe) must stay off
+    // the main thread.
+    tokio::task::spawn_blocking(|| {
+        if crate::utils::network::detect_tailscale().is_none() {
+            // Stopped at login (observed after network-extension updates):
+            // one bounded auto-heal attempt, then re-detect.
+            if let Some(heal) = crate::utils::network::heal_stopped_tailscale() {
+                tracing::info!("[tailscale] {heal}");
+            }
+        }
+        Ok(match crate::utils::network::detect_tailscale() {
+            Some((interface, tailnet_ip)) => {
+                let probe = crate::utils::network::probe_adc_over_tailnet();
+                TailscaleStatus {
+                    connected: true,
+                    interface: Some(interface),
+                    tailnet_ip: Some(tailnet_ip),
+                    adc_reachable: probe.as_ref().map(|(_, r)| *r),
+                    adc_node: probe.map(|(n, _)| n),
+                }
+            }
+            None => TailscaleStatus {
+                connected: false,
+                interface: None,
+                tailnet_ip: None,
+                adc_reachable: None,
+                adc_node: None,
+            },
+        })
     })
+    .await
+    .map_err(|e| format!("join: {e}"))?
 }

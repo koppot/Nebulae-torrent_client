@@ -15,13 +15,27 @@
 pub mod engine;
 
 #[cfg(target_os = "macos")]
-pub use embed_macos::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_macos::{
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
+    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
+    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+};
+pub mod bluray_meta;
+pub mod dvd_meta;
 
 #[cfg(target_os = "windows")]
-pub use embed_windows::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_windows::{
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
+    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
+    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+};
 
 #[cfg(target_os = "linux")]
-pub use embed_linux::{ensure_overlay, set_overlay_hidden, sync_frame};
+pub use embed_linux::{
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
+    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
+    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+};
 
 #[cfg(target_os = "macos")]
 mod embed_macos;
@@ -54,4 +68,27 @@ pub struct PlayerState {
     pub media_player: Mutex<usize>,
     /// Set once playback starts; lets `player_poll` report "ended" exactly once.
     pub started: Mutex<bool>,
+    /// ONE libvlc instance shared by every session for the app's lifetime:
+    /// releasing an instance (old behavior) runs libxml2's global
+    /// xmlCleanupParser, which races the next session's metadata parsing
+    /// and aborts (malloc "pointer being freed was not allocated" on Play).
+    pub shared_instance: AtomicUsize,
+    /// What the owner asked to play (may be a folder) — kept so "return to
+    /// disc menu" can restart playback fresh when dvdnav ignores set_title.
+    pub current_path: Mutex<Option<String>>,
+    /// The resolved playback target (ISO/VIDEO_TS root) of the session.
+    pub current_resolved: Mutex<Option<String>>,
+    /// While true, a post-open watcher keeps forcing the disc's MENU title:
+    /// VLC's Blu-ray demuxer starts the disc's FIRST-PLAY flow (warning →
+    /// program chain) and would otherwise run straight into playback.
+    /// Cleared when the frontend wants playback (resume / menu Play).
+    pub menu_watch: std::sync::atomic::AtomicBool,
+    /// Guard around every VLC call that uses the media-player pointer and
+    /// around the session teardown that releases it: background helpers
+    /// (menu watcher) must never call into a released player. Held for the
+    /// duration of each call, never across waits.
+    pub media_player_cell: std::sync::Mutex<()>,
+    /// Serializes session open and teardown calls so concurrent open requests
+    /// cannot race and create duplicate concurrent playback sessions.
+    pub open_lock: tokio::sync::Mutex<()>,
 }

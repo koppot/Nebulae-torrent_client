@@ -9,9 +9,10 @@ import { invoke } from '@tauri-apps/api/core';
 // ~2s decaying average of counter deltas). librqbit's raw per-second rates
 // swing between burst and 0 on small swarms, so raw display flickers.
 // Nebulae therefore computes a decaying average of COUNTER DELTAS over a
-// ~5s time constant and settles honestly to zero when the counters stop
-// moving. Per-tick raw rates are never passed through.
-const SPEED_WINDOW_SECONDS = 5.0;
+// ~15s time constant (owner-requested: the 5s window still fluctuated
+// widely on small swarms) and settles honestly to zero when the counters
+// stop moving. Per-tick raw rates are never passed through.
+const SPEED_WINDOW_SECONDS = 15.0;
 const SPEED_IDLE_SNAP_TICKS = 10; // ~5s at 500ms telemetry before snapping to exact 0
 interface SpeedCounterState {
   lastDownBytes: number | null;
@@ -22,6 +23,47 @@ interface SpeedCounterState {
   idleTicks: number;
 }
 const speedCounters = new Map<string, SpeedCounterState>();
+
+interface RecheckEntry {
+  requestedAt: number;
+  seenChecking: boolean;
+}
+const activeRechecks = new Map<string, RecheckEntry>();
+
+export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
+  const now = Date.now();
+  return torrents.map((t) => {
+    const recheck = activeRechecks.get(t.id);
+    if (!recheck) return t;
+
+    if (t.status === 'Checking') {
+      recheck.seenChecking = true;
+      return t;
+    }
+
+    if (t.status === 'Queued for checking') {
+      return t;
+    }
+
+    // Torrent is currently NOT reported as checking by the engine.
+    if (!recheck.seenChecking) {
+      if (now - recheck.requestedAt < 10000) {
+        // Within 10s debounce grace window before engine flips to Checking:
+        // preserve optimistic Queued for checking
+        return { ...t, status: 'Queued for checking', progress: 0 };
+      }
+      // Grace window elapsed without engine ever reporting Checking/Queued:
+      // discard stale recheck tracking and report engine truth
+      activeRechecks.delete(t.id);
+      return t;
+    }
+
+    // Engine was previously seen Checking, and now is NO LONGER Checking or Queued for checking.
+    // That means verification finished successfully!
+    activeRechecks.delete(t.id);
+    return t;
+  });
+}
 
 export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
   const seen = new Set<string>();
@@ -142,7 +184,7 @@ interface TorrentState {
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
   matchTorrentContent: (source: string, downloadDir: string) => Promise<TorrentContentMatch>;
   applyTorrentRenames: (downloadDir: string, renames: TorrentRenameEntry[]) => Promise<number>;
-  forceRecheck: (id: string) => Promise<void>;
+  forceRecheck: (id: string) => Promise<{ success: boolean; error?: string }>;
   reannounce: (id: string) => Promise<void>;
   setLocation: (id: string, newPath: string) => Promise<void>;
   setCategory: (id: string, category: string) => Promise<void>;
@@ -174,7 +216,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      set({ torrents: smoothTelemetrySpeeds(data), isLoading: false });
+      set({ torrents: smoothTelemetrySpeeds(reconcileRecheckState(data)), isLoading: false });
     } catch {
       set({ isLoading: false });
     }
@@ -185,45 +227,50 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   pauseTorrent: async (id: string) => {
     try {
       await invoke('pause_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('pause_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
         t.id === id ? { ...t, status: 'Paused', download_rate: 0, upload_rate: 0 } : t
       ),
     });
+    // Pull engine truth immediately so the optimistic state is never
+    // reverted by the next telemetry/poll tick (owner-reported 5-10s lag).
+    await get().fetchTorrents();
   },
 
   resumeTorrent: async (id: string) => {
     try {
       await invoke('resume_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('resume_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
         t.id === id ? { ...t, status: t.progress >= 1.0 ? 'Seeding' : 'Downloading' } : t
       ),
     });
+    await get().fetchTorrents();
   },
 
   pauseAll: async () => {
     try {
       await invoke('pause_all_torrents');
-    } catch {
-      //
+    } catch (err) {
+      console.warn('pause_all_torrents failed:', err);
     }
     set({
       torrents: get().torrents.map((t) => ({ ...t, status: 'Paused', download_rate: 0, upload_rate: 0 })),
     });
+    await get().fetchTorrents();
   },
 
   resumeAll: async () => {
     try {
       await invoke('resume_all_torrents');
-    } catch {
-      //
+    } catch (err) {
+      console.warn('resume_all_torrents failed:', err);
     }
     set({
       torrents: get().torrents.map((t) => ({
@@ -231,6 +278,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         status: t.progress >= 1.0 ? 'Seeding' : 'Downloading',
       })),
     });
+    await get().fetchTorrents();
   },
 
   removeTorrent: async (id: string, deleteFiles?: boolean) => {
@@ -264,22 +312,38 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     return await invoke<number>('apply_torrent_renames', { downloadDir, renames });
   },
 
-  forceRecheck: async (id: string) => {
+  forceRecheck: async (id: string): Promise<{ success: boolean; error?: string }> => {
+    activeRechecks.set(id, { requestedAt: Date.now(), seenChecking: false });
+    set({
+      torrents: get().torrents.map((t) =>
+        t.id === id ? { ...t, status: 'Queued for checking', progress: 0 } : t
+      ),
+    });
     try {
       await invoke('force_recheck_torrent', { id });
-    } catch {
-      //
+      // Schedule a single refresh to capture initial checking state;
+      // subsequent progress updates stream live from engine telemetry.
+      setTimeout(() => {
+        void get().fetchTorrents();
+      }, 300);
+      return { success: true };
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'string'
+          ? err
+          : (err as Error)?.message || 'Failed to start force recheck';
+      console.warn('force_recheck_torrent failed:', msg);
+      activeRechecks.delete(id);
+      await get().fetchTorrents();
+      return { success: false, error: msg };
     }
-    set({
-      torrents: get().torrents.map((t) => (t.id === id ? { ...t, status: 'Checking' } : t)),
-    });
   },
 
   reannounce: async (id: string) => {
     try {
       await invoke('reannounce_torrent', { id });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('reannounce_torrent failed:', err);
     }
     set({
       torrents: get().torrents.map((t) =>
@@ -295,6 +359,9 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           : t
       ),
     });
+    // next-announce times only move once the tracker answers; refresh now
+    // and let the next poll pick up the final scheduled time.
+    await get().fetchTorrents();
   },
 
   setLocation: async (id: string, newPath: string) => {
@@ -387,9 +454,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   setFilePriority: async (id: string, fileIndex: number, priority: number) => {
     try {
       await invoke('set_file_priority', { id, fileIndex, priority });
-    } catch {
-      //
+    } catch (err) {
+      console.warn('set_file_priority failed:', err);
     }
+    // The dropdown reads the mapped file priority from the engine; without
+    // this refresh it keeps showing the old bucket forever.
+    await get().fetchTorrents();
+    // Mirror the change locally too so the dropdown updates even before the
+    // refreshed engine payload lands.
     set({
       torrents: get().torrents.map((t) =>
         t.id === id

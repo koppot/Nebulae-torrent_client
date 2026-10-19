@@ -141,6 +141,37 @@ pub struct UserSettings {
     /// install takes over, settings are re-persisted with the new version
     /// and any newly applied defaults.
     pub app_version: Option<String>,
+
+    // 12. Racing Mode tuning preset
+    /// When enabled, Transmission is configured with aggressive peer limits,
+    /// 256 MiB disk cache, 14 unchoke slots, 2-minute queue stall threshold,
+    /// and added torrents receive high bandwidth priority.
+    #[serde(default)]
+    pub racing_mode_enabled: bool,
+
+    // 13. Engine Identification
+    /// Selected engine identity profile: "transmission" (default) | "nebulae" | "custom"
+    #[serde(default = "default_engine_identity_profile")]
+    pub engine_identity_profile: String,
+    /// Custom User-Agent string (used when engine_identity_profile == "custom")
+    #[serde(default)]
+    pub custom_user_agent: String,
+    /// Custom Peer ID prefix (8 chars, e.g. "-NE0220-", used when profile == "custom")
+    #[serde(default)]
+    pub custom_peer_id_prefix: String,
+
+    // 14. Media Mode (Optical Cinema)
+    /// When enabled, the Media Center view is accessible. Defaults to true.
+    #[serde(default = "default_true")]
+    pub media_mode_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_engine_identity_profile() -> String {
+    "transmission".to_string()
 }
 
 impl Default for UserSettings {
@@ -196,7 +227,7 @@ impl Default for UserSettings {
             max_global_connections: 500,
             max_connections_per_torrent: 100,
             max_global_upload_slots: 8,
-            max_upload_slots_per_torrent: 4,
+            max_upload_slots_per_torrent: 14,
             proxy_type: "None".to_string(),
             proxy_host: "".to_string(),
             proxy_port: 8080,
@@ -283,6 +314,18 @@ impl Default for UserSettings {
 
             // 11. Internal bookkeeping
             app_version: None,
+
+            // 12. Racing Mode tuning preset: false by default to prevent silent
+            // activation on existing installs and keep upstream defaults.
+            racing_mode_enabled: false,
+
+            // 13. Engine Identification
+            engine_identity_profile: "transmission".to_string(),
+            custom_user_agent: "".to_string(),
+            custom_peer_id_prefix: "".to_string(),
+
+            // 14. Media Mode
+            media_mode_enabled: true,
         }
     }
 }
@@ -324,6 +367,7 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 pub fn save_user_settings(
     mut settings: UserSettings,
     db: State<Arc<Database>>,
+    engine: State<crate::engine::SharedEngine>,
 ) -> Result<(), String> {
     if settings.engine.trim() == "librqbit" {
         settings.engine = "transmission".to_string();
@@ -334,7 +378,107 @@ pub fn save_user_settings(
     db.set_setting("user_settings_json", &json)
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
+    apply_autostart(settings.start_on_boot, settings.start_minimized)?;
+
+    // Apply all session settings to the live engine immediately so the user
+    // does not have to restart the daemon for changes to take effect.
+    let _ = engine.apply_global_settings(&settings);
+
     Ok(())
+}
+
+/// Make "Start Nebulae on OS startup" actually work (owner report: the
+/// toggle did nothing — nothing consumed the flag).
+/// - macOS: a LaunchAgent plist with RunAtLoad.
+/// - Windows: the HKCU Run registry key (hidden console via `reg`).
+/// - Linux: an XDG autostart .desktop entry.
+/// `start_minimized` passes a `--minimized` flag the app honours at boot.
+pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot resolve the app executable: {e}"))?
+        .to_string_lossy()
+        .to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        let dirs = dirs::home_dir().ok_or("no home dir")?;
+        let dir = dirs.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("LaunchAgents dir: {e}"))?;
+        let plist = dir.join("com.asiandvdclub.nebulae.plist");
+        if !enabled {
+            let _ = std::fs::remove_file(&plist);
+            return Ok(());
+        }
+        let minimized_arg = if minimized {
+            "  <string>--minimized</string>\n"
+        } else {
+            ""
+        };
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>com.asiandvdclub.nebulae</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{exe}</string>{minimized_arg}  </array>\n  <key>RunAtLoad</key><true/>\n</dict>\n</plist>\n"
+        );
+        std::fs::write(&plist, xml).map_err(|e| format!("Write plist: {e}"))?;
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", "gui/com.asiandvdclub.nebulae"])
+            .output();
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        if !enabled {
+            let _ = std::process::Command::new("reg")
+                .args(["delete", key, "/v", "Nebulae", "/f"])
+                .creation_flags_hidden();
+            return Ok(());
+        }
+        let value = if minimized {
+            format!("\"{exe}\" --minimized")
+        } else {
+            format!("\"{exe}\"")
+        };
+        let out = std::process::Command::new("reg")
+            .args([
+                "add", key, "/v", "Nebulae", "/t", "REG_SZ", "/d", &value, "/f",
+            ])
+            .creation_flags_hidden()
+            .output()
+            .map_err(|e| format!("reg add: {e}"))?;
+        if !out.status.success() {
+            return Err("Failed to write the Run registry key".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let dirs = dirs::home_dir().ok_or("no home dir")?;
+        let dir = dirs.join(".config/autostart");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("autostart dir: {e}"))?;
+        let desktop = dir.join("nebulae.desktop");
+        if !enabled {
+            let _ = std::fs::remove_file(&desktop);
+            return Ok(());
+        }
+        let minimized_env = if minimized { " --minimized" } else { "" };
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=Nebulae\nExec={exe}{minimized_env}\nX-GNOME-Autostart-enabled=true\n"
+        );
+        std::fs::write(&desktop, content).map_err(|e| format!("Write desktop entry: {e}"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+trait CreationFlagsHidden {
+    fn creation_flags_hidden(&mut self) -> &mut Self;
+}
+#[cfg(target_os = "windows")]
+impl CreationFlagsHidden for std::process::Command {
+    fn creation_flags_hidden(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        self.creation_flags(0x0800_0000)
+    }
 }
 
 /// Active engine mode for this session, set once at startup and exposed to
@@ -392,6 +536,147 @@ pub fn test_rtorrent_server_connection(
         .map_err(|e| format!("Unexpected server response: {e}"))
 }
 
+#[tauri::command]
+pub fn get_engine_identity_info(
+    db: State<Arc<Database>>,
+    app: tauri::AppHandle,
+    engine: State<crate::engine::SharedEngine>,
+) -> Result<crate::engine::identity::EngineIdentityInfo, String> {
+    use tauri::Manager;
+    let settings = load_user_settings(db.clone())?;
+
+    let app_version = crate::engine::identity::get_app_version();
+    let nebulae_ua_res = crate::engine::identity::derive_nebulae_user_agent(app_version);
+    let nebulae_prefix_res = crate::engine::identity::derive_nebulae_peer_id_prefix(app_version);
+
+    let (nebulae_ua, nebulae_prefix, version_encoding_supported, version_encoding_limitation) =
+        match (&nebulae_ua_res, &nebulae_prefix_res) {
+            (Ok(ua), Ok(prefix)) => (ua.clone(), prefix.clone(), true, None),
+            (Err(err), _) | (_, Err(err)) => (
+                format!("Nebulae/{app_version}"),
+                "-NE0000-".to_string(),
+                false,
+                Some(err.clone()),
+            ),
+        };
+
+    // Obtain authoritative Transmission version from live daemon if running, or build-time pinned
+    let tr_version = engine
+        .engine_version()
+        .unwrap_or_else(|| crate::engine::identity::get_bundled_transmission_version().to_string());
+    let tr_ua = crate::engine::identity::derive_transmission_user_agent(&tr_version);
+    let tr_prefix = crate::engine::identity::derive_transmission_peer_id_prefix(&tr_version);
+
+    // Check daemon binary capabilities on disk
+    let res_dir = app.path().resource_dir().ok();
+    let daemon_path_res =
+        crate::engine::transmission::find_transmission_daemon_binary(res_dir.as_deref());
+    let (_daemon_found, supports_overrides) = match daemon_path_res {
+        Ok(path) => (true, crate::engine::identity::check_daemon_identity_support(&path)),
+        Err(_) => (false, false),
+    };
+
+    let is_remote = settings.rtorrent_server_enabled;
+
+    let (configured_ua, configured_prefix) = match settings.engine_identity_profile.as_str() {
+        "nebulae" => (nebulae_ua.clone(), nebulae_prefix.clone()),
+        "custom" => (
+            if settings.custom_user_agent.trim().is_empty() {
+                nebulae_ua.clone()
+            } else {
+                settings.custom_user_agent.clone()
+            },
+            if settings.custom_peer_id_prefix.trim().is_empty() {
+                nebulae_prefix.clone()
+            } else {
+                settings.custom_peer_id_prefix.clone()
+            },
+        ),
+        _ => (tr_ua.clone(), tr_prefix.clone()),
+    };
+
+    // Report active identity from the running engine session's actual applied configuration
+    let active_identity_info = db
+        .get_setting("active_engine_identity")
+        .ok()
+        .flatten()
+        .or_else(|| db.get_setting("spawned_engine_identity").ok().flatten())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+
+    let (active_profile, active_ua, active_prefix, status_message) = if is_remote {
+        (
+            "remote".to_string(),
+            "rTorrent/remote".to_string(),
+            "-RT----".to_string(),
+            "Remote rTorrent server is active. Engine identity is managed server-side and cannot be overridden locally.".to_string(),
+        )
+    } else if !supports_overrides {
+        (
+            "transmission".to_string(),
+            tr_ua.clone(),
+            tr_prefix.clone(),
+            "Bundled transmission-daemon does not support runtime identity overrides. Upstream Transmission identity remains active.".to_string(),
+        )
+    } else if let Some(info) = active_identity_info {
+        let p = info
+            .get("profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("transmission")
+            .to_string();
+        let ua = info
+            .get("user_agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&tr_ua)
+            .to_string();
+        let prefix = info
+            .get("peer_id_prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&tr_prefix)
+            .to_string();
+
+        let msg = match p.as_str() {
+            "nebulae" => format!("Native Nebulae v{} engine identity active in running daemon.", app_version),
+            "custom" => "Custom engine identity active in running daemon.".to_string(),
+            _ => "Transmission upstream engine identity active in running daemon.".to_string(),
+        };
+        (p, ua, prefix, msg)
+    } else {
+        (
+            "transmission".to_string(),
+            tr_ua.clone(),
+            tr_prefix.clone(),
+            "Transmission upstream engine identity active.".to_string(),
+        )
+    };
+
+    // Restart is required when configured profile or identity strings differ from the active running daemon
+    let restart_required = !is_remote
+        && supports_overrides
+        && (settings.engine_identity_profile != active_profile
+            || configured_ua != active_ua
+            || configured_prefix != active_prefix);
+
+    Ok(crate::engine::identity::EngineIdentityInfo {
+        profile: settings.engine_identity_profile,
+        configured_user_agent: configured_ua,
+        configured_peer_id_prefix: configured_prefix,
+        active_user_agent: active_ua,
+        active_peer_id_prefix: active_prefix,
+        bundled_transmission_version: tr_version,
+        bundled_transmission_user_agent: tr_ua,
+        bundled_transmission_peer_id_prefix: tr_prefix,
+        nebulae_version: app_version.to_string(),
+        nebulae_user_agent: nebulae_ua,
+        nebulae_peer_id_prefix: nebulae_prefix,
+        supports_runtime_overrides: supports_overrides && !is_remote,
+        restart_required,
+        status_message,
+        version_encoding_supported,
+        version_encoding_limitation,
+    })
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +712,61 @@ mod tests {
         assert_eq!(deserialized.encryption_mode, "Prefer");
         assert_eq!(deserialized.max_global_connections, 500);
         assert_eq!(deserialized.engine, "transmission");
+        assert!(!deserialized.racing_mode_enabled);
         assert!(deserialized.auto_update_enabled);
+    }
+
+    #[test]
+    fn test_racing_mode_migration_preserves_false_and_defaults_missing() {
+        // Existing user settings without racing_mode_enabled must default to false
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            !deserialized.racing_mode_enabled,
+            "Missing racing_mode_enabled must default to false for existing users"
+        );
+
+        // Explicit false must be preserved
+        let false_json = r#"{"racing_mode_enabled": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.racing_mode_enabled,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true must be preserved
+        let true_json = r#"{"racing_mode_enabled": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.racing_mode_enabled,
+            "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_media_mode_migration_defaults_true_and_preserves_false() {
+        // Missing media_mode_enabled defaults to true
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            deserialized.media_mode_enabled,
+            "Missing media_mode_enabled must default to true"
+        );
+
+        // Explicit false is preserved
+        let false_json = r#"{"media_mode_enabled": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.media_mode_enabled,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true is preserved
+        let true_json = r#"{"media_mode_enabled": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.media_mode_enabled,
+            "Explicit true must be preserved"
+        );
     }
 }
