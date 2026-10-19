@@ -29,7 +29,13 @@ use serde::Serialize;
 const SOCKS_PORT: u16 = 1055;
 const HTTP_PROXY_PORT: u16 = 1056;
 const CLI_TIMEOUT: Duration = Duration::from_secs(20);
-const ENROLL_TIMEOUT: Duration = Duration::from_secs(60);
+/// `up` (enroll and profile-resume) gets a generous bound: on a cold
+/// Windows box the first login can take 45s+ (DERP warmup, control
+/// dial). Killing the CLI mid-login cancels the daemon-side login
+/// context and leaves engine updates blocked - the daemon then ignores
+/// every later register response (observed live). Never let this
+/// timeout land on a healthy-but-slow login.
+const ENROLL_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// Managed daemon handle. Registered with Tauri's state.
 #[derive(Default)]
