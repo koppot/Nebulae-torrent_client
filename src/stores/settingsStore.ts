@@ -145,6 +145,7 @@ export const defaultSettings: UserSettings = {
 
   // 11. Racing Mode (tuning preset, disabled by default)
   racing_mode_enabled: false,
+  super_seeding_enabled: false,
 
   // 12. Engine Identification
   engine_identity_profile: 'transmission',
@@ -153,6 +154,7 @@ export const defaultSettings: UserSettings = {
 
   // 13. Media Mode
   media_mode_enabled: true,
+  media_mode_decision_made: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -187,8 +189,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ settings: merged });
     try {
       await invoke('save_user_settings', { settings: merged });
-    } catch {
-      // Fallback
+    } catch (err) {
+      set({ settings: current });
+      throw err;
     }
   },
 

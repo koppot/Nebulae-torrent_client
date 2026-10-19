@@ -1024,9 +1024,6 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                 <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                   Downloading
                 </h3>
-                <span className="text-[11px] font-mono text-white px-2 rounded-md bg-[#1f1f1f] border border-[#333333] flex items-center h-[22px]">
-                  {activeDownloads.length}
-                </span>
               </div>
               <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-thin">
                 {visibleGroups(groupItems(activeDownloads)).map((g) => renderGroupCard(g, 'active'))}

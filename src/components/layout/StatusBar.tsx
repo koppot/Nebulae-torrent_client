@@ -28,7 +28,34 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
-  const { settings } = useSettingsStore();
+  const { settings, saveSettings } = useSettingsStore();
+
+  const [isTogglingRacing, setIsTogglingRacing] = useState(false);
+  const [isTogglingSuperSeeding, setIsTogglingSuperSeeding] = useState(false);
+
+  const handleToggleRacingMode = async () => {
+    if (isTogglingRacing) return;
+    setIsTogglingRacing(true);
+    try {
+      await saveSettings({ racing_mode_enabled: !settings.racing_mode_enabled });
+    } catch (err) {
+      console.error('Failed to toggle racing mode:', err);
+    } finally {
+      setIsTogglingRacing(false);
+    }
+  };
+
+  const handleToggleSuperSeeding = async () => {
+    if (isTogglingSuperSeeding) return;
+    setIsTogglingSuperSeeding(true);
+    try {
+      await saveSettings({ super_seeding_enabled: !settings.super_seeding_enabled });
+    } catch (err) {
+      console.error('Failed to toggle super seeding:', err);
+    } finally {
+      setIsTogglingSuperSeeding(false);
+    }
+  };
 
   const [lastDoctorRun, setLastDoctorRun] = useState<number>(0);
   const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
@@ -222,12 +249,20 @@ export const StatusBar: React.FC = () => {
 
         <span className="text-[#333333]">|</span>
 
-        <div
-          className="flex items-center gap-1.5"
+        <button
+          type="button"
+          onClick={handleToggleRacingMode}
+          disabled={isTogglingRacing}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
           title={
             settings.racing_mode_enabled
-              ? 'Racing mode active — aggressive peer limits, high bandwidth priority, large disk cache'
-              : 'Racing mode disabled'
+              ? 'Racing mode enabled (click to disable)'
+              : 'Racing mode disabled (click to enable)'
+          }
+          aria-label={
+            settings.racing_mode_enabled
+              ? 'Disable racing mode'
+              : 'Enable racing mode'
           }
         >
           <span
@@ -240,7 +275,37 @@ export const StatusBar: React.FC = () => {
           <span className={settings.racing_mode_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
             Racing mode
           </span>
-        </div>
+        </button>
+
+        <span className="text-[#333333]">|</span>
+
+        <button
+          type="button"
+          onClick={handleToggleSuperSeeding}
+          disabled={isTogglingSuperSeeding}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
+          title={
+            settings.super_seeding_enabled
+              ? 'Super seeding enabled (click to disable)'
+              : 'Super seeding disabled (click to enable)'
+          }
+          aria-label={
+            settings.super_seeding_enabled
+              ? 'Disable super seeding'
+              : 'Enable super seeding'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full transition-colors ${
+              settings.super_seeding_enabled
+                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+            }`}
+          />
+          <span className={settings.super_seeding_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
+            Super seeding
+          </span>
+        </button>
       </div>
 
       {/* Center: Global Transfer Throughput */}

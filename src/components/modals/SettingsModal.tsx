@@ -51,8 +51,16 @@ type SettingsTab =
 
 export const SettingsModal: React.FC = () => {
   const { showSettings, setShowSettings } = useUiStore();
-  const { settings, saveSettings, engineMode } = useSettingsStore();
+  const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
+  const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
+  const settings: UserSettings = {
+    ...persistedSettings,
+    ...pendingChanges,
+  };
+
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
@@ -73,6 +81,50 @@ export const SettingsModal: React.FC = () => {
   const [, setIsLoadingIdentity] = useState(false);
   const [identityFeedback, setIdentityFeedback] = useState<string | null>(null);
 
+  const saveSettings = (patch: Partial<UserSettings>) => {
+    setStatusMessage(null);
+    setPendingChanges((prev) => {
+      const next = { ...prev, ...patch };
+      (Object.keys(patch) as Array<keyof UserSettings>).forEach((k) => {
+        if (persistedSettings[k] === next[k]) {
+          delete next[k];
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleApply = async (): Promise<boolean> => {
+    if (Object.keys(pendingChanges).length === 0 || isSaving) return true;
+    setIsSaving(true);
+    setStatusMessage(null);
+    try {
+      await storeSaveSettings(pendingChanges);
+      setPendingChanges({});
+      setStatusMessage('Preferences applied successfully');
+      setTimeout(() => setStatusMessage(null), 3500);
+      return true;
+    } catch (err: unknown) {
+      setStatusMessage(`Error saving settings: ${errorMessage(err, 'Failed to apply preferences')}`);
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDone = async () => {
+    if (Object.keys(pendingChanges).length > 0) {
+      const ok = await handleApply();
+      if (!ok) return;
+    }
+    setShowSettings(false);
+  };
+
+  const handleCancel = () => {
+    setPendingChanges({});
+    setShowSettings(false);
+  };
+
   const fetchIdentityInfo = () => {
     setIsLoadingIdentity(true);
     invoke<EngineIdentityInfo>('get_engine_identity_info')
@@ -82,14 +134,25 @@ export const SettingsModal: React.FC = () => {
   };
 
   const handleRestoreIdentityDefaults = async () => {
-    await saveSettings({
-      engine_identity_profile: 'transmission',
-      custom_user_agent: '',
-      custom_peer_id_prefix: '',
-    });
-    setIdentityFeedback('Restored Transmission upstream defaults. Restart required to apply.');
-    fetchIdentityInfo();
-    setTimeout(() => setIdentityFeedback(null), 4000);
+    try {
+      await storeSaveSettings({
+        engine_identity_profile: 'transmission',
+        custom_user_agent: '',
+        custom_peer_id_prefix: '',
+      });
+      setPendingChanges((prev) => {
+        const next = { ...prev };
+        delete next.engine_identity_profile;
+        delete next.custom_user_agent;
+        delete next.custom_peer_id_prefix;
+        return next;
+      });
+      setIdentityFeedback('Restored Transmission upstream defaults. Restart required to apply.');
+      fetchIdentityInfo();
+      setTimeout(() => setIdentityFeedback(null), 4000);
+    } catch (err: unknown) {
+      setIdentityFeedback(`Failed: ${errorMessage(err)}`);
+    }
   };
 
   const probePlayer = () => {
@@ -396,20 +459,6 @@ export const SettingsModal: React.FC = () => {
                         <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
                           Checks for signed releases on startup, downloads silently in the background, and stages updates to apply on quit without interrupting active torrent transfers.
                           On Linux Debian/RPM installations, updates are managed by your system package manager.
-                        </span>
-                      </div>
-                    </label>
-                    <label className="flex items-start gap-2 cursor-pointer pt-1">
-                      <input
-                        type="checkbox"
-                        checked={settings.media_mode_enabled !== false}
-                        onChange={(e) => saveSettings({ media_mode_enabled: e.target.checked })}
-                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
-                      />
-                      <div>
-                        <span className="text-white font-medium">Enable media mode</span>
-                        <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
-                          Enables the optical disc and ISO cinema streaming interface, DVD/Blu-ray interactive menu playback, and the top-bar Media navigation switch. Disabling hides the Media tab without deleting media data.
                         </span>
                       </div>
                     </label>
@@ -1159,31 +1208,52 @@ export const SettingsModal: React.FC = () => {
                         onChange={(e) => saveSettings({ media_mode_enabled: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
                       />
-                      <span className="text-white font-medium text-xs">Enabled</span>
+                      <span className="text-white font-medium text-xs">Enable media mode</span>
                     </label>
                   </div>
                 </div>
 
-                {/* Racing Mode */}
-                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5 text-[#e50914]" />
-                        <span>Racing Mode</span>
-                      </h3>
-                      <p className="text-[11px] text-[#a3a3a3] mt-0.5">
-                        Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes for queue accounting, and assigns high torrent bandwidth priority to active torrents.
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 cursor-pointer ml-4 flex-shrink-0">
+                {/* Global BitTorrent Modes */}
+                <div className="p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-4">
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>Global Swarm Modes</span>
+                    </h3>
+                    <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                      Configure high-performance swarm behavior and initial seeding distribution policies.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 pt-1">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={settings.racing_mode_enabled}
                         onChange={(e) => saveSettings({ racing_mode_enabled: e.target.checked })}
-                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
-                      <span className="text-white font-medium text-xs">Enabled</span>
+                      <div>
+                        <span className="text-white font-medium text-xs">Enable racing mode</span>
+                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                          Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents.
+                        </p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.super_seeding_enabled}
+                        onChange={(e) => saveSettings({ super_seeding_enabled: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium text-xs">Enable super seeding</span>
+                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                          Initial seeding mode — forces peers to download and re-upload unique pieces across the swarm before receiving subsequent pieces. Applied to actively seeding torrents to maximize piece dispersion.
+                        </p>
+                      </div>
                     </label>
                   </div>
                 </div>
@@ -2153,19 +2223,47 @@ export const SettingsModal: React.FC = () => {
             </button>
             <div className="text-[11px] font-mono text-[#a3a3a3]">
               {statusMessage ? (
-                <span className="text-[#e50914] font-semibold">{statusMessage}</span>
+                <span
+                  className={
+                    statusMessage.startsWith('Error')
+                      ? 'text-[#e50914] font-semibold'
+                      : 'text-emerald-400 font-semibold'
+                  }
+                >
+                  {statusMessage}
+                </span>
+              ) : Object.keys(pendingChanges).length > 0 ? (
+                <span className="text-amber-400 font-medium">Unsaved preference changes pending</span>
               ) : (
-                <span>Nebulae Preferences · Changes applied automatically</span>
+                <span>Nebulae Preferences</span>
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowSettings(false)}
-            className="px-5 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white font-medium text-xs transition shadow"
-          >
-            Done
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="px-3.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] hover:bg-[#262626] text-[#a3a3a3] hover:text-white font-medium text-xs transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={Object.keys(pendingChanges).length === 0 || isSaving}
+              onClick={handleApply}
+              className="px-4 py-1.5 rounded border border-[#444444] bg-[#2a2a2a] hover:bg-[#333333] disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-xs transition shadow-sm"
+              title="Apply pending preference changes live without closing Preferences"
+            >
+              {isSaving ? 'Applying...' : 'Apply'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDone}
+              className="px-5 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white font-medium text-xs transition shadow"
+            >
+              OK
+            </button>
+          </div>
         </div>
       </div>
     </div>

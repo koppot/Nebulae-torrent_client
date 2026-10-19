@@ -142,12 +142,16 @@ pub struct UserSettings {
     /// and any newly applied defaults.
     pub app_version: Option<String>,
 
-    // 12. Racing Mode tuning preset
+    // 12. Racing Mode & Super Seeding global presets
     /// When enabled, Transmission is configured with aggressive peer limits,
     /// 256 MiB disk cache, 14 unchoke slots, 2-minute queue stall threshold,
-    /// and added torrents receive high bandwidth priority.
+    /// and actively downloading torrents receive high bandwidth priority.
     #[serde(default)]
     pub racing_mode_enabled: bool,
+    /// When enabled, actively seeding torrents operate in initial seeding mode
+    /// (super seeding) to distribute rare pieces across the swarm efficiently.
+    #[serde(default)]
+    pub super_seeding_enabled: bool,
 
     // 13. Engine Identification
     /// Selected engine identity profile: "transmission" (default) | "nebulae" | "custom"
@@ -164,6 +168,10 @@ pub struct UserSettings {
     /// When enabled, the Media Center view is accessible. Defaults to true.
     #[serde(default = "default_true")]
     pub media_mode_enabled: bool,
+    /// Indicates whether the user has explicitly answered the first-run
+    /// Media Mode choice. When false, the prompt is presented on launch.
+    #[serde(default)]
+    pub media_mode_decision_made: bool,
 }
 
 fn default_true() -> bool {
@@ -315,9 +323,10 @@ impl Default for UserSettings {
             // 11. Internal bookkeeping
             app_version: None,
 
-            // 12. Racing Mode tuning preset: false by default to prevent silent
+            // 12. Racing Mode & Super Seeding global presets: false by default to prevent silent
             // activation on existing installs and keep upstream defaults.
             racing_mode_enabled: false,
+            super_seeding_enabled: false,
 
             // 13. Engine Identification
             engine_identity_profile: "transmission".to_string(),
@@ -326,6 +335,7 @@ impl Default for UserSettings {
 
             // 14. Media Mode
             media_mode_enabled: true,
+            media_mode_decision_made: false,
         }
     }
 }

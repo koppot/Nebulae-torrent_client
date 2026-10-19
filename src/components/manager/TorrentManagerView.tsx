@@ -1097,7 +1097,19 @@ export const TorrentManagerView: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-2 px-2.5">
-                      <span className="text-[11px] font-sans text-white">{t.status}</span>
+                      {t.status === 'Downloading' && t.racingMode ? (
+                        <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-[#e50914] flex-shrink-0" fill="currentColor" />
+                          <span>Racing mode</span>
+                        </span>
+                      ) : t.status === 'Seeding' && t.super_seeding ? (
+                        <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="currentColor" />
+                          <span>Super seeding</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-sans text-white">{t.status}</span>
+                      )}
                     </td>
                     <td className="py-2 px-2.5 text-white">{formatSpeed(t.download_rate)}</td>
                     <td className="py-2 px-2.5">{formatSpeed(t.upload_rate)}</td>

@@ -100,7 +100,7 @@ export const App: React.FC = () => {
       window.clearInterval(iv);
     };
   }, []);
-  const { loadSettings, fetchEngineMode, saveSettings } = useSettingsStore();
+  const { settings, loadSettings, fetchEngineMode, saveSettings, isLoading: settingsLoading } = useSettingsStore();
   const { fetchTorrents } = useTorrentStore();
   const { runDoctorTest } = useConnectivityStore();
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
@@ -108,6 +108,12 @@ export const App: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [engineInitError, setEngineInitError] = useState<string | null>(null);
   const [showFirstRunMediaModal, setShowFirstRunMediaModal] = useState(false);
+
+  useEffect(() => {
+    if (!settingsLoading && !settings.media_mode_decision_made) {
+      setShowFirstRunMediaModal(true);
+    }
+  }, [settingsLoading, settings.media_mode_decision_made]);
 
   useEffect(() => {
     invoke<string | null>('get_engine_init_error')
@@ -124,10 +130,6 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
-
-    if (!localStorage.getItem('nebulae_media_mode_choice')) {
-      setShowFirstRunMediaModal(true);
-    }
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
@@ -330,8 +332,8 @@ export const App: React.FC = () => {
         {viewMode === 'manager' && <TorrentManagerView />}
       </main>
 
-      {/* 4. Bottom Desktop Application Status Bar */}
-      <StatusBar />
+      {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}
+      {viewMode === 'manager' && <StatusBar />}
         </>
       )}
 
@@ -379,7 +381,7 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  void saveSettings({ media_mode_enabled: false });
+                  void saveSettings({ media_mode_enabled: false, media_mode_decision_made: true });
                   setViewMode('manager');
                   localStorage.setItem('nebulae_media_mode_choice', 'no');
                   setShowFirstRunMediaModal(false);
@@ -392,7 +394,7 @@ export const App: React.FC = () => {
                 type="button"
                 autoFocus
                 onClick={() => {
-                  void saveSettings({ media_mode_enabled: true });
+                  void saveSettings({ media_mode_enabled: true, media_mode_decision_made: true });
                   setViewMode('media');
                   localStorage.setItem('nebulae_media_mode_choice', 'yes');
                   setShowFirstRunMediaModal(false);
