@@ -75,13 +75,14 @@ jobs:
           if (-not (Test-Path "src-tauri/resources/jre/bin/java.exe")) { throw "JRE staging failed" }
 
       - name: Set Package Version to ${{ matrix.version }}
-        shell: pwsh
+        shell: bash
         run: |
-          $ver = "${{ matrix.version }}"
-          Write-Host "Updating Cargo.toml and tauri.conf.json to version $ver"
-          (Get-Content src-tauri/Cargo.toml) -replace '^version = ".*"', "version = `"$ver`"" | Set-Content src-tauri/Cargo.toml
-          (Get-Content src-tauri/tauri.conf.json) -replace '"version": ".*"', "`"version`": `"$ver`"" | Set-Content src-tauri/tauri.conf.json
-          (Get-Content package.json) -replace '"version": ".*"', "`"version`": `"$ver`"," | Set-Content package.json
+          VER="${{ matrix.version }}"
+          echo "Setting package versions to $VER"
+          node -e "const p = require('./package.json'); p.version = process.argv[1]; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');" "$VER"
+          node -e "const p = require('./src-tauri/tauri.conf.json'); p.version = process.argv[1]; require('fs').writeFileSync('./src-tauri/tauri.conf.json', JSON.stringify(p, null, 2) + '\n');" "$VER"
+          python3 -c "import re, sys; f='src-tauri/Cargo.toml'; c=open(f).read(); c=re.sub(r'(?m)^version\s*=\s*\".*\"', f'version = \"{sys.argv[1]}\"', c, count=1); open(f,'w').write(c)" "$VER"
+          grep '^version' src-tauri/Cargo.toml
 
       - name: Build Tauri Application with test-updater feature
         run: pnpm tauri build --features test-updater
@@ -123,4 +124,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload test-builds artifacts/* --clobber
+          uploaded=false
+          for attempt in 1 2 3 4 5; do
+            if gh release upload test-builds artifacts/* --clobber; then
+              uploaded=true
+              break
+            fi
+            echo "upload attempt $attempt failed; retrying in 15s"
+            sleep 15
+          done
+          if [ "$uploaded" != true ]; then
+            echo "ERROR: could not attach assets to draft release"
+            exit 1
+          fi
