@@ -10,7 +10,7 @@ work runs on `spawn_blocking`. Status type: `crate::tailscale::TsStatus`.
 | `tailscale_status` | — | `TsStatus` | Cheap; safe to poll (status bar) |
 | `tailscale_enroll` | `auth_key: String`, `control_url: Option<String>` | `Result<(), String>` | Starts + waits for the daemon first; key is never logged |
 | `tailscale_disconnect` | — | `Result<(), String>` | `logout`: leaves the tailnet, daemon stays up |
-| `adc_private_probe` | — | `AdcPrivateProbe` | Two independent verdicts, see below |
+| `adc_private_probe` | — | `AdcPrivateProbe` | 4-tier verdicts, see below |
 
 `TsStatus` fields and UI intent:
 - `daemon_running: bool` — our supervised tailscaled process is alive.
@@ -20,6 +20,10 @@ work runs on `spawn_blocking`. Status type: `crate::tailscale::TsStatus`.
 - `tailnet_name: Option<String>` — tailnet display name.
 - `socks_proxy: Option<String>` — `socks5://127.0.0.1:1055` when `Running`.
 - `adc_node: Option<String>` — ADC server node's tailnet IP, when seen among peers.
+- `adc_route_ip: Option<String>` — first subnet IP the ADC node advertises
+  (`PrimaryRoutes`, e.g. the server's public IP riding the approved subnet
+  route). This is the pin target for mesh HTTP; the tailnet IP itself has
+  no listener (verified live).
 
 Enrollment UX: `auth_key` = the single-use key from the ADC site.
 `control_url = Some("https://control.asiandvdclub.org")` → club Headscale
@@ -27,16 +31,31 @@ Enrollment UX: `auth_key` = the single-use key from the ADC site.
 Errors surface verbatim in the UI; the common failure ("binaries are
 missing…") means the build did not bundle the binaries.
 
-`AdcPrivateProbe`:
-- `mesh_tcp_ok: bool` — TCP connect to the ADC node's tailnet IP
-  (`mesh_target`, 100.x.y.z:443) through the SOCKS proxy. Success proves
-  the private route by construction (destination exists only in-mesh).
-- `https_public_name_ok: bool` (+ `https_status`) — real TLS HTTPS to
-  `https://asiandvdclub.org` through the same proxy; only works when the
-  server advertises a subnet route for its public name. Failure with
-  `mesh_tcp_ok = true` means "node reachable, public name not routed yet".
-- UI copy must keep the two verdicts separate; never show a green
-  "connected to ADC" from `https_public_name_ok` alone.
+`AdcPrivateProbe` — the 4-tier contract. Each tier strictly implies the
+tiers below it (fail-closed by construction: a verdict can never be true
+over a failed lower tier, and every verdict flips when the peer/route
+goes away):
+
+1. `daemon_ready` (+ `backend_state`) — the EMBEDDED daemon answers on
+   our private pipe. Readiness of the control plane only.
+2. `peer_available` (+ `peer_ip`, `peer_route_ip`) — the ADC node is in
+   the live netmap with its subnet route advertised.
+3. `routed_tcp_ok` (+ `routed_tcp_target`, `routed_tcp_latency_ms`) — a
+   real TCP connect through the daemon's SOCKS5 proxy to the advertised
+   subnet IP. Proves the routed mesh path, not just the map.
+4. `https_ok` (+ `https_status`, `tls_verified`) — a real HTTPS request
+   to `https://asiandvdclub.org` through the same proxy with FULL
+   certificate and hostname validation.
+
+TLS truthfulness: there are NO insecure escape hatches in this path —
+`danger_accept_invalid_certs` is absent from the tailscale and tracker
+clients (the tracker client's historic `ssl_verify` reading is curl's
+`%{ssl_verify_result}` convention: **0 means the certificate VERIFIED**,
+non-zero is an error code). `tls_verified: true` is reported exactly
+when tier 4 succeeded. UI copy must keep the tiers separate; never show
+a green "connected to ADC" from tier 4 alone when 1-3 explain a
+different story. Compatibility aliases (`mesh_tcp_ok` = tier 3,
+`https_public_name_ok` = tier 4) are kept for the existing settings UI.
 
 ## Using `adc_http_client()` (ADC HTTP callers)
 
@@ -54,8 +73,26 @@ Torrent peer transport must NOT go through this client (see limits).
 
 App launch starts the daemon (`ensure_daemon`, 30s readiness bound);
 one supervisor thread restarts it if it crashes; app quit stops it
-(graceful SIGTERM + reap on unix); user disconnect keeps it running.
+(graceful SIGTERM + reap on unix; on Windows an ADOPTED daemon (left by
+a hard kill, supervised by pipe-probe) is stopped by ownership-checked
+pid — the command line must carry our private state dir, so system or
+foreign daemons are never touched); user disconnect keeps it running.
 At most one supervisor/daemon exists even under concurrent starts.
+Adoption is also ownership-checked: the private pipe is probed AND a
+matching process must exist in the process table before the daemon is
+adopted; a pipe answer without an owned process is logged and retried,
+never adopted, never double-spawned.
+
+## Stale WebView2 recovery (Windows)
+
+`webview_recovery::recover_stale_webviews()` runs at launch BEFORE any
+window exists. A hard-killed app can leave WebView2 runtimes holding
+the EBWebView profile lock, which fails the next launch's WebView2
+initialization (0x8007139F / 0x80070578). Recovery is ownership-scoped:
+process name msedgewebview2.exe AND our identifier-scoped user-data
+marker (`org.asiandvdclub.nebulae\EBWebView`) in the command line AND a
+dead parent process. Other applications' webviews, live instances, and
+the profile directory on disk are never touched.
 
 ## Platform limitations (current truth)
 

@@ -77,15 +77,18 @@ impl Paths {
     pub fn resolve() -> Result<Paths, String> {
         let internal = crate::utils::paths::AppPaths::init()?.internal_dir;
         let state_dir = internal.join("tailscale");
-        std::fs::create_dir_all(&state_dir)
-            .map_err(|e| format!("tailscale state dir: {e}"))?;
+        std::fs::create_dir_all(&state_dir).map_err(|e| format!("tailscale state dir: {e}"))?;
         // Bundled binaries — resolved with the SAME convention as
         // find_transmission_daemon_binary (engine/transmission.rs):
         // exe-dir layouts first, macOS Contents/Resources, AppImage $APPDIR,
         // then the Linux package prefixes (lib/nebulae, share/nebulae).
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
         let exe_dir = exe.parent().ok_or("no exe dir")?;
-        let name = if cfg!(windows) { "tailscaled.exe" } else { "tailscaled" };
+        let name = if cfg!(windows) {
+            "tailscaled.exe"
+        } else {
+            "tailscaled"
+        };
         let mut candidates: Vec<PathBuf> = Vec::new();
         let bases = [
             Some(exe_dir.to_path_buf()),
@@ -179,7 +182,10 @@ pub fn private_socket_arg(state_dir: &PathBuf) -> String {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        state_dir.join("tailscaled.sock").to_string_lossy().to_string()
+        state_dir
+            .join("tailscaled.sock")
+            .to_string_lossy()
+            .to_string()
     }
 }
 
@@ -228,6 +234,63 @@ fn daemon_command(paths: &Paths) -> Command {
 /// `timeout` (injectable form; see `wait_for_ready`).
 pub fn daemon_ready_on(paths: &Paths, timeout: Duration) -> bool {
     cli_on(paths, &["status", "--json"], timeout).is_ok()
+}
+
+/// Command-line marker that pins daemon-process lookups to THIS app's
+/// embedded instance: our private state dir can never match a system
+/// Tailscale install (its statedir is C:\ProgramData\Tailscale) or any
+/// other app's daemon. (unix: used by tests only — pdeathsig owns cleanup)
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn daemon_cmdline_marker(paths: &Paths) -> String {
+    paths.state_dir.to_string_lossy().to_string()
+}
+
+/// PIDs of tailscaled processes whose command line carries OUR state dir
+/// (ownership proof). Empty on other platforms (the child handle covers
+/// them) and when PowerShell is unavailable.
+fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        let marker = daemon_cmdline_marker(paths);
+        let filter = "Name='tailscaled.exe'";
+        let ps = format!(
+            "$ErrorActionPreference='SilentlyContinue'; \
+             Get-CimInstance Win32_Process -Filter \"{filter}\" | \
+             ForEach-Object {{ if ($_.CommandLine -like '*{marker}*') {{ Write-Output $_.ProcessId }} }}"
+        );
+        match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .filter_map(|s| s.parse::<u32>().ok())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = paths;
+        Vec::new()
+    }
+}
+
+/// Hard-stop a daemon process by pid (adopted-daemon teardown; same
+/// semantics as the child-handle path).
+fn stop_pid_force(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
 }
 
 /// Clear, actionable error for a build without the bundled binaries.
@@ -388,25 +451,42 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                 // ADOPTION: on Windows a hard-killed app leaves the daemon
                 // running (no pdeathsig). Its pipe still answers, so a blind
                 // spawn fails on the busy pipe and would loop forever
-                // (verified live: 18 failed respawns in 90s). When the pipe
-                // already serves a daemon, adopt it: supervise by probe,
-                // resume its profile once, spawn nothing.
+                // (verified live: 18 failed respawns in 90s). Adoption is
+                // ownership-checked twice: the probe runs against OUR pipe
+                // (a system daemon never binds it), AND a matching process
+                // must exist in the process table (command line carries our
+                // state dir). A pipe answer with no owned process means a
+                // foreign daemon bound our pipe name: spawn nothing, log,
+                // retry next tick.
                 if cli_on(&paths, &["status", "--json"], Duration::from_secs(3)).is_ok() {
-                    if !resumed {
-                        resumed = true;
-                        let p2 = paths.clone();
-                        std::thread::spawn(move || {
-                            if let Err(e) = wait_for_ready(&p2, Duration::from_secs(30)) {
-                                tracing::warn!("[tailscale] adopt readiness: {e}");
-                                return;
-                            }
-                            match resume_saved_profile(&p2) {
-                                Ok(()) => tracing::info!("[tailscale] adopted daemon resumed"),
-                                Err(e) => tracing::warn!("[tailscale] adopt resume: {e}"),
-                            }
-                        });
+                    let owned = find_owned_daemon_pids(&paths);
+                    if owned.is_empty() {
+                        tracing::warn!(
+                            "[tailscale] pipe answers but no daemon matches our state dir; \
+                             not adopting, not spawning"
+                        );
+                        *guard = None;
+                    } else {
+                        tracing::info!(
+                            "[tailscale] adopting already-running daemon (pid {})",
+                            owned[0]
+                        );
+                        if !resumed {
+                            resumed = true;
+                            let p2 = paths.clone();
+                            std::thread::spawn(move || {
+                                if let Err(e) = wait_for_ready(&p2, Duration::from_secs(30)) {
+                                    tracing::warn!("[tailscale] adopt readiness: {e}");
+                                    return;
+                                }
+                                match resume_saved_profile(&p2) {
+                                    Ok(()) => tracing::info!("[tailscale] adopted daemon resumed"),
+                                    Err(e) => tracing::warn!("[tailscale] adopt resume: {e}"),
+                                }
+                            });
+                        }
+                        *guard = None;
                     }
-                    *guard = None;
                 } else {
                     tracing::warn!("[tailscale] tailscaled exited; restarting");
                     match daemon_command(&paths).spawn() {
@@ -423,7 +503,9 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                                     return;
                                 }
                                 match resume_saved_profile(&p2) {
-                                    Ok(()) => tracing::info!("[tailscale] respawned daemon resumed"),
+                                    Ok(()) => {
+                                        tracing::info!("[tailscale] respawned daemon resumed")
+                                    }
                                     Err(e) => tracing::warn!("[tailscale] respawn resume: {e}"),
                                 }
                             });
@@ -449,7 +531,9 @@ pub fn shutdown() {
 
 /// Injectable teardown: SIGTERM first (lets tailscaled flush its state
 /// file), bounded wait, then hard kill. Wanted=false also stops the
-/// supervisor from respawning.
+/// supervisor from respawning. ADOPTED daemons (no child handle: the app
+/// adopted a daemon left by a hard kill) are stopped by ownership-checked
+/// pid lookup, so graceful quit never leaves our daemon behind.
 pub fn shutdown_state(state: &Arc<TsState>) {
     state.wanted.store(false, Ordering::SeqCst);
     let mut guard = state.child.lock().unwrap();
@@ -470,6 +554,17 @@ pub fn shutdown_state(state: &Arc<TsState>) {
             }
         }
         let _ = child.wait();
+    } else {
+        // Adopted-daemon teardown: same hard-kill semantics as the child
+        // path. Ownership = the command line carries our state dir;
+        // system/foreign daemons never match (and on unix the list is
+        // empty by construction: pdeathsig owns cleanup there).
+        if let Ok(paths) = Paths::resolve() {
+            for pid in find_owned_daemon_pids(&paths) {
+                tracing::info!("[tailscale] stopping adopted daemon pid {pid}");
+                stop_pid_force(pid);
+            }
+        }
     }
     *guard = None;
 }
@@ -513,11 +608,7 @@ fn cli_on(paths: &Paths, args: &[&str], timeout: Duration) -> Result<String, Str
                 if let Some(mut e) = child.stderr.take() {
                     let _ = e.read_to_string(&mut err);
                 }
-                return Err(if err.trim().is_empty() {
-                    output
-                } else {
-                    err
-                });
+                return Err(if err.trim().is_empty() { output } else { err });
             }
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -612,7 +703,14 @@ pub fn status() -> TsStatus {
     // An ADOPTED daemon (orphan serving the pipe; see supervise_loop) has no
     // child handle but is perfectly functional: report it as running when
     // the pipe answers. One CLI call serves both the probe and the parse.
-    if let Ok(json) = cli(&["status", "--json"], if child_running { CLI_TIMEOUT } else { Duration::from_secs(5) }) {
+    if let Ok(json) = cli(
+        &["status", "--json"],
+        if child_running {
+            CLI_TIMEOUT
+        } else {
+            Duration::from_secs(5)
+        },
+    ) {
         if !child_running {
             st.daemon_running = true;
         }
@@ -641,7 +739,11 @@ pub fn status() -> TsStatus {
                     let is_adc = ["DNSName", "HostName"].iter().any(|k| {
                         peer.get(k)
                             .and_then(|x| x.as_str())
-                            .map(|s| s.trim_end_matches('.').to_lowercase().contains("asiandvdclub"))
+                            .map(|s| {
+                                s.trim_end_matches('.')
+                                    .to_lowercase()
+                                    .contains("asiandvdclub")
+                            })
                             .unwrap_or(false)
                     });
                     if is_adc {
@@ -686,12 +788,17 @@ pub fn socks_addr() -> Option<SocketAddr> {
 /// Minimal SOCKS5 CONNECT through the daemon's local proxy (no new deps):
 /// greeting (no auth) -> CONNECT to <ip:port> -> reply code 0x00 = success.
 /// Only used for TCP reachability probes; HTTP goes through reqwest.
-fn socks5_tcp_connect(proxy: SocketAddr, ip: &str, port: u16, timeout: Duration) -> Result<(), String> {
+fn socks5_tcp_connect(
+    proxy: SocketAddr,
+    ip: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<(), String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
-    let mut stream = TcpStream::connect_timeout(&proxy, timeout)
-        .map_err(|e| format!("socks connect: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&proxy, timeout).map_err(|e| format!("socks connect: {e}"))?;
     stream.set_read_timeout(Some(timeout)).ok();
     stream.set_write_timeout(Some(timeout)).ok();
 
@@ -700,32 +807,37 @@ fn socks5_tcp_connect(proxy: SocketAddr, ip: &str, port: u16, timeout: Duration)
         .and_then(|_| stream.flush())
         .map_err(|e| format!("socks greeting: {e}"))?;
     let mut reply = [0u8; 2];
-    stream.read_exact(&mut reply).map_err(|e| format!("socks greeting reply: {e}"))?;
+    stream
+        .read_exact(&mut reply)
+        .map_err(|e| format!("socks greeting reply: {e}"))?;
     if reply[1] != 0x00 {
         return Err("socks: no acceptable auth method".into());
     }
 
     // CONNECT, domain-less: IPv4 target (tailnet IPs are v4 CGNAT).
-    let octets: Vec<u8> = ip
-        .split('.')
-        .filter_map(|o| o.parse::<u8>().ok())
-        .collect();
+    let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse::<u8>().ok()).collect();
     if octets.len() != 4 {
         return Err(format!("not an IPv4 target: {ip}"));
     }
     let mut req = vec![0x05, 0x01, 0x00, 0x01];
     req.extend_from_slice(&octets);
     req.extend_from_slice(&port.to_be_bytes());
-    stream.write_all(&req).map_err(|e| format!("socks connect: {e}"))?;
+    stream
+        .write_all(&req)
+        .map_err(|e| format!("socks connect: {e}"))?;
 
     let mut resp = [0u8; 4];
-    stream.read_exact(&mut resp).map_err(|e| format!("socks connect reply: {e}"))?;
+    stream
+        .read_exact(&mut resp)
+        .map_err(|e| format!("socks connect reply: {e}"))?;
     if resp[1] != 0x00 {
         return Err(format!("socks CONNECT failed (code {})", resp[1]));
     }
     // Bounded drain of the bound address field (4b addr + 2b port for v4).
     let mut rest = [0u8; 6];
-    stream.read_exact(&mut rest).map_err(|e| format!("socks tail: {e}"))?;
+    stream
+        .read_exact(&mut rest)
+        .map_err(|e| format!("socks tail: {e}"))?;
     Ok(())
 }
 
@@ -742,7 +854,10 @@ pub fn probe_adc_mesh_tcp() -> Result<(String, u32), String> {
         return Err("ADC node not seen in the tailnet peer list (not enrolled, or the club node is offline in the control plane)".into());
     };
     if st.backend_state != "Running" {
-        return Err(format!("daemon backend is {} (not Running)", st.backend_state));
+        return Err(format!(
+            "daemon backend is {} (not Running)",
+            st.backend_state
+        ));
     }
     let proxy: SocketAddr = format!("127.0.0.1:{SOCKS_PORT}")
         .parse()
@@ -764,7 +879,11 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
     if st.backend_state != "Running" {
         return Err(format!(
             "private route unavailable: daemon backend is {} (not Running)",
-            if st.backend_state.is_empty() { "not started" } else { &st.backend_state }
+            if st.backend_state.is_empty() {
+                "not started"
+            } else {
+                &st.backend_state
+            }
         ));
     }
     let proxy = reqwest::Proxy::all(format!("socks5://127.0.0.1:{SOCKS_PORT}"))
@@ -777,10 +896,7 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
     // the mesh), else to the node's tailnet IP. TLS SNI + certificate/
     // hostname validation stay on the public name (resolve() only affects
     // the connection target).
-    let pin = st
-        .adc_route_ip
-        .clone()
-        .or_else(|| st.adc_node.clone());
+    let pin = st.adc_route_ip.clone().or_else(|| st.adc_node.clone());
     if let Some(node_ip) = pin {
         if let Ok(addr) = node_ip.parse() {
             builder = builder.resolve("asiandvdclub.org", addr);
@@ -788,7 +904,6 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
     }
     builder.build().map_err(|e| format!("client: {e}"))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -808,7 +923,10 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert_eq!(arg, r"\\.\pipe\nebulae-tailscaled");
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(arg, dir.join("tailscaled.sock").to_string_lossy().to_string());
+        assert_eq!(
+            arg,
+            dir.join("tailscaled.sock").to_string_lossy().to_string()
+        );
     }
 
     #[test]
@@ -874,7 +992,9 @@ mod tests {
         let paths = Paths {
             state_dir: dir.clone(),
             socket: socket_path(&dir),
-            bin_dir: Paths::resolve().map(|p| p.bin_dir).unwrap_or_else(|_| dir.clone()),
+            bin_dir: Paths::resolve()
+                .map(|p| p.bin_dir)
+                .unwrap_or_else(|_| dir.clone()),
         };
         let state = Arc::new(TsState::default());
         // wanted stays false: supervisors exit immediately, spawn nothing.
@@ -884,7 +1004,10 @@ mod tests {
                 std::thread::spawn(move || start_supervisor_once(&state, paths))
             })
             .collect();
-        let started: usize = handles.into_iter().map(|h| h.join().unwrap() as usize).sum();
+        let started: usize = handles
+            .into_iter()
+            .map(|h| h.join().unwrap() as usize)
+            .sum();
         assert_eq!(started, 1, "exactly one supervisor may start");
         let guard = state.child.lock().unwrap();
         assert!(guard.is_none(), "no daemon must be spawned when not wanted");
@@ -898,9 +1021,37 @@ mod tests {
         assert!(should_resume_profile(enrolled));
         let fresh = r#"{"ControlURL":"","LoggedOut":true}"#;
         assert!(!should_resume_profile(fresh));
-        let logged_out_with_url = r#"{"ControlURL":"https://control.asiandvdclub.org","LoggedOut":true}"#;
+        let logged_out_with_url =
+            r#"{"ControlURL":"https://control.asiandvdclub.org","LoggedOut":true}"#;
         assert!(!should_resume_profile(logged_out_with_url));
         assert!(!should_resume_profile("not json"));
+    }
+
+    /// The daemon-process ownership marker must pin lookups to OUR private
+    /// state dir: it can never match a system Tailscale install or another
+    /// app's daemon (adoption and shutdown both key off this).
+    #[test]
+    fn daemon_marker_is_private_state_dir() {
+        let dir = temp_dir("nebulae-ts-marker");
+        let paths = Paths {
+            state_dir: dir.clone(),
+            socket: socket_path(&dir),
+            bin_dir: dir.clone(),
+        };
+        let marker = daemon_cmdline_marker(&paths);
+        assert!(
+            marker.contains("nebulae-ts-marker"),
+            "must carry our state dir"
+        );
+        assert!(
+            !marker.contains("ProgramData"),
+            "must not match system installs"
+        );
+        assert!(
+            !marker.contains("Tailscale"),
+            "must not match system installs"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Stopping a never-started state must be a no-op (no panic, clean flags).
@@ -937,7 +1088,10 @@ mod tests {
 
         shutdown_state(&state); // graceful: SIGTERM, bounded wait, reap
         std::thread::sleep(Duration::from_millis(300));
-        assert!(state.child.lock().unwrap().is_none(), "child must be reaped");
+        assert!(
+            state.child.lock().unwrap().is_none(),
+            "child must be reaped"
+        );
         assert!(!state.wanted.load(Ordering::SeqCst));
 
         // Restart: readiness must come back and identity must persist.

@@ -6,6 +6,7 @@ pub mod player;
 pub mod tailscale;
 pub mod updater;
 pub mod utils;
+pub mod webview_recovery;
 
 use commands::diagnostics::EngineInitState;
 use db::Database;
@@ -15,12 +16,27 @@ use tailscale::TsState;
 use utils::logger::SafeLogger;
 use utils::paths::AppPaths;
 
-pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> =
-    std::sync::OnceLock::new();
+pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> = std::sync::OnceLock::new();
 
 pub fn run() {
     // 0. Initialize privacy-safe tracing subscriber (redacting passkeys and tracker URLs)
     SafeLogger::init_tracing();
+
+    // Stale WebView2 cleanup BEFORE any window exists: a previously
+    // hard-killed app can leave webview runtimes holding the EBWebView
+    // profile lock, which fails WebView2 init on the next launch. The
+    // pass is ownership-scoped (our marker + dead parent only) and never
+    // touches the profile on disk.
+    {
+        let stale = webview_recovery::recover_stale_webviews();
+        if !stale.is_empty() {
+            SafeLogger::log_to_file(
+                &AppPaths::init().map(|p| p.logs_dir).unwrap_or_default(),
+                "INFO",
+                &format!("Recovered stale WebView2 runtimes: {:?}", stale),
+            );
+        }
+    }
 
     // Embedded Tailscale (ADC-network) state container + app-owned
     // lifecycle: start the bundled daemon at launch (readiness-waited on a

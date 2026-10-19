@@ -37,10 +37,7 @@ pub async fn tailscale_status() -> Result<crate::tailscale::TsStatus, String> {
 ///              https://control.asiandvdclub.org  (ADC-network mode;
 ///              no Tailscale Inc. account required)
 #[tauri::command]
-pub async fn tailscale_enroll(
-    auth_key: String,
-    control_url: Option<String>,
-) -> Result<(), String> {
+pub async fn tailscale_enroll(auth_key: String, control_url: Option<String>) -> Result<(), String> {
     // The auth key is deliberately not logged.
     if auth_key.trim().is_empty() {
         return Err("Enrollment key is empty".into());
@@ -60,24 +57,48 @@ pub async fn tailscale_disconnect() -> Result<(), String> {
         .map_err(|e| format!("join: {e}"))?
 }
 
-/// Probe ADC connectivity on the PRIVATE route — verified by construction.
+/// Probe ADC connectivity on the PRIVATE route — the 4-tier contract.
 ///
-/// Two independent checks, reported separately:
-///   1. `mesh_tcp` — TCP connect to the ADC NODE'S TAILNET IP (100.x.y.z:443)
-///      through the daemon's SOCKS5 proxy. That destination exists only
-///      inside the mesh, so success proves the private route.
-///   2. `https_public_name` — real HTTPS request to https://asiandvdclub.org
-///      through the same proxy with full certificate validation. This only
-///      works when the ADC server advertises a subnet route for its public
-///      IP (server-side prerequisite). An ordinary public-host reply is NOT
-///      counted as verified private connectivity on its own.
+/// Each tier is a strictly stronger requirement, reported separately; a
+/// tier may only be true when every tier below it is true (fail-closed by
+/// construction):
+///   1. `daemon_ready`    — the EMBEDDED daemon answers on OUR private
+///      pipe and reports its backend state.
+///   2. `peer_available`  — the ADC node appears in the live netmap
+///      (enrolled, online) and advertises its subnet route.
+///   3. `routed_tcp_ok`   — a real TCP connect THROUGH the daemon's SOCKS5
+///      proxy to the peer's advertised subnet IP. Proves the routed mesh
+///      path, not just the map.
+///   4. `https_ok`        — a real HTTPS request to
+///      https://asiandvdclub.org through the same proxy with FULL
+///      certificate and hostname validation. No insecure escape hatches
+///      exist anywhere in this path; `tls_verified` is true exactly when
+///      tier 4 succeeded. (In curl terms: `%{ssl_verify_result}` of 0 —
+///      the SUCCESS code — is the invariant; it does NOT mean validation
+///      was disabled.)
 #[derive(Debug, Serialize)]
 pub struct AdcPrivateProbe {
+    // Tier 1 — daemon/control readiness.
+    pub daemon_ready: bool,
+    pub backend_state: String,
+    // Tier 2 — ADC peer availability in the netmap.
+    pub peer_available: bool,
+    pub peer_ip: Option<String>,
+    pub peer_route_ip: Option<String>,
+    // Tier 3 — routed TCP reachability through the mesh.
+    pub routed_tcp_ok: bool,
+    pub routed_tcp_target: Option<String>,
+    pub routed_tcp_latency_ms: Option<u32>,
+    // Tier 4 — real ADC HTTPS with full TLS validation.
+    pub https_ok: bool,
+    pub https_status: Option<u16>,
+    pub tls_verified: bool,
+    // Compatibility aliases for the existing settings UI: mesh_tcp_ok ==
+    // routed_tcp_ok, https_public_name_ok == https_ok.
     pub mesh_tcp_ok: bool,
     pub mesh_target: Option<String>,
     pub mesh_latency_ms: Option<u32>,
     pub https_public_name_ok: bool,
-    pub https_status: Option<u16>,
     pub detail: String,
 }
 
@@ -89,48 +110,97 @@ pub async fn adc_private_probe() -> Result<AdcPrivateProbe, String> {
 }
 
 /// Synchronous probe body (unit-testable without the Tauri runtime).
+/// Strictly fail-closed: each tier runs only when the tier below it
+/// succeeded, so no verdict can be true over a failed lower tier.
 pub fn adc_private_probe_sync() -> AdcPrivateProbe {
-    // Check 1: mesh-by-construction.
-    let (mesh_ok, mesh_target, mesh_ms, mut detail) =
-        match crate::tailscale::probe_adc_mesh_tcp() {
-            Ok((ip, ms)) => (true, Some(ip), Some(ms), String::new()),
-            Err(e) => (false, None, None, e),
-        };
+    let mut detail = String::new();
 
-    // Check 2: real HTTPS to the public ADC name through the mesh client.
-    let (https_ok, https_status) = match crate::tailscale::adc_http_client() {
-        Ok(client) => match client.head("https://asiandvdclub.org/").send() {
-            Ok(resp) => {
-                let code = resp.status().as_u16();
-                (code < 500, Some(code))
-            }
-            Err(_) => (false, None),
-        },
-        Err(e) => {
-            if detail.is_empty() {
+    // Tier 1: the embedded daemon answers on our private pipe.
+    let st = crate::tailscale::status();
+    let daemon_ready = st.daemon_running;
+    let backend_state = st.backend_state.clone();
+    if !daemon_ready {
+        detail = "Embedded Tailscale daemon is not running.".into();
+    }
+
+    // Tier 2: the ADC peer is in the live netmap.
+    let peer_available = daemon_ready && st.adc_node.is_some();
+    let peer_ip = st.adc_node.clone();
+    let peer_route_ip = st.adc_route_ip.clone();
+    if daemon_ready && !peer_available {
+        detail = "Daemon is running, but the ADC node is not in the tailnet map \
+                  (not enrolled, control stream down, or server offline)."
+            .into();
+    }
+
+    // Tier 3: routed TCP to the peer's advertised subnet IP via SOCKS5.
+    let (routed_tcp_ok, routed_target, routed_ms) = if peer_available {
+        match crate::tailscale::probe_adc_mesh_tcp() {
+            Ok((ip, ms)) => (true, Some(ip), Some(ms)),
+            Err(e) => {
                 detail = e;
+                (false, None, None)
             }
-            (false, None)
         }
+    } else {
+        (false, None, None)
     };
+    if peer_available && !routed_tcp_ok {
+        detail = format!("ADC peer is in the map, but the routed TCP path failed: {detail}");
+    }
+
+    // Tier 4: real HTTPS over the mesh, full TLS validation (never disabled).
+    let (https_ok, https_status) = if routed_tcp_ok {
+        match crate::tailscale::adc_http_client() {
+            Ok(client) => match client.head("https://asiandvdclub.org/").send() {
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    (code < 500, Some(code))
+                }
+                Err(_) => {
+                    detail = "Routed TCP works, but the HTTPS request failed \
+                              (TLS or HTTP error)."
+                        .into();
+                    (false, None)
+                }
+            },
+            Err(e) => {
+                detail = e;
+                (false, None)
+            }
+        }
+    } else {
+        (false, None)
+    };
+    let tls_verified = https_ok;
 
     if detail.is_empty() {
-        detail = match (mesh_ok, https_ok) {
-            (true, true) => {
-                "ADC reachable over the tailnet (node TCP + public-name HTTPS).".into()
-            }
-            (true, false) => "ADC node reachable over the tailnet, but the public-name                               HTTPS path is not routed yet (server subnet route pending)."
-                .into(),
-            (false, _) => "Private route to ADC is unavailable.".into(),
+        detail = if https_ok {
+            "ADC reachable over the tailnet: routed TCP + HTTPS with full \
+             certificate validation."
+                .into()
+        } else {
+            "ADC HTTPS path not healthy (server side pending).".into()
         };
     }
 
     AdcPrivateProbe {
-        mesh_tcp_ok: mesh_ok,
-        mesh_target,
-        mesh_latency_ms: mesh_ms,
-        https_public_name_ok: https_ok,
+        daemon_ready,
+        backend_state,
+        peer_available,
+        peer_ip,
+        peer_route_ip,
+        routed_tcp_ok,
+        routed_tcp_target: routed_target.clone(),
+        routed_tcp_latency_ms: routed_ms,
+        https_ok,
         https_status,
+        tls_verified,
+        // Compat aliases.
+        mesh_tcp_ok: routed_tcp_ok,
+        mesh_target: routed_target,
+        mesh_latency_ms: routed_ms,
+        https_public_name_ok: https_ok,
         detail,
     }
 }
@@ -139,18 +209,35 @@ pub fn adc_private_probe_sync() -> AdcPrivateProbe {
 mod tests {
     use super::*;
 
-    /// No daemon in test builds: both verdicts must be false, honestly,
-    /// with a plain-language reason. Enrollment alone must never read as
-    /// connectivity.
+    /// No daemon in test builds: ALL FOUR tiers must be false, honestly,
+    /// with a plain-language reason. This is the fail-closed proof: no
+    /// verdict may read as success when the tier below it failed, and
+    /// enrollment alone must never read as connectivity.
     #[test]
-    fn probe_without_daemon_reports_both_false_with_reason() {
+    fn probe_without_daemon_reports_all_tiers_false_with_reason() {
         let probe = adc_private_probe_sync();
-        assert!(!probe.mesh_tcp_ok);
-        assert!(probe.mesh_target.is_none());
-        assert!(!probe.https_public_name_ok);
+        assert!(!probe.daemon_ready, "tier 1");
+        assert!(!probe.peer_available, "tier 2");
+        assert!(!probe.routed_tcp_ok, "tier 3");
+        assert!(!probe.https_ok, "tier 4");
+        // Fail-closed structure: no tier may be true over a failed lower
+        // tier (verdicts must flip when the peer/route goes away).
+        assert!(!probe.routed_tcp_ok || probe.peer_available);
+        assert!(!probe.https_ok || probe.routed_tcp_ok);
+        // Compatibility aliases must mirror the tiers exactly.
+        assert_eq!(probe.mesh_tcp_ok, probe.routed_tcp_ok);
+        assert_eq!(probe.https_public_name_ok, probe.https_ok);
+        // TLS validation is never reported as bypassed.
+        assert!(!probe.tls_verified);
         assert!(probe.https_status.is_none());
-        assert!(!probe.detail.is_empty(), "failure needs a user-facing reason");
-        assert!(!probe.detail.to_lowercase().contains("reachable over the tailnet"));
+        assert!(
+            !probe.detail.is_empty(),
+            "failure needs a user-facing reason"
+        );
+        assert!(!probe
+            .detail
+            .to_lowercase()
+            .contains("reachable over the tailnet"));
     }
 
     /// The private check targets a TAILNET address by construction; it must
@@ -202,17 +289,29 @@ pub async fn tailscale_adc_fetch(path: Option<String>) -> Result<AdcFetchResult,
                 })
             }
         };
-        let addr: std::net::IpAddr = match node_ip.parse() {
+        // Parse-validate only: the client pins the HOST to this IP via
+        // resolve(); the request URL keeps the public name for TLS SNI.
+        let _addr: std::net::IpAddr = match node_ip.parse() {
             Ok(a) => a,
             Err(_) => {
                 return Ok(AdcFetchResult {
-                    ok: false, status: None, via_tailnet_ip: Some(node_ip),
-                    body_snippet: String::new(), detail: "bad ADC node IP".into(),
+                    ok: false,
+                    status: None,
+                    via_tailnet_ip: Some(node_ip),
+                    body_snippet: String::new(),
+                    detail: "bad ADC node IP".into(),
                 })
             }
         };
         let path = path.unwrap_or_else(|| "/".into());
-        let url = format!("https://asiandvdclub.org{}", if path.starts_with('/') { path } else { format!("/{}", path) });
+        let url = format!(
+            "https://asiandvdclub.org{}",
+            if path.starts_with('/') {
+                path
+            } else {
+                format!("/{}", path)
+            }
+        );
         match client.get(&url).send() {
             Ok(resp) => {
                 let ok = resp.status().is_success();
