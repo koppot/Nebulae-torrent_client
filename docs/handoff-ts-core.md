@@ -1,5 +1,27 @@
 # Tailscale-core handoff — checkpoint 2026-10-19 (branch head 26ff30e)
 
+## FINAL LIFECYCLE ACCEPTANCE (completed; build 262a502 on the desktop)
+
+The 262a502→26ff30e delta is log-gating only (14+/4- in one file; no
+functional change), so the deployed 262a502 package remained the final
+test build — no redeploy required.
+
+Three full hard-kill/relaunch/adoption/graceful-quit cycles, ALL PASS:
+
+| Cycle | Fresh spawn (app/daemon) | Orphan daemon survived | Adopted pid | One app + one daemon | Respawn loop | Graceful quit after adoption |
+|---|---|---|---|---|---|---|
+| 1 (earlier) | — / 2460 | 2460 ✓ | 2460 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+| 2 | 5584 / 4612 | 4612 ✓ | 4612 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+| 3 | 18256 / 14636 | 14636 ✓ | 14636 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+
+- No WebView profile deletion was ever needed (recovery is
+  ownership-scoped; the profile on disk was never touched).
+- Identity preserved across every cycle: node 3 = 100.64.0.3, machine
+  key [DCmIu], node key [pa2YU]; no re-enrollment, no node churn.
+- Known cosmetic (fixed in 26ff30e, not in the deployed build): the
+  "adopting already-running daemon" line repeats per supervisor tick
+  (8 lines ≈ 40s of supervision). Behavior is unaffected.
+
 ## Deliverables (CI-green)
 
 | SHA (full) | What | CI run |
@@ -91,3 +113,28 @@ certificate/hostname validation everywhere (fail-closed).
   enabled for one bounded capture and RESTORED (config back to
   `config.yaml.pre-debug`, service active); no other server changes.
 - **mac test client**: node 5 daemon stopped.
+
+## NEXT EXPERIMENT (requires owner approval before execution)
+
+Single most discriminating test for the control-stream death:
+
+- **Target**: ONLY the "OnBoard LAN 2" adapter on the Windows desktop
+  (10.0.0.4). Nothing else changes — no MTU, firewall, AV, DNS, routing.
+- **Change**: `Set-NetAdapterAdvancedProperty -Name 'OnBoard LAN 2' -DisplayName 'Large Send Offload V2 (IPv4)' -DisplayValue Disabled` and
+  the same for `'Large Send Offload V2 (IPv6)'`.
+- **Hypothesis**: LSOv2 on this Intel NIC is stalling ACK delivery on
+  long-lived idle TCP flows, which is why every outbound connection of
+  the embedded daemon dies silently in 10-310s while the identical mac
+  client on the same LAN holds for hours.
+- **Expected if the hypothesis is right**: headscale's journal shows
+  node 3 connect with NO following disconnect for >600s, and the app
+  holds `Running` continuously across multiple probe reads.
+- **Rollback** (exact): set both properties back to `Enabled`
+  (current values, recorded here for restore).
+- **Disruption**: ~3-5s NIC reset when the property applies (any traffic
+  on that adapter blips); offload removed may slightly raise CPU and
+  lower throughput on that host. Scoped to the one interface.
+
+If the stream STILL dies with LSOv2 disabled, the remaining suspect is
+the switch/router path for host 10.0.0.4, and the investigation hands
+off to whoever owns that network path.
