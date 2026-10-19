@@ -114,27 +114,50 @@ certificate/hostname validation everywhere (fail-closed).
   `config.yaml.pre-debug`, service active); no other server changes.
 - **mac test client**: node 5 daemon stopped.
 
-## NEXT EXPERIMENT (requires owner approval before execution)
+## NEXT EXPERIMENT (LSOv2) — EXECUTED, HYPOTHESIS REFUTED
 
-Single most discriminating test for the control-stream death:
+With owner approval, LSOv2 (IPv4+IPv6) was disabled on "OnBoard LAN 2"
+only (RegistryKeywords `*LsoV2IPv4`/`*LsoV2IPv6` → 0). Result: the
+short-lifetime deaths PERSISTED (connect 18:57:26Z → disconnect
+18:57:37Z, 11s) and the login-cycle pattern continued. LSOv2 is NOT the
+cause. The values were RESTORED to Enabled (both verified) the same
+session.
 
-- **Target**: ONLY the "OnBoard LAN 2" adapter on the Windows desktop
-  (10.0.0.4). Nothing else changes — no MTU, firewall, AV, DNS, routing.
-- **Change**: `Set-NetAdapterAdvancedProperty -Name 'OnBoard LAN 2' -DisplayName 'Large Send Offload V2 (IPv4)' -DisplayValue Disabled` and
-  the same for `'Large Send Offload V2 (IPv6)'`.
-- **Hypothesis**: LSOv2 on this Intel NIC is stalling ACK delivery on
-  long-lived idle TCP flows, which is why every outbound connection of
-  the embedded daemon dies silently in 10-310s while the identical mac
-  client on the same LAN holds for hours.
-- **Expected if the hypothesis is right**: headscale's journal shows
-  node 3 connect with NO following disconnect for >600s, and the app
-  holds `Running` continuously across multiple probe reads.
-- **Rollback** (exact): set both properties back to `Enabled`
-  (current values, recorded here for restore).
-- **Disruption**: ~3-5s NIC reset when the property applies (any traffic
-  on that adapter blips); offload removed may slightly raise CPU and
-  lower throughput on that host. Scoped to the one interface.
+## CONTROL-STREAM ROOT CAUSE (evidence from the follow-up capture)
 
-If the stream STILL dies with LSOv2 disabled, the remaining suspect is
-the switch/router path for host 10.0.0.4, and the investigation hands
-off to whoever owns that network path.
+A client-side daemon-log capture across a cycle boundary shows the
+daemon's ipn state machine FULL-CYCLING every ~40-70s:
+NoState → Starting → Running → NoState → … with one doLogin per cycle,
+while the process (and machine key [DCmIu], node key [pa2YU]) stays
+stable. The cycle boundary carries:
+
+    health(warnable=login-state): error: You are logged out. The last
+    login error was: fetch control key: Get
+    "https://control.asiandvdclub.org/key?v=148": context canceled
+
+i.e. a SELF-CANCELING LOGIN RETRY STORM: a pending control-key fetch is
+canceled by the next login attempt; the recorded error marks the client
+logged-out; that error triggers the next attempt. The same binary on
+the mac does none of this (single login, stream holds for hours).
+
+Additional experiment the same session: the daemon was relaunched with
+TS_DEBUG_DISABLE_PORTMAPPER=1 (manually, then ADOPTED by the app —
+adoption verified). The UDP endpoint churn STOPPED (0 "endpoints
+changed" in 150s vs constant churn before) but the LOGIN STORM
+CONTINUED. So there are TWO independent client-side behaviors:
+(a) UPnP portmapper endpoint churn (stopped by the debug env var; a
+debug knob, NOT a supported remedy), and (b) the login retry storm
+(still open).
+
+### Remaining precise hypothesis + needed access
+
+The storm's fuel is the control-key fetch (GET /key) being slow enough
+on this Windows host to be canceled by the client's own retry. The
+discriminating test is a packet-level timeline of ONE login cycle on
+the desktop (DNS + TCP + TLS to 45.135.163.140:443, /key fetch latency)
+compared with the mac. Windows pktmon on this host yields counters, not
+packet timelines; a real capture needs `netsh trace`/Wireshark on the
+desktop, which needs an owner-approved tool/install. Everything else is
+exonerated; the switch/router path remains a fallback suspect only if
+the capture shows the host's packets are fine.
+
