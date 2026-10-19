@@ -13,7 +13,7 @@ use windows::core::w;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, MoveWindow, SetWindowPos, ShowWindow, HWND_TOP, SET_WINDOW_POS_FLAGS,
-    SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, WINDOW_STYLE, WS_CHILD,
+    SHOW_WINDOW_CMD, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
     WS_CLIPCHILDREN, WS_VISIBLE,
 };
 
@@ -47,9 +47,7 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let parent = win
-        .hwnd()
-        .map_err(|e| format!("no parent HWND: {e}"))?;
+    let parent = win.hwnd().map_err(|e| format!("no parent HWND: {e}"))?;
     let parent_hwnd = HWND(parent.0);
     let (x, y, w, h) = {
         let size = win

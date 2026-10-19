@@ -9,8 +9,8 @@
 //! event loop; the Xlib display handle is opened once and intentionally
 //! leaked for the process lifetime.
 
-use std::sync::mpsc;
 use raw_window_handle::HasWindowHandle;
+use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 
 struct XHandle {
@@ -48,7 +48,8 @@ fn with_x<R: Send + 'static>(
         let _ = tx.send(res);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
-    rx.recv().map_err(|_| "main thread callback lost".to_string())?
+    rx.recv()
+        .map_err(|_| "main thread callback lost".to_string())?
 }
 
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
@@ -98,8 +99,7 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
 }
 
 unsafe fn create_overlay(parent_xid: u64) -> Result<usize, String> {
-    let xlib = x11_dl::xlib::Xlib::open()
-        .map_err(|e| format!("libX11 unavailable: {e}"))?;
+    let xlib = x11_dl::xlib::Xlib::open().map_err(|e| format!("libX11 unavailable: {e}"))?;
     let display = (xlib.XOpenDisplay)(std::ptr::null());
     if display.is_null() {
         return Err("XOpenDisplay failed".into());

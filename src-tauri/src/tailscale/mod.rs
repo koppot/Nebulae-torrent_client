@@ -41,6 +41,15 @@ const ENROLL_TIMEOUT: Duration = Duration::from_secs(240);
 #[derive(Default)]
 pub struct TsState {
     child: Mutex<Option<Child>>,
+    /// Windows only: a long-lived `debug daemon-logs` client so the daemon
+    /// ALWAYS has a connected client. Without it, the Windows dev-mode
+    /// daemon tears its ipn backend down when the last client disconnects
+    /// ("client disconnected ... disconnecting Tailscale"), and the app's
+    /// periodic status polls (one CLI connection each) keep the backend in
+    /// a perpetual teardown/relogin storm — the control stream never
+    /// survives. Verified against 1.104.1 on Windows (the mac is immune).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    keepalive: Mutex<Option<Child>>,
     /// Whether the app wants the daemon running (settings-driven).
     wanted: AtomicBool,
     /// Guards against a second supervisor thread spawning a second daemon.
@@ -234,6 +243,62 @@ fn daemon_command(paths: &Paths) -> Command {
 /// `timeout` (injectable form; see `wait_for_ready`).
 pub fn daemon_ready_on(paths: &Paths, timeout: Duration) -> bool {
     cli_on(paths, &["status", "--json"], timeout).is_ok()
+}
+
+/// Spawn the Windows keepalive client: one long-lived `debug daemon-logs`
+/// CLI process. Its whole job is to REMAIN CONNECTED so the daemon's ipn
+/// backend is never torn down by "last client disconnected". One rebuild
+/// happens when it connects; after that the daemon is stable. Unix needs
+/// none of this (disconnects never tear the backend down there).
+fn spawn_keepalive(state: &TsState, paths: &Paths) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut guard = state.keepalive.lock().unwrap();
+        // Replace a dead keepalive client; keep a live one.
+        if let Some(child) = guard.as_mut() {
+            if matches!(child.try_wait(), Ok(None)) {
+                return; // still connected
+            }
+            let _ = child.wait();
+        }
+        *guard = None;
+        let mut cmd = Command::new(paths.tailscale());
+        cmd.arg("--socket")
+            .arg(private_socket_arg(&paths.state_dir))
+            .args(["debug", "daemon-logs"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        match cmd.spawn() {
+            Ok(child) => {
+                tracing::info!("[tailscale] keepalive client connected (backend hold)");
+                *guard = Some(child);
+            }
+            Err(e) => tracing::warn!("[tailscale] keepalive spawn failed: {e}"),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (state, paths);
+    }
+}
+
+/// Stop the keepalive client (the daemon teardown path).
+fn stop_keepalive(state: &TsState) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut guard = state.keepalive.lock().unwrap();
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        *guard = None;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+    }
 }
 
 /// Command-line marker that pins daemon-process lookups to THIS app's
@@ -482,6 +547,11 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                         }
                         if !resumed {
                             resumed = true;
+                            // The adopted daemon must ALWAYS hold a client
+                            // (see TsState::keepalive): the app's status
+                            // polls would otherwise tear the backend down
+                            // on every disconnect.
+                            spawn_keepalive(&state, &paths);
                             let p2 = paths.clone();
                             std::thread::spawn(move || {
                                 if let Err(e) = wait_for_ready(&p2, Duration::from_secs(30)) {
@@ -507,11 +577,16 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                             // profile on Windows (verified live): resume in
                             // the background so the loop keeps supervising.
                             let p2 = paths.clone();
+                            let st2 = Arc::clone(&state);
                             std::thread::spawn(move || {
                                 if let Err(e) = wait_for_ready(&p2, Duration::from_secs(60)) {
                                     tracing::warn!("[tailscale] respawn readiness: {e}");
                                     return;
                                 }
+                                // Keepalive goes in AFTER readiness so its
+                                // connect is the LAST client event (one
+                                // rebuild, then the backend is held).
+                                spawn_keepalive(&st2, &p2);
                                 match resume_saved_profile(&p2) {
                                     Ok(()) => {
                                         tracing::info!("[tailscale] respawned daemon resumed")
@@ -526,6 +601,10 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                         }
                     }
                 }
+            } else {
+                // Daemon alive: make sure the Windows keepalive client is
+                // still connected (it must never be the thing that died).
+                spawn_keepalive(&state, &paths);
             }
         }
         std::thread::sleep(Duration::from_secs(5));
@@ -546,6 +625,7 @@ pub fn shutdown() {
 /// pid lookup, so graceful quit never leaves our daemon behind.
 pub fn shutdown_state(state: &Arc<TsState>) {
     state.wanted.store(false, Ordering::SeqCst);
+    stop_keepalive(state);
     let mut guard = state.child.lock().unwrap();
     if let Some(child) = guard.as_mut() {
         #[cfg(unix)]

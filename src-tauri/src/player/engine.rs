@@ -20,18 +20,14 @@ pub struct VlcLib {
     // `lib`.
     #[allow(dead_code)]
     deps: Vec<Library>,
-    pub libvlc_new:
-        unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
+    pub libvlc_new: unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
     pub libvlc_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_get_version: unsafe extern "C" fn() -> *const c_char,
-    pub libvlc_media_new_path:
-        unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    pub libvlc_media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     pub libvlc_media_release: unsafe extern "C" fn(*mut c_void),
-    pub libvlc_media_player_new_from_media:
-        unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    pub libvlc_media_player_new_from_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub libvlc_media_player_release: unsafe extern "C" fn(*mut c_void),
-    pub libvlc_media_player_set_nsobject:
-        unsafe extern "C" fn(*mut c_void, *mut c_void),
+    pub libvlc_media_player_set_nsobject: unsafe extern "C" fn(*mut c_void, *mut c_void),
     pub libvlc_media_player_play: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_stop: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_pause: unsafe extern "C" fn(*mut c_void, c_int),
@@ -39,10 +35,8 @@ pub struct VlcLib {
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
     pub libvlc_media_player_get_length: unsafe extern "C" fn(*mut c_void) -> i64,
-    pub libvlc_audio_set_volume:
-        unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
-    pub libvlc_video_set_deinterlace:
-        unsafe extern "C" fn(*mut c_void, *const c_char),
+    pub libvlc_audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
+    pub libvlc_video_set_deinterlace: unsafe extern "C" fn(*mut c_void, *const c_char),
 }
 
 // The library handle is process-global and the symbols are plain functions;
@@ -122,8 +116,10 @@ impl VlcLib {
         #[cfg(target_os = "macos")]
         {
             if let Ok(home) = std::env::var("HOME") {
-                c.push(PathBuf::from(&home)
-                    .join("Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"));
+                c.push(
+                    PathBuf::from(&home)
+                        .join("Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"),
+                );
             }
             c.push(PathBuf::from(
                 "/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib",
@@ -133,9 +129,7 @@ impl VlcLib {
         }
         #[cfg(target_os = "windows")]
         {
-            c.push(PathBuf::from(
-                r"C:\Program Files\VideoLAN\VLC\libvlc.dll",
-            ));
+            c.push(PathBuf::from(r"C:\Program Files\VideoLAN\VLC\libvlc.dll"));
             c.push(PathBuf::from(
                 r"C:\Program Files (x86)\VideoLAN\VLC\libvlc.dll",
             ));
@@ -210,10 +204,7 @@ impl VlcLib {
 
     /// Path of the libvlc that successfully loaded (for the status pane).
     pub fn last_loaded_path() -> Option<PathBuf> {
-        LOADED_PATH
-            .lock()
-            .ok()?
-            .clone()
+        LOADED_PATH.lock().ok()?.clone()
     }
 }
 
@@ -233,21 +224,14 @@ impl VlcSession {
     /// NSView pointer on macOS, 0 for none). The player is created attached
     /// to the target BEFORE `play()` so the vout lands in our view instead
     /// of spawning VLC's own window.
-    pub fn open(
-        lib: &VlcLib,
-        path: &str,
-        video_target: usize,
-    ) -> Result<VlcSession, String> {
+    pub fn open(lib: &VlcLib, path: &str, video_target: usize) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
         let args = [
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
         ];
-        let argv: Vec<*const c_char> = args
-            .iter()
-            .map(|a| a.as_ptr() as *const c_char)
-            .collect();
+        let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
             let instance = (lib.libvlc_new)(argv.len() as c_int, argv.as_ptr());
             if instance.is_null() {
@@ -274,7 +258,11 @@ impl VlcSession {
                 (lib.libvlc_release)(instance);
                 return Err(format!("libvlc refused to play {path} (rc={rc})"));
             }
-            Ok(VlcSession { instance: instance as usize, media: media as usize, media_player: mp as usize })
+            Ok(VlcSession {
+                instance: instance as usize,
+                media: media as usize,
+                media_player: mp as usize,
+            })
         }
     }
 

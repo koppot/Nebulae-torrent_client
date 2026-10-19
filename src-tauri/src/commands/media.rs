@@ -1,9 +1,9 @@
-use crate::player::{self, PlayerState};
 use crate::player::engine::VlcSession;
+use crate::player::{self, PlayerState};
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
-use std::path::{Path, PathBuf};
 use std::ffi::{c_int, c_void};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 #[tauri::command]
@@ -157,9 +157,7 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     })
 }
 
-fn loaded_lib(
-    state: &PlayerState,
-) -> Result<std::sync::Arc<player::engine::VlcLib>, String> {
+fn loaded_lib(state: &PlayerState) -> Result<std::sync::Arc<player::engine::VlcLib>, String> {
     let mut guard = state.lib.lock().map_err(|_| "player state poisoned")?;
     if guard.is_none() {
         *guard = Some(std::sync::Arc::new(player::engine::VlcLib::load()?));
@@ -270,10 +268,7 @@ pub fn player_open(
 }
 
 #[tauri::command]
-pub fn player_close(
-    app: tauri::AppHandle,
-    state: tauri::State<PlayerState>,
-) -> Result<(), String> {
+pub fn player_close(app: tauri::AppHandle, state: tauri::State<PlayerState>) -> Result<(), String> {
     stop_session(&app, &state);
     Ok(())
 }
@@ -358,7 +353,6 @@ pub fn player_sync_viewport(
 ) -> Result<(), String> {
     player::sync_frame(&app, x, y, width, height)
 }
-
 
 /// Depth-limited recursive search for a playable disc image or disc folder
 /// structure. A disc image ALWAYS outranks loose episode files - the owner
@@ -641,5 +635,4 @@ mod tests {
         assert!(!status.player_name.is_empty());
         assert!(!status.player_type.is_empty());
     }
-
 }
