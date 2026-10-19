@@ -553,6 +553,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     const known = titleFromName(p);
     if (known) {
       await openInPlayer(p, { displayTitle: known });
+      void refreshExternalMedia();
     } else {
       setExternalTitlePrompt({ path: p, guess: (p.split(/[/\\]/).filter(Boolean).pop() || '').replace(/\.[^.]+$/, '') });
     }

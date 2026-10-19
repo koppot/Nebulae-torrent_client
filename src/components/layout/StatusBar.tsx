@@ -139,9 +139,9 @@ export const StatusBar: React.FC = () => {
   const connected = isPortOpen || swarmActive;
 
   return (
-    <footer className="h-6 bg-[#141414] border-t border-[#262626] flex items-center justify-between px-3 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
-      {/* Left: Connectivity, Port, Tailscale, VPN */}
-      <div className="flex items-center gap-3">
+    <footer className="min-h-[24px] h-auto py-1 px-3 bg-[#141414] border-t border-[#262626] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
+      {/* Left: Connectivity, Port, Tailscale, VPN, Modes */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <div
           className="flex items-center gap-1.5"
           title={
@@ -309,7 +309,7 @@ export const StatusBar: React.FC = () => {
       </div>
 
       {/* Center: Global Transfer Throughput */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <div
           className="flex items-center gap-1.5"
           title="Global Download Rate & Total Downloaded"
@@ -356,7 +356,7 @@ export const StatusBar: React.FC = () => {
       </div>
 
       {/* Right: Storage & Application State */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
           Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
         </span>
