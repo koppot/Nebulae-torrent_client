@@ -1,4 +1,105 @@
-# Tailscale-core handoff — checkpoint 2026-10-19 (branch head 26ff30e)
+# Tailscale-core handoff — FINAL 2026-10-19 (Windows private ADC access WORKING)
+
+## RESULT: END-TO-END SUCCESS on build 243084c
+
+`243084c82cce24ba99df0874cdaa5627e9487722` (CI 39316981556 ✓, all jobs)
+is the final tested SHA; the desktop package `nebtestF` = the CI artifact
+`nebulae-tailscale-test-243084c82cce24ba99df0874cdaa5627e9487722-win64`
+(full SHA match). Windows private ADC connectivity is demonstrated
+end-to-end and stable:
+
+- **Probe (all 4 tiers TRUE)**: daemon Running; ADC peer 100.64.0.1
+  advertising route 45.135.163.139; routed TCP through the daemon's
+  SOCKS to 45.135.163.139:443 in 230ms; real HTTPS 200 from
+  asiandvdclub.org with FULL certificate validation (tls_verified=true).
+- **Stability**: one connection held >680s (the journal shows ZERO
+  disconnects across the whole window; probes at ~170s/~430s/~680s all
+  four tiers true).
+- **Reproducibility**: hard-kill → orphan → relaunch → ADOPTION (same
+  daemon pid) → the state machine settled at Running again → all four
+  tiers TRUE on the second connection.
+- **Lifecycle on the final build**: graceful quit after adoption stopped
+  the app AND the adopted daemon; the identity state file preserved
+  (node 3, machine key [DCmIu], node key [pa2YU], no re-enrollment).
+- **Status truthfulness**: at every step (including all the failures
+  below) the probe matched the control plane's journal exactly and never
+  reported success over a failed lower tier.
+
+## THE TWO ROOT CAUSES (both fixed in code)
+
+1. **Windows backend teardown on client disconnect** (ff12578): the
+   Windows dev-mode daemon tears its ipn backend down when the last
+   client disconnects, and every CLI connection forces a full profile
+   switch + control-client rebuild ("profile data directory: profile
+   not found" at startup — the current-profile pointer resolves only on
+   a CLI connect). The app's status poll = one CLI connection per poll =
+   a perpetual teardown/relogin storm; the control stream died every
+   10-310s. THE MAC IS IMMUNE (verified: 30 CLI polls in 150s, zero
+   rebuilds, state held Running). FIX: the app's supervisor holds ONE
+   long-lived `debug daemon-logs` client per daemon (spawned after
+   readiness, adopted immediately, respawned if it dies, stopped on
+   shutdown), so the backend always has a connected client.
+2. **The probe/prefer-peer selector** (6eed154 + 243084c): the tailnet's
+   MagicDNS suffix is asiandvdclub.org, so every peer's DNSName contains
+   that string and the name-only selector matched an arbitrary client
+   peer; and probe_adc_mesh_tcp still dialed the tailnet IP where
+   nothing listens. FIX: prefer the peer advertising the subnet route
+   (the ADC server), and dial the advertised route IP.
+
+## What was ruled out along the way (proven NOT the cause)
+
+LSOv2 offloads (approved experiment: the deaths persisted with LSOv2
+disabled; values restored to Enabled and verified), the UPnP portmapper
+endpoint churn (disabling it stopped the churn but not the storm), MTU,
+firewall/AV (Defender-only, no drops logged), system proxy, DNS,
+routing/teaming, elevation, supervisor churn. The ixgbt 10G driver
+shows occasional link events (~22min apart) — a secondary signal, not
+the storm's driver.
+
+## Remaining limitations (documented, not blockers)
+
+- The Windows daemon's per-connection profile-switch + last-client
+  teardown is an upstream tailscale behavior (1.104.1 dev-mode); our
+  keepalive client works around it inside the app. Worth an upstream
+  report with the stderr evidence in this file's history.
+- `TS_DEBUG_DISABLE_PORTMAPPER` was tested as a diagnosis only; NOT
+  shipped (the endpoint churn was not the connectivity blocker once the
+  keepalive holds the backend).
+- The mac evidence: the same binary holds Running for 4+ hours with a
+  single login and passed the identical private-path checks (routed TCP
+  + HTTPS 200 + full TLS) in earlier acceptance runs.
+- Retention: headscale 0.29.5's long-offline GC applies
+  `node.ephemeral.inactivity_timeout` to ALL nodes (the interim 8760h
+  stands; the permanent policy = owner decision). LSOv2 values restored.
+- Stale test nodes (2/4/5) remain on the server per the earlier
+  directive; the desktop's MTUs stay 1500.
+
+## Environment release states
+
+- **Windows desktop (supermicro)**: 0 app/daemon/webview processes;
+  scheduled task deleted; identity + `ts-state-backup` preserved;
+  package `nebtestF` (243084c) on disk. LSOv2 = Enabled (restored).
+- **ADC server**: healthy; no server-policy changes; debug logging
+  restored earlier.
+- **mac test client**: daemon stopped.
+
+## Lifecycle acceptance detail (cycles 1-3 on 262a502, cycle 4 on 243084c)
+
+| Cycle | Fresh spawn (app/daemon) | Orphan daemon survived | Adopted pid | One app + one daemon | Respawn loop | Graceful quit after adoption |
+|---|---|---|---|---|---|---|
+| 1 (earlier) | — / 2460 | 2460 ✓ | 2460 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+| 2 | 5584 / 4612 | 4612 ✓ | 4612 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+| 3 | 18256 / 14636 | 14636 ✓ | 14636 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+| 4 (final) | 3756 / 8136 | 8136 ✓ | 8136 ✓ | ✓ | none ✓ | ✓ daemon stopped |
+
+- No WebView profile deletion was ever needed (recovery is
+  ownership-scoped; the profile on disk was never touched).
+- Identity preserved across every cycle: node 3 = 100.64.0.3, machine
+  key [DCmIu], node key [pa2YU]; no re-enrollment, no node churn.
+
+---
+
+# Historical checkpoint (superseded by the RESULT above)
 
 ## FINAL LIFECYCLE ACCEPTANCE (completed; build 262a502 on the desktop)
 
