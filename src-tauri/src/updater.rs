@@ -27,11 +27,7 @@ pub fn spawn_silent_background_updater(app: &tauri::AppHandle, db: Arc<crate::db
     tauri::async_runtime::spawn(async move {
         // Initial delay to avoid resource contention at boot
         #[cfg(feature = "test-updater")]
-        let initial_delay = if std::env::var("NEBULAE_UPDATER_TEST_ENDPOINT").is_ok() {
-            std::time::Duration::from_millis(500)
-        } else {
-            std::time::Duration::from_secs(10)
-        };
+        let initial_delay = std::time::Duration::from_millis(500);
         #[cfg(not(feature = "test-updater"))]
         let initial_delay = std::time::Duration::from_secs(10);
         tokio::time::sleep(initial_delay).await;
@@ -103,14 +99,15 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
     let mut builder = handle.updater_builder();
     #[cfg(feature = "test-updater")]
     {
-        if let Ok(endpoint) = std::env::var("NEBULAE_UPDATER_TEST_ENDPOINT") {
-            if let Ok(url) = url::Url::parse(&endpoint) {
-                match builder.endpoints(vec![url]) {
-                    Ok(b) => builder = b,
-                    Err(e) => {
-                        warn!("Failed to override test updater endpoint: {e}");
-                        return;
-                    }
+        let default_test_endpoint = "https://asiandvdclub.org/app-update-test-a7f92e4c91b5/latest.json";
+        let endpoint_str = std::env::var("NEBULAE_UPDATER_TEST_ENDPOINT")
+            .unwrap_or_else(|_| default_test_endpoint.to_string());
+        if let Ok(url) = url::Url::parse(&endpoint_str) {
+            match builder.endpoints(vec![url]) {
+                Ok(b) => builder = b,
+                Err(e) => {
+                    warn!("Failed to override test updater endpoint: {e}");
+                    return;
                 }
             }
         }
