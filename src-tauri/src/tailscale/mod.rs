@@ -959,13 +959,11 @@ fn socks5_tcp_connect(
     Ok(())
 }
 
-/// TCP reachability of the ADC NODE'S TAILNET IP (100.x.y.z:443) through
-/// the daemon's SOCKS5 proxy.
-///
-/// This is the honest "private route" check: the destination is a tailnet
-/// CGNAT address that ONLY exists inside the mesh, so a successful connect
-/// is connectivity over the tailnet by construction. It says nothing about
-/// torrent peering (userspace tun is not a bindable OS tunnel).
+/// TCP reachability through the daemon's SOCKS5 proxy, to the ADC node's
+/// ADVERTISED SUBNET IP when it has one (the real private data path: the
+/// packets ride the mesh via the 45.135.163.139/32 route), else to the
+/// node's tailnet IP (100.x.y.z:443, the old check — there is no listener
+/// there today, verified live, so without a route this honestly fails).
 pub fn probe_adc_mesh_tcp() -> Result<(String, u32), String> {
     let st = status();
     let Some(node_ip) = st.adc_node.clone() else {
@@ -977,12 +975,16 @@ pub fn probe_adc_mesh_tcp() -> Result<(String, u32), String> {
             st.backend_state
         ));
     }
+    // The subnet-route IP is the REAL destination (a listener exists
+    // there; the tailnet IP itself has none). Fall back to the tailnet IP
+    // only when the node advertises no route.
+    let target = st.adc_route_ip.clone().unwrap_or(node_ip);
     let proxy: SocketAddr = format!("127.0.0.1:{SOCKS_PORT}")
         .parse()
         .map_err(|_| "socks proxy addr".to_string())?;
     let started = Instant::now();
-    socks5_tcp_connect(proxy, &node_ip, 443, Duration::from_secs(5))?;
-    Ok((node_ip, started.elapsed().as_millis() as u32))
+    socks5_tcp_connect(proxy, &target, 443, Duration::from_secs(5))?;
+    Ok((target, started.elapsed().as_millis() as u32))
 }
 
 /// Reusable routed HTTP client for ADC application requests.
