@@ -428,6 +428,9 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
     // Tracks whether the current daemon (owned or adopted) already had its
     // saved profile resumed, so adoption does not spam resume attempts.
     let mut resumed = false;
+    // Adoption is logged once per orphan; supervise-by-probe repeats every
+    // tick and must not flood the log. Reset when a NEW daemon is spawned.
+    let mut adopted_logged = false;
     loop {
         if !state.wanted.load(Ordering::SeqCst) {
             let mut guard = state.child.lock().unwrap();
@@ -467,10 +470,16 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                         );
                         *guard = None;
                     } else {
-                        tracing::info!(
-                            "[tailscale] adopting already-running daemon (pid {})",
-                            owned[0]
-                        );
+                        // Adoption is supervised by the probe (no child
+                        // handle); log it once per orphan so the 5s tick
+                        // does not flood the log.
+                        if !adopted_logged {
+                            adopted_logged = true;
+                            tracing::info!(
+                                "[tailscale] adopting already-running daemon (pid {})",
+                                owned[0]
+                            );
+                        }
                         if !resumed {
                             resumed = true;
                             let p2 = paths.clone();
@@ -493,6 +502,7 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                         Ok(child) => {
                             *guard = Some(child);
                             resumed = false;
+                            adopted_logged = false;
                             // Respawned daemons never auto-resume the saved
                             // profile on Windows (verified live): resume in
                             // the background so the loop keeps supervising.
