@@ -1693,4 +1693,35 @@ Client repairs have been implemented, verified, packaged, deployed, and pushed t
 
 Factory may now fast-forward or merge `fix/owner-ui-repairs` (`d366edb`) into `main`.
 
+## 2026-10-19 — Unified Integration & Merge Completed (PR #2 Merged to Main)
+
+**INTEGRATION BRANCH:** `integrate/repairs-and-tailscale`  
+**BASE BRANCH:** `origin/main`  
+**FINAL MERGED MAIN SHA:** `913d26a27e0258167f5e1ad3cb7f9b8895055b80`  
+**MERGED PR:** https://github.com/koppot/Nebulae-torrent_client/pull/2  
+**STATUS:** **READY FOR ALL-PLATFORM RELEASE**
+
+### Integrated Components Verified:
+1. **Antigravity Client UI & Engine Repairs:**
+   - Non-blocking UHD playback start, deferred heavy filesystem language discovery.
+   - Filmic HDR tone-mapping (`--tone-mapping=3`) via bundled libVLC OpenGL placebo shaders.
+   - Authored disc interactive menus and VLC navigation mode 5 (`libvlc_navigate_popup`).
+   - Reference Media Mode Details modal (2x2 facts card, discs breakdown, platform buttons).
+   - Clean poster cards free of overlay chips.
+   - Playback overlay `Title (Year)` display.
+   - Initial seeder super-seeding dialog, live session push, and Transmission Racing Mode.
+   - Responsive wrapped status bar with "Tailnet" label.
+   - Persistent and draggable first-run media mode prompt.
+2. **Factory Tailscale Integration:**
+   - Windows dev-mode daemon supervisor with long-lived keepalive client preventing backend teardown.
+   - ADC server peer selection preferring advertised subnet route (`45.135.163.139`).
+   - SOCKS-routed TCP path and full HTTPS TLS validation (`tls_verified=true`).
+   - Hard-kill adoption cycle, graceful quit, and node identity preservation.
+3. **Verification Suite Results:**
+   - `cargo test --lib`: 119 passed, 0 failed, 1 ignored (real daemon test).
+   - `npx tsc --noEmit`: 0 errors.
+   - `npm run lint`: 0 errors.
+   - `npm run build`: 0 errors, built in 1.56s.
+   - GitHub Actions `build-test` run 39327829648: 100% green across all 4 platforms (Windows x64, macOS ARM64, macOS x64, Linux x86_64).
+
 

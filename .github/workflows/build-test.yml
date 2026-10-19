@@ -184,6 +184,18 @@ jobs:
           test -e src-tauri/resources/jre/bin/java || test -e src-tauri/resources/jre/bin/java.exe || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
           ls src-tauri/resources/jre/bin | head -3
 
+      # --- Tailscale Engine Bundling ----------------------------------------
+      - name: Setup Go (macOS builds tailscale from source tag)
+        if: runner.os == 'macOS'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Bundle tailscale
+        shell: bash
+        run: ./scripts/bundle-tailscale.sh "${{ matrix.target }}"
+
       # --- Linux split build ------------------------------------------------
       - name: Build Linux packages with bundled player (deb, rpm)
         if: runner.os == 'Linux'

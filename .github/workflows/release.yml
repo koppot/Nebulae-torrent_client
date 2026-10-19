@@ -62,7 +62,11 @@ jobs:
           Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
           BODY
           sed -i "s/@TAG@/$TAG/g" release-body.md
-          gh release create "$TAG" --repo koppot/Nebulae-torrent_client --title "Nebulae $TAG" --notes-file release-body.md --latest
+          PRERELEASE_FLAG="--latest"
+          if [[ "$TAG" == *"beta"* || "$TAG" == *"alpha"* || "$TAG" == *"rc"* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" --repo koppot/Nebulae-torrent_client --title "Nebulae $TAG" --notes-file release-body.md $PRERELEASE_FLAG
 
   build-release:
     needs: create-release
@@ -243,6 +247,18 @@ jobs:
           chmod -R u+rwX,go+rX src-tauri/resources/jre || true
           test -e src-tauri/resources/jre/bin/java || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
           ls src-tauri/resources/jre/bin | head -3
+
+      # --- Tailscale Engine Bundling ----------------------------------------
+      - name: Setup Go (macOS builds tailscale from source tag)
+        if: runner.os == 'macOS'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Bundle tailscale
+        shell: bash
+        run: ./scripts/bundle-tailscale.sh "${{ matrix.target }}"
 
       # --- Linux split build ------------------------------------------------
       # tauri-bundler runs linuxdeploy over the AppDir, and linuxdeploy
