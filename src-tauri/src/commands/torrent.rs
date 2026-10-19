@@ -1640,10 +1640,9 @@ mod tests {
 /// "nothing happens".
 #[tauri::command]
 pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
-
     #[cfg(target_os = "macos")]
     {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
         app.run_on_main_thread(move || {
             let picked = unsafe { present_disc_panel() };
             let _ = tx.send(picked);
@@ -1654,7 +1653,7 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
 
     #[cfg(target_os = "windows")]
     {
-        let _ = &tx;
+        let _ = &app;
         // Windows: file dialog for ISO first; folder dialog for a release
         // root when the file dialog is cancelled.
         let iso = r#"
@@ -1688,7 +1687,7 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
 
     #[cfg(target_os = "linux")]
     {
-        let _ = &tx;
+        let _ = &app;
         // Linux: zenity file selection (ISO); directory selection when
         // the file dialog is cancelled.
         let out = std::process::Command::new("zenity")

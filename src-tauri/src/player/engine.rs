@@ -357,22 +357,17 @@ impl VlcLib {
         {
             // Windows: resources/vlc/libvlc.dll -> resources/vlc/plugins (parent)
             // Linux: resources/vlc/lib/libvlc.so.5 -> resources/vlc/plugins (parent.parent)
-            if let Some(p) = lib_path
+            lib_path
                 .parent()
                 .map(|p| p.join("plugins"))
                 .filter(|p| p.exists())
-            {
-                Some(p)
-            } else if let Some(p) = lib_path
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|p| p.join("plugins"))
-                .filter(|p| p.exists())
-            {
-                Some(p)
-            } else {
-                None
-            }
+                .or_else(|| {
+                    lib_path
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .map(|p| p.join("plugins"))
+                        .filter(|p| p.exists())
+                })
         }
     }
 

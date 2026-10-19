@@ -355,6 +355,7 @@ pub fn run() {
             use tauri::Manager;
             // Rounded app corners (owner, Movist-style): apply once at
             // startup — the old call only ran when the player attached.
+            #[cfg(target_os = "macos")]
             {
                 let h: tauri::AppHandle = app.handle().clone();
                 let radius_handle = h.clone();

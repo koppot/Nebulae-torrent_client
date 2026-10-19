@@ -421,6 +421,7 @@ impl LibraryCleaner {
         };
 
         if let Some(video) = target_video {
+            #[cfg(target_os = "macos")]
             let ext = video
                 .extension()
                 .and_then(|e| e.to_str())
