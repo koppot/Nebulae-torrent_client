@@ -14,13 +14,13 @@
 #    with go (setup-go on CI; clone/build failures are fatal).
 set -euo pipefail
 
-TS_VERSION="1.104.1"
+TS_VERSION="1.102.4"
 TARGET="${1:?usage: bundle-tailscale.sh <target-triple>}"
 DEST="src-tauri/resources/engine/tailscale"
 
 # Official pinned checksums (pkgs.tailscale.com/stable/<file>.sha256)
 SHA_LINUX_AMD64="108d1d96ecf410d305571e173516f27038f870919a9b89c914a167c6d33a4528"
-# tailscale-setup-1.104.1-amd64.msi (the NSIS .exe payload is not
+# tailscale-setup-1.102.4-amd64.msi (the NSIS .exe payload is not
 # plain-7z-extractable; the MSI administrative extract is reliable)
 SHA_WIN_MSI="6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4"
 
