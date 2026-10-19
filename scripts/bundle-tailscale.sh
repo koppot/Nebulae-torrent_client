@@ -19,7 +19,7 @@ TARGET="${1:?usage: bundle-tailscale.sh <target-triple>}"
 DEST="src-tauri/resources/engine/tailscale"
 
 # Official pinned checksums (pkgs.tailscale.com/stable/<file>.sha256)
-SHA_LINUX_AMD64="50748df1045e60b5b695f19f4c56b0da36c019948b440fb456b6584a50f0d8b980eb007e39dfebe17299fa1a09c79a8e1d934f76e0246c0817ebe3af675b7ef6"
+SHA_LINUX_AMD64="50748df1045e60b5b695f19f4c56b0da36c019948b440fb456b6584a50f0d8b9"
 # tailscale-setup-1.102.4-amd64.msi (the NSIS .exe payload is not
 # plain-7z-extractable; the MSI administrative extract is reliable)
 SHA_WIN_MSI="80eb007e39dfebe17299fa1a09c79a8e1d934f76e0246c0817ebe3af675b7ef6"
