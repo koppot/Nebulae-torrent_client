@@ -509,16 +509,6 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=3000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // Output-module comparison (one controlled change): select the
-            // legacy 'macosx' vout display (NSOpenGLView-based; "vout display"
-            // priority 250) instead of the auto-selected 'caopengllayer'
-            // (priority 300). Both ship in this runtime and both read
-            // drawable-nsobject, so the externally supplied NSView embedding
-            // is supported either way (verified in the shipped module set and
-            // upstream 3.0.x sources). Tone-mapping machinery ships in the
-            // caopengllayer module; this run measures whether the alternative
-            // output changes hardware-decoder continuity, menus, or color.
-            CString::new("--vout=macosx").unwrap(),
             // HDR Tone-Mapping:
             // When playing BT.2020 PQ (ST2084) HDR content, apply Hable filmic tone-mapping
             // so contrast, saturation, and highlight roll-off render accurately without washed-out colors.
@@ -603,15 +593,17 @@ impl VlcSession {
                 #[cfg(target_os = "macos")]
                 {
                     (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
-                    // Re-select the vout AFTER the embedding call: set_nsobject
-                    // clears "vout" on the player (upstream sets it to ""),
+                    // NOTE: set_nsobject clears "vout" (and "avcodec-hw",
+                    // "window") on the player (upstream sets them to ""),
                     // which shadows the --vout libvlc_new arg for every vout
-                    // created under this player. VLC_VAR_STRING = 0x0040; the
-                    // vlc_value_t union is 8 bytes, register-passed, so the
-                    // C string pointer travels as usize.
-                    let c_var = CString::new("vout").unwrap();
-                    let c_val = CString::new("macosx").unwrap();
-                    (lib.var_set_checked)(mp, c_var.as_ptr(), 0x0040, c_val.as_ptr() as usize);
+                    // created under this player. To pin a specific display
+                    // module, re-set "vout" here AFTER the embedding call,
+                    // e.g. with var_SetChecked (bound above; VLC_VAR_STRING =
+                    // 0x0040, the vlc_value_t union is 8 bytes so the C
+                    // string pointer travels as usize). Deliberately NOT set
+                    // for normal playback: the default probe (caopengllayer)
+                    // is the accepted output and the one carrying the
+                    // tone-mapping shader pipeline.
                 }
                 #[cfg(target_os = "windows")]
                 {
