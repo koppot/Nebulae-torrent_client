@@ -80,11 +80,20 @@ candidate freeze. No other overlapping edits exist at this time.
   **CI on `dc444f0`: lint-and-check = SUCCESS, windows-tests = SUCCESS.**
   The owner's manual runtime verdicts (drag, BD/DVD chapters, hover poster)
   remain valid - those code paths are untouched by this commit.
-- **Build: run `39361992611` dispatched by Factory from `dc444f0`** (the
-  prior runs: 39351367957 from `8f0accd` failed on the windows compile -
-  the ubuntu-only CI gap, now gated by the windows-latest job `55f1e6b`;
-  39356812146 from `696ae40` = all four SUCCESS but superseded by the
-  orphan fix). Artifacts = workflow-only; no release, no tag.
+- **Build: run `39361992611` dispatched by Factory from `dc444f0` — ALL FOUR
+  PLATFORMS SUCCESS.** Identity verified: `candidate-source.txt` =
+  `dc444f0b8bf1bd4e11694fffa905a23be4b3e58f`; the Setup's sha256 = matches
+  (afdc5b83…). **The installer battery re-run on the FINAL bytes:
+  clean-quit upgrade RC=0; upgrade over the live stack RC=0 (the hook
+  stopped it, the files replaced, the auto-run relaunched); the orphan
+  case RC=0 AND the new sweep VERIFIED WORKING — the old orphans were
+  swept during the install (the survivors = the fresh auto-run's
+  children, the start times prove it).** The transient post-install
+  orphans (the auto-run app dies with the installer's parent shell) are
+  self-healing: the next app launch's sweep removes them.
+- **30-min window: LIVE** (the candidate installed + the full stack up:
+  app=1 tsd=1 trans=1; the mesh HTTPS = 200, 0.18s, verify=0 at the
+  window's start). The verdict appends here when the window closes.
 - **Desktop: clean** (0 app / 0 tailscaled / 0 transmission after the
   orphan sweep; the zombie tray icons from the test churn disappear on
   hover - only the live instance's icon has a menu).
