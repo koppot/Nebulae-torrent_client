@@ -198,7 +198,7 @@ export const TitleBar: React.FC = () => {
             <span>Manager</span>
           </button>
         </div>
-        <div className="flex items-center gap-2.5 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           {/* Nebula icon (owner): visible on BOTH views; opens the
               release/app info popup with the Update button. */}
           <button
@@ -211,7 +211,7 @@ export const TitleBar: React.FC = () => {
           </button>
           <span className="text-xs font-bold text-white tracking-tight">Nebulae</span>
           <span className="text-[11px] text-[#a3a3a3] font-normal tracking-tight hidden lg:inline">
-            —  Client by Asian DVD Club
+            — Client by Asian DVD Club
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
