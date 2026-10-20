@@ -69,20 +69,35 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Proposed candidate:** `25cb9bd` (incorporating all prior client and backend repairs). Contains:
-  - All Windows process & lifecycle fixes: NSIS pre-extract shutdown (`d8b7d42`), console window suppression (`af321dd`, `233474d`), Win32 synchronous native window drag (`644e3b4`, type-repaired in `25cb9bd`).
-  - Chapter timeline alignment & libbluray ABI 48-byte fix (`f9b26b5`).
-  - Manager torrent-hover poster 30% dimension reduction (`e92d914`).
-  - Discord stats reporter categorized telemetry (`8e8e048`).
-  - Windows MSVC compilation fixes (`25cb9bd`): resolved Win32 `SendMessageW` `Option<WPARAM>`/`Option<LPARAM>` arguments, `POINT` import from `windows::Win32::Foundation`, `HTCAPTION as usize`, and `CommandExt` in `tailscale/mod.rs`.
-  - All test suites passing (119 Rust unit tests, 9 integration tests, TypeScript check clean).
-- **Packaging workflow:** **Factory dispatched replacement run `39356428932` from the COMPLETE SHA `696ae40`** (the owner's order: "dispatch one replacement from the agreed complete SHA"). `25cb9bd` was superseded because it still contained the !Send HWND closure — the real `tauri build` would fail there exactly like run 39351367957 did. `696ae40` = `25cb9bd` + the Send-bound fix + the platform-correct tilde test; **CI on `696ae40` = BOTH jobs SUCCESS** (the first-ever windows compile+unit gate passed the drag/chapter/spawn code on the real target). Run 39351367957 on `8f0accd` had succeeded on macOS arm64/x64 and Linux, failed on Windows MSVC (the 4 Win32 type errors + the CI gap: the ubuntu-only CI never compiled `cfg(windows)` code — now gated, `55f1e6b`).
-- **Desktop: FACTORY OWNS IT** (the read-only probe: the installer Retry dialog is gone, zero app/sidecar processes, the installed 0.2.2 = intact post-retry). The battery runs when the artifacts land.
-- **Factory Windows acceptance verification (Task 5):** download the run-39356428932 artifacts, verify the source identity (candidate-source.txt = 696ae40) + the checksums, and execute the acceptance battery: the installer's 4 upgrade cases, no console windows, native drag, DVD/BD chapter capture + marker/seek agreement, the 70% hover poster, the 30-min connectivity + lifecycle. The final coordinated v0.2.2-beta.1 asset update follows Factory's confirmation per §3.7.
-- **Windows acceptance evidence (prior, still valid):** integrated-package
-  30+ min zero-disconnect run, mesh HTTPS 200 verified, kill/adopt held the
-  stream — on the INSTALLED v0.2.2-beta.1 build (4cf142f). To be RE-RUN on the
-  new candidate per §3.5.
+- **Candidate (COMPLETE + CI-verified): `dc444f0`.** Adds the
+  transmission-orphan sweep fix on top of `696ae40` (which the owner verified
+  at runtime): repeated hard-killed app instances had ACCUMULATED orphaned
+  transmission-daemons on Windows (3 live observed) because
+  `cleanup_orphan_daemon`'s pid file records only the LAST daemon and its
+  secondary scan was pgrep (unix-only). The fix: a Windows CIM scan that
+  terminates EVERY transmission-daemon whose command line carries our config
+  dir (the same ownership proof as the tailscale supervisor), silently.
+  **CI on `dc444f0`: lint-and-check = SUCCESS, windows-tests = SUCCESS.**
+  The owner's manual runtime verdicts (drag, BD/DVD chapters, hover poster)
+  remain valid - those code paths are untouched by this commit.
+- **Build: run `39361992611` dispatched by Factory from `dc444f0`** (the
+  prior runs: 39351367957 from `8f0accd` failed on the windows compile -
+  the ubuntu-only CI gap, now gated by the windows-latest job `55f1e6b`;
+  39356812146 from `696ae40` = all four SUCCESS but superseded by the
+  orphan fix). Artifacts = workflow-only; no release, no tag.
+- **Desktop: clean** (0 app / 0 tailscaled / 0 transmission after the
+  orphan sweep; the zombie tray icons from the test churn disappear on
+  hover - only the live instance's icon has a menu).
+- **Discord reporter: delivery VERIFIED (run 39352687166, HTTP 2xx).**
+  **Webhook rotation: BLOCKED on the owner** - Factory has NO Discord
+  connector; the rotation = create a new webhook + delete the exposed one in
+  the channel's integration settings, then tell Factory to update the secret
+  (the value = never in chat). The exposed hook = POST-only to one channel
+  (the leak = the spam risk only).
+- **Prior valid evidence:** the 30+ min zero-disconnect run on the
+  INSTALLED v0.2.2-beta.1 build (4cf142f); the installer cases + the mesh
+  HTTPS 200 verified on the `696ae40` bytes. The battery re-runs the
+  installer cases + the connectivity window on the `dc444f0` bytes.
 
 ## 5. Rules for this record
 
