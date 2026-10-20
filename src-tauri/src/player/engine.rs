@@ -28,6 +28,12 @@ pub struct VlcLib {
     // MRL-based media (bluray://, dvd://) — folder-based disc images.
     pub libvlc_media_new_location: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     pub libvlc_media_release: unsafe extern "C" fn(*mut c_void),
+    // libvlccore internal, exported by the bundled dylib: sets a variable on
+    // a VLC object directly. Needed because libvlc_media_player_set_nsobject()
+    // resets "vout" (and "avcodec-hw", "window") to empty strings on the
+    // media player object (upstream 3.0.x lib/media_player.c), which shadows
+    // any --vout passed to libvlc_new for every vout under that player.
+    pub var_set_checked: unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int,
     pub libvlc_media_player_new_from_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub libvlc_media_player_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_set_nsobject: unsafe extern "C" fn(*mut c_void, *mut c_void),
@@ -388,6 +394,20 @@ impl VlcLib {
             libvlc_media_new_path: sym!("libvlc_media_new_path": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_new_location: sym!("libvlc_media_new_location": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_release: sym!("libvlc_media_release": unsafe extern "C" fn(*mut c_void)),
+            // var_SetChecked lives in libvlccore, not libvlc; look it up in
+            // the preloaded dependency libraries. libvlc.5 keeps libvlccore
+            // mapped, so the pointer stays valid for the process lifetime.
+            var_set_checked: {
+                type VscFn = unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int;
+                let mut found: Option<Symbol<VscFn>> = None;
+                for dep in &deps {
+                    if let Ok(s) = dep.get::<VscFn>(b"var_SetChecked\0") {
+                        found = Some(s);
+                        break;
+                    }
+                }
+                *found.unwrap_or_else(|| panic!("libvlccore symbol var_SetChecked missing"))
+            },
             libvlc_media_player_new_from_media: sym!("libvlc_media_player_new_from_media": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
             libvlc_media_player_release: sym!("libvlc_media_player_release": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_set_nsobject: sym!("libvlc_media_player_set_nsobject": unsafe extern "C" fn(*mut c_void, *mut c_void)),
@@ -583,6 +603,15 @@ impl VlcSession {
                 #[cfg(target_os = "macos")]
                 {
                     (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
+                    // Re-select the vout AFTER the embedding call: set_nsobject
+                    // clears "vout" on the player (upstream sets it to ""),
+                    // which shadows the --vout libvlc_new arg for every vout
+                    // created under this player. VLC_VAR_STRING = 0x0040; the
+                    // vlc_value_t union is 8 bytes, register-passed, so the
+                    // C string pointer travels as usize.
+                    let c_var = CString::new("vout").unwrap();
+                    let c_val = CString::new("macosx").unwrap();
+                    (lib.var_set_checked)(mp, c_var.as_ptr(), 0x0040, c_val.as_ptr() as usize);
                 }
                 #[cfg(target_os = "windows")]
                 {
