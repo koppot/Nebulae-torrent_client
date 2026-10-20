@@ -382,11 +382,11 @@ fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>
             }
         }
     }
-    let reachable = std::net::TcpStream::connect_timeout(
-        &format!("{ip}:443").parse().unwrap(),
+    let reachable = crate::tailscale::probe_target_reachability(
+        &ip,
+        443,
         std::time::Duration::from_secs(2),
-    )
-    .is_ok();
+    );
     if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
         *c = Some((ip, reachable, std::time::Instant::now()));
     }
@@ -405,7 +405,8 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
         // entry reported ADC as reachable while the ADC Linux host was
         // offline. Reachability must be a live bounded probe with a
         // freshness window, never a cached netmap entry.
-        let (adc_node, adc_reachable) = live_adc_probe(ts.adc_route_ip.as_deref(), ts.adc_node);
+        let target = ts.adc_route_ip.clone().or_else(|| ts.adc_node.clone());
+        let (adc_node, adc_reachable) = live_adc_probe(target.as_deref(), ts.adc_node);
         return Ok(TailscaleStatus {
             connected: true,
             interface: Some("nebulae-embedded (userspace)".into()),

@@ -418,9 +418,9 @@ export const SettingsModal: React.FC = () => {
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
                       <div>
-                        <span className="text-white font-medium">Close button minimizes to system tray</span>
+                        <span className="text-white font-medium">Keep running in the notification area when the window is closed</span>
                         <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
-                          When enabled, clicking the window close button automatically hides Nebulae to the system tray (right-click tray icon to quit). When disabled, closing the window exits Nebulae.
+                          When enabled, closing the main window keeps Nebulae running in the notification area so background downloads and seeding continue. When disabled, closing the main window quits the application gracefully.
                         </span>
                       </div>
                     </label>

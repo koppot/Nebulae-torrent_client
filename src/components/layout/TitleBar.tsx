@@ -121,13 +121,7 @@ export const TitleBar: React.FC = () => {
 
   const handleClose = async () => {
     try {
-      if (settings.close_to_tray) {
-        // Owner directive: the X button minimizes to the taskbar/dock (the
-        // engine keeps running); only explicit Quit ends the session.
-        await invoke('window_minimize_cmd');
-      } else {
-        await invoke('window_close_cmd');
-      }
+      await invoke('window_close_cmd');
     } catch (e) {
       console.warn('Close failed', e);
     }

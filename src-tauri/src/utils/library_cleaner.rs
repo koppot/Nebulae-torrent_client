@@ -121,21 +121,74 @@ impl LibraryCleaner {
 
     #[cfg(windows)]
     fn get_windows_disk_space(path: &Path) -> Result<VolumeSpaceInfo, String> {
-        let escaped_path = path.to_string_lossy().replace('\'', "''");
-        let script = format!(
-            "$p = '{}'; $drive = (Get-Item -LiteralPath $p).PSDrive; if ($drive) {{ [PSCustomObject]@{{ Mount = $drive.Root; Total = ($drive.Used + $drive.Free); Used = $drive.Used; Free = $drive.Free }} | ConvertTo-Json -Compress }} else {{ [PSCustomObject]@{{ Mount = 'C:\\'; Total = 1000000000000; Used = 500000000000; Free = 500000000000 }} | ConvertTo-Json -Compress }}",
-            escaped_path
-        );
+        use std::os::windows::ffi::OsStrExt;
 
-        let output = crate::utils::process::run_hidden_powershell(&script)
-            .map_err(|e| format!("Failed to query disk space via PowerShell: {e}"))?;
-
-        if !output.status.success() {
-            return Err("PowerShell disk space query failed".to_string());
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lpDirectoryName: *const u16,
+                lpFreeBytesAvailableToCaller: *mut u64,
+                lpTotalNumberOfBytes: *mut u64,
+                lpTotalNumberOfFreeBytes: *mut u64,
+            ) -> i32;
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Self::parse_powershell_disk_json(&stdout)
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+
+        let mut free_bytes_avail: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut total_free_bytes: u64 = 0;
+
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_bytes_avail,
+                &mut total_bytes,
+                &mut total_free_bytes,
+            )
+        };
+
+        if ok == 0 {
+            // If the specific directory didn't work (e.g. not created yet), try its root or parent
+            if let Some(parent) = path.parent() {
+                let mut wide_parent: Vec<u16> = parent.as_os_str().encode_wide().collect();
+                wide_parent.push(0);
+                let ok_parent = unsafe {
+                    GetDiskFreeSpaceExW(
+                        wide_parent.as_ptr(),
+                        &mut free_bytes_avail,
+                        &mut total_bytes,
+                        &mut total_free_bytes,
+                    )
+                };
+                if ok_parent == 0 {
+                    return Err("GetDiskFreeSpaceExW failed for path and parent".to_string());
+                }
+            } else {
+                return Err("GetDiskFreeSpaceExW failed".to_string());
+            }
+        }
+
+        let used_bytes = total_bytes.saturating_sub(free_bytes_avail);
+        let used_percent = if total_bytes > 0 {
+            ((used_bytes as f64 / total_bytes as f64) * 100.0).round() as u8
+        } else {
+            0
+        };
+
+        let mount_point = path
+            .components()
+            .next()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .unwrap_or_else(|| "C:\\".to_string());
+
+        Ok(VolumeSpaceInfo {
+            mount_point,
+            total_bytes,
+            available_bytes: free_bytes_avail,
+            used_bytes,
+            used_percent,
+        })
     }
 
     pub fn parse_powershell_disk_json(json_str: &str) -> Result<VolumeSpaceInfo, String> {

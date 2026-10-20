@@ -471,7 +471,7 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit_i =
-                tauri::menu::MenuItem::with_id(app, "quit", "Quit Nebulae", true, None::<&str>)?;
+                tauri::menu::MenuItem::with_id(app, "quit", "Quit application", true, None::<&str>)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let menu = tauri::menu::Menu::with_items(
                 app,
@@ -492,6 +492,9 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
+                        let engine = app.state::<SharedEngine>();
+                        engine.shutdown();
+                        tailscale::shutdown();
                         updater::apply_staged_update_if_present(app);
                         app.exit(0);
                     }
@@ -567,29 +570,33 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 use tauri::Manager;
-                let should_close_to_tray = if let Some(db) =
-                    window.try_state::<std::sync::Arc<crate::db::Database>>()
-                {
-                    if let Ok(Some(json)) = db.get_setting("user_settings_json") {
-                        if let Ok(parsed) =
-                            serde_json::from_str::<crate::commands::settings::UserSettings>(&json)
-                        {
-                            parsed.close_to_tray
+                // Only intercept close on the main window; individual player or dialog windows close normally
+                if window.label() == "main" {
+                    let should_close_to_tray = if let Some(db) =
+                        window.try_state::<std::sync::Arc<crate::db::Database>>()
+                    {
+                        if let Ok(Some(json)) = db.get_setting("user_settings_json") {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<crate::commands::settings::UserSettings>(&json)
+                            {
+                                parsed.close_to_tray
+                            } else {
+                                true
+                            }
                         } else {
                             true
                         }
                     } else {
                         true
-                    }
-                } else {
-                    true
-                };
+                    };
 
-                if should_close_to_tray {
-                    api.prevent_close();
-                    let _ = window.hide();
-                } else {
-                    updater::apply_staged_update_if_present(window.app_handle());
+                    if should_close_to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    } else {
+                        updater::apply_staged_update_if_present(window.app_handle());
+                        window.app_handle().exit(0);
+                    }
                 }
             }
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -758,7 +765,11 @@ pub fn run() {
     let _event_payloads = initial_payloads.clone();
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
+            use tauri::Manager;
             updater::apply_staged_update_if_present(_app_handle);
+            if let Some(engine) = _app_handle.try_state::<SharedEngine>() {
+                engine.shutdown();
+            }
             tailscale::shutdown(); // stop the embedded tailscaled
                                    // Owner defect (2026-10-20): a tray Quit stopped tailscaled and
                                    // the keepalive but ORPHANED the transmission-daemon. Shut the

@@ -316,7 +316,7 @@ fn terminate_pid_if_transmission(pid: u32) {
 
 /// Transmission JSON-RPC Client.
 pub struct TransmissionRpcClient {
-    rpc_url: String,
+    rpc_url: std::sync::RwLock<String>,
     auth_header: Option<String>,
     session_id: Mutex<Option<String>>,
     client: reqwest::blocking::Client,
@@ -353,10 +353,20 @@ impl TransmissionRpcClient {
             .unwrap_or_default();
 
         Self {
-            rpc_url: format!("http://127.0.0.1:{port}/transmission/rpc"),
+            rpc_url: std::sync::RwLock::new(format!("http://127.0.0.1:{port}/transmission/rpc")),
             auth_header: auth,
             session_id: Mutex::new(None),
             client,
+        }
+    }
+
+    /// Update the RPC endpoint port when the daemon restarts on a new port.
+    pub fn set_rpc_port(&self, port: u16) {
+        if let Ok(mut lock) = self.rpc_url.write() {
+            *lock = format!("http://127.0.0.1:{port}/transmission/rpc");
+        }
+        if let Ok(mut sid) = self.session_id.lock() {
+            *sid = None;
         }
     }
 
@@ -382,7 +392,12 @@ impl TransmissionRpcClient {
                     std::thread::sleep(Duration::from_millis(wait_ms));
                 }
                 let session_id = self.session_id.lock().unwrap().clone();
-                let mut retry_req = self.client.post(&self.rpc_url).json(&payload);
+                let url = self
+                    .rpc_url
+                    .read()
+                    .map(|g| g.clone())
+                    .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
+                let mut retry_req = self.client.post(&url).json(&payload);
                 if let Some(ref sid) = session_id {
                     retry_req = retry_req.header("X-Transmission-Session-Id", sid);
                 }
@@ -591,7 +606,11 @@ impl TransmissionRpcClient {
         // the call is fired on a dedicated thread with a 30-minute window
         // and returns immediately - the daemon keeps moving regardless of
         // what the UI does.
-        let rpc_url = self.rpc_url.clone();
+        let rpc_url = self
+            .rpc_url
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
         let auth = self.auth_header.clone();
         // Clone the current token as a mutable local — the thread will update
         // it in-place whenever Transmission returns 409 with a new token,
@@ -714,6 +733,7 @@ pub struct TransmissionTorrentEngine {
     #[allow(dead_code)]
     peer_remove_unsupported: Arc<AtomicBool>,
     daemon_version: Arc<Mutex<Option<String>>>,
+    is_shutting_down: Arc<AtomicBool>,
 }
 
 /// Builds the transmission-daemon `settings.json` configuration structure with
@@ -1423,6 +1443,7 @@ impl TransmissionTorrentEngine {
         // Graceful-shutdown flag: created here so the watchdog (spawned
         // below) and the engine struct share the same instance.
         let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let is_shutting_down = Arc::clone(&shutdown_flag);
 
         // 8. Spawn health watchdog
         {
@@ -1435,6 +1456,12 @@ impl TransmissionTorrentEngine {
             let spawned_prefix_watch = spawned_prefix.clone();
             let spawned_profile_watch = spawned_profile.clone();
             let daemon_supports_identity_watch = daemon_supports_identity;
+            let is_shutting_down_watch = Arc::clone(&is_shutting_down);
+            let rpc_client_watch = Arc::clone(&rpc_client);
+            let db_watch = Arc::clone(&db);
+            let default_download_dir_watch = default_download_dir.clone();
+            let bind_ipv4_watch = bind_ipv4.clone();
+            let rpc_password_watch = rpc_password.clone();
 
             tauri::async_runtime::spawn(async move {
                 let mut backoff = Duration::from_secs(1);
@@ -1445,6 +1472,9 @@ impl TransmissionTorrentEngine {
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
+                    if is_shutting_down_watch.load(Ordering::SeqCst) {
+                        break;
+                    }
 
                     let is_dead = {
                         let mut lock = child_watch.lock().unwrap();
@@ -1466,13 +1496,51 @@ impl TransmissionTorrentEngine {
                     };
 
                     if is_dead {
+                        if is_shutting_down_watch.load(Ordering::SeqCst) {
+                            break;
+                        }
+
                         tokio::time::sleep(backoff).await;
+                        if is_shutting_down_watch.load(Ordering::SeqCst) {
+                            break;
+                        }
                         backoff = (backoff * 2).min(Duration::from_secs(16));
+
+                        let new_port = match find_free_port() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!("Could not find free port for restarting transmission-daemon");
+                                continue;
+                            }
+                        };
+
+                        let user_settings = db_watch
+                            .get_setting("user_settings_json")
+                            .ok()
+                            .flatten()
+                            .and_then(|raw| {
+                                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+                            })
+                            .unwrap_or_default();
+
+                        let new_settings = build_transmission_settings(
+                            &user_settings,
+                            &default_download_dir_watch.to_string_lossy(),
+                            &bind_ipv4_watch,
+                            new_port,
+                            "nebulae",
+                            &rpc_password_watch,
+                        );
+
+                        if let Ok(json_str) = serde_json::to_string_pretty(&new_settings) {
+                            let _ = std::fs::write(engine_dir_watch.join("settings.json"), json_str);
+                        }
 
                         let mut cmd = std::process::Command::new(&daemon_path_watch);
                         cmd.arg("--config-dir")
                             .arg(&engine_dir_watch)
                             .arg("--foreground")
+                            .current_dir(&engine_dir_watch)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null());
 
@@ -1494,8 +1562,26 @@ impl TransmissionTorrentEngine {
                                 let new_pid = new_child.id();
                                 let _ = std::fs::write(&pid_file_watch, new_pid.to_string());
                                 *child_watch.lock().unwrap() = Some(new_child);
-                                info!("Restarted transmission-daemon (pid {new_pid})");
-                                backoff = Duration::from_secs(1);
+
+                                // Update RPC client URL to point to the new port!
+                                rpc_client_watch.set_rpc_port(new_port);
+
+                                // Verify daemon readiness on the new port
+                                let mut ready = false;
+                                for _ in 0..20 {
+                                    tokio::time::sleep(Duration::from_millis(250)).await;
+                                    if rpc_client_watch.session_get().is_ok() {
+                                        ready = true;
+                                        break;
+                                    }
+                                }
+
+                                if ready {
+                                    info!("Restarted transmission-daemon (pid {new_pid}) responsive on RPC port {new_port}");
+                                    backoff = Duration::from_secs(1);
+                                } else {
+                                    warn!("Restarted transmission-daemon (pid {new_pid}) but not yet responding on RPC port {new_port}");
+                                }
                             }
                             Err(e) => {
                                 error!("Failed to restart transmission-daemon: {e}");
@@ -1608,6 +1694,7 @@ impl TransmissionTorrentEngine {
             rtt_prober,
             peer_remove_unsupported,
             daemon_version: daemon_version_arc,
+            is_shutting_down,
         })
     }
 
@@ -1617,6 +1704,19 @@ impl TransmissionTorrentEngine {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    /// Gracefully shutdown the engine: stop daemon sidecar cleanly and prevent watchdog respawn.
+    pub fn shutdown(&self) {
+        self.is_shutting_down.store(true, Ordering::SeqCst);
+        let _ = self.rpc_client.request("session-close", None);
+        if let Ok(mut lock) = self.child_process.lock() {
+            if let Some(ref mut child) = *lock {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
     }
 
     /// Applies per-torrent Racing Mode settings immediately after a torrent is
@@ -1659,18 +1759,7 @@ impl TransmissionTorrentEngine {
 
 impl Drop for TransmissionTorrentEngine {
     fn drop(&mut self) {
-        // Prevent watchdog respawn, then terminate.
-        self.shutdown_flag.store(true, Ordering::SeqCst);
-        // Attempt clean RPC shutdown first
-        let _ = self.rpc_client.request("session-close", None);
-        // Terminate child process
-        if let Ok(mut lock) = self.child_process.lock() {
-            if let Some(ref mut child) = *lock {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-        let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
+        self.shutdown_engine();
     }
 }
 
@@ -1680,6 +1769,7 @@ impl TransmissionTorrentEngine {
     /// wait, then hard kill. Idempotent.
     pub fn shutdown_engine(&self) {
         self.shutdown_flag.store(true, Ordering::SeqCst);
+        let _ = self.rpc_client.request("session-close", None);
         if let Ok(mut lock) = self.child_process.lock() {
             if let Some(ref mut child) = *lock {
                 let _ = child.kill();
@@ -1687,6 +1777,7 @@ impl TransmissionTorrentEngine {
                 *lock = None;
             }
         }
+        let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
         info!("transmission engine shut down gracefully");
     }
 }

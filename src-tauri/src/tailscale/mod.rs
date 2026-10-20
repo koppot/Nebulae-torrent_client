@@ -978,7 +978,7 @@ pub fn socks_addr() -> Option<SocketAddr> {
 /// Minimal SOCKS5 CONNECT through the daemon's local proxy (no new deps):
 /// greeting (no auth) -> CONNECT to <ip:port> -> reply code 0x00 = success.
 /// Only used for TCP reachability probes; HTTP goes through reqwest.
-fn socks5_tcp_connect(
+pub fn socks5_tcp_connect(
     proxy: SocketAddr,
     ip: &str,
     port: u16,
@@ -1029,6 +1029,32 @@ fn socks5_tcp_connect(
         .read_exact(&mut rest)
         .map_err(|e| format!("socks tail: {e}"))?;
     Ok(())
+}
+
+/// Probe reachability to an IP:port target. If the embedded daemon is Running
+/// and its SOCKS5 proxy is listening on 127.0.0.1:1055, routes through SOCKS5
+/// so the packets ride the userspace WireGuard mesh. If SOCKS5 is not available
+/// or returns an error, falls back to direct TcpStream connect.
+pub fn probe_target_reachability(ip: &str, port: u16, timeout: Duration) -> bool {
+    let socks_proxy: Option<SocketAddr> = format!("127.0.0.1:{SOCKS_PORT}").parse().ok();
+    if let Some(proxy) = socks_proxy {
+        if socks5_tcp_connect(proxy, ip, port, timeout).is_ok() {
+            return true;
+        }
+    }
+    // Fallback: direct OS TCP connect (for system TUN mode or direct destinations)
+    let socket_addr = if ip.starts_with('[') {
+        format!("{ip}:{port}").parse().ok()
+    } else if ip.contains(':') {
+        format!("[{ip}]:{port}").parse().ok()
+    } else {
+        format!("{ip}:{port}").parse().ok()
+    };
+    if let Some(addr) = socket_addr {
+        std::net::TcpStream::connect_timeout(&addr, timeout).is_ok()
+    } else {
+        false
+    }
 }
 
 /// TCP reachability through the daemon's SOCKS5 proxy, to the ADC node's

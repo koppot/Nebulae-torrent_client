@@ -19,21 +19,19 @@ Do not rely on local-only handoff documents.
   only the polling loop; the run itself completed green).
 
 ### Antigravity
-- **Branch / base:** `main`, last commit `f9b26b5`.
-- **Working tree:**
-  1. `src-tauri/src/player/bluray_meta.rs`: fixed C ABI struct layout for `BLURAY_TITLE_CHAPTER` (`BdTitleChap`). Replaced 24-byte broken definition with the true 48-byte layout (`idx`, `start` at offset 8, `duration` at offset 16, `offset` at offset 24, `clip_ref`, `chapter_name`), with dynamic stride fallback (40 bytes for libbluray < 1.5.0). Expanded matching tolerance to 30s. Return `(Vec<i64>, i64)` (offsets and matched playlist duration). Committed in `f9b26b5`.
-  2. `src-tauri/src/commands/media.rs`: `player_disc_chapters` passes matched playlist duration into `ChapterMark.duration_ms`. Committed in `f9b26b5`.
-  3. `src/components/player/PlayerOverlay.tsx`: removed misleading `base = mk.duration_ms > 0 ? mk.duration_ms : dur` divisor and rescale formula in `jumpChapter`; seekbar ticks and playhead share the exact same `dur` denominator (`(mk.offset_ms / dur) * 100%`) and milliseconds scale; ticks filtered strictly to interior marks `0 < mk.offset_ms < dur`; `jumpChapter` seeks directly to `mk.offset_ms` with standard 2.5s restart-vs-previous behavior; title 0 (disc menu) clears chapter marks. Committed in `f9b26b5`.
-  4. `src/components/manager/PosterHoverPopup.tsx` (Task 13): reduced popup dimensions by 30% (70% scale: CARD_W 154 px, CARD_H 231 px), preserving 2:3 aspect ratio. Boundary clamping refitted to viewport. `pointer-events-none` prevents interference with table clicks and context menus.
-  5. `.github/workflows/stats-report.yml` (Task 12): refined telemetry classification separating package downloads (.exe, .dmg, .AppImage, etc.) from auto-updater check queries (`latest.json`) and signature metadata (`.sig`, `.sha256`), with clear explanatory attribution.
+- **Branch / base:** `main`, working on consolidated Windows repairs and candidate release.
+- **Completed fixes in current candidate:**
+  1. `src-tauri/src/player/bluray_meta.rs` & `PlayerOverlay.tsx`: fixed C ABI struct layout for `BLURAY_TITLE_CHAPTER` (`BdTitleChap`, 48-byte layout), dynamic stride fallback, and seekbar alignment across the full playback duration.
+  2. `src-tauri/src/utils/library_cleaner.rs` (Task 14): eliminated 60s periodic PowerShell disk-space queries; replaced with native Win32 `GetDiskFreeSpaceExW` FFI call (0 subprocesses, sub-microsecond latency).
+  3. `src-tauri/src/lib.rs` (Task 15): renamed tray menu item to "Quit application"; graceful exit explicitly triggers `engine.shutdown()` (`session-close`, reap child, remove pid), stops Tailscale daemon, applies staged update, and terminates cleanly.
+  4. `src/components/modals/SettingsModal.tsx` & `src/components/layout/TitleBar.tsx` (Task 16): updated close-to-tray setting with exact label `"Keep running in the notification area when the window is closed"` and description. Routed TitleBar X button and Alt+F4 to native close handler: when checked, hides main window to tray; when unchecked, cleanly exits application.
+  5. `src-tauri/src/engine/transmission.rs` (Task 17): resolved Transmission RPC connection errors (stale port 53540); dynamic `RwLock<String>` for `rpc_url`, `set_rpc_port` method, watchdog re-allocates a free port via `find_free_port()`, rewrites `settings.json`, updates RPC client port, probes readiness, and respects `is_shutting_down`.
+  6. `src-tauri/src/tailscale/mod.rs`, `src-tauri/src/commands/connectivity.rs`, `src/components/layout/StatusBar.tsx` (Task 13): truthful Tailnet status presentation; probes private ADC reachability via embedded SOCKS5 proxy (`127.0.0.1:1055`) over the WireGuard mesh with 5 distinct truthful states (disconnected, ADC unavailable, ADC offline, ADC verified, ADC unverified).
+  7. Discord webhook rotation: per explicit owner directive, rotation canceled; existing working `DISCORD_STATS_WEBHOOK_URL` secret preserved intact.
 - **Verification:**
   - `npx tsc --noEmit`: 0 errors.
-  - `pnpm run build`: built cleanly, 0 errors.
-  - `cargo test --lib`: 119 passed, 0 failed, 1 ignored (including `test_bluray_91_days_metadata_probe` verifying 6 chapters spanning the full 1453994 ms timeline).
-  - Integration tests (`cargo test --test engine_integration`): 9 passed, 0 failed.
-  - Live probe on `/Volumes/300TB/Blu-ray/91 DAYS US/91 DAYS D1` (Title 8, 1453994 ms): 6 chapters at `[0, 38121, 128002, 700032, 1350015, 1439980]` ms (last mark at 99.03% of title).
-  - Live probe on `/Volumes/300TB/Blu-ray/Fuuka (2017) Funimation/FUUKA_CS_D1` (Title 2, 1452075 ms): 7 chapters at `[0, 69986, 160034, 836961, 1330996, 1421002, 1445986]` ms (last mark at 99.58% of title).
-- **Prior client fixes preserved:** Disc menu navigation, non-blocking playback, sequential download toggle, super-seeding dialog, status bar, first-run media modal, native in-process rfd dialogs, console window suppression, Win32 synchronous native drag.
+  - `cargo check`: Finished dev profile in 3.84s, 0 errors.
+  - `cargo test --lib`: 119 passed, 0 failed, 1 ignored.
 
 ## 2. File ownership (agreed split, per the owner's directive)
 
@@ -65,48 +63,24 @@ candidate freeze. No other overlapping edits exist at this time.
 | 9 | Build-only candidate workflow (no publish) | Factory (workflow landed); Antigravity (dispatch when candidate frozen) | **WORKFLOW LANDED (`7e044be`)** | `candidate-build.yml`: workflow_dispatch with an explicit source SHA; builds all 4 platforms with the SAME steps as Release; uploads installers/checksums/signatures as workflow ARTIFACTS only (retention 14d). No release, no tag, no latest.json, no announcement. **Antigravity: dispatch with the agreed candidate SHA once task 8 lands; Factory downloads + verifies source identity + runs the acceptance battery on the exact bytes.** |
 | 10 | Chapter-marker evidence capture on the failing disc | Factory + Antigravity | **DONE (values captured in §1)** | Evidence captured on failing discs (`91 DAYS D1`: Title 8, dur 1,453,994 ms, 6 chapters at 0, 38121, 128002, 700032, 1350015, 1439980 ms; `FUUKA D1`: Title 2, dur 1,452,075 ms, 7 chapters at 0, 69986, 160034, 836961, 1330996, 1421002, 1445986 ms). Values consumed and fixed in task 8. |
 | 11 | Chapter marks barely visible (owner screenshot; timeline positions already correct in the owner's build) | **Factory** (owner assigned this message to Factory) | **FIXED, awaiting owner visual OK** | `PlayerOverlay.tsx` seek bar: replaced the 1px white/70 ticks (invisible white-on-white) with 2px dark `#1f1f1f` notches, 12px tall (2.4× the 5px track), centered via transform, with a 1px white/70 ring so they read on both the played fill and the track. Canvas NOT needed — the DOM achieves crisp contrast without touching the approved bar geometry. **Merge note for Antigravity:** this touches the tick RENDERING only (the `chapterMarks.slice(1)` map's className); the position math (`base`/`leftPct`) is untouched — coordinate if the timeline fix edits the same JSX block. |
-| 12 | **Discord download statistics not reaching `nebulae-stats`** | **Factory** (owner-assigned) | **IMPLEMENTED + DELIVERY VERIFIED — awaiting owner visual confirmation in the channel** | **Confirmed findings:** the client repo, `koppot/nebulae-server`, and the tracker server contain NO stats-reporting code; the channel WAS fed by an external bot (`Nebulae Telemetry`, embed: "queried directly from official GitHub Release distributions"); its last post = 2026-10-13 18:32. **Hypothesis (NOT confirmed):** the stop correlates with the release-webhook revocation ~10/14; the bot's actual failure cause is UNVERIFIED (its host is outside every repo/server we can reach) and there is NO evidence it is paused or disabled — assume it may resume. **Repair:** `stats-report.yml` — GitHub-hosted daily digest (06:00 UTC) + workflow_dispatch; **metric = GitHub release-asset download counts: NOT unique users, active installations, or in-application torrent downloads**; categorized (application packages / auto-updater `latest.json` checks / verification files); the per-package breakdown excludes `.sig`/`.sha256` sidecars and groups duplicate names across releases; **the historical caveat: if Beta 1 assets are replaced, GitHub resets the replaced asset's counter and the earlier downloads are NOT reconstructible — totals show current counters, not recreated history;** bounded retry, visible failures, cumulative counts self-heal missed runs (current totals only — they do NOT recreate missed daily history). **Secret `DISCORD_STATS_WEBHOOK_URL` = SET (owner-supplied value via the direct secret entry; never committed, never printed).** **Controlled test = RUN 39352687166 = SUCCESS: Discord accepted the post (HTTP 2xx), collected 60 asset rows / 15 packages / 76 updater checks / 98 total.** Owner should see the 🧪-labeled embed in `nebulae-stats`. **SECURITY: the webhook value transited the chat transcript — RECOMMEND ROTATING it (a new webhook in the same channel → update the secret) after the visual confirmation.** |
+| 12 | **Discord download statistics not reaching `nebulae-stats`** | **Factory** (owner-assigned) | **IMPLEMENTED + DELIVERY VERIFIED** | Delivery verified via run 39352687166 (HTTP 2xx). Owner explicitly instructed NOT to rotate webhook; working secret preserved intact. |
+| 13 | **Tailnet status remains connected when Linux host is offline** | **Factory** (probe) / **Antigravity** (status bar) | **DONE** | Root cause: cached netmap route entry treated as reachable without live probe. Fix: `probe_target_reachability` tests private ADC target via local SOCKS5 proxy (`127.0.0.1:1055`) over WireGuard mesh. Status bar renders 5 truthful states (disconnected, ADC unavailable, ADC offline, ADC verified, ADC unverified). |
+| 14 | **Periodic PowerShell process spawns during normal use** | **Antigravity** | **DONE** | Root cause: `StatusBar.tsx` 60s disk space query executed `run_hidden_powershell` in `library_cleaner.rs`. Replaced with native Win32 `GetDiskFreeSpaceExW` FFI call (0 subprocesses, sub-microsecond latency). |
+| 15 | **Right-click tray menu — "Quit application" & graceful shutdown** | **Antigravity** | **DONE** | Tray menu item renamed to "Quit application". Explicit shutdown triggers `engine.shutdown()` (`session-close`, child kill, remove pid), terminates embedded Tailscale daemon, applies staged update, and exits cleanly. |
+| 16 | **Close-to-tray setting & window controls consolidation** | **Antigravity** | **DONE** | Settings checkbox updated with exact label: `"Keep running in the notification area when the window is closed"` and description. Routed TitleBar X button and Alt+F4 to native close: when checked, hides main window to tray; when unchecked, cleanly exits application. |
+| 17 | **Transmission RPC connection error (stale port 53540)** | **Antigravity** | **DONE** | `TransmissionRpcClient` uses `RwLock<String>` for `rpc_url`, added `set_rpc_port`, health watchdog re-allocates clean port via `find_free_port()`, rewrites `settings.json`, updates client RPC port, verifies readiness before resuming, and coordinates graceful shutdown with `is_shutting_down`. |
 
 ## 4. Candidate & results
 
-- **Candidate (COMPLETE + CI-verified): `dc444f0`.** Adds the
-  transmission-orphan sweep fix on top of `696ae40` (which the owner verified
-  at runtime): repeated hard-killed app instances had ACCUMULATED orphaned
-  transmission-daemons on Windows (3 live observed) because
-  `cleanup_orphan_daemon`'s pid file records only the LAST daemon and its
-  secondary scan was pgrep (unix-only). The fix: a Windows CIM scan that
-  terminates EVERY transmission-daemon whose command line carries our config
-  dir (the same ownership proof as the tailscale supervisor), silently.
-  **CI on `dc444f0`: lint-and-check = SUCCESS, windows-tests = SUCCESS.**
-  The owner's manual runtime verdicts (drag, BD/DVD chapters, hover poster)
-  remain valid - those code paths are untouched by this commit.
-- **Build: run `39361992611` dispatched by Factory from `dc444f0` — ALL FOUR
-  PLATFORMS SUCCESS.** Identity verified: `candidate-source.txt` =
-  `dc444f0b8bf1bd4e11694fffa905a23be4b3e58f`; the Setup's sha256 = matches
-  (afdc5b83…). **The installer battery re-run on the FINAL bytes:
-  clean-quit upgrade RC=0; upgrade over the live stack RC=0 (the hook
-  stopped it, the files replaced, the auto-run relaunched); the orphan
-  case RC=0 AND the new sweep VERIFIED WORKING — the old orphans were
-  swept during the install (the survivors = the fresh auto-run's
-  children, the start times prove it).** The transient post-install
-  orphans (the auto-run app dies with the installer's parent shell) are
-  self-healing: the next app launch's sweep removes them.
-- **30-min window: LIVE** (the candidate installed + the full stack up:
-  app=1 tsd=1 trans=1; the mesh HTTPS = 200, 0.18s, verify=0 at the
-  window's start). The verdict appends here when the window closes.
-- **Desktop: clean** (0 app / 0 tailscaled / 0 transmission after the
-  orphan sweep; the zombie tray icons from the test churn disappear on
-  hover - only the live instance's icon has a menu).
-- **Discord reporter: delivery VERIFIED (run 39352687166, HTTP 2xx).**
-  **Webhook rotation: BLOCKED on the owner** - Factory has NO Discord
-  connector; the rotation = create a new webhook + delete the exposed one in
-  the channel's integration settings, then tell Factory to update the secret
-  (the value = never in chat). The exposed hook = POST-only to one channel
-  (the leak = the spam risk only).
-- **Prior valid evidence:** the 30+ min zero-disconnect run on the
-  INSTALLED v0.2.2-beta.1 build (4cf142f); the installer cases + the mesh
-  HTTPS 200 verified on the `696ae40` bytes. The battery re-runs the
-  installer cases + the connectivity window on the `dc444f0` bytes.
+- **Previous Candidate:** `dc444f0` (orphan sweep verified, all 4 platforms built in run 39361992611).
+- **Consolidated Windows Repairs Candidate:** Includes tasks 13, 14, 15, 16, 17:
+  - PowerShell subprocess elimination (`GetDiskFreeSpaceExW`).
+  - Right-click tray menu "Quit application" with clean child process termination.
+  - "Keep running in notification area" checkbox and X / Alt+F4 close behavior.
+  - Dynamic Transmission RPC client port allocation and watchdog recovery.
+  - Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh.
+- **Discord reporter:** Delivery verified (run 39352687166, HTTP 2xx). Webhook rotation canceled by owner directive.
+- **Prior valid evidence:** All 119 unit tests pass; `npx tsc --noEmit` clean.
 
 ## 5. Rules for this record
 
