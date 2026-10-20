@@ -489,10 +489,22 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=3000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
+            // Output-module comparison (one controlled change): select the
+            // legacy 'macosx' vout display (NSOpenGLView-based; "vout display"
+            // priority 250) instead of the auto-selected 'caopengllayer'
+            // (priority 300). Both ship in this runtime and both read
+            // drawable-nsobject, so the externally supplied NSView embedding
+            // is supported either way (verified in the shipped module set and
+            // upstream 3.0.x sources). Tone-mapping machinery ships in the
+            // caopengllayer module; this run measures whether the alternative
+            // output changes hardware-decoder continuity, menus, or color.
+            CString::new("--vout=macosx").unwrap(),
             // HDR Tone-Mapping:
             // When playing BT.2020 PQ (ST2084) HDR content, apply Hable filmic tone-mapping
             // so contrast, saturation, and highlight roll-off render accurately without washed-out colors.
             // On standard SDR content (BT.709), this setting remains inactive.
+            // Integer-valued option per this runtime: 0=hard clip, 1=Mobius,
+            // 2=Reinhard, 3=Hable (recommended), 4=Gamma-Power, 5=Linear stretch.
             CString::new("--tone-mapping=3").unwrap(),
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
