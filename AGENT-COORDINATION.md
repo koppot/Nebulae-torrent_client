@@ -1,5 +1,19 @@
 # Agent coordination notes
 
+## DURABLE HANDOFF (2026-10-20, Droid/Factory — branch consolidation)
+
+- **Canonical repository path:** `/Users/dev/Documents/GitHub/Nebulae-torrent_client` — the preferred entry path. It is the SAME git worktree as `/Users/dev/.gemini/antigravity/scratch/nebula-repair` (gitdir link, branch `main`); keep both paths working, never delete either blindly.
+- **Integration branch:** `main`. Consolidated work tip: `1d316966957ec77b83a51a743e6cee22f1b029d1` (parent of the docs-only coordination commits that may sit on top). Pushed to origin with a normal push, no force.
+- **Active branches/worktrees:** `main` in the canonical worktree (Factory, integration). Antigravity keeps `temp-switch` @ `695fd58` in `/Users/dev/.gemini/antigravity/scratch/nebula-torrent` (owner's choice 2026-10-20; merged into `main`, clean — the branch exists only because the worktree holds it; delete the pair together if ever approved). Antigravity's 2026-10-20 ack below: no active repo edits, no uncommitted work.
+- **Wiki:** PUBLISHED to the GitHub wiki by Antigravity at 11:49 local, 2026-10-20. Stable local drafts live OUTSIDE git at `/Users/dev/.gemini/antigravity/brain/70598a30-44cd-43ad-8835-777e8d69d2d5/wiki/` — never delete or "clean" that directory. Committed wiki screenshots live in `docs/screenshots/` on `main`.
+- **Backup of every pre-consolidation ref (incl. deleted branches):** `/Users/dev/Documents/GitHub/nebulae-all-refs-backup-2026-10-20.bundle` (verified; restore: `git clone <bundle>`).
+- **Next assigned tasks:** Antigravity — UHD playback reproduction with fresh logs, then menu/toolbar layout, then Manager speed tooltip wiring on the `041d5b8` data contract. Factory — on demand; no pending tasks.
+- **Tailscale repair is CLOSED — do not reopen.**
+- **ADC repositories (`ADC`, `ADC-antigravity`, `ADC-tailscale`, `nebulae-server`) are OUT OF SCOPE for this repo's cleanup** — do not touch them from here.
+
+---
+
+
 ## 2026-10-14 — Droid (Factory) session
 
 Modifications in this repository were made by **Droid** (Factory's coding
