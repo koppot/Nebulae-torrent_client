@@ -709,21 +709,22 @@ update follows the FINAL Factory verdict.
 | **Windows x64** | `60252ab` (Run 39407774733) | NSIS Installer Upgrade | Clean upgrade RC=0; live stack upgrade RC=0; orphan sweep verified. | **PASSED** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Graceful Tray Quit | App=0, tsd=0, trans=0; watchdog exits cleanly without respawn. | **PASSED** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Process Hygiene | Subprocesses eliminated; GetDiskFreeSpaceExW native FFI; agent diagnostic tasks hidden. | **PASSED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | 30-min Connectivity | Probes all HTTPS 200, ssl_verify_result=0; zero disconnects. | **PASSED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | Transmission RPC | Dynamic port re-binding; RPC healthy on port 63354 with 401 auth. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | 30-min Connectivity | Probes all HTTPS 200, ssl_verify_result=0; confirms HTTP stability, but private transit requires independent verification. | **BOUNDED PASS (HTTP ONLY)** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Transmission RPC | Dynamic port re-binding; HTTP 401 proves auth-required endpoint. Authenticated RPC / Add Torrent integration remains open. | **AUTH REQUIRED (INTEGRATION OPEN)** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Close-to-Tray UI | Checkbox labeled; Alt+F4 / X routing. Requires owner/automated visual confirmation. | **NOT TESTED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | Private Failure/Recovery | Previous TCP firewall test invalid (mesh is UDP). Scoped UDP injection pending. | **NOT TESTED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Private Failure/Recovery | Previous TCP firewall test invalid (mesh is UDP). Direct UDP block triggers relay fallback. Scoped injection pending. | **NOT TESTED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Production Registration | Node 7 registered (`nebulae-macstudio`, IP `100.64.0.7`); strict host key verified. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Backend Running State | `BackendState: "Running"`, `InNetworkMap: true`, DNS `nebulae-macstudio.adc.asiandvdclub.org`. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | SOCKS Listener Ownership | `127.0.0.1:1055` owned exclusively by embedded `tailscaled` (PID `80986`). | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | App Quit / Relaunch Persistence | Graceful quit left 0 processes; relaunch resumed `Running` with same IP and NodeID. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Daemon Crash Recovery | `kill -TERM` dropped socket; supervisor respawned PID `80986`, re-bound SOCKS, restored Running. | **PASSED** | None |
-| **macOS ARM64** | `60252ab` (Run 39407774733) | Status Presentation | Live payload is `{connected: true, adc_reachable: true}`. Visual UI rendering not yet observed. | **INFERRED** | `492ffff` (Mixed-stack status guard absent in `60252ab`) |
-| **macOS ARM64** | `60252ab` (Run 39407774733) | Private Mesh Subnet Route | Client has `--accept-routes=false`; SOCKS request exited direct outbound path. | **NOT CONFIGURED** | Needs `--accept-routes` in client `up` flags if mesh subnet routing required |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Status Presentation | Live payload is `{connected: true, adc_reachable: true}`. Visual UI rendering not yet independently observed. | **INFERRED** | `492ffff` (Mixed-stack status guard absent in `60252ab`) |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Private Mesh Subnet Route | Earlier pass WITHDRAWN. Defect identified: `adc_reachable=true` returned despite `--accept-routes=false` and SOCKS exiting public path. | **WITHDRAWN / DEFECT IDENTIFIED** | `--accept-routes=true` and route enforcement in client probe |
 
 ### 5. Candidate Assessment & Release Gate
-- Candidate `60252ab` compiles and runs cleanly across Windows and macOS, but lacks `492ffff` (which prevents system Tailscale from leaking into status when logged out).
-- When Windows visual interaction and valid private-path failure/recovery tests are concluded, authorization will be requested for ONE final candidate build incorporating `492ffff`.
+- Candidate `60252ab` is retained for registration, backend running state, socket ownership, restart persistence, and supervisor crash recovery.
+- Private-path verification for `60252ab` is officially **WITHDRAWN** due to the application defect masking public outbound fallback.
+- Client-side code corrections implemented to ensure truthful private-path verification and persistent route acceptance across restarts/recovery.
 - Overall release acceptance remains strictly **OPEN**. No build dispatch or release publication.
 
 ## 13. Route-acceptance correction — READY FOR BUILD (2026-10-20, Factory)

@@ -117,7 +117,7 @@ pub fn find_active_egress_vpn_interface() -> Option<NetworkInterfaceInfo> {
 }
 
 /// Tailscale assigns member addresses from the CGNAT block 100.64.0.0/10.
-fn is_tailnet_ip(ip: &str) -> bool {
+pub fn is_tailnet_ip(ip: &str) -> bool {
     let octets: Vec<&str> = ip.split('.').collect();
     octets.len() == 4
         && octets[0] == "100"
@@ -146,25 +146,30 @@ pub fn probe_adc_over_tailnet() -> Option<(String, bool)> {
 
     // Resolve the CLI explicitly: the app ships its own tailscale binary;
     // relying on PATH fails under macOS GUI-app PATH constraints (the
-    // bundled binary is NOT on the default GUI PATH).
-    let cli = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("tailscale").join("tailscale"))),
-        Some(std::path::PathBuf::from("tailscale")),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|p| p.exists())
-    .map(|p| p.to_string_lossy().to_string())?;
+    // bundled binary is NOT on the default GUI PATH). Also check standard
+    // system install paths if bundled is absent.
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("tailscale").join("tailscale"));
+        }
+    }
+    candidates.push(std::path::PathBuf::from("tailscale"));
+    candidates.push(std::path::PathBuf::from("/opt/homebrew/bin/tailscale"));
+    candidates.push(std::path::PathBuf::from("/usr/local/bin/tailscale"));
+    candidates.push(std::path::PathBuf::from(
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ));
 
-    let mut child = crate::utils::process::create_hidden_command(&cli)
-        .arg("status")
-        .arg("--json")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = candidates.iter().find_map(|bin| {
+        crate::utils::process::create_hidden_command(bin.to_string_lossy().as_ref())
+            .arg("status")
+            .arg("--json")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()
+    })?;
 
     // Bounded wait: kill a hung client instead of blocking the caller.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);

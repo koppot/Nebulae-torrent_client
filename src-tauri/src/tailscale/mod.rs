@@ -74,6 +74,9 @@ pub struct TsStatus {
     /// the mesh AND reach a real listener; the tailnet IP itself has no
     /// listener (verified live). None when the node advertises no subnets.
     pub adc_route_ip: Option<String>,
+    /// Whether the local client has accepted routes advertised by peers
+    /// (i.e. --accept-routes=true, no unaccepted-routes health warning).
+    pub routes_accepted: bool,
 }
 
 #[derive(Clone)]
@@ -872,6 +875,7 @@ pub fn status() -> TsStatus {
         socks_proxy: None,
         adc_node: None,
         adc_route_ip: None,
+        routes_accepted: false,
     };
     // An ADOPTED daemon (orphan serving the pipe; see supervise_loop) has no
     // child handle but is perfectly functional: report it as running when
@@ -893,6 +897,18 @@ pub fn status() -> TsStatus {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string();
+            let has_unaccepted_routes = v
+                .get("Health")
+                .and_then(|h| h.as_array())
+                .map(|arr| {
+                    arr.iter().any(|item| {
+                        item.as_str()
+                            .unwrap_or("")
+                            .contains("Some peers are advertising routes but --accept-routes is false")
+                    })
+                })
+                .unwrap_or(false);
+            st.routes_accepted = st.backend_state == "Running" && !has_unaccepted_routes;
             st.tailnet_ip = v
                 .get("Self")
                 .and_then(|s| s.get("TailscaleIPs"))
@@ -1053,19 +1069,22 @@ pub fn probe_target_reachability(ip: &str, port: u16, timeout: Duration) -> bool
             return true;
         }
     }
-    // Fallback: direct OS TCP connect (for system TUN mode or direct destinations)
-    let socket_addr = if ip.starts_with('[') {
-        format!("{ip}:{port}").parse().ok()
-    } else if ip.contains(':') {
-        format!("[{ip}]:{port}").parse().ok()
-    } else {
-        format!("{ip}:{port}").parse().ok()
-    };
-    if let Some(addr) = socket_addr {
-        std::net::TcpStream::connect_timeout(&addr, timeout).is_ok()
-    } else {
-        false
+    // Fallback: direct OS TCP connect ONLY for CGNAT/tailnet IPs (100.64.0.0/10)
+    // in legacy system TUN mode. A public IP must NEVER fall back to direct OS connect,
+    // as that bypasses the private WireGuard mesh.
+    if crate::utils::network::is_tailnet_ip(ip) {
+        let socket_addr = if ip.starts_with('[') {
+            format!("{ip}:{port}").parse().ok()
+        } else if ip.contains(':') {
+            format!("[{ip}]:{port}").parse().ok()
+        } else {
+            format!("{ip}:{port}").parse().ok()
+        };
+        if let Some(addr) = socket_addr {
+            return std::net::TcpStream::connect_timeout(&addr, timeout).is_ok();
+        }
     }
+    false
 }
 
 /// TCP reachability through the daemon's SOCKS5 proxy, to the ADC node's
@@ -1083,6 +1102,9 @@ pub fn probe_adc_mesh_tcp() -> Result<(String, u32), String> {
             "daemon backend is {} (not Running)",
             st.backend_state
         ));
+    }
+    if !st.routes_accepted {
+        return Err("advertised routes are not accepted (--accept-routes=false)".into());
     }
     // The subnet-route IP is the REAL destination (a listener exists
     // there; the tailnet IP itself has none). Fall back to the tailnet IP
@@ -1114,6 +1136,12 @@ pub fn adc_http_client() -> Result<reqwest::blocking::Client, String> {
                 &st.backend_state
             }
         ));
+    }
+    if !st.routes_accepted {
+        return Err(
+            "private route unavailable: advertised routes are not accepted (--accept-routes=false)"
+                .to_string(),
+        );
     }
     let proxy = reqwest::Proxy::all(format!("socks5://127.0.0.1:{SOCKS_PORT}"))
         .map_err(|e| format!("proxy: {e}"))?;
