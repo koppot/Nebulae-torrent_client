@@ -160,22 +160,21 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, SendMessageW, HTCAPTION, POINT, POINTS, WM_NCLBUTTONDOWN,
+        GetCursorPos, SendMessageW, HTCAPTION, POINT, WM_NCLBUTTONDOWN,
     };
     let hwnd = main_hwnd(app)?;
     app.run_on_main_thread(move || unsafe {
         let _ = ReleaseCapture();
         let mut pt = POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
-        let points = POINTS {
-            x: pt.x as i16,
-            y: pt.y as i16,
-        };
+        // Win32 WM_NCLBUTTONDOWN lParam packs coordinates: LOWORD = x, HIWORD = y.
+        // It is NOT a pointer to POINTS; passing a pointer passes a 64-bit stack address.
+        let lparam = ((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize;
         SendMessageW(
             hwnd,
             WM_NCLBUTTONDOWN,
             WPARAM(HTCAPTION.0 as usize as _),
-            LPARAM(&points as *const _ as _),
+            LPARAM(lparam),
         );
     })
     .map_err(|e| format!("main thread unavailable: {e}"))

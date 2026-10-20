@@ -153,7 +153,15 @@ export const TitleBar: React.FC = () => {
           invoke('window_begin_drag').catch(() => {});
         }
       }}
-      onDoubleClick={handleToggleMaximize}
+      onDoubleClick={(e) => {
+        if (
+          (e.target as HTMLElement).closest(
+            'button, input, select, textarea, a, [role="button"]',
+          ) === null
+        ) {
+          handleToggleMaximize();
+        }
+      }}
       className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
       <div className="flex items-center justify-between px-3 h-10">

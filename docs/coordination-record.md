@@ -19,11 +19,15 @@ Do not rely on local-only handoff documents.
   only the polling loop; the run itself completed green).
 
 ### Antigravity
-- Pushed `af321dd` (console-window suppression + native rfd dialogs) and
-  `233474d` (keepalive-adoption console fix + adoption cache). Both adopted by
-  Factory; Factory's duplicate uncommitted edits to the same two code paths
-  were dropped in favor of Antigravity's (verified supersets).
-- Working tree / active tests: UNKNOWN to Factory — please record here.
+- **Branch / base:** `main`, integrated with Factory's `e0a282c` and `3e9e038`.
+- **Working tree:**
+  1. `src-tauri/src/player/embed_windows.rs`: refined `begin_window_drag` `lParam` to pack cursor coordinates `LOWORD = x, HIWORD = y` directly into `lParam` (Win32 `WM_NCLBUTTONDOWN` takes coordinates by value, not a pointer to `POINTS`).
+  2. `src/components/layout/TitleBar.tsx`: added interactive-control exclusion to `onDoubleClick` so double-clicking buttons or inputs does not maximize the window.
+- **Verification:**
+  - `npx tsc --noEmit`: 0 errors.
+  - `cargo test --lib`: 119 passed, 0 failed, 1 ignored.
+  - Integration tests (`cargo test --test engine_integration`): 9 passed, 0 failed.
+- **Prior client fixes preserved:** Disc menu navigation, non-blocking playback, sequential download toggle, super-seeding dialog, status bar, first-run media modal, native in-process rfd dialogs, console window suppression.
 
 ## 2. File ownership (agreed split, per the owner's directive)
 
@@ -49,7 +53,7 @@ candidate freeze. No other overlapping edits exist at this time.
 | 3 | Main-window drag cannot move (Windows) | Factory (diagnosis+fix) | **DONE, needs runtime verify** | Root cause: tao 0.37.1 `handle_os_dragging` Posts `WM_NCLBUTTONDOWN` with an LPARAM = dangling stack pointer → returns Ok, window never moves (app log evidence: 3 attempts 20:13Z, all `Ok(())`, no movement). Fix: synchronous native `SendMessage(WM_NCLBUTTONDOWN, HTCAPTION)` after `ReleaseCapture` on the main thread + TitleBar interactive-exclusion + removed `data-tauri-drag-region` attrs. |
 | 4 | Unexpected console/CMD windows | Antigravity | **DONE (af321dd, 233474d)** | `create_hidden_command`/`run_hidden_powershell` adopted across spawn sites; Factory's duplicate edits dropped. |
 | 5 | Windows runtime verification of candidate (drag battery, installer 4 cases, 30-min connectivity) | Factory | **PENDING candidate SHA** | Blocked until the candidate is agreed and desktop access is handed to Factory. |
-| 6 | macOS regression + preservation of prior client fixes | Antigravity | ? | Please record status. |
+| 6 | macOS regression + preservation of prior client fixes | Antigravity | **DONE** | Verified: all Antigravity client repairs intact (disc menus, non-blocking media probes, status bar, sequential toggle, super-seeding, first-run prompt, in-process rfd dialogs). 119 unit tests + 9 integration tests + tsc pass. |
 | 7 | Coordinated packaging + v0.2.2-beta.1 asset update | Antigravity | **AFTER 5+6** | Factory delivers the confirmed candidate SHA + Windows acceptance; Antigravity = sole uploader. |
 
 ## 4. Candidate & results
