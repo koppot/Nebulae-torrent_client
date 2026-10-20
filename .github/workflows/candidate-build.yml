@@ -1,0 +1,397 @@
+name: Candidate Build
+
+# Build-only candidate packaging for agent verification (owner-authorized).
+# Builds the agreed candidate from an EXPLICIT source SHA and uploads the
+# renamed installers + checksums + signatures as WORKFLOW ARTIFACTS only:
+# it never creates a release, never moves or creates tags, never touches
+# latest.json or any updater asset, and never announces anything.
+# Dispatched by the release owner (Antigravity) once the candidate is
+# agreed in docs/coordination-record.md; Factory downloads the artifacts,
+# verifies their source identity, and runs the acceptance battery.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Exact source SHA/ref to build (the agreed candidate)'
+        required: true
+        type: string
+
+jobs:
+  build-candidate:
+    permissions:
+      contents: read
+    env:
+      WINDOWS_SIGN_PROVIDER: ${{ vars.WINDOWS_SIGN_PROVIDER }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      CANDIDATE_REF: ${{ github.event.inputs.ref }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'ubuntu-22.04'
+            target: 'x86_64-unknown-linux-gnu'
+            args: ''
+            artifact_name: 'Nebulae-Linux-x86_64'
+          - platform: 'macos-latest'
+            target: 'aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-arm64.dmg'
+          - platform: 'macos-latest'
+            target: 'x86_64-apple-darwin'
+            args: '--target x86_64-apple-darwin'
+            artifact_name: 'Nebulae-macOS-x64.dmg'
+          - platform: 'windows-latest'
+            target: 'x86_64-pc-windows-msvc'
+            args: ''
+            artifact_name: 'Nebulae-Setup-x64.exe'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout candidate source (exact SHA)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 0
+
+      - name: Record source identity
+        shell: bash
+        run: |
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" | tee candidate-source.txt
+          git log -1 --format='%H%n%ci%n%s' >> candidate-source.txt
+
+      - name: Setup Node.js & pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies for Linux (Ubuntu 22.04 pinned baseline)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            squashfs-tools \
+            patchelf \
+            rpm \
+            dpkg \
+            binutils \
+            xvfb \
+            desktop-file-utils \
+            libdvdnav4 \
+            libbluray2 \
+            libvlc5 \
+            vlc-plugin-base \
+            vlc-plugin-video-output
+
+      - name: Bundle libVLC (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p src-tauri/resources/vlc/lib src-tauri/resources/vlc/plugins
+          cp -rL /usr/lib/x86_64-linux-gnu/libvlc*.so* src-tauri/resources/vlc/lib/
+          cp -rL /usr/lib/x86_64-linux-gnu/vlc/plugins/. src-tauri/resources/vlc/plugins/ || true
+          chmod -R u+rwX,go+rX src-tauri/resources/vlc
+          ls src-tauri/resources/vlc/lib | head -3
+
+      - name: Cache cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Temurin JDK 21 (bundled JRE for BD-J/UHD menus)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Bundle transmission-daemon engine (Windows x64)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/bundle-windows-transmission.ps1
+
+      - name: Bundle transmission-daemon engine (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/bundle-linux-transmission.sh
+
+      - name: Install transmission-cli on macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          brew install transmission-cli || brew upgrade transmission-cli || true
+
+      - name: Bundle transmission-daemon engine (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/bundle-macos-transmission.sh
+
+      - name: Bundle libVLC (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
+          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
+          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
+          mkdir -p src-tauri/resources/vlc
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
+          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
+          hdiutil detach /tmp/vlcmnt -quiet || true
+          ls src-tauri/resources/vlc
+
+      - name: Bundle JRE (BD-J/UHD menus)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=mac || true; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
+          else
+            A=x64
+          fi
+          curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
+          mkdir -p jrex src-tauri/resources/jre
+          if [ "$EXT" = "zip" ]; then
+            unzip -q jre.$EXT -d jrex || tar xf jre.$EXT -C jrex
+          else
+            tar xzf jre.$EXT -C jrex
+          fi
+          HOME_DIR=$(find jrex -type d -name Home -path '*Contents*' | head -1 || true)
+          if [ -z "$HOME_DIR" ]; then
+            BIN_DIR=$(find jrex -type d -name bin | head -1)
+            HOME_DIR=$(dirname "$BIN_DIR")
+          fi
+          cp -a "$HOME_DIR"/. src-tauri/resources/jre/
+          chmod -R u+rwX,go+rX src-tauri/resources/jre || true
+          test -e src-tauri/resources/jre/bin/java || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
+          ls src-tauri/resources/jre/bin | head -3
+
+      - name: Setup Go (macOS builds tailscale from source tag)
+        if: runner.os == 'macOS'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Bundle tailscale
+        shell: bash
+        run: ./scripts/bundle-tailscale.sh "${{ matrix.target }}"
+
+      - name: Build Linux packages with bundled player (deb, rpm)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build --bundles deb,rpm
+
+      - name: Build Linux AppImage without engine resources
+        if: runner.os == 'Linux'
+        run: |
+          rm -rf src-tauri/transmission-staging-appimage
+          if [ -d src-tauri/resources/engine ]; then
+            mv src-tauri/resources/engine src-tauri/transmission-staging-appimage
+          fi
+          rm -rf src-tauri/vlc-staging-appimage src-tauri/jre-staging-appimage
+          mv src-tauri/resources/vlc src-tauri/vlc-staging-appimage
+          mv src-tauri/resources/jre src-tauri/jre-staging-appimage
+          pnpm tauri build --bundles appimage
+
+      - name: Inject bundled player + engine into AppImage (and refresh updater bundle)
+        if: runner.os == 'Linux'
+        run: |
+          APPIMAGE_PATH="$(find src-tauri/target -name '*.AppImage' -type f | head -n 1)"
+          OFFSET="$("$APPIMAGE_PATH" --appimage-offset)"
+          dd if="$APPIMAGE_PATH" of=/tmp/appimage-runtime bs="$OFFSET" count=1 status=none
+          "$APPIMAGE_PATH" --appimage-extract > /dev/null
+          mkdir -p squashfs-root/usr/share/nebulae/resources/engine
+          rm -rf squashfs-root/usr/share/nebulae/resources/engine
+          cp -a src-tauri/transmission-staging-appimage/. squashfs-root/usr/share/nebulae/resources/engine/
+          rm -rf squashfs-root/usr/share/nebulae/resources/vlc squashfs-root/usr/share/nebulae/resources/jre
+          cp -a src-tauri/vlc-staging-appimage squashfs-root/usr/share/nebulae/resources/vlc
+          cp -a src-tauri/jre-staging-appimage squashfs-root/usr/share/nebulae/resources/jre
+          if [ ! -f squashfs-root/usr/share/nebulae/resources/engine/transmission/transmission-daemon ]; then
+            echo "ERROR: transmission-daemon missing from AppImage engine staging"
+            find squashfs-root/usr/share/nebulae/resources/ -maxdepth 3 | head -30
+            exit 1
+          fi
+          mksquashfs squashfs-root /tmp/appimage-payload.squashfs -root-owned -noappend
+          cat /tmp/appimage-runtime /tmp/appimage-payload.squashfs > "$APPIMAGE_PATH.new"
+          chmod +x "$APPIMAGE_PATH.new"
+          mv "$APPIMAGE_PATH.new" "$APPIMAGE_PATH"
+          rm -rf squashfs-root
+          LISTING="$(unsquashfs -l /tmp/appimage-payload.squashfs 2>&1 || true)"
+          printf '%s\n' "$LISTING" | grep -q "resources/engine/transmission/transmission-daemon" || { echo "ERROR: transmission-daemon missing from repacked AppImage"; exit 1; }
+          cd "$(dirname "$APPIMAGE_PATH")"
+          NAME="$(basename "$APPIMAGE_PATH")"
+          tar -czf "$NAME.tar.gz" "$NAME"
+          pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" "$(pwd)/$NAME.tar.gz"
+
+      - name: Bundle libVLC (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
+          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+          Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
+
+      - name: Build Tauri Application
+        if: runner.os != 'Linux'
+        run: pnpm tauri build ${{ matrix.args }}
+
+      - name: Prepare candidate artifact (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
+          TAURI_DMG=$(find src-tauri/target -name "*.dmg" -type f | head -n 1)
+          ICON_PATH="$(pwd)/src-tauri/icons/icon.icns"
+          DMG_NAME="${{ matrix.artifact_name }}"
+          DMG_ABS="$(pwd)/$DMG_NAME"
+
+          if [ -n "$APP_DIR" ]; then
+            LAYOUT_ARGS=()
+            if [ -n "$TAURI_DMG" ]; then
+              LAYOUT_ARGS+=(--layout-from "$TAURI_DMG")
+            fi
+            ./scripts/package-macos-dmg.sh \
+              --app "$APP_DIR" \
+              --output "$DMG_NAME" \
+              --icon "$ICON_PATH" \
+              "${LAYOUT_ARGS[@]}"
+          elif [ -n "$TAURI_DMG" ]; then
+            cp "$TAURI_DMG" "$DMG_NAME"
+          fi
+
+          if [ -f "$DMG_NAME" ]; then
+            shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
+
+            if [ -n "$APP_DIR" ]; then
+              APP_ZIP="$DMG_NAME-app.zip"
+              ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$APP_ZIP"
+              shasum -a 256 "$APP_ZIP" > "$APP_ZIP.sha256"
+            fi
+
+            UPDATER_TAR=$(find src-tauri/target -name "*.app.tar.gz" -o -name "Nebulae.app.tar.gz" -o -name "*.tar.gz" | head -n 1)
+            UPDATER_SIG=$(find src-tauri/target -name "*.app.tar.gz.sig" -o -name "Nebulae.app.tar.gz.sig" -o -name "*.tar.gz.sig" | head -n 1)
+            if [ -n "$UPDATER_TAR" ] && [ -n "$UPDATER_SIG" ]; then
+              TARGET_TAR="$DMG_NAME-app.tar.gz"
+              TARGET_SIG="$DMG_NAME-app.tar.gz.sig"
+              cp "$UPDATER_TAR" "$TARGET_TAR"
+              cp "$UPDATER_SIG" "$TARGET_SIG"
+            fi
+          fi
+
+      - name: Prepare candidate artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Candidate builds are UNSIGNED (identical to the current beta path).
+          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*setup.exe" | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName -Destination 'Nebulae-Setup-x64.exe' -Force }
+          $bin = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "nebulae.exe" | Select-Object -First 1
+          if ($bin) { Copy-Item $bin.FullName -Destination 'nebulae.exe' -Force }
+          @(
+            "Windows code signing status: UNSIGNED"
+            "Provider: none"
+            "CANDIDATE BUILD - workflow artifact only, not published"
+          ) | Out-File -FilePath 'WINDOWS-SIGNING-STATUS.txt' -Encoding utf8
+
+          foreach ($name in @('Nebulae-Setup-x64.exe', 'nebulae.exe')) {
+            if (Test-Path $name) {
+              $hash = (Get-FileHash -Path $name -Algorithm SHA256).Hash.ToLower()
+              "$hash  $name" | Out-File -FilePath "$name.sha256" -Encoding utf8
+            } else {
+              Write-Host "Skipping $name - not produced."
+            }
+          }
+
+          # Tauri updater signature (adjacent .sig from the bundler)
+          $expectedSig = if ($exe) { "$($exe.FullName).sig" } else { $null }
+          if ($expectedSig -and (Test-Path $expectedSig)) {
+            Copy-Item $expectedSig -Destination 'Nebulae-Setup-x64.exe.sig' -Force
+          }
+
+          if ($env:TAURI_SIGNING_PRIVATE_KEY -and (Test-Path 'Nebulae-Setup-x64.exe')) {
+            Write-Host "Re-signing candidate Windows installer with Tauri minisign..."
+            pnpm tauri signer sign -k "$env:TAURI_SIGNING_PRIVATE_KEY" Nebulae-Setup-x64.exe
+          }
+
+          if ((Test-Path 'Nebulae-Setup-x64.exe') -and (Test-Path 'Nebulae-Setup-x64.exe.sig')) {
+            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature Nebulae-Setup-x64.exe Nebulae-Setup-x64.exe.sig
+          } else {
+            throw "FATAL: candidate installer or its signature missing!"
+          }
+
+      - name: Prepare candidate artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          DEB_FILE=$(find src-tauri/target -name "*.deb" -type f | head -n 1)
+          RPM_FILE=$(find src-tauri/target -name "*.rpm" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -name "*.AppImage" -type f | head -n 1)
+          BINARY_FILE=$(find src-tauri/target/release -maxdepth 1 -name "nebulae" -type f | head -n 1)
+
+          if [ -n "$DEB_FILE" ]; then
+            cp "$DEB_FILE" "Nebulae-Linux-x86_64.deb"
+            sha256sum "Nebulae-Linux-x86_64.deb" > "Nebulae-Linux-x86_64.deb.sha256"
+          fi
+          if [ -n "$RPM_FILE" ]; then
+            cp "$RPM_FILE" "Nebulae-Linux-x86_64.rpm"
+            sha256sum "Nebulae-Linux-x86_64.rpm" > "Nebulae-Linux-x86_64.rpm.sha256"
+          fi
+          if [ -n "$APPIMAGE_FILE" ]; then
+            cp "$APPIMAGE_FILE" "Nebulae-Linux-x86_64.AppImage"
+            chmod +x "Nebulae-Linux-x86_64.AppImage"
+            sha256sum "Nebulae-Linux-x86_64.AppImage" > "Nebulae-Linux-x86_64.AppImage.sha256"
+          fi
+          if [ -n "$BINARY_FILE" ]; then
+            cp "$BINARY_FILE" "nebulae-linux-x86_64"
+            chmod +x "nebulae-linux-x86_64"
+            sha256sum "nebulae-linux-x86_64" > "nebulae-linux-x86_64.sha256"
+          fi
+
+          APPIMAGE_TAR=$(find src-tauri/target -name "*.AppImage.tar.gz" -o -name "*appimage*.tar.gz" | head -n 1)
+          APPIMAGE_SIG=$(find src-tauri/target -name "*.AppImage.tar.gz.sig" -o -name "*appimage*.tar.gz.sig" | head -n 1)
+          if [ -n "$APPIMAGE_TAR" ] && [ -n "$APPIMAGE_SIG" ]; then
+            cp "$APPIMAGE_TAR" "Nebulae-Linux-x86_64.AppImage.tar.gz"
+            cp "$APPIMAGE_SIG" "Nebulae-Linux-x86_64.AppImage.tar.gz.sig"
+          fi
+
+      - name: Upload candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ github.run_id }}-${{ matrix.artifact_name }}
+          path: |
+            candidate-source.txt
+            ${{ matrix.artifact_name }}*
+            Nebulae-Linux*
+            nebulae-linux*
+            nebulae.exe*
+            WINDOWS-SIGNING-STATUS.txt
+            *.deb
+            *.rpm
+            *.AppImage*
+            *.tar.gz*
+            *.sig
+          if-no-files-found: warn
+          retention-days: 14
