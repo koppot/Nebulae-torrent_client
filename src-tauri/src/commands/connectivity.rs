@@ -349,6 +349,50 @@ pub struct TailscaleStatus {
     pub adc_node: Option<String>,
 }
 
+/// Freshness window for the ADC reachability probe: a successful result is
+/// trusted for this long, then the next status poll re-probes. Failures are
+/// cached for the same window so a confirmed failure immediately replaces a
+/// previous healthy indication (an older success can never overwrite a
+/// newer failure — every write is the latest probe's result, keyed by the
+/// probed address so a route/peer change invalidates the cache).
+const ADC_PROBE_FRESH_SECS: u64 = 60;
+
+static ADC_PROBE_CACHE: std::sync::Mutex<Option<(String, bool, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// Bounded live check of the ADC node over the tailnet, using the EMBEDDED
+/// daemon's own peer/route data (no system `tailscale` CLI — embedded-only
+/// installs do not have one on PATH). A TCP connect to the node's tailnet
+/// IP:443 within 2s; TLS is validated by the actual HTTPS clients that use
+/// the route (the doctor), never faked here. Returns `(node, Some(reachable))`
+/// when a node was resolvable, `(node, None)` when it could not be resolved
+/// at all, and falls back to the last cached result while it is still fresh.
+fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>, Option<bool>) {
+    let Some(ip) = target.map(|s| s.to_string()) else {
+        // No ADC node resolvable at all: do not serve a stale "reachable".
+        if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
+            *c = None;
+        }
+        return (node, None);
+    };
+    if let Ok(c) = ADC_PROBE_CACHE.lock() {
+        if let Some((cip, ok, at)) = c.as_ref() {
+            if cip == &ip && at.elapsed().as_secs() < ADC_PROBE_FRESH_SECS {
+                return (node.or_else(|| Some(cip.clone())), Some(*ok));
+            }
+        }
+    }
+    let reachable = std::net::TcpStream::connect_timeout(
+        &format!("{ip}:443").parse().unwrap(),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok();
+    if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
+        *c = Some((ip, reachable, std::time::Instant::now()));
+    }
+    (node, Some(reachable))
+}
+
 /// Truthful tailscale status for the status bar: the EMBEDDED daemon's
 /// state first (userspace, no TUN — "interface" is descriptive); the legacy
 /// system-TUN detection is only a fallback for an embedded daemon that has
@@ -357,12 +401,17 @@ pub struct TailscaleStatus {
 pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
     let ts = crate::tailscale::status();
     if ts.backend_state == "Running" {
+        // Owner defect (2026-10-20): a Running daemon with a CACHED route
+        // entry reported ADC as reachable while the ADC Linux host was
+        // offline. Reachability must be a live bounded probe with a
+        // freshness window, never a cached netmap entry.
+        let (adc_node, adc_reachable) = live_adc_probe(ts.adc_route_ip.as_deref(), ts.adc_node);
         return Ok(TailscaleStatus {
             connected: true,
             interface: Some("nebulae-embedded (userspace)".into()),
             tailnet_ip: ts.tailnet_ip,
-            adc_reachable: Some(ts.adc_route_ip.is_some()),
-            adc_node: ts.adc_node,
+            adc_reachable,
+            adc_node,
         });
     }
 

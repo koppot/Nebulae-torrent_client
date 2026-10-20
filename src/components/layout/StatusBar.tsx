@@ -201,23 +201,30 @@ export const StatusBar: React.FC = () => {
           title={
             tailscale?.connected
               ? tailscale.adc_reachable === false
-                ? 'ADC host offline'
-                : `Tailnet connected — IP ${tailscale.tailnet_ip ?? ''}`
+                ? 'Tailnet connected, but the ADC host is not answering — private ADC traffic cannot get through right now'
+                : tailscale.adc_reachable === true
+                  ? `Tailnet connected — ADC host verified reachable — IP ${tailscale.tailnet_ip ?? ''}`
+                  : 'Tailnet connected — ADC host not yet verified (probe pending)'
               : 'Tailnet is not connected'
           }
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              tailscale?.connected
-                ? tailscale.adc_reachable === false
-                  ? 'bg-amber-500'
-                  : 'bg-emerald-500'
-                : 'bg-[#333333]'
+              !tailscale?.connected
+                ? 'bg-[#333333]'
+                : tailscale.adc_reachable === false
+                  ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]'
+                  : tailscale.adc_reachable === true
+                    ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                    : 'bg-[#555555] animate-pulse'
             }`}
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
           {tailscale?.connected && tailscale.adc_reachable === false && (
             <span className="text-amber-500">· ADC host offline</span>
+          )}
+          {tailscale?.connected && tailscale.adc_reachable == null && (
+            <span className="text-[#a3a3a3]">· ADC unverified</span>
           )}
         </div>
 
