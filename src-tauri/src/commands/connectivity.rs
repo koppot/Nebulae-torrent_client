@@ -382,11 +382,8 @@ fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>
             }
         }
     }
-    let reachable = crate::tailscale::probe_target_reachability(
-        &ip,
-        443,
-        std::time::Duration::from_secs(2),
-    );
+    let reachable =
+        crate::tailscale::probe_target_reachability(&ip, 443, std::time::Duration::from_secs(2));
     if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
         *c = Some((ip, reachable, std::time::Instant::now()));
     }

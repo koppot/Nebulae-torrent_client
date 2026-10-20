@@ -1509,7 +1509,9 @@ impl TransmissionTorrentEngine {
                         let new_port = match find_free_port() {
                             Ok(p) => p,
                             Err(_) => {
-                                warn!("Could not find free port for restarting transmission-daemon");
+                                warn!(
+                                    "Could not find free port for restarting transmission-daemon"
+                                );
                                 continue;
                             }
                         };
@@ -1519,7 +1521,10 @@ impl TransmissionTorrentEngine {
                             .ok()
                             .flatten()
                             .and_then(|raw| {
-                                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+                                serde_json::from_str::<crate::commands::settings::UserSettings>(
+                                    &raw,
+                                )
+                                .ok()
                             })
                             .unwrap_or_default();
 
@@ -1533,7 +1538,8 @@ impl TransmissionTorrentEngine {
                         );
 
                         if let Ok(json_str) = serde_json::to_string_pretty(&new_settings) {
-                            let _ = std::fs::write(engine_dir_watch.join("settings.json"), json_str);
+                            let _ =
+                                std::fs::write(engine_dir_watch.join("settings.json"), json_str);
                         }
 
                         let mut cmd = std::process::Command::new(&daemon_path_watch);
