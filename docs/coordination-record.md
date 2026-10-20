@@ -58,7 +58,7 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Proposed candidate:** `4b4584c` (main tip containing Factory's drag fix, Antigravity's coordinates refinement, rustfmt fix, and full test suites clean). CI in progress.
+- **Proposed candidate:** `644e3b4` (CI run 39347930247: **SUCCESS**). Contains all Windows repairs: NSIS pre-extract shutdown, console suppression, synchronous native window drag with packed cursor coordinates, interactive-control exclusion on titlebar double-click, and full test suite passing. Ready for Factory's candidate verification battery.
 - **Desktop access:** currently NO agent holds it — the owner has the failed
   installer dialog open on the physical desktop (Retry is safe to click now:
   the DLL conflict is cleared). Factory requests access for the verification
