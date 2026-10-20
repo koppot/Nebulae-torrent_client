@@ -586,3 +586,11 @@ and the Windows interaction checks proceed on the already-authorized
 - **Pending Single Owner Authorization Step:**
   Authentication request `hskey-authreq-UGJSp25-cs1FH9Q4D5p6RZ8G` awaits owner authorization on `control.asiandvdclub.org` (or via the file-based preauth key procedure specified in Section 7).
 
+**Factory re-verification, 2026-10-20 14:16 UTC:** the embedded daemon
+reports "Logged out. Log in at:
+https://control.asiandvdclub.org/register/hskey-authreq-…" (BackendState
+= NeedsLogin, AuthURL present). The AuthURL answers HTTP 200 with FULL
+TLS verification (ssl_verify_result=0) from this machine. The node
+registration is LIVE and awaits the owner's browser approval of the
+AuthURL. The preauth-key path in Section 7 = the fallback only; the
+interactive registration = the simpler and is the selected route.
