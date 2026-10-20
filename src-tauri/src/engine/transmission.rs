@@ -3194,6 +3194,14 @@ mod tests {
             Some(home.join("Downloads"))
         );
         assert_eq!(expand_tilde_path(Path::new("~")), Some(home.clone()));
+        // Absolute paths must pass through untouched. The literal differs
+        // per platform: "/x" is not absolute on Windows (no drive).
+        #[cfg(windows)]
+        {
+            let absolute = Path::new(r"C:\absolute\path");
+            assert_eq!(expand_tilde_path(absolute), Some(PathBuf::from(absolute)));
+        }
+        #[cfg(not(windows))]
         assert_eq!(
             expand_tilde_path(Path::new("/absolute/path")),
             Some(PathBuf::from("/absolute/path"))
