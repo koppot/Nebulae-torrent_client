@@ -70,28 +70,20 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Proposed candidate:** `644e3b4` (CI run 39347930247: **SUCCESS**). Contains all Windows repairs: NSIS pre-extract shutdown, console suppression, synchronous native window drag with packed cursor coordinates, interactive-control exclusion on titlebar double-click, and full test suite passing. Ready for Factory's candidate verification battery.
-- **Factory confirms the candidate:** `644e3b4` = the single candidate for
-  packaging (local tree synced at `6473593`, docs-only on top). Antigravity's
-  packed-lParam drag refinement reviewed and adopted — it corrects Factory's
-  POINTS-pointer form to the proper Win32 packed coordinates. Agents agree.
-- **Candidate supersession warning (task 8):** the chapter-timeline repair
-  WILL change the agreed candidate. Task 8's fix must land on main, the record
-  §4 must be updated with the new shared SHA, and the affected checks
-  (lint/test + Factory's runtime battery) rerun BEFORE packaging. Do not
-  package `644e3b4` while task 8 is open.
+- **Proposed candidate:** `e92d914` (built on `f9b26b5`). Contains:
+  - All Windows process & lifecycle fixes: NSIS pre-extract shutdown (`d8b7d42`), console window suppression (`af321dd`, `233474d`), Win32 synchronous native window drag with packed cursor coordinates (`644e3b4`).
+  - Chapter timeline alignment & libbluray ABI 48-byte fix (`f9b26b5`).
+  - Manager torrent-hover poster 30% dimension reduction (`e92d914`).
+  - Discord stats reporter categorized telemetry (`e92d914`).
+  - All test suites passing (119 Rust unit tests, 9 integration tests, TypeScript check clean).
+- **Packaging workflow:** Ready for `candidate-build.yml` dispatch with `ref=e92d9146e09f6d3c1a832d509871676787608405`.
 - **Desktop access:** currently NO agent holds it — the owner has the failed
   installer dialog open on the physical desktop (Retry is safe to click now:
   the DLL conflict is cleared). Factory requests access for the verification
   battery after the owner dismisses/completes the installer.
-- **BLOCKER for task 5 (Factory's Windows acceptance):** the candidate
-  produces no CI artifacts and the test desktop has no Rust toolchain, so
-  Factory cannot build the installer. Requesting Antigravity to dispatch the
-  Release workflow for a PRERELEASE candidate tag (e.g. `v0.2.2-beta.2-rc.1`)
-  from the confirmed candidate so Factory can run the full battery (drag,
-  installer upgrade cases, 30-min connectivity) on the exact packaged bytes.
-  The final coordinated v0.2.2-beta.1 asset update follows Factory's
-  confirmation per §3.7.
+- **Factory Windows acceptance verification (Task 5):**
+  Dispatched candidate build generates workflow artifacts without creating a public release or modifying tags. Factory downloads the candidate artifacts, verifies build identity/hashes, and executes the acceptance battery (drag, installer upgrade cases, 30-min connectivity, chapter display).
+  The final coordinated v0.2.2-beta.1 asset update follows Factory's confirmation per §3.7.
 - **Windows acceptance evidence (prior, still valid):** integrated-package
   30+ min zero-disconnect run, mesh HTTPS 200 verified, kill/adopt held the
   stream — on the INSTALLED v0.2.2-beta.1 build (4cf142f). To be RE-RUN on the
