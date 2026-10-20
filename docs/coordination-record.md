@@ -670,3 +670,59 @@ screenshot/UIA access) + a valid Windows private-path failure/recovery
 test (the scoped UDP-layer injection, since the TCP block cannot affect
 the userspace mesh). The release hold stays; Antigravity's Beta 1 asset
 update follows the FINAL Factory verdict.
+
+## 13. Acceptance Record Refinements & Consolidated Matrix (2026-10-20, Antigravity)
+
+### 1. Private-Path Evidence & Route Counter Analysis
+- **Observed Configuration:**
+  - Embedded netmap at registration: Peer `asiandvdclub` (`100.64.0.1`) advertises `PrimaryRoutes: ["45.135.163.139/32"]`.
+  - Embedded daemon health check: `"Some peers are advertising routes but --accept-routes is false"`.
+  - Daemon debug preferences (`tailscale debug prefs`): `"RouteAll": false`, `"AdvertiseRoutes": null`.
+- **Peer Counter Measurements (asiandvdclub Peer):**
+  - Pre-request: `RxBytes: 268`, `TxBytes: 364`
+  - Post-request (`curl --proxy socks5h://127.0.0.1:1055 https://asiandvdclub.org/`): `RxBytes: 268`, `TxBytes: 404` (+40 bytes Tx, 0 bytes Rx).
+- **Technical Interpretation:**
+  - SOCKS5 connect to raw CGNAT IP `100.64.0.1:443` fails with SOCKS error code 1 (Connection refused), establishing that Apache SSL does not listen on `100.64.0.1`.
+  - SOCKS5 connect to `asiandvdclub.org` (`45.135.163.139:443`) succeeds with HTTP 200 and valid TLS (`ssl_verify_result=0`).
+  - However, because `--accept-routes=false` is default on the embedded userspace client, `45.135.163.139/32` is not ingested into the client's routing table. The 40-byte Tx increment reflects a WireGuard keepalive/control packet; the bulk TLS data exited via the host's direct outbound interface through the SOCKS dialer rather than across the WireGuard tunnel.
+  - Per directive: server listeners and routes remain untouched.
+
+### 2. Distinction of Recovery Test Cases
+- **Case A: Graceful Quit & Relaunch (Enrollment Persistence):**
+  - Triggered via application quit event. Result: `app=0 tsd=0 trans=0`.
+  - Relaunch via LaunchServices (`open /Applications/Nebulae.app`): Embedded supervisor started `tailscaled` with saved state dir; daemon automatically resumed `BackendState: "Running"` under existing `NodeID: 7` (`100.64.0.7`), with zero re-prompting.
+- **Case B: Forced Process Termination & Supervisor Recovery:**
+  - Triggered via `kill -TERM` / `kill -9` on daemon PID `80285`.
+  - Result: Socket dropped, SOCKS port `1055` listener closed.
+  - Within 2 seconds, Nebulae's supervisor thread detected child death and spawned fresh daemon PID `80986`.
+  - New PID `80986` bound new socket, acquired FD `10u` on `127.0.0.1:1055`, resumed profile from disk, re-established `BackendState: "Running"`, and restored HTTPS 200 reachability through SOCKS.
+
+### 3. Status Bar Presentation Distinction
+- **Live Backend Payload (`get_tailscale_status`):**
+  `{ connected: true, interface: "nebulae-embedded (userspace)", tailnet_ip: "100.64.0.7", adc_reachable: true, adc_node: "100.64.0.1" }`
+- **Visual Presentation Status:** **NOT YET INDEPENDENTLY OBSERVED**. The expected visual presentation (green dot with "Tailnet" text) is derived from the verified backend status payload and `StatusBar.tsx` lines 219–220, but has not been verified via OCR or visual screen reader on macOS.
+
+### 4. Consolidated Acceptance Matrix
+
+| Platform | Installed SHA | Test Area | Observed Result & Evidence | Status | Absent Source Corrections |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Windows x64** | `60252ab` (Run 39407774733) | NSIS Installer Upgrade | Clean upgrade RC=0; live stack upgrade RC=0; orphan sweep verified. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Graceful Tray Quit | App=0, tsd=0, trans=0; watchdog exits cleanly without respawn. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Process Hygiene | Subprocesses eliminated; GetDiskFreeSpaceExW native FFI; agent diagnostic tasks hidden. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | 30-min Connectivity | Probes all HTTPS 200, ssl_verify_result=0; zero disconnects. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Transmission RPC | Dynamic port re-binding; RPC healthy on port 63354 with 401 auth. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Close-to-Tray UI | Checkbox labeled; Alt+F4 / X routing. Requires owner/automated visual confirmation. | **NOT TESTED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Private Failure/Recovery | Previous TCP firewall test invalid (mesh is UDP). Scoped UDP injection pending. | **NOT TESTED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Production Registration | Node 7 registered (`nebulae-macstudio`, IP `100.64.0.7`); strict host key verified. | **PASSED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Backend Running State | `BackendState: "Running"`, `InNetworkMap: true`, DNS `nebulae-macstudio.adc.asiandvdclub.org`. | **PASSED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | SOCKS Listener Ownership | `127.0.0.1:1055` owned exclusively by embedded `tailscaled` (PID `80986`). | **PASSED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | App Quit / Relaunch Persistence | Graceful quit left 0 processes; relaunch resumed `Running` with same IP and NodeID. | **PASSED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Daemon Crash Recovery | `kill -TERM` dropped socket; supervisor respawned PID `80986`, re-bound SOCKS, restored Running. | **PASSED** | None |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Status Presentation | Live payload is `{connected: true, adc_reachable: true}`. Visual UI rendering not yet observed. | **INFERRED** | `492ffff` (Mixed-stack status guard absent in `60252ab`) |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Private Mesh Subnet Route | Client has `--accept-routes=false`; SOCKS request exited direct outbound path. | **NOT CONFIGURED** | Needs `--accept-routes` in client `up` flags if mesh subnet routing required |
+
+### 5. Candidate Assessment & Release Gate
+- Candidate `60252ab` compiles and runs cleanly across Windows and macOS, but lacks `492ffff` (which prevents system Tailscale from leaking into status when logged out).
+- When Windows visual interaction and valid private-path failure/recovery tests are concluded, authorization will be requested for ONE final candidate build incorporating `492ffff`.
+- Overall release acceptance remains strictly **OPEN**. No build dispatch or release publication.
+
