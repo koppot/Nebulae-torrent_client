@@ -47,35 +47,54 @@ jobs:
           from collections import defaultdict
 
           rows = [json.loads(l) for l in open('assets.jsonl') if l.strip()]
-          total = sum(r['count'] for r in rows)
-          # The same package name appears on several releases (stable + beta):
-          # report PER-PACKAGE totals, not per-release rows.
-          by_name = defaultdict(int)
+          
+          # Categorize assets accurately:
+          # 1. Verification/signature metadata: .sig, .sha256, .txt
+          # 2. Auto-updater manifests: latest.json (polled periodically on startup)
+          # 3. Application packages / installers: .exe, .dmg, .AppImage, .deb, .rpm, .tar.gz, .zip
+          packages_by_name = defaultdict(int)
+          updater_queries = 0
+          metadata_downloads = 0
+
           for r in rows:
-              if not r['name'].endswith(('.sig', '.sha256')):
-                  by_name[r['name']] += r['count']
-          top = "\n".join(
+              name = r['name']
+              count = r['count']
+              if name == 'latest.json':
+                  updater_queries += count
+              elif name.endswith(('.sig', '.sha256', '.txt')):
+                  metadata_downloads += count
+              else:
+                  packages_by_name[name] += count
+
+          total_packages = sum(packages_by_name.values())
+          total_all_assets = total_packages + updater_queries + metadata_downloads
+
+          top_packages = "\n".join(
               f"`{name}`: {count:,}"
-              for name, count in sorted(by_name.items(), key=lambda kv: -kv[1])[:10]
-          ) or "_No public release assets yet._"
+              for name, count in sorted(packages_by_name.items(), key=lambda kv: -kv[1])[:10]
+          ) or "_No package downloads recorded yet._"
+
           note = os.environ.get('NOTE', '').strip()
           note_line = f"\n🧪 **CONTROLLED TEST POST** ({note}) — not a scheduled digest.\n" if note else ""
           embed = {
               "title": "Nebulae Torrent Client — Live Download Statistics",
               "description": (
-                  "Real-time download telemetry for the **Nebulae** cross-platform "
-                  "BitTorrent client. Data is queried directly from official GitHub "
-                  "Release distributions." + note_line
+                  "Aggregate public asset download metrics queried directly from GitHub "
+                  "Release distributions. These represent asset fetch counts, not unique "
+                  "users, active installations, or in-application torrent downloads." + note_line
               ),
               "color": 15010068,
               "fields": [
-                  {"name": "Total Global Downloads", "value": f"[ {total:,} Downloads ]", "inline": False},
-                  {"name": "Downloads by Package", "value": top, "inline": False},
+                  {"name": "Application Package Downloads", "value": f"[ {total_packages:,} Downloads ]", "inline": True},
+                  {"name": "Auto-Updater Checks (latest.json)", "value": f"[ {updater_queries:,} Checks ]", "inline": True},
+                  {"name": "Downloads by Package", "value": top_packages, "inline": False},
               ],
-              "footer": {"text": "Asian DVD Club Community • aggregate public release stats"},
+              "footer": {
+                  "text": "Asian DVD Club • aggregate GitHub release asset statistics (current totals)"
+              },
           }
           json.dump({"embeds": [embed], "allowed_mentions": {"parse": []}}, open('payload.json', 'w'))
-          print(f"collected: {len(rows)} asset rows, {len(by_name)} packages, total downloads {total}")
+          print(f"collected: {len(rows)} asset rows, packages={total_packages}, updater={updater_queries}, total_all={total_all_assets}")
           PY
         # NOTE is provided only on manual dispatch (controlled tests).
 

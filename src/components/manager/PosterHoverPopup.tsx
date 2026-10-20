@@ -40,8 +40,9 @@ const PosterHoverPopup: React.FC<{ target: PosterPopupTarget | null; x: number; 
   if (!target) return null;
 
   // Flip left when the card would overflow the right edge; clamp top.
-  const CARD_W = 220;
-  const CARD_H = 330;
+  // 70% of previous dimensions (was 220x330), 2:3 aspect ratio preserved.
+  const CARD_W = 154;
+  const CARD_H = 231;
   const left = x + 16 + CARD_W > window.innerWidth ? x - CARD_W - 16 : x + 16;
   const top = Math.max(8, Math.min(y - 24, window.innerHeight - CARD_H - 8));
 
