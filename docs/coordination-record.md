@@ -388,10 +388,17 @@ build.
    If the daemon were Running-but-logged-out anywhere, the
    unavailable/amber path shows.
 
-**Verdict: the display is TRUTHFUL for this environment. The Linux host
-being online (the production control) is irrelevant to a client that is
-not enrolled against it.** No false-green, no stale cache (the cache
-lives only in the Running branch), no peer-selector fault.
+**Verdict (corrected per owner review): the OBSERVED runtime facts are
+the embedded daemon = NoState + logged out + the dead control + the CLI
+probe failure. The STATUS BAR's visual tier on macOS = NOT yet read by
+tooling (the WebView exposes no AX text) - the displayed tier mapping is
+SOURCE INSPECTION, not runtime proof. The mixed-stack hazard the owner
+flagged is real in the legacy fallback branch (detect_tailscale can see
+a SYSTEM Tailscale interface and report connected=true for the app's
+embedded daemon); on this machine no system daemon exists (verified),
+but the hazard is recorded for the shared candidate. No false-green,
+no stale cache (the cache lives only in the Running branch), no
+peer-selector fault.**
 
 **Cross-platform regression audit (shared code touched by the Windows
 fixes)**: the ADC peer/subnet-route selection (routes_of = PrimaryRoutes)
@@ -409,39 +416,53 @@ a preauth key), OR say the local test tailnet should be resurrected and
 Factory will provision a new local headscale. No code change, no build,
 no server-policy change. Stable updater and webhook untouched.
 
-## 7. macOS recovery plan — owner-approved production re-enroll (2026-10-20)
+## 7. macOS recovery — FINAL procedure (owner-approved, 2026-10-20)
 
-**Backup taken BEFORE any change** (owner's requirement): the live
-tailscaled.state (0600, the only enrollment = profile-218c, saved
-ControlURL = the dead local test control per the daemon's live cmdline)
-copied to ~/nebulae-state-backup-20261020/tailscaled.state.backup (0600).
-NO state-file edit, NO identity deletion.
+**Verified facts (Factory, live):**
+- Bundled CLI = the app's resources engine/tailscale/tailscale
+  (v1.104.1-dev20261007). Socket =
+  /Users/dev/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock,
+  owned by the app's embedded tailscaled (pid 50940) — CONFIRMED via lsof.
+- NO separate system tailscaled exists on the macOS machine (verified);
+  no system enrollment can be affected.
+- Production control: Headscale v0.29.5, base_domain
+  adc.asiandvdclub.org, single user `club`, NO oidc — **a preauth key IS
+  the supported registration method.**
+- The bundled CLI supports file-based key input: `--auth-key file:<path>`
+  ("if it begins with file:, then it's a path to a file containing the
+  authkey") — the key never appears in argv, history, logs, or chat.
 
-**Why the existing tailnet identity cannot be reused against the
-production control:** the node key in tailscaled.state was registered
-ONLY on the dead local test control. Tailside node identity is
-control-scoped — the production control server has never seen this node
-and will reject its key. Machine key is reusable; a fresh node
-registration against the production control is unavoidable. The app's
-user data (torrents, settings, keys, DB) is app-level and untouched by
-this; the tailscale state file is backed up and restorable verbatim.
+**Owner steps (two, minimal):**
+1. On the control server: `headscale preauthkeys create --user club
+   --reusable --expiration 1h` and copy the printed key.
+2. On the macOS machine, in their own terminal (paste the key once):
 
-**Supported recovery flow (no credential exposure):** the app's enroll
-command exists backend-only (no UI), so the owner runs the daemon's own
-supported login directly in THEIR terminal on the macOS machine (the key
-never passes through chat/logs/commits):
+```
+umask 077
+KF="$TMPDIR/neb-preauth-$"
+printf '%s' 'PASTE-KEY-HERE' > "$KF"
+TS="/Applications/Nebulae.app/Contents/Resources/resources/engine/tailscale/tailscale"
+SOCK="$HOME/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock"
+"$TS" --socket "$SOCK" up --login-server=https://control.asiandvdclub.org \
+  --auth-key "file:$KF" \
+  --accept-dns=false --hostname=nebulae-MacStudio.local
+rm -f "$KF"
+```
 
-  /Applications/Nebulae.app/Contents/Resources/resources/engine/tailscale/tailscale \
-    --socket "$HOME/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock" \
-    up --login-server=https://control.asiandvdclub.org \
-    --auth-key <PASTE-PRODUCTION-PREAUTH-KEY> \
-    --accept-dns=false --hostname=nebulae-MacStudio.local
+State backup (0600) was taken before any change; nothing else is edited.
 
-(the daemon is already running; `up` re-targets it in place. The key is
-generated on the control server by the owner: `headscale preauthkeys
-create --user <user>`.) After the owner runs it, Factory verifies: the
-daemon's backend Running + the control endpoint = the production, the
-SOCKS listener ownership (the app's daemon process), the ADC peer +
-route in the netmap, the mesh TLS-verified HTTPS (verify=0), and the
-status bar's verified state + failure/recovery behavior. No build, no
-server change; the release-assets hold remains.
+**Onboarding gap (recorded as a product issue, per owner):** the app has
+a backend-only enroll command and NO enrollment UI. Ordinary-user setup
+currently REQUIRES terminal use. Recorded as a product/onboarding gap
+for a future release; manual terminal enrollment here is NOT proof that
+onboarding is complete.
+
+**After the owner runs the procedure, Factory verifies:** the embedded
+daemon Running against the production control endpoint, the SOCKS
+listener ownership (the same app daemon), the ADC peer + the private
+route in the netmap, TLS-verified private HTTPS (verify=0) through the
+daemon's proxy, the status-bar verified state, the failure display (the
+control's stop = the bounded test OR the already-observed dead-control
+evidence), the recovery after a fresh successful probe, and the
+persistence across the app's restart. Windows interaction/failure-
+recovery checks continue in parallel (the screenshot-based evidence).
