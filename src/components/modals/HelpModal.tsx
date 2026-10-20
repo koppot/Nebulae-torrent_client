@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { open } from '@tauri-apps/plugin-shell';
 import { useUiStore } from '../../stores/uiStore';
 import {
   X,
@@ -166,6 +167,30 @@ export const HelpModal: React.FC = () => {
               </section>
             </div>
           )}
+
+          {/* Discord Support (owner 2026-10-20): invite verified against the
+              ADC Discord - it lands in the #nebulae-support forum
+              (channel 1561910667357724824) and never expires. */}
+          <section className="bg-[#1f1f1f] p-3 rounded-lg border border-[#333333]">
+            <h3 className="font-semibold text-white text-xs flex items-center gap-1.5 mb-1">
+              <LifeBuoy className="w-3.5 h-3.5 text-[#e50914]" />
+              <span>Discord Support</span>
+            </h3>
+            <p className="text-[11px] text-[#a3a3a3]">
+              Live help from staff and members in the Asian DVD Club Discord,
+              <span className="text-white"> #nebulae-support</span> forum.
+            </p>
+            <button
+              onClick={() => {
+                open('https://discord.gg/pcHMJTh8G2').catch((e) =>
+                  console.error('[help] failed to open Discord invite:', e)
+                );
+              }}
+              className="mt-2 px-3 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-[11px] font-semibold transition"
+            >
+              Open Discord Support
+            </button>
+          </section>
 
           {/* Common Storage Note */}
           <section className="bg-[#1f1f1f] p-3 rounded-lg border border-[#333333]">

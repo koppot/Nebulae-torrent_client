@@ -1724,4 +1724,78 @@ Factory may now fast-forward or merge `fix/owner-ui-repairs` (`d366edb`) into `m
    - `npm run build`: 0 errors, built in 1.56s.
    - GitHub Actions `build-test` run 39327829648: 100% green across all 4 platforms (Windows x64, macOS ARM64, macOS x64, Linux x86_64).
 
+## 2026-10-20 — Droid (Factory): Manager lifetime-average rates + verified Discord Support (FACTORY OWNERSHIP BOUNDARIES — READ BEFORE CONSOLIDATION)
+
+Owner-directed session. Tailscale repair remains CLOSED (not reopened; no
+tailscale files touched). No builds, releases, tags, updater changes, or
+pushes were made this session — work is committed locally on `main`.
+
+### FACTORY-OWNED AREAS (branch consolidation must leave these untouched)
+
+- **Worktree:** the `nebula-repair` linked worktree on branch `main`
+  (`/Users/dev/Documents/GitHub/Nebulae-torrent_client` and
+  `/Users/dev/.gemini/antigravity/scratch/nebula-repair` are the SAME
+  worktree via gitdir link — do not re-point or delete either path).
+- **Files Factory owns and modified this session** (rebase/merge must not
+  revert or rewrite them; coordinate first if you need them):
+  - `src-tauri/src/commands/torrent.rs` (TorrentItem struct only)
+  - `src-tauri/src/engine/transmission.rs` (field list + mapping only)
+  - `src-tauri/src/engine/mock.rs` (4 sample literals only)
+  - `src-tauri/src/engine/rtorrent/mod.rs` (1 construction site only)
+  - `src/stores/torrentStore.ts` (speed presentation)
+  - `src/types/index.ts` (TorrentItem type only)
+  - `src/App.tsx` (import/call rename only)
+  - `src/components/manager/TorrentManagerView.tsx` (comments + graph label only)
+  - `src/components/modals/HelpModal.tsx` (new Discord Support section)
+  - this coordination file
+- **Untouched by design:** all `tailscale/*` code, `PlayerOverlay.tsx`
+  (its 6 pre-existing eslint warnings are Antigravity's, left as-is),
+  `SimpleMediaView`, player engine, release workflows, tray menu.
+- **ADC repo:** `/Users/dev/Documents/GitHub/ADC` (main @ cec128ef) and
+  Antigravity's `/Users/dev/Documents/GitHub/ADC-antigravity`
+  (`ag/ag3-claim-idempotency`) were inspected but not modified.
+
+### DATA CONTRACT — Manager average rates (owner directive 2026-10-20)
+
+"Show the average since the respective transfer began — not a rolling
+average." Effective immediately, for ANY code that displays or consumes
+`TorrentItem.download_rate` / `upload_rate`:
+
+1. **Semantics:** post-store `download_rate` = lifetime AVERAGE download
+   rate in bytes/s = `downloaded_bytes / seconds_downloading`;
+   `upload_rate` = `uploaded_bytes / seconds_seeding`. They are NOT
+   instantaneous rates and NOT windowed/EMA values. Do not re-smooth,
+   decay, or chart-derive instantaneous rates from them.
+2. **New engine fields:** `TorrentItem.seconds_downloading` and
+   `seconds_seeding` (u64, cumulative ACTIVE seconds per direction,
+   `#[serde(default)]`, from Transmission `secondsDownloading` /
+   `secondsSeeding`). Every engine fills them; rtorrent/remote mode sends
+   0 until the server side exposes equivalents.
+3. **Fallback (frontend, torrentStore `lifetimeAverage`):** when active
+   seconds are 0 but bytes > 0, the store falls back to wall-clock time
+   since `added_on` so older remote servers still show a true since-start
+   average instead of a dead zero. 0 bytes => 0 B/s.
+4. **ETA** derives from the same displayed average (unchanged choke point).
+5. **Paused torrents** display 0 B/s (store forces it; state unchanged).
+6. **Manager "Speed Graph"** now traces these averages (label updated).
+   Do not restore the 15s EMA or counter-delta machinery — it was removed.
+
+### Discord Support entry (verified)
+
+Help (?) → "Discord Support" section added to `HelpModal.tsx`. Button
+opens `https://discord.gg/pcHMJTh8G2` via tauri-plugin-shell. Invite
+VERIFIED 2026-10-20 against Discord's invite API: guild **Asian DVD Club**
+(`869567607810969651`), destination channel **`1561910667357724824`**
+(`#nebulae-support` forum), inviter `dersperre`, no expiry. The old
+site-wide invite (`T7CBkSFR8w`) elsewhere in ADC is a different link and
+was left alone (out of scope).
+
+### Validation (all green, run locally on this session's tree)
+
+`cargo fmt --check` clean on all touched files (pre-existing diff in
+`tailscale/mod.rs` NOT touched); `cargo clippy --lib -- -D warnings` clean;
+`cargo test --lib` 119 passed / 0 failed / 1 ignored; `npx tsc --noEmit`
+clean; `npm run lint` 0 errors (6 pre-existing warnings in
+`PlayerOverlay.tsx`).
+
 
