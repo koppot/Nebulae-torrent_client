@@ -50,6 +50,8 @@ pub struct TsState {
     /// survives. Verified against 1.104.1 on Windows (the mac is immune).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     keepalive: Mutex<Option<Child>>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    adopted_keepalive: AtomicBool,
     /// Whether the app wants the daemon running (settings-driven).
     wanted: AtomicBool,
     /// Guards against a second supervisor thread spawning a second daemon.
@@ -257,8 +259,15 @@ fn find_owned_keepalive_pids() -> Vec<u32> {
          Get-CimInstance Win32_Process -Filter \"Name='tailscale.exe'\" | \
          ForEach-Object {{ if ($_.CommandLine -like '*{pipe}*' -and $_.CommandLine -like '*daemon-logs*') {{ Write-Output $_.ProcessId }} }}"
     );
-    match std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+    match crate::utils::process::create_hidden_command("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &ps,
+        ])
         .output()
     {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
@@ -277,6 +286,9 @@ fn find_owned_keepalive_pids() -> Vec<u32> {
 fn spawn_keepalive(state: &TsState, paths: &Paths) {
     #[cfg(target_os = "windows")]
     {
+        if state.adopted_keepalive.load(Ordering::SeqCst) {
+            return;
+        }
         let mut guard = state.keepalive.lock().unwrap();
         // Replace a dead keepalive client; keep a live one. If an orphaned
         // keepalive from a hard-killed app instance is still connected,
@@ -290,6 +302,7 @@ fn spawn_keepalive(state: &TsState, paths: &Paths) {
         *guard = None;
         if !find_owned_keepalive_pids().is_empty() {
             tracing::info!("[tailscale] adopting existing keepalive client");
+            state.adopted_keepalive.store(true, Ordering::SeqCst);
             return;
         }
         let mut cmd = Command::new(paths.tailscale());
@@ -319,6 +332,7 @@ fn spawn_keepalive(state: &TsState, paths: &Paths) {
 fn stop_keepalive(state: &TsState) {
     #[cfg(target_os = "windows")]
     {
+        state.adopted_keepalive.store(false, Ordering::SeqCst);
         let mut guard = state.keepalive.lock().unwrap();
         if let Some(child) = guard.as_mut() {
             let _ = child.kill();
