@@ -73,14 +73,16 @@ candidate freeze. No other overlapping edits exist at this time.
 ## 4. Candidate & results
 
 - **Previous Candidate:** `dc444f0` (orphan sweep verified, all 4 platforms built in run 39361992611).
-- **Consolidated Windows Repairs Candidate:** Includes tasks 13, 14, 15, 16, 17:
-  - PowerShell subprocess elimination (`GetDiskFreeSpaceExW`).
-  - Right-click tray menu "Quit application" with clean child process termination.
-  - "Keep running in notification area" checkbox and X / Alt+F4 close behavior.
-  - Dynamic Transmission RPC client port allocation and watchdog recovery.
-  - Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh.
+- **Consolidated Windows Repairs Candidate:** `cb95871f1b490de9e6a061c4581811ceb674da45`.
+  - Dispatched `Candidate Build` workflow **run `39407035838`** with explicit source ref `cb95871f1b490de9e6a061c4581811ceb674da45`.
+  - Integrates Tasks 13, 14, 15, 16, 17:
+    - Task 13: Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh (`127.0.0.1:1055`).
+    - Task 14: PowerShell subprocess elimination (`GetDiskFreeSpaceExW` FFI call replaces 60s periodic script).
+    - Task 15: Right-click tray menu "Quit application" with clean child process termination (`engine.shutdown()` + `tailscale::shutdown()`).
+    - Task 16: "Keep running in the notification area when the window is closed" checkbox and X / Alt+F4 close routing.
+    - Task 17: Dynamic Transmission RPC client port allocation, watchdog recovery, and bounded retry loop.
 - **Discord reporter:** Delivery verified (run 39352687166, HTTP 2xx). Webhook rotation canceled by owner directive.
-- **Prior valid evidence:** All 119 unit tests pass; `npx tsc --noEmit` clean.
+- **Verification:** All 119 unit tests pass; `cargo check` clean; `npx tsc --noEmit` clean.
 
 ## 5. Rules for this record
 
