@@ -368,8 +368,6 @@ impl TransmissionRpcClient {
         });
 
         for attempt in 0..2 {
-            let session_id = self.session_id.lock().unwrap().clone();
-
             // Bounded retry on transport errors: the daemon may be briefly
             // unreachable (watchdog restart backoff after a crash, or the
             // first seconds after a relaunch). Re-sending is safe —
