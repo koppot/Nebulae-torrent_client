@@ -726,3 +726,58 @@ update follows the FINAL Factory verdict.
 - When Windows visual interaction and valid private-path failure/recovery tests are concluded, authorization will be requested for ONE final candidate build incorporating `492ffff`.
 - Overall release acceptance remains strictly **OPEN**. No build dispatch or release publication.
 
+## 13. Route-acceptance correction — READY FOR BUILD (2026-10-20, Factory)
+
+**Baseline restored first:** the test firewall rule (NebUDPBLock) was
+removed; ZERO Neb* rules remain; the desktop's mesh baseline re-verified
+(HTTP 200 through the daemon's proxy before the correction).
+
+**The consolidated correction: `1b4f7323167246420893b7ae7d92cb98460aefb4`.**
+Diff summary (three files, ~50 lines):
+1. `tailscale/mod.rs` — `--accept-routes` added to BOTH `up`
+   invocations (enroll + resume_saved_profile, which must stay in
+   lockstep because `up` refuses to change non-default settings that
+   are not re-mentioned). This is THE root-cause fix: the ADC node's
+   advertised route (45.135.163.139/32) was never accepted, so the
+   userspace SOCKS dialed the ADC target over the DEFAULT public path —
+   every prior SOCKS HTTPS 200 proved public reachability, not mesh
+   transit. The flag is persisted in the daemon's prefs by `up`, so it
+   survives restarts and supervisor recovery with NO per-install owner
+   repair. No unrelated routes: the client accepts only what the named
+   ADC peer advertises; the server side is untouched.
+2. `utils/network.rs` — `probe_adc_over_tailnet` resolves the bundled
+   CLI explicitly (current_exe/../tailscale) instead of PATH; macOS GUI
+   apps never have the bundled binary on PATH, which had made CLI-based
+   probing honestly-unavailable on macOS.
+3. `commands/tailscale.rs` — the two tier tests are env-honest: on a
+   dev machine with a LIVE daemon they verify the positive contract
+   (tailnet/advertised target) instead of asserting the no-daemon error
+   contract; CI runners keep the full no-daemon coverage.
+
+**Includes the already-on-main mixed-stack correction (`492ffff`):** the
+embedded daemon's non-empty backend state owns the status report; a
+system Tailscale can never leak into the app's status; the probe cache
+is cleared whenever the embedded daemon is not Running.
+
+**Source checks: cargo fmt clean; cargo clippy -D warnings clean; 119
+lib tests pass (0 failed) on this machine. CI on `1b4f732`: lint-and-
+check + windows-tests both SUCCESS (run 39440976940).**
+
+**Proposed build/test scope (ONE candidate build, on authorization):**
+- Build the candidate from `1b4f732…` (all four platforms).
+- On the Windows desktop: install, confirm the daemon's effective
+  prefs show route acceptance, confirm the ADC subnet route is accepted
+  (netmap/PrimaryRoutes + a route-selection observation), then run the
+  scoped data-plane failure test (block the desktop tailscaled's UDP to
+  the ADC peer's WireGuard port 34523 ONLY): expect the fresh private
+  probe to FAIL while the control stays connected, the UI to leave the
+  verified state within <=75s, recovery to a FRESH 200 after rule
+  removal, and the persisted flag to survive a full app restart.
+- On macOS: the same route-acceptance confirmation after an in-place
+  `up` (the resume path), using the bundled CLI + the embedded socket.
+- Windows interaction tests (checkbox both states, X/Alt+F4, tray
+  restore, explicit Quit) via the screenshot/UIA access on the new build.
+
+**Awaiting owner authorization for this one build. No dispatch, no
+release update, no server-network change, no updater change, no webhook
+rotation. UHD work deferred.**
