@@ -79,9 +79,14 @@ jobs:
           embed = {
               "title": "Nebulae Torrent Client — Live Download Statistics",
               "description": (
-                  "Aggregate public asset download metrics queried directly from GitHub "
-                  "Release distributions. These represent asset fetch counts, not unique "
-                  "users, active installations, or in-application torrent downloads." + note_line
+                  "GitHub **release-asset download counts** for the **Nebulae** "
+                  "cross-platform BitTorrent client, queried from official GitHub "
+                  "Release distributions. These are raw asset fetch counts — "
+                  "**not** unique users, active installations, or in-application torrent "
+                  "downloads. If release assets are ever replaced, GitHub "
+                  "resets the replaced asset's counter and the earlier downloads "
+                  "cannot be reconstructed — totals reflect current asset counters."
+                  + note_line
               ),
               "color": 15010068,
               "fields": [
