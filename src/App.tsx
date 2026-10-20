@@ -280,6 +280,68 @@ export const App: React.FC = () => {
       .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
+    // Native application menu actions (File, Edit, View, Window, Help)
+    listen<string>('nebulae://menu-action', (event) => {
+      const ui = useUiStore.getState();
+      const torrents = useTorrentStore.getState();
+      switch (event.payload) {
+        case 'menu-about':
+          window.dispatchEvent(new CustomEvent('nebulae:open-about'));
+          break;
+        case 'menu-settings':
+          ui.setShowSettings(true);
+          break;
+        case 'menu-add-torrent':
+        case 'menu-add-link':
+          ui.setShowAddTorrent(true);
+          break;
+        case 'menu-create-torrent':
+          ui.setShowCreateTorrent(true);
+          break;
+        case 'menu-resume-torrent':
+          if (torrents.selectedId) torrents.resumeTorrent(torrents.selectedId);
+          break;
+        case 'menu-pause-torrent':
+          if (torrents.selectedId) torrents.pauseTorrent(torrents.selectedId);
+          break;
+        case 'menu-delete-torrent': {
+          const sel = torrents.torrents.find((t) => t.id === torrents.selectedId);
+          if (sel) ui.setDeleteModalTarget({ id: sel.id, name: sel.name });
+          break;
+        }
+        case 'menu-view-media':
+          ui.setViewMode('media');
+          break;
+        case 'menu-view-manager':
+          ui.setViewMode('manager');
+          break;
+        case 'menu-view-compact':
+          ui.setViewMode(ui.viewMode === 'compact' ? 'manager' : 'compact');
+          break;
+        case 'menu-tools-doctor':
+          ui.setShowConnectivityDoctor(true);
+          break;
+        case 'menu-tools-vpn':
+          ui.setShowVpnManager(true);
+          break;
+        case 'menu-tools-tracker':
+          ui.setShowTrackerDashboard(true);
+          break;
+        case 'menu-help-docs':
+          ui.setShowHelp(true);
+          break;
+        case 'menu-help-discord':
+          import('@tauri-apps/plugin-shell').then(({ open }) => {
+            open('https://discord.gg/pcHMJTh8G2').catch((e) =>
+              console.error('[menu] failed to open Discord invite:', e)
+            );
+          });
+          break;
+      }
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
     // Listen for native OS drag & drop events emitted by Tauri
     listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', () => {
       setIsDragging(true);

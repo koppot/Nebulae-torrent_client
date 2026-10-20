@@ -65,9 +65,19 @@ export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
 export function averageTransferSpeeds(torrents: TorrentItem[]): TorrentItem[] {
   const now = Date.now();
   return torrents.map((t) => {
+    // Preserve raw instantaneous engine rates before replacing with since-start averages
+    const rawDown = t.current_download_rate ?? t.download_rate;
+    const rawUp = t.current_upload_rate ?? t.upload_rate;
+
     const active = t.status === 'Downloading' || t.status === 'Seeding';
     if (!active) {
-      return { ...t, download_rate: 0, upload_rate: 0 };
+      return {
+        ...t,
+        download_rate: 0,
+        upload_rate: 0,
+        current_download_rate: 0,
+        current_upload_rate: 0,
+      };
     }
     // Average since the respective transfer began: cumulative bytes over
     // cumulative ACTIVE seconds. A paused stretch does not dilute the rate
@@ -81,7 +91,14 @@ export function averageTransferSpeeds(torrents: TorrentItem[]): TorrentItem[] {
     const etaSeconds =
       t.status !== 'Downloading' || avgDown <= 0 ? undefined : Math.round(remaining / avgDown);
 
-    return { ...t, download_rate: avgDown, upload_rate: avgUp, eta_seconds: etaSeconds };
+    return {
+      ...t,
+      download_rate: avgDown,
+      upload_rate: avgUp,
+      current_download_rate: rawDown,
+      current_upload_rate: rawUp,
+      eta_seconds: etaSeconds,
+    };
   });
 }
 

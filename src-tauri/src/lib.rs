@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+pub mod app_menu;
 pub mod commands;
 pub mod db;
 pub mod engine;
@@ -565,6 +566,12 @@ pub fn run() {
 
             let _ = tray_builder.build(app)?;
 
+            #[cfg(desktop)]
+            {
+                let native_menu = app_menu::build_app_menu(app.handle())?;
+                let _ = app.set_menu(native_menu);
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -618,6 +625,7 @@ pub fn run() {
             }
             _ => {}
         })
+        .on_menu_event(app_menu::handle_menu_event)
         .invoke_handler(tauri::generate_handler![
             // Diagnostics & Recovery
             commands::diagnostics::get_engine_init_error,

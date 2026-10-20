@@ -15,7 +15,7 @@
 //! the frontend drives position/size with `player_sync_viewport`.
 
 use objc2::rc::Retained;
-use objc2::{ClassType, MainThreadOnly};
+use objc2::MainThreadOnly;
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use std::sync::atomic::Ordering;
@@ -249,47 +249,17 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
         if ns_win.is_null() {
             return;
         }
-        let start: NSPoint =
-            unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
-        let origin = unsafe { (*ns_win).frame().origin };
-        // Track the pointer on a worker thread; each tick moves the
-        // window on the main thread until the left button is released.
-        let win_addr = ns_win as usize;
-        std::thread::spawn(move || {
-            let ns_win = win_addr as *mut NSWindow;
-            let mut last_x = start.x;
-            let mut last_y = start.y;
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(16));
-                let now: NSPoint =
-                    unsafe { objc2::msg_send![objc2_app_kit::NSEvent::class(), mouseLocation] };
-                let buttons: usize = unsafe {
-                    objc2::msg_send![objc2_app_kit::NSEvent::class(), pressedMouseButtons]
-                };
-                if buttons & 1 == 0 {
-                    break;
-                }
-                let dx = now.x - last_x;
-                let dy = now.y - last_y;
-                last_x = now.x;
-                last_y = now.y;
-                if dx == 0.0 && dy == 0.0 {
-                    continue;
-                }
-                let app3 = app2.clone();
-                let win_addr = ns_win as usize;
-                let _ = app3.run_on_main_thread(move || unsafe {
-                    let ns_win = win_addr as *mut NSWindow;
-                    let o = (*ns_win).frame().origin;
-                    // Screen coords are bottom-left origin; Cocoa delta
-                    // already matches, but the trackpad y grows upward in
-                    // NSEvent coords while the window origin does too, so
-                    // subtract to follow the pointer downward.
-                    (*ns_win).setFrameOrigin(NSPoint::new(o.x + dx, o.y + dy));
-                });
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let ns_app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        if let Some(event) = ns_app.currentEvent() {
+            unsafe {
+                let _: () = objc2::msg_send![ns_win, performWindowDragWithEvent: &*event];
             }
-            let _ = origin;
-        });
+        } else {
+            let _ = win.start_dragging();
+        }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }

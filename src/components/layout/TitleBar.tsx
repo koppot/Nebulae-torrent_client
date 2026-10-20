@@ -25,6 +25,8 @@ import {
   Film,
   Minimize2,
   Maximize2,
+  Wrench,
+  ChevronDown,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -48,7 +50,19 @@ export const TitleBar: React.FC = () => {
 
   const [isMaximized, setIsMaximized] = useState(false);
   const [showAppInfo, setShowAppInfo] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
+
+  useEffect(() => {
+    const handleOpenAbout = () => setShowAppInfo(true);
+    const handleClickOutside = () => setShowToolsMenu(false);
+    window.addEventListener('nebulae:open-about', handleOpenAbout);
+    window.addEventListener('click', handleClickOutside);
+    return () => {
+      window.removeEventListener('nebulae:open-about', handleOpenAbout);
+      window.removeEventListener('click', handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
@@ -358,38 +372,66 @@ export const TitleBar: React.FC = () => {
           {/* Divider */}
           <div className="h-4 w-[1px] bg-[#262626] mx-1" />
 
+          {/* Tools Menu Dropdown (infrequent configuration/help actions) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowToolsMenu((v) => !v);
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white text-xs font-medium transition"
+              title="Tools & Diagnostics Menu"
+            >
+              <Wrench className="w-3 h-3 text-[#a3a3a3]" />
+              <span>Tools</span>
+              <ChevronDown className="w-2.5 h-2.5 text-[#737373]" />
+            </button>
+            {showToolsMenu && (
+              <div
+                className="absolute left-0 top-full mt-1 w-56 bg-[#1a1a1a] border border-[#333333] rounded-md shadow-2xl py-1 z-50 flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowToolsMenu(false);
+                    setShowConnectivityDoctor(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-white hover:bg-[#262626] transition text-left"
+                >
+                  <Activity className="w-3.5 h-3.5 text-[#e50914]" />
+                  <span>Connectivity Doctor</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowToolsMenu(false);
+                    setShowVpnManager(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-white hover:bg-[#262626] transition text-left"
+                >
+                  <Shield className="w-3.5 h-3.5 text-[#e50914]" />
+                  <span>VPN & Kill Switch</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowToolsMenu(false);
+                    setShowTrackerDashboard(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-white hover:bg-[#262626] transition text-left"
+                >
+                  <Radio className="w-3.5 h-3.5 text-[#e50914]" />
+                  <span>ADC Tracker Dashboard</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        {/* Utility dialogs (owner): centered on the second row. */}
-        <div className="flex-1 flex items-center justify-center gap-1 min-w-0">
-          {/* Utility Workbench Dialogs: Doctor, VPN, Tracker, Settings, Help */}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowConnectivityDoctor(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Connectivity Doctor & Port Status"
-          >
-            <Activity className="w-3.5 h-3.5" />
-          </button>
 
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowVpnManager(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="VPN & Fail-Closed Kill Switch"
-          >
-            <Shield className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowTrackerDashboard(true); }}
-            className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title="Asian DVD Club Tracker & Ratio Profile"
-          >
-            <Radio className="w-3.5 h-3.5" />
-          </button>
-
-        </div>
+        {/* Flexible spacer */}
+        <div className="flex-1" />
 
         <div className="flex items-center gap-2 flex-shrink-0">
         {/* Compact Quick Filter — transfers only. */}

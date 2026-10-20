@@ -625,6 +625,50 @@ fn start_playback_inner(
                                 .store(false, std::sync::atomic::Ordering::SeqCst);
                             tracing::warn!("[player] menu watcher finished 15 s window");
                         });
+
+                        // Deferred liveness check: detect silent decryption failure.
+                        // When AACS keys (libaacs + KEYDB.cfg) are absent, the Blu-ray
+                        // demuxer opens the BDMV but cannot decrypt stream data.
+                        // libvlc_media_player_play() returns 0 (success) and the session
+                        // struct is valid, but get_time stays at -1 because no frames are
+                        // decoded. This produces the black-screen / 0:00:00 symptom.
+                        // Emit a user-facing error event after 6 seconds if still frozen.
+                        let app3 = app.clone();
+                        std::thread::spawn(move || {
+                            use tauri::{Emitter, Manager};
+                            std::thread::sleep(std::time::Duration::from_secs(6));
+                            let state = app3.state::<PlayerState>();
+                            if !*poison(&state.started) {
+                                return; // session already closed
+                            }
+                            let mp = *poison(&state.media_player);
+                            if mp == 0 {
+                                return;
+                            }
+                            let lib = match loaded_lib(&state) {
+                                Ok(l) => l,
+                                Err(_) => return,
+                            };
+                            let ms =
+                                unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) };
+                            if ms == -1 {
+                                // No media progress after 6 s — almost certainly a
+                                // decryption failure (AACS) or unsupported disc format.
+                                tracing::error!(
+                                    "[player] liveness check failed: get_time=-1 after 6 s \
+                                     — disc may require AACS decryption keys (libaacs + KEYDB.cfg)"
+                                );
+                                let msg = "Playback did not start. \
+                                    This disc may be encrypted (AACS copy protection). \
+                                    Install libaacs and a valid KEYDB.cfg, then try again. \
+                                    If the disc is not encrypted, check that the BDMV folder is readable.";
+                                let _ = app3.emit("nebulae://player-error", msg);
+                            } else {
+                                tracing::info!(
+                                    "[player] liveness check OK: get_time={ms} ms after 6 s"
+                                );
+                            }
+                        });
                     }
                     Ok(resolved)
                 }

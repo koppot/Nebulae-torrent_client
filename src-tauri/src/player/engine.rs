@@ -479,16 +479,10 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
-            // Route VLC's internal log to a file — the embedded player's
-            // stderr is invisible when launched from Finder, and demux
-            // failures (e.g. bluray://) otherwise fail silently.
+            // VLC internal log is routed via the NEBULAE_VLC_LOG shim dylib
+            // (libvlc_log_set C callback). The --file-logging / --logfile args
+            // are VLC application flags and are silently ignored by libvlc_new.
             CString::new("--verbose=2").unwrap(),
-            CString::new("--file-logging").unwrap(),
-            CString::new(format!(
-                "--logfile={}",
-                std::env::temp_dir().join("nebulae-vlc.log").display()
-            ))
-            .unwrap(),
             // Network share & high-bitrate UHD Blu-ray buffer tuning:
             // Default libvlc caching (300ms) starves on SMB shares. 3000ms prevents stutter and freezes.
             CString::new("--file-caching=3000").unwrap(),

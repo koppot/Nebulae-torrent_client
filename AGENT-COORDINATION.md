@@ -1,5 +1,18 @@
 # Agent coordination notes
 
+## CONSOLIDATION HANDOFF (2026-10-20, Antigravity — for Factory's Test Release)
+
+- **Consolidated Working Tree:** Canonical checkout `/Users/dev/Documents/GitHub/Nebulae-torrent_client` on branch `main`.
+- **Included Deliverables:**
+  1. **Multi-Display Window Drag:** Switched from 16ms manual coordinate polling to AppKit native `performWindowDragWithEvent: &*event` in `src-tauri/src/player/embed_macos.rs`, restoring seamless window movement across multiple connected displays and boundaries.
+  2. **Standard Menus & Toolbar Organization:** Built native macOS menu bar (`Nebulae`, `File`, `Edit`, `View`, `Window`, `Help`) with standard macOS shortcuts/placement in `src-tauri/src/app_menu.rs`, wired menu dispatch in `src-tauri/src/lib.rs` and `src/App.tsx`, and consolidated row 2 toolbar utility buttons into a clean `Tools` dropdown menu in `src/components/layout/TitleBar.tsx`. Preserved Factory's verified Discord Support invite (`https://discord.gg/pcHMJTh8G2`).
+  3. **Manager Speed Tooltips:** Integrated Factory's `041d5b8` transfer-average contract in `src/types/index.ts`, `src/stores/torrentStore.ts`, and `src/components/manager/TorrentManagerView.tsx`. Raw instantaneous engine rates are retained separately and displayed exclusively on hover tooltips (`Current: <rate>`) for Down/Up speed cells and details panel.
+  4. **UHD Playback Diagnostic & Menu Recovery:** In `src-tauri/src/commands/media.rs` and `src/components/player/PlayerOverlay.tsx`, added 6-second deferred playback liveness monitoring emitting `nebulae://player-error` on decryption/demuxer failures, and updated `player_return_to_menu` to detect stalled playback and force a clean disc restart rather than silently exiting when title reports 0.
+- **UHD Playback Status:**
+  - Root cause reproduced on installed binary and diagnosed in live logs: dynamic 1080p -> 4K HEVC transition in libvlc triggers VideoToolbox session error `305` (`pic_holder_wait timed out`), halting the TS demuxer and stopping playlist playback.
+  - Error alerting and menu recovery are implemented in source, but runtime resolution of the VideoToolbox format transition is NOT yet verified. UHD playback must be tested on the newly compiled test binary.
+- **Uncommitted Work:** None remaining after commit.
+
 ## DURABLE HANDOFF (2026-10-20, Droid/Factory — branch consolidation)
 
 - **Canonical repository path:** `/Users/dev/Documents/GitHub/Nebulae-torrent_client` — the preferred entry path. It is the SAME git worktree as `/Users/dev/.gemini/antigravity/scratch/nebula-repair` (gitdir link, branch `main`); keep both paths working, never delete either blindly.

@@ -158,6 +158,7 @@ export default function PlayerOverlay() {
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
   const lastSaveRef = useRef(0);
   const dragArmedRef = useRef(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Latest poll/state mirrors for the unified keyboard handler (it must not
   // re-register on every poll tick).
   const pollRef = useRef(poll);
@@ -191,6 +192,7 @@ export default function PlayerOverlay() {
     setEnded(false);
     setSeeking(null);
     setDiscChoices(null);
+    setErrorMessage(null);
 
     const apply = (p: Poll) => {
       setPoll(p);
@@ -225,6 +227,17 @@ export default function PlayerOverlay() {
       window.removeEventListener('resize', syncViewport);
     };
   }, [player.open, player.resolvedPath, syncViewport]);
+
+  // Listen for playback errors (e.g. AACS decryption failure detected by liveness check).
+  useEffect(() => {
+    if (!player.open) return;
+    const unlisten = listen<string>('nebulae://player-error', (event) => {
+      setErrorMessage(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [player.open]);
 
   // Track the volume slider once playback is running.
   useEffect(() => {
@@ -1303,6 +1316,40 @@ export default function PlayerOverlay() {
       >
         <X className="w-5 h-5" />
       </button>
+
+      {/* Playback Error Alert Modal */}
+      {errorMessage && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="max-w-md w-full bg-[#181818] border border-[#333333] rounded-lg p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <span className="text-[#e50914] text-xl font-bold">⚠️</span>
+              <div className="space-y-1">
+                <h3 className="text-white text-sm font-semibold">Playback Error</h3>
+                <p className="text-xs text-[#a3a3a3] leading-relaxed whitespace-pre-wrap">{errorMessage}</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                className="px-3 py-1.5 text-xs rounded border border-[#333333] text-white hover:bg-[#262626] transition"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setErrorMessage(null);
+                  void closePlayer();
+                }}
+                className="px-3 py-1.5 text-xs rounded bg-[#e50914] text-white hover:bg-[#b80710] font-medium transition"
+              >
+                Close Player
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

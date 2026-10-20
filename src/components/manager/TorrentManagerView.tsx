@@ -1123,8 +1123,18 @@ export const TorrentManagerView: React.FC = () => {
                         <span className="text-[11px] font-sans text-white">{t.status}</span>
                       )}
                     </td>
-                    <td className="py-2 px-2.5 text-white">{formatSpeed(t.download_rate)}</td>
-                    <td className="py-2 px-2.5">{formatSpeed(t.upload_rate)}</td>
+                    <td
+                      className="py-2 px-2.5 text-white"
+                      title={t.current_download_rate !== undefined ? `Current: ${formatSpeed(t.current_download_rate)}` : undefined}
+                    >
+                      {formatSpeed(t.download_rate)}
+                    </td>
+                    <td
+                      className="py-2 px-2.5"
+                      title={t.current_upload_rate !== undefined ? `Current: ${formatSpeed(t.current_upload_rate)}` : undefined}
+                    >
+                      {formatSpeed(t.upload_rate)}
+                    </td>
                     <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
                     <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
                     <td className="py-2 px-2.5 text-white">
@@ -1239,7 +1249,10 @@ export const TorrentManagerView: React.FC = () => {
                               <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
                                 DL Speed
                               </span>
-                              <span className="text-white">
+                              <span
+                                className="text-white"
+                                title={selectedTorrent.current_download_rate !== undefined ? `Current: ${formatSpeed(selectedTorrent.current_download_rate)}` : undefined}
+                              >
                                 {formatSpeed(selectedTorrent.download_rate)}
                                 {selectedTorrent.download_limit_kib > 0 ? ` [${selectedTorrent.download_limit_kib}K]` : ''}
                               </span>
@@ -1248,7 +1261,10 @@ export const TorrentManagerView: React.FC = () => {
                               <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
                                 UL Speed
                               </span>
-                              <span className="text-white">
+                              <span
+                                className="text-white"
+                                title={selectedTorrent.current_upload_rate !== undefined ? `Current: ${formatSpeed(selectedTorrent.current_upload_rate)}` : undefined}
+                              >
                                 {formatSpeed(selectedTorrent.upload_rate)}
                                 {selectedTorrent.upload_limit_kib > 0 ? ` [${selectedTorrent.upload_limit_kib}K]` : ''}
                               </span>
