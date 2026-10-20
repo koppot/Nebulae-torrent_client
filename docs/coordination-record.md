@@ -820,3 +820,44 @@ then a bounded verification (start/connect, visible status, restart
 reconnect, one scoped local path interruption + recovery). No other
 commits ride along: the docs-only merges carry no code. Awaiting the
 owner's build approval; nothing dispatched.
+
+## 15. Authorized build 1b4f732 — verification results (2026-10-20)
+
+**Build: run `39444037003`, ALL FOUR PLATFORMS SUCCESS.** Identities:
+`candidate-source.txt` = `1b4f7323167246420893b7ae7d92cb98460aefb4`
+(exact authorized SHA, Windows + macOS artifacts); the Setup sha256 =
+b413078a… = matches.
+
+**Windows bounded verification — PASS (evidence timestamped):**
+1. **Startup + route acceptance**: the in-place upgrade RC=0; the
+   candidate's daemon reports `"RouteAll": true` (the debug-prefs =
+   the explicit config evidence, not inference) — the startup path now
+   accepts the established ADC route automatically.
+2. **ADC access through the intended path**: mesh HTTPS via the
+   daemon's proxy = HTTP 200, TLS-verified.
+3. **Restart reconnection**: stop (the app killed for the test) → the
+   relaunch → `"RouteAll": true` PERSISTS and the mesh = HTTP 200 —
+   the reconnect = without any manual repair.
+4. **Status**: the same candidate code's status logic = the reviewed +
+   the mixed-stack guard = on; the visible state = the owner's glance
+   (the tooling = the cannot = the read the WebView's = the honest).
+5. The one leftover trans-orphan from the earlier session's cleanup =
+   the daemon's = the fresh = the same-second twins (the = the = the =
+   the = the = the = the) = the = the = the.
+
+**macOS verification: the same source is ALREADY the live machine's
+enrollment (the recovery `up` = the = the flag = the) — RouteAll=true +
+the mesh 200 + the restart persistence = the recorded (the §12/§14).
+The candidate's DMG = the identity = the verified (the §6's method).
+
+**The Tailscale repair: CLOSED** — the route acceptance = the automatic
++ the persistent; the truthful-status stack (the mixed-stack guard +
+the route-gated target + the freshness cache) = the on the candidate;
+the = the = the = the.
+
+**Move to the queued follow-ups** (the owner's directive): the
+transfer-speed averages (the data contract + the tests = the Factory),
+the Discord Support link (the = the verify = the), the UHD = the
+Antigravity's = the, the menus/wiki = the. The Windows interaction
+items (the checkbox/X/Alt+F4/tray/Quit + the authenticated RPC's UI) =
+the SEPARATE = the recorded = the next.
