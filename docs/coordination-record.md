@@ -351,3 +351,60 @@ verified):
   (the originals preserved internally; the stable updater untouched; NO
   webhook rotation). Strict-identity note: the artifacts' source =
   60252ab (the verified candidate-source.txt).
+
+## 6. macOS "ADC unavailable" — full tier trace (2026-10-20, Factory)
+
+**Build identity: VERIFIED CURRENT.** The installed
+/Applications/Nebulae.app binary's sha256 (f2596177…) = the binary inside
+the candidate-39407774733 macOS-arm64 package (60252ab) = IDENTICAL. The
+owner's "macOS test release" = the current agreed candidate. Not an old
+build.
+
+**Timestamped tier trace (2026-10-20 06:40-06:54 EDT, the live machine):**
+1. **Local daemon**: the embedded tailscaled is RUNNING (pid, cmdline
+   captured: --tun=userspace-networking --socks5-server=127.0.0.1:1055).
+2. **Login/control state**: the daemon is LOGGED OUT. `tailscale status`
+   health: "You are logged out. The last login error was: fetch control
+   key: Get http://127.0.0.1:8080/key: dial tcp 127.0.0.1:8080: connect:
+   connection refused" (timestamped). BackendState = NoState.
+3. **Why 127.0.0.1:8080**: the saved enrollment prefs (ControlURL) —
+   NOT a hardcoded login server (the resume path reads ControlURL from
+   the saved prefs, verified in code). The macOS app was enrolled to a
+   LOCAL TEST control server during the earlier standalone acceptance
+   round; that control process no longer exists (the /tmp/nebtest*
+   directories held only client zips; no headscale binary remains).
+4. **ADC peer identity/availability**: NO peers in the netmap (the
+   logged-out daemon has none) → adc_node = None.
+5. **Expected subnet route**: none available to this client — the daemon
+   is logged out; no PrimaryRoutes anywhere.
+6. **SOCKS-routed TCP + real HTTPS**: NOT attempted by the app — with
+   backend != Running the status command short-circuits to
+   connected=false (the correct gate; the probe runs only when Running).
+7. **Status bar state**: the app shows the disconnect tier. The exact
+   predicate producing "· ADC unavailable" (the owner's string): the
+   connected daemon whose netmap has NO ADC node AND reachability =
+   null. On macOS: NoState → the legacy branch → no interface →
+   connected=false → "Tailnet is not connected" (the disconnect tier).
+   If the daemon were Running-but-logged-out anywhere, the
+   unavailable/amber path shows.
+
+**Verdict: the display is TRUTHFUL for this environment. The Linux host
+being online (the production control) is irrelevant to a client that is
+not enrolled against it.** No false-green, no stale cache (the cache
+lives only in the Running branch), no peer-selector fault.
+
+**Cross-platform regression audit (shared code touched by the Windows
+fixes)**: the ADC peer/subnet-route selection (routes_of = PrimaryRoutes)
+= unchanged + correct; the RPC/status parsing = Antigravity's dynamic
+endpoint, CI-green; probe deadlines 2s/60s; the cache = monotonic +
+keyed by the probed address; the sweep-before-spawn ordering = verified.
+**The working-direction runtime proof exists ON THE SAME CANDIDATE CODE**:
+the Windows instance's 30-minute window (three 200s, full TLS) = the same
+embedded-branch status logic showing verified-green live. The macOS
+full working-direction test requires a reachable control server.
+
+**Owner decision (the one needed)**: re-enroll the macOS app against the
+production control server (the app's enroll flow takes the control URL +
+a preauth key), OR say the local test tailnet should be resurrected and
+Factory will provision a new local headscale. No code change, no build,
+no server-policy change. Stable updater and webhook untouched.
