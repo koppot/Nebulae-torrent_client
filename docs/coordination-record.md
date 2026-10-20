@@ -261,11 +261,29 @@ The owner observed that the Windows candidate archive (~117 MB) is ~4× smaller 
    - **System Requirements:** Relies strictly on standard Windows 10/11 Evergreen WebView2 (preinstalled OS component, with Tauri bootstrapper fallback) and standard Microsoft Universal CRT / VC++ redistributable. Offline-capable installation.
    - **Local Inference Audit:** Confirmed complete and validated via local `qwen3.6:27b` analysis under LOCAL_REQUIRED policy.
 
-5. **macOS "Tailnet/ADC unavailable" — the status is TRUTHFUL; the environment is the cause:**
-   - The installed macOS app (0.2.2) runs the embedded tailscaled pointed at a LOCAL test control server, `http://127.0.0.1:8080`, which is DEAD (connection refused, health check: `"You are logged out... fetch control key... connect: connection refused"`, `BackendState=NoState`).
-   - The "online Linux host" the owner sees is the PRODUCTION control (`45.135.163.140`), which this app is NOT enrolled against.
-   - The status logic correctly shows disconnected/unavailable for a daemon that cannot reach its control server — in-wild proof of truthful failure display path (no stale green).
-   - **Owner decision needed:** re-enroll the macOS app to the production control server (identity-preserving reconnect), or restart the local test control if that tailnet is still wanted.
+5. **macOS "Tailnet/ADC unavailable" — Deep Forensic Diagnosis & Status Tier Trace (2026-10-20):**
+   - **Build Provenance Verified:** `/Applications/Nebulae.app/Contents/MacOS/nebulae` SHA256 is `f2596177a664708e11ccbd8f80b3e74ca415855a1fb6df6dd34350f088b204da`, exactly matching candidate `60252ab598a7f29504660578b9268f8430cd82ec` from GitHub Actions run 39407774733 (`Nebulae-macOS-arm64.dmg-app.zip`). It is NOT an old build.
+   - **Tier 1 (Daemon state):** Embedded tailscaled (PID 50940) was in `BackendState: "NoState"` because `/Users/dev/Library/Application Support/Nebulae/internal/tailscale/tailscaled.state` has stored `ControlURL: "http://127.0.0.1:8080"` (a local test control server that is dead). Nebulae correctly fell back to system Tailscale detection.
+   - **Tier 2 (Peer identity):** System Tailscale (`/Applications/Tailscale.app`) is active on `utun4` with IP `100.109.251.80`. The peer `asiandvdclub` is online at `100.117.16.0` (ping 35.4ms, SSH port 22 connected).
+   - **Tier 3 (Subnet route):** `asiandvdclub` has `AllowedIPs: ["100.117.16.0/32"]` with `PrimaryRoutes: null`. No subnet route to `45.135.163.139/32` is advertised into the tailnet.
+   - **Tier 4 (SOCKS5 & TCP to private destination):**
+     - SOCKS5 to `100.117.16.0:443`: **FAILED (Connection refused, SOCKS error code 1)**.
+     - SOCKS5 to `100.117.16.0:80`: **SUCCESS (code 0)**.
+     - SOCKS5 to `100.117.16.0:22`: **SUCCESS (code 0)**.
+     - SOCKS5 to `45.135.163.139:443`: **SUCCESS (code 0)**.
+     - `curl --proxy socks5h://127.0.0.1:1055 https://asiandvdclub.org`: **`HTTP 200, verify=0 (TLS ok), 0.169s`** (resolves through SOCKS5 to public IP `45.135.163.139`).
+     - **Server-side binding cause:** On `asiandvdclub.org`, Apache SSL is configured in `/etc/apache2/ports.conf` with `Listen 45.135.163.139:443` because Headscale control plane runs on `45.135.163.140:443`. Apache does NOT listen on `100.117.16.0:443`.
+   - **Tier 5 (Exact Code Predicate producing "ADC unavailable"):**
+     - In `StatusBar.tsx`: `tailscale?.connected && tailscale.adc_reachable == null && !tailscale.adc_node` renders `"· ADC unavailable"`.
+     - In `connectivity.rs`: Fallback `detect_tailscale()` returned `Some("utun4", "100.109.251.80")` -> `connected: true`.
+     - It then called `crate::utils::network::probe_adc_over_tailnet()`, which executed `create_hidden_command("tailscale")`. In the macOS GUI environment (Finder launch), `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin` (lacking `/opt/homebrew/bin`), so spawning the system `tailscale` CLI failed -> returned `None`.
+     - When `probe` is `None`, `adc_node = None` and `adc_reachable = None`, perfectly satisfying the predicate and displaying `"Tailnet · ADC unavailable"`.
+     - Furthermore, even when the CLI succeeds, probing `100.117.16.0:443` fails with Connection Refused, producing `adc_reachable: Some(false)` -> displaying `"Tailnet · ADC host offline"`.
+   - **Cross-Platform Assessment:** No regression introduced by Windows fixes. The status indicator is truthful: the private HTTPS service is genuinely unreachable on `100.117.16.0:443` because Apache is not listening on that IP and no subnet route to `45.135.163.139/32` exists in the tailnet.
+   - **Resolution Options:**
+     1. Add `Listen 100.117.16.0:443` to `/etc/apache2/ports.conf` on `asiandvdclub.org` (enables Apache to serve HTTPS directly on the Tailscale IP with zero collision with Headscale).
+     2. Alternatively, advertise `45.135.163.139/32` as a subnet route via `tailscale up --advertise-routes=45.135.163.139/32` on `asiandvdclub.org`.
+     3. For the macOS GUI fallback CLI path, ensure `probe_adc_over_tailnet()` checks standard macOS binary locations (`/opt/homebrew/bin/tailscale`, `/Applications/Tailscale.app/Contents/MacOS/Tailscale`) or the bundled binary.
 
 6. **Tailnet failure/recovery test note:**
    - Scoped firewall injection (TCP 443 block on tailscaled) does NOT affect the userspace WireGuard data path (mesh rides UDP to peer endpoints), so probe stayed correctly 200 and rule was removed.
@@ -274,4 +292,5 @@ The owner observed that the Windows candidate archive (~117 MB) is ~4× smaller 
 
 7. **30-minute window: RUNNING on the 60252ab-installed bytes:**
    - The stack `app=1 tsd=1 trans=1` at start; timestamped evidence = `conn_window.txt` on desktop. Verdict appends on completion.
+
 
