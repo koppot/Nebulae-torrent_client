@@ -552,3 +552,37 @@ CI both jobs green).** A rebuild covering it requires owner
 authorization per the standing build-control rule; the macOS recovery
 and the Windows interaction checks proceed on the already-authorized
 39407774733 artifacts + local verification in the meantime.
+## 10. macOS recovery EXECUTED by Antigravity — node awaits owner approval (2026-10-20)
+
+### Acceptance Summary Corrections (Mandatory)
+1. **Embedded NoState / NeedsLogin is NOT a connected embedded client.** A fallback in `connectivity.rs` to system Tailscale interface detection (`utun4`) does not represent embedded client connectivity.
+2. **CLI discovery failure means verification is unavailable.** When `tailscale` CLI cannot be spawned due to standard macOS GUI `PATH` constraints, reachability probing is unavailable; it does not indicate target failure.
+3. **Reachable host with unavailable HTTPS is NOT host offline.** When `100.117.16.0` responds to ping and SSH but rejects port 443 TCP connections, the host is reachable, but the HTTPS service is unavailable on that address.
+4. **Windows success does NOT establish macOS acceptance.** Factory AI's Windows acceptance verdict is platform-scoped. macOS acceptance remains open.
+5. **Ineffective Windows firewall rule is NOT a passed test.** The TCP 443 block on `tailscaled.exe` did not restrict the userspace UDP WireGuard data path; it does not constitute a valid failure/recovery test.
+6. **Overall release acceptance remains OPEN.** No release asset update, build dispatch, server configuration change, updater change, or webhook rotation is authorized.
+
+### Embedded Production Recovery Status
+- **Target Daemon:** Embedded production daemon (`tailscaled` PID 50940) running userspace networking with SOCKS5 on `127.0.0.1:1055` and HTTP proxy on `127.0.0.1:1056`.
+- **Bundled CLI:** `/Applications/Nebulae.app/Contents/Resources/resources/engine/tailscale/tailscale`
+- **Explicit Embedded Socket:** `/Users/dev/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock`
+- **Execution & Transition:**
+  Executed bundled CLI against the explicit embedded socket targeting the production control server without manual edits to `tailscaled.state` and without altering the separate system Tailscale client:
+  ```bash
+  "/Applications/Nebulae.app/Contents/Resources/resources/engine/tailscale/tailscale" \
+    --socket "/Users/dev/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock" \
+    up \
+    --accept-dns=false \
+    --login-server=https://control.asiandvdclub.org \
+    --hostname=nebulae-MacStudio.local \
+    --timeout=5s
+  ```
+- **Live State Evidence:**
+  The embedded daemon transitioned from dead-test `NoState` into `BackendState: "NeedsLogin"`.
+  `tailscale status --json` confirms:
+  - `"BackendState": "NeedsLogin"`
+  - `"AuthURL": "https://control.asiandvdclub.org/register/hskey-authreq-UGJSp25-cs1FH9Q4D5p6RZ8G"`
+  - Health: Awaiting authentication approval.
+- **Pending Single Owner Authorization Step:**
+  Authentication request `hskey-authreq-UGJSp25-cs1FH9Q4D5p6RZ8G` awaits owner authorization on `control.asiandvdclub.org` (or via the file-based preauth key procedure specified in Section 7).
+
