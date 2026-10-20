@@ -1363,7 +1363,9 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
     };
     #[cfg(target_os = "windows")]
     let opened = if p.is_dir() {
-        crate::utils::process::create_hidden_command("explorer").arg(&p).status()
+        crate::utils::process::create_hidden_command("explorer")
+            .arg(&p)
+            .status()
     } else {
         crate::utils::process::create_hidden_command("explorer")
             .arg(format!("/select,{}", p.display()))
@@ -1627,7 +1629,9 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
             return Ok(Some(picked.to_string_lossy().to_string()));
         }
         let picked_folder = rfd::FileDialog::new()
-            .set_title("Add Movie - select the release ROOT folder that holds ALL of its disc folders")
+            .set_title(
+                "Add Movie - select the release ROOT folder that holds ALL of its disc folders",
+            )
             .pick_folder();
         Ok(picked_folder.map(|p| p.to_string_lossy().to_string()))
     }
