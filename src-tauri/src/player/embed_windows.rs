@@ -157,10 +157,10 @@ pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), St
 /// POINTS lparam on the main thread (native title-bar behavior; the
 /// modal loop pumps messages, so the app stays responsive).
 pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
-    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::Foundation::{LPARAM, POINT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, SendMessageW, HTCAPTION, POINT, WM_NCLBUTTONDOWN,
+        GetCursorPos, SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
     };
     let hwnd = main_hwnd(app)?;
     app.run_on_main_thread(move || unsafe {
@@ -173,8 +173,8 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
         SendMessageW(
             hwnd,
             WM_NCLBUTTONDOWN,
-            WPARAM(HTCAPTION.0 as usize as _),
-            LPARAM(lparam),
+            Some(WPARAM(HTCAPTION as usize)),
+            Some(LPARAM(lparam)),
         );
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
