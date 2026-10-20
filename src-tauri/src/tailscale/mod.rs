@@ -245,6 +245,30 @@ pub fn daemon_ready_on(paths: &Paths, timeout: Duration) -> bool {
     cli_on(paths, &["status", "--json"], timeout).is_ok()
 }
 
+/// PIDs of keepalive CLI clients whose command line carries OUR pipe and
+/// the daemon-logs marker (ownership proof). A hard-killed app leaves its
+/// keepalive client running; the next app ADOPTS it instead of spawning a
+/// second one.
+#[cfg(target_os = "windows")]
+fn find_owned_keepalive_pids() -> Vec<u32> {
+    let pipe = r"\\.\pipe\nebulae-tailscaled";
+    let ps = format!(
+        "$ErrorActionPreference='SilentlyContinue'; \
+         Get-CimInstance Win32_Process -Filter \"Name='tailscale.exe'\" | \
+         ForEach-Object {{ if ($_.CommandLine -like '*{pipe}*' -and $_.CommandLine -like '*daemon-logs*') {{ Write-Output $_.ProcessId }} }}"
+    );
+    match std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .filter_map(|s| s.parse::<u32>().ok())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Spawn the Windows keepalive client: one long-lived `debug daemon-logs`
 /// CLI process. Its whole job is to REMAIN CONNECTED so the daemon's ipn
 /// backend is never torn down by "last client disconnected". One rebuild
@@ -254,14 +278,20 @@ fn spawn_keepalive(state: &TsState, paths: &Paths) {
     #[cfg(target_os = "windows")]
     {
         let mut guard = state.keepalive.lock().unwrap();
-        // Replace a dead keepalive client; keep a live one.
+        // Replace a dead keepalive client; keep a live one. If an orphaned
+        // keepalive from a hard-killed app instance is still connected,
+        // ADOPT it (do not spawn a duplicate).
         if let Some(child) = guard.as_mut() {
             if matches!(child.try_wait(), Ok(None)) {
-                return; // still connected
+                return; // our own keepalive is still connected
             }
             let _ = child.wait();
         }
         *guard = None;
+        if !find_owned_keepalive_pids().is_empty() {
+            tracing::info!("[tailscale] adopting existing keepalive client");
+            return;
+        }
         let mut cmd = Command::new(paths.tailscale());
         cmd.arg("--socket")
             .arg(private_socket_arg(&paths.state_dir))
@@ -284,7 +314,8 @@ fn spawn_keepalive(state: &TsState, paths: &Paths) {
     }
 }
 
-/// Stop the keepalive client (the daemon teardown path).
+/// Stop the keepalive client (the daemon teardown path). Covers BOTH our
+/// own child and any adopted (orphaned) keepalive, ownership-checked.
 fn stop_keepalive(state: &TsState) {
     #[cfg(target_os = "windows")]
     {
@@ -294,6 +325,13 @@ fn stop_keepalive(state: &TsState) {
             let _ = child.wait();
         }
         *guard = None;
+        for pid in find_owned_keepalive_pids() {
+            tracing::info!("[tailscale] stopping adopted keepalive client pid {pid}");
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .status();
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
