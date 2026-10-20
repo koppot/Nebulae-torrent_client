@@ -412,7 +412,15 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
             // route entry reported ADC as reachable while the ADC Linux
             // host was offline. Reachability must be a live bounded probe
             // with a freshness window, never a cached netmap entry.
-            let target = ts.adc_route_ip.clone().or_else(|| ts.adc_node.clone());
+            // Furthermore, private verification must NOT accept public
+            // fallback: only target the peer's advertised subnet route
+            // when routes_accepted is true. Without accepted routes,
+            // fall back to probing the CGNAT tailnet IP (which honestly fails).
+            let target = if ts.routes_accepted {
+                ts.adc_route_ip.clone().or_else(|| ts.adc_node.clone())
+            } else {
+                ts.adc_node.clone()
+            };
             live_adc_probe(target.as_deref(), ts.adc_node)
         } else {
             // Not running: clear any cached probe result so a stale

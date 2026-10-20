@@ -709,20 +709,58 @@ update follows the FINAL Factory verdict.
 | **Windows x64** | `60252ab` (Run 39407774733) | NSIS Installer Upgrade | Clean upgrade RC=0; live stack upgrade RC=0; orphan sweep verified. | **PASSED** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Graceful Tray Quit | App=0, tsd=0, trans=0; watchdog exits cleanly without respawn. | **PASSED** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Process Hygiene | Subprocesses eliminated; GetDiskFreeSpaceExW native FFI; agent diagnostic tasks hidden. | **PASSED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | 30-min Connectivity | Probes all HTTPS 200, ssl_verify_result=0; zero disconnects. | **PASSED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | Transmission RPC | Dynamic port re-binding; RPC healthy on port 63354 with 401 auth. | **PASSED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | 30-min Connectivity | Probes all HTTPS 200, ssl_verify_result=0; confirms HTTP stability, but private transit requires independent verification. | **BOUNDED PASS (HTTP ONLY)** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Transmission RPC | Dynamic port re-binding; HTTP 401 proves auth-required endpoint. Authenticated RPC / Add Torrent integration remains open. | **AUTH REQUIRED (INTEGRATION OPEN)** | None |
 | **Windows x64** | `60252ab` (Run 39407774733) | Close-to-Tray UI | Checkbox labeled; Alt+F4 / X routing. Requires owner/automated visual confirmation. | **NOT TESTED** | None |
-| **Windows x64** | `60252ab` (Run 39407774733) | Private Failure/Recovery | Previous TCP firewall test invalid (mesh is UDP). Scoped UDP injection pending. | **NOT TESTED** | None |
+| **Windows x64** | `60252ab` (Run 39407774733) | Private Failure/Recovery | Previous TCP firewall test invalid (mesh is UDP). Direct UDP block triggers relay fallback. Scoped injection pending. | **NOT TESTED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Production Registration | Node 7 registered (`nebulae-macstudio`, IP `100.64.0.7`); strict host key verified. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Backend Running State | `BackendState: "Running"`, `InNetworkMap: true`, DNS `nebulae-macstudio.adc.asiandvdclub.org`. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | SOCKS Listener Ownership | `127.0.0.1:1055` owned exclusively by embedded `tailscaled` (PID `80986`). | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | App Quit / Relaunch Persistence | Graceful quit left 0 processes; relaunch resumed `Running` with same IP and NodeID. | **PASSED** | None |
 | **macOS ARM64** | `60252ab` (Run 39407774733) | Daemon Crash Recovery | `kill -TERM` dropped socket; supervisor respawned PID `80986`, re-bound SOCKS, restored Running. | **PASSED** | None |
-| **macOS ARM64** | `60252ab` (Run 39407774733) | Status Presentation | Live payload is `{connected: true, adc_reachable: true}`. Visual UI rendering not yet observed. | **INFERRED** | `492ffff` (Mixed-stack status guard absent in `60252ab`) |
-| **macOS ARM64** | `60252ab` (Run 39407774733) | Private Mesh Subnet Route | Client has `--accept-routes=false`; SOCKS request exited direct outbound path. | **NOT CONFIGURED** | Needs `--accept-routes` in client `up` flags if mesh subnet routing required |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Status Presentation | Live payload is `{connected: true, adc_reachable: true}`. Visual UI rendering not yet independently observed. | **INFERRED** | `492ffff` (Mixed-stack status guard absent in `60252ab`) |
+| **macOS ARM64** | `60252ab` (Run 39407774733) | Private Mesh Subnet Route | Earlier pass WITHDRAWN. Defect identified: `adc_reachable=true` returned despite `--accept-routes=false` and SOCKS exiting public path. | **WITHDRAWN / DEFECT IDENTIFIED** | `--accept-routes=true` and route enforcement in client probe |
 
 ### 5. Candidate Assessment & Release Gate
-- Candidate `60252ab` compiles and runs cleanly across Windows and macOS, but lacks `492ffff` (which prevents system Tailscale from leaking into status when logged out).
-- When Windows visual interaction and valid private-path failure/recovery tests are concluded, authorization will be requested for ONE final candidate build incorporating `492ffff`.
+- Candidate `60252ab` is retained for registration, backend running state, socket ownership, restart persistence, and supervisor crash recovery.
+- Private-path verification for `60252ab` is officially **WITHDRAWN** due to the application defect masking public outbound fallback.
+- Client-side code corrections implemented to ensure truthful private-path verification and persistent route acceptance across restarts/recovery.
 - Overall release acceptance remains strictly **OPEN**. No build dispatch or release publication.
+
+---
+
+## 14. Private Routing Implementation & Verification Hardening (2026-10-20, Antigravity)
+
+### 1. Root Cause & Defect Analysis
+1. **Unaccepted Advertised Routes:**
+   - Peer `asiandvdclub` (`100.64.0.1`) advertises `PrimaryRoutes: ["45.135.163.139/32"]`.
+   - The embedded client in `60252ab` invoked `tailscale up` without `--accept-routes=true`, leaving `RouteAll: false` (`Some peers are advertising routes but --accept-routes is false`).
+   - Tailscale userspace SOCKS5 dialer does not route unaccepted destination subnets through the WireGuard peer tunnel, falling back to direct outbound routing over the host's default gateway.
+2. **False-Positive Application Verification Defect:**
+   - `probe_target_reachability()` previously fell back to direct OS TCP connect for any address when SOCKS was bypassed, allowing a public internet connection to report `adc_reachable: true`.
+   - `get_tailscale_status()` targeted `adc_route_ip` without verifying that the client had actually accepted routes.
+
+### 2. Client-Side Source Corrections Implemented
+1. **Canonical Route Acceptance:**
+   - Added `--accept-routes=true` to `tailscale up` arguments in both `resume_saved_profile()` and `enroll()` in `src-tauri/src/tailscale/mod.rs`.
+   - Ensures advertised routes are accepted canonically across enrollment, application restart, and supervisor recovery without requiring manual host interventions.
+2. **Health-Based Route Acceptance Inspection:**
+   - In `src-tauri/src/tailscale/mod.rs`, inspects `v["Health"]` for unaccepted route warnings.
+   - Sets `st.routes_accepted = st.backend_state == "Running" && !has_unaccepted_routes`.
+3. **Strict Private Transit Enforcement:**
+   - In `src-tauri/src/tailscale/mod.rs`: `probe_adc_mesh_tcp()` and `adc_http_client()` strictly fail with an error if `!st.routes_accepted`.
+   - In `src-tauri/src/commands/connectivity.rs`: `get_tailscale_status()` only targets `adc_route_ip` if `ts.routes_accepted` is true; otherwise, it falls back to probing `ts.adc_node` (`100.64.0.1:443`), which honestly returns `adc_reachable: Some(false)` because Apache does not listen on the CGNAT address.
+   - In `probe_target_reachability()`: direct OS TCP connect fallback is strictly restricted to `is_tailnet_ip(ip)` (`100.64.0.0/10`). Public IPs can NEVER fall back to direct OS connect.
+4. **Hardened CLI Discovery:**
+   - In `src-tauri/src/utils/network.rs`: candidate paths for `tailscale` CLI include standard macOS installation locations (`/opt/homebrew/bin/tailscale`, `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, `/usr/local/bin/tailscale`) when naked `tailscale` is not on the GUI `PATH`.
+
+### 3. Consolidated Candidate Scope
+The consolidated changes ready for integration on `main` include:
+- `492ffff`: Mixed-stack status guard (prevents separate system Tailscale from leaking into embedded status).
+- `src-tauri/src/tailscale/mod.rs`: `--accept-routes=true` in `up` arguments, `routes_accepted` tracking, strict private probe enforcement.
+- `src-tauri/src/commands/connectivity.rs`: truthful target selection based on route acceptance.
+- `src-tauri/src/utils/network.rs`: public `is_tailnet_ip` check, hardened macOS CLI discovery paths.
+
+All 119 unit tests pass; `cargo check` and `npx tsc --noEmit` pass with 0 errors.
+Release acceptance remains **OPEN** pending owner authorization for candidate build.
 
