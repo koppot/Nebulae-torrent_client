@@ -490,6 +490,8 @@ impl TransmissionRpcClient {
             "percentDone",
             "downloadedEver",
             "uploadedEver",
+            "secondsDownloading",
+            "secondsSeeding",
             "rateDownload",
             "rateUpload",
             "sizeWhenDone",
@@ -1845,6 +1847,16 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             let uploaded_ever = t.get("uploadedEver").and_then(|v| v.as_u64()).unwrap_or(0);
+            // Cumulative ACTIVE seconds per direction - the denominators of the
+            // since-transfer-began average rates displayed in the Manager.
+            let seconds_downloading = t
+                .get("secondsDownloading")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let seconds_seeding = t
+                .get("secondsSeeding")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let rate_dl = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
             let rate_ul = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
             let total_bytes = t
@@ -2130,6 +2142,8 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 uploaded_bytes: uploaded_ever,
                 download_rate: rate_dl,
                 upload_rate: rate_ul,
+                seconds_downloading,
+                seconds_seeding,
                 progress,
                 status,
                 eta_seconds,

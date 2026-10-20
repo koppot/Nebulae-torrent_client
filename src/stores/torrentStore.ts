@@ -2,27 +2,24 @@ import { create } from 'zustand';
 import { TorrentItem, CreateTorrentParams, InspectTorrentResult, TorrentContentMatch, TorrentRenameEntry } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 
-// Display-side speed presentation, modeled on the established torrent
-// clients. qBittorrent (libtorrent) and Transmission do NOT display raw
-// per-tick rates: both derive speed from cumulative byte counters over a
-// short window (libtorrent: ~2s sliding window; Transmission tr_bandwidth:
-// ~2s decaying average of counter deltas). librqbit's raw per-second rates
-// swing between burst and 0 on small swarms, so raw display flickers.
-// Nebulae therefore computes a decaying average of COUNTER DELTAS over a
-// ~15s time constant (owner-requested: the 5s window still fluctuated
-// widely on small swarms) and settles honestly to zero when the counters
-// stop moving. Per-tick raw rates are never passed through.
-const SPEED_WINDOW_SECONDS = 15.0;
-const SPEED_IDLE_SNAP_TICKS = 10; // ~5s at 500ms telemetry before snapping to exact 0
-interface SpeedCounterState {
-  lastDownBytes: number | null;
-  lastUpBytes: number | null;
-  lastTimeMs: number | null;
-  avgDown: number;
-  avgUp: number;
-  idleTicks: number;
+// Display-side speed presentation (owner directive 2026-10-20): the Manager
+// shows the AVERAGE rate since the respective transfer began - total bytes
+// transferred over cumulative ACTIVE seconds - never a rolling or windowed
+// average of instantaneous rates. The values come straight from the engine's
+// lifetime counters (Transmission downloadedEver/secondsDownloading and
+// uploadedEver/secondsSeeding), so they are stable across app restarts, do
+// not flicker, and settle to a plain 0 B/s for a transfer with no active
+// time yet. Engines that cannot report active seconds (older remote server
+// builds) fall back to wall-clock time since the torrent was added, which
+// keeps the number a true since-start average.
+function lifetimeAverage(bytes: number, activeSeconds: number, addedOn: number, nowMs: number): number {
+  if (activeSeconds > 0) return bytes / activeSeconds;
+  if (bytes > 0 && addedOn > 0) {
+    const wallSeconds = Math.max(1, Math.floor(nowMs / 1000 - addedOn));
+    return bytes / wallSeconds;
+  }
+  return 0;
 }
-const speedCounters = new Map<string, SpeedCounterState>();
 
 interface RecheckEntry {
   requestedAt: number;
@@ -65,101 +62,27 @@ export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
   });
 }
 
-export function smoothTelemetrySpeeds(torrents: TorrentItem[]): TorrentItem[] {
-  const seen = new Set<string>();
+export function averageTransferSpeeds(torrents: TorrentItem[]): TorrentItem[] {
   const now = Date.now();
-  const out = torrents.map((t) => {
-    seen.add(t.id);
+  return torrents.map((t) => {
     const active = t.status === 'Downloading' || t.status === 'Seeding';
     if (!active) {
-      speedCounters.delete(t.id);
       return { ...t, download_rate: 0, upload_rate: 0 };
     }
-    const prev = speedCounters.get(t.id) ?? {
-      lastDownBytes: null,
-      lastUpBytes: null,
-      lastTimeMs: null,
-      avgDown: 0,
-      avgUp: 0,
-      idleTicks: 0,
-    };
+    // Average since the respective transfer began: cumulative bytes over
+    // cumulative ACTIVE seconds. A paused stretch does not dilute the rate
+    // because paused time never enters the active-seconds denominator.
+    const avgDown = lifetimeAverage(t.downloaded_bytes, t.seconds_downloading, t.added_on, now);
+    const avgUp = lifetimeAverage(t.uploaded_bytes, t.seconds_seeding, t.added_on, now);
 
-    // dt guard: clamp weird intervals (app sleep, first sample, clock jumps).
-    let dt = prev.lastTimeMs === null ? 0 : (now - prev.lastTimeMs) / 1000;
-    if (dt <= 0.01 || dt > 30) {
-      // Anchor (or re-anchor after a long gap) without producing a spike.
-      dt = 0;
-    }
-
-    const deltaOf = (current: number, last: number | null) => {
-      if (dt === 0 || last === null) return null; // no interval yet
-      const delta = current - last;
-      return delta > 0 ? delta : 0; // counter reset (recheck/re-add) = no traffic
-    };
-
-    const downDelta = deltaOf(t.downloaded_bytes, prev.lastDownBytes);
-    const upDelta = deltaOf(t.uploaded_bytes, prev.lastUpBytes);
-    const instDown = downDelta === null ? null : downDelta / dt;
-    const instUp = upDelta === null ? null : upDelta / dt;
-
-    // Exponential smoothing with a time-based weight, equivalent to the
-    // clients' windowed averages: newer samples weigh proportionally to
-    // the elapsed fraction of the window.
-    const weight = dt === 0 ? 0 : 1 - Math.exp(-dt / SPEED_WINDOW_SECONDS);
-    const noTraffic =
-      (downDelta === null || downDelta === 0) && (upDelta === null || upDelta === 0);
-    const idleTicks = noTraffic ? prev.idleTicks + 1 : 0;
-    const decayed = (avg: number) => {
-      // Counter not advancing: decay toward zero on the same time constant.
-      return avg * Math.exp(-dt / SPEED_WINDOW_SECONDS);
-    };
-
-    let avgDown = prev.avgDown;
-    let avgUp = prev.avgUp;
-    if (dt === 0) {
-      // First sample or re-anchor: keep the current average, wait for an interval.
-    } else if (instDown !== null && instDown > 0) {
-      avgDown += weight * (instDown - avgDown);
-    } else if (downDelta === 0) {
-      avgDown = decayed(avgDown);
-    }
-    if (dt !== 0 && instUp !== null && instUp > 0) {
-      avgUp += weight * (instUp - avgUp);
-    } else if (dt !== 0 && upDelta === 0) {
-      avgUp = decayed(avgUp);
-    }
-
-    // Snap to exact zero once traffic has been absent for a while, so an
-    // idle torrent does not display an asymptotic sliver forever.
-    const snap = idleTicks >= SPEED_IDLE_SNAP_TICKS;
-    const finalDown = snap ? 0 : avgDown;
-    const finalUp = snap ? 0 : avgUp;
-
-    // ETA from the SAME smoothed speed the UI displays (what the established
-    // clients do: remaining bytes / windowed rate). Computing it from the raw
-    // engine rate made it jump between 0, infinity and hours; deriving it
-    // from the displayed average keeps it consistent and slowly-moving. A
-    // genuinely stalled download shows infinity only after the idle snap.
+    // ETA from the SAME average the UI displays: remaining bytes / since-start
+    // average. Consistent with the columns and immune to burst flicker.
     const remaining = Math.max(0, t.total_bytes * (1 - t.progress));
     const etaSeconds =
-      t.status !== 'Downloading' || finalDown <= 0
-        ? undefined
-        : Math.round(remaining / finalDown);
+      t.status !== 'Downloading' || avgDown <= 0 ? undefined : Math.round(remaining / avgDown);
 
-    speedCounters.set(t.id, {
-      lastDownBytes: t.downloaded_bytes,
-      lastUpBytes: t.uploaded_bytes,
-      lastTimeMs: now,
-      avgDown: finalDown,
-      avgUp: finalUp,
-      idleTicks,
-    });
-    return { ...t, download_rate: finalDown, upload_rate: finalUp, eta_seconds: etaSeconds };
+    return { ...t, download_rate: avgDown, upload_rate: avgUp, eta_seconds: etaSeconds };
   });
-  for (const id of [...speedCounters.keys()]) {
-    if (!seen.has(id)) speedCounters.delete(id);
-  }
-  return out;
 }
 
 export interface SystemPathPresets {
@@ -216,7 +139,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      set({ torrents: smoothTelemetrySpeeds(reconcileRecheckState(data)), isLoading: false });
+      set({ torrents: averageTransferSpeeds(reconcileRecheckState(data)), isLoading: false });
     } catch {
       set({ isLoading: false });
     }

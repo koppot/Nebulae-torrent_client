@@ -38,6 +38,16 @@ pub struct TorrentItem {
     pub uploaded_bytes: u64,
     pub download_rate: u64,
     pub upload_rate: u64,
+    /// Cumulative seconds the torrent spent actively downloading (Transmission
+    /// `secondsDownloading`). Denominator of the since-transfer-began average
+    /// download rate; 0 when the engine does not report active seconds.
+    #[serde(default)]
+    pub seconds_downloading: u64,
+    /// Cumulative seconds the torrent spent actively seeding (Transmission
+    /// `secondsSeeding`). Denominator of the since-transfer-began average
+    /// upload rate; 0 when the engine does not report active seconds.
+    #[serde(default)]
+    pub seconds_seeding: u64,
     pub progress: f32,
     pub status: String,
     pub eta_seconds: Option<u64>,

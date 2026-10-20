@@ -132,6 +132,10 @@ impl RtorrentRemoteEngine {
             uploaded_bytes: int(5).max(0) as u64,
             download_rate,
             upload_rate,
+            // The rtorrent XML-RPC mapping has no active-seconds field; the
+            // frontend falls back to wall-clock-since-added for the average.
+            seconds_downloading: 0,
+            seconds_seeding: 0,
             progress,
             status,
             eta_seconds,

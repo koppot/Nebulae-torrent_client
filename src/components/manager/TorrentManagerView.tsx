@@ -524,10 +524,12 @@ export const TorrentManagerView: React.FC = () => {
     };
   })();
 
-  // Sample the selected torrent's rates on a fixed 1s cadence. Triggering on
-  // value CHANGE froze the timeline during quiet periods (smoothed rates sit
-  // at exactly 0 between bursts, so deps never changed and the graph stopped
-  // advancing) — a graph must tick even when speeds are zero.
+  // Sample the selected torrent's average rates on a fixed 1s cadence.
+  // Triggering on value CHANGE froze the timeline during quiet periods
+  // (rates sit at exactly 0 when no transfer is active, so deps never
+  // changed and the graph stopped advancing) — a graph must tick even
+  // when speeds are zero. The traced values are since-transfer-began
+  // averages, so the line moves slowly and honestly.
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   useEffect(() => {
@@ -1718,7 +1720,7 @@ export const TorrentManagerView: React.FC = () => {
                         <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
                       </div>
                     </div>
-                    <span className="text-[10px]">Real-time Telemetry (500ms Push)</span>
+                    <span className="text-[10px]">Average Since Transfer Began (1s samples)</span>
                   </div>
 
                   <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">

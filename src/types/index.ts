@@ -128,6 +128,11 @@ export interface TorrentItem {
   uploaded_bytes: number;
   download_rate: number;
   upload_rate: number;
+  // Cumulative ACTIVE seconds per direction (Transmission secondsDownloading /
+  // secondsSeeding). Denominators of the since-transfer-began average rates;
+  // 0 when the engine cannot report them (frontend falls back to added_on).
+  seconds_downloading: number;
+  seconds_seeding: number;
   progress: number;
   status: 'Downloading' | 'Seeding' | 'Paused' | 'Completed' | 'Checking' | 'Queued for checking' | 'Error';
   eta_seconds?: number;

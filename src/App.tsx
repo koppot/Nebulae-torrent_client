@@ -3,7 +3,7 @@ import { useUiStore, ManagerTab } from './stores/uiStore';
 import { usePlayerStore, playerStore, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
-import { useTorrentStore, smoothTelemetrySpeeds, reconcileRecheckState } from './stores/torrentStore';
+import { useTorrentStore, averageTransferSpeeds, reconcileRecheckState } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
@@ -234,11 +234,12 @@ export const App: React.FC = () => {
     const unlistenFns: Array<() => void> = [];
 
     // Real-time 500ms push telemetry from Rust engine (speeds are
-    // display-smoothed; raw engine rates burst between full speed and 0)
+    // display-averaged since the respective transfer began (owner directive);
+    // raw engine rates burst between full speed and 0)
     listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
       if (event.payload) {
         useTorrentStore.setState({
-          torrents: smoothTelemetrySpeeds(reconcileRecheckState(event.payload)),
+          torrents: averageTransferSpeeds(reconcileRecheckState(event.payload)),
           isLoading: false,
         });
       }
