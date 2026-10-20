@@ -52,17 +52,29 @@ candidate freeze. No other overlapping edits exist at this time.
 | 2 | Installer pre-extract shutdown repair | Factory | **DONE** | `d8b7d42`: `NSIS_HOOK_PREINSTALL` stops the app + path-matched owned sidecars (graceful→bounded force, silent nsExec), aborts BEFORE extraction with an actionable message on failure. |
 | 3 | Main-window drag cannot move (Windows) | Factory (diagnosis+fix) | **DONE, needs runtime verify** | Root cause: tao 0.37.1 `handle_os_dragging` Posts `WM_NCLBUTTONDOWN` with an LPARAM = dangling stack pointer → returns Ok, window never moves (app log evidence: 3 attempts 20:13Z, all `Ok(())`, no movement). Fix: synchronous native `SendMessage(WM_NCLBUTTONDOWN, HTCAPTION)` after `ReleaseCapture` on the main thread + TitleBar interactive-exclusion + removed `data-tauri-drag-region` attrs. |
 | 4 | Unexpected console/CMD windows | Antigravity | **DONE (af321dd, 233474d)** | `create_hidden_command`/`run_hidden_powershell` adopted across spawn sites; Factory's duplicate edits dropped. |
-| 5 | Windows runtime verification of candidate (drag battery, installer 4 cases, 30-min connectivity) | Factory | **PENDING candidate SHA** | Blocked until the candidate is agreed and desktop access is handed to Factory. |
+| 5 | Windows runtime verification of candidate (drag battery, installer 4 cases, 30-min connectivity) | Factory | **IN PROGRESS** | Candidate 644e3b4 confirmed. BLOCKED on a packaged artifact: no CI artifacts, no toolchain on the desktop — requested a prerelease RC dispatch from Antigravity (§4). Battery plan ready; runs the moment bytes exist + desktop is handed over. |
 | 6 | macOS regression + preservation of prior client fixes | Antigravity | **DONE** | Verified: all Antigravity client repairs intact (disc menus, non-blocking media probes, status bar, sequential toggle, super-seeding, first-run prompt, in-process rfd dialogs). 119 unit tests + 9 integration tests + tsc pass. |
 | 7 | Coordinated packaging + v0.2.2-beta.1 asset update | Antigravity | **AFTER 5+6** | Factory delivers the confirmed candidate SHA + Windows acceptance; Antigravity = sole uploader. |
 
 ## 4. Candidate & results
 
 - **Proposed candidate:** `644e3b4` (CI run 39347930247: **SUCCESS**). Contains all Windows repairs: NSIS pre-extract shutdown, console suppression, synchronous native window drag with packed cursor coordinates, interactive-control exclusion on titlebar double-click, and full test suite passing. Ready for Factory's candidate verification battery.
+- **Factory confirms the candidate:** `644e3b4` = the single candidate for
+  packaging (local tree synced at `6473593`, docs-only on top). Antigravity's
+  packed-lParam drag refinement reviewed and adopted — it corrects Factory's
+  POINTS-pointer form to the proper Win32 packed coordinates. Agents agree.
 - **Desktop access:** currently NO agent holds it — the owner has the failed
   installer dialog open on the physical desktop (Retry is safe to click now:
   the DLL conflict is cleared). Factory requests access for the verification
   battery after the owner dismisses/completes the installer.
+- **BLOCKER for task 5 (Factory's Windows acceptance):** the candidate
+  produces no CI artifacts and the test desktop has no Rust toolchain, so
+  Factory cannot build the installer. Requesting Antigravity to dispatch the
+  Release workflow for a PRERELEASE candidate tag (e.g. `v0.2.2-beta.2-rc.1`)
+  from the confirmed candidate so Factory can run the full battery (drag,
+  installer upgrade cases, 30-min connectivity) on the exact packaged bytes.
+  The final coordinated v0.2.2-beta.1 asset update follows Factory's
+  confirmation per §3.7.
 - **Windows acceptance evidence (prior, still valid):** integrated-package
   30+ min zero-disconnect run, mesh HTTPS 200 verified, kill/adopt held the
   stream — on the INSTALLED v0.2.2-beta.1 build (4cf142f). To be RE-RUN on the
