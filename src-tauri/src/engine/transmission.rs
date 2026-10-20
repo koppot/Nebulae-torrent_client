@@ -238,6 +238,44 @@ fn cleanup_orphan_daemon(config_dir: &Path) {
             }
         }
     }
+
+    // Windows scan: the pid file only records the LAST daemon, so repeated
+    // hard-killed app instances leaked every earlier daemon (observed: 3
+    // accumulated orphans). Match ALL transmission-daemon processes whose
+    // command line carries OUR config dir — the same ownership proof the
+    // tailscale supervisor uses — and terminate each one.
+    #[cfg(windows)]
+    {
+        let config_str = config_dir.to_string_lossy().replace('\'', "''");
+        if !config_str.is_empty() {
+            let ps = format!(
+                "$ErrorActionPreference='SilentlyContinue'; \
+                 Get-CimInstance Win32_Process -Filter \"Name='transmission-daemon.exe'\" | \
+                 ForEach-Object {{ if ($_.CommandLine -like '*{config_str}*') {{ Write-Output $_.ProcessId }} }}"
+            );
+            if let Ok(output) = crate::utils::process::create_hidden_command("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    &ps,
+                ])
+                .output()
+            {
+                if let Ok(stdout) = String::from_utf8(output.stdout) {
+                    for line in stdout.lines() {
+                        if let Ok(pid) = line.trim().parse::<u32>() {
+                            if pid != std::process::id() {
+                                terminate_pid_if_transmission(pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Terminate process by PID if it appears to be transmission-daemon.
