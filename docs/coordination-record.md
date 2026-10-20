@@ -594,3 +594,39 @@ TLS verification (ssl_verify_result=0) from this machine. The node
 registration is LIVE and awaits the owner's browser approval of the
 AuthURL. The preauth-key path in Section 7 = the fallback only; the
 interactive registration = the simpler and is the selected route.
+
+## 11. Registration: Auth ID rotated — replacement presented (2026-10-20)
+
+**SSH trust: INDEPENDENTLY VERIFIED by the owner** via the
+hosting-provider console (ED25519 SHA256:G7Ig… = the recorded
+fingerprint, exact match). Strict host-key checking in use from now on;
+all administration resumed under that verification.
+
+**The first Auth ID expired before registration** (the headscale
+registration requests are short-lived; the daemon auto-issued a new
+one). Per the owner's standing rule ("if the request has changed or
+expired, stop and present the replacement"), Factory STOPPED — the
+original UGJSp25 ID was NOT registered.
+
+**Replacement presented for approval, 2026-10-20 14:20:05 UTC:**
+- Auth ID: hskey-authreq-q7I-sG10CystIXpSHwQSU3Qi
+- URL: https://control.asiandvdclub.org/register/hskey-authreq-q7I-sG10CystIXpSHwQSU3Qi
+- Verified from this machine: HTTP 200, TLS-verified (verify=0)
+- Belongs to: the app's EMBEDDED daemon (pid 50940), hostname
+  nebulae-MacStudio.local (from the live daemon cmdline)
+- State backup: ~/nebulae-state-backup-20261020/ (unchanged, pre-change)
+
+Owner approval step (either): (a) open the URL and approve in the
+browser, or (b) on the server with strict host-key checking:
+`headscale auth register --auth-id hskey-authreq-q7I-sG10CystIXpSHwQSU3Qi --user club`.
+NOTE: the ID may rotate again if it expires before approval — re-read
+the daemon's current AuthURL at approval time; the same stop-and-present
+rule applies.
+
+This approval covers ONLY this registration: no server-network changes,
+no identity deletion, no preauth-key generation, no build dispatch, no
+release update, no updater change, no webhook rotation. Overall release
+acceptance remains OPEN. Candidate separation: installed candidate =
+60252ab (39407774733 bytes); newer source corrections (492ffff: the
+mixed-stack status fix) are recorded separately and require owner
+authorization to build.
