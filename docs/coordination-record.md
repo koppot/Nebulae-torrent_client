@@ -253,3 +253,55 @@ app=1 tsd=1 trans=1 at the start; the timestamped evidence =
 conn_window.txt on the desktop; the verdict appends on completion).
 Scoped injection variant for a future round: block the daemon's UDP to
 the peer endpoint, or use the already-observed dead-control state.
+
+## 5. FACTORY ACCEPTANCE VERDICT — candidate 60252ab (2026-10-20)
+
+**RELEASE ACCEPTANCE PASS (Factory scope: engine, lifecycle, installer,
+connectivity, Windows process behavior).** Evidence, all on the
+authorized run-39407774733 bytes (sha256 d31c880e…, source-identity
+verified):
+
+1. **Installer**: upgrade over clean state RC=0; over the live stack
+   RC=0 with the hook shutdown + the replacement + the auto-run
+   relaunch; with owned orphans present RC=0 AND the new sweep removed
+   them (the start-time proof). No unrelated process touched. Profiles,
+   torrents, settings, identities preserved (the same enrollment intact
+   across every reinstall this session).
+2. **Graceful quit (tray "Quit application")**: owner-verified live —
+   the menu opens, the app exits, the icon is removed; process counts
+   after quit: app=0 tsd=0 trans=0 on the new build (the transmission
+   shutdown flag + the ExitRequested wiring). No respawn (the watchdog
+   exits on the flag).
+3. **Connectivity 30-minute window**: 06:47:19 → 07:18:30 EDT, three
+   timestamped probes (start/mid/final) all HTTPS 200 with FULL TLS
+   verification (ssl_verify_result=0) through the daemon's proxy = the
+   private mesh path; stack app=1 tsd=1 trans=1 at every check; zero
+   disconnects. Evidence: conn_window.txt (the desktop).
+4. **Tailnet truthfulness**: healthy = verified-green live; failure
+   display = verified in the wild (the macOS dead-control case showed
+   unavailable truthfully, no stale green); freshness 60s; no
+   older-success overwrite (the monotonic cache); direct-TCP fallback
+   only for the system-TUN mode.
+5. **RPC/Add Torrent**: the endpoint follows the daemon's port changes
+   (the set_rpc_port + the watchdog's re-provisioning) + the bounded
+   ~8.5s transport retry (the duplicate-safe: the daemon dedupes the
+   same-metainfo adds).
+6. **Process hygiene**: every app spawn = CREATE_NO_WINDOW (the last
+   gap — the periodic disk-space PowerShell — replaced with the native
+   GetDiskFreeSpaceExW by Antigravity; the CLI probe spawn = hidden by
+   Factory). The remaining visible PowerShell instances = Factory's own
+   diagnostic scheduled tasks = removed from the desktop; none remain.
+
+**OUTSTANDING (explicitly NOT silent-complete):**
+- [Owner visual] The Tailnet status states (the green/amber/gray) + the
+  close-behavior checkbox BOTH states + the persistence on the installed
+  candidate (the Alt+F4 case + the tray restore) — the candidate carries
+  Antigravity's implementation; the runtime confirmation = the owner's
+  five-minute pass on the live app.
+- [Owner decision] The macOS enrollment: re-point at the production
+  control (the identity-preserving) vs the restart of the local test
+  control (the 127.0.0.1:8080) — the current "unavailable" = truthful.
+- [Antigravity] The Beta 1 asset update from the 39407774733 artifacts
+  (the originals preserved internally; the stable updater untouched; NO
+  webhook rotation). Strict-identity note: the artifacts' source =
+  60252ab (the verified candidate-source.txt).
