@@ -75,6 +75,13 @@ candidate freeze. No other overlapping edits exist at this time.
 - **Previous Candidates:** `dc444f0` (orphan sweep verified), `1402208` (candidate build 39406029401 built Windows/Linux/macOS arm64).
 - **Consolidated Final Candidate:** `60252ab598a7f29504660578b9268f8430cd82ec`.
   - **Candidate Build Run:** [Run 39407774733](https://github.com/koppot/Nebulae-torrent_client/actions/runs/39407774733) (dispatched per explicit owner authorization with source ref `60252ab598a7f29504660578b9268f8430cd82ec`).
+  - **Windows Artifact READY:** `candidate-39407774733-Nebulae-Setup-x64.exe` (Job `118577803874` SUCCESS in 10m25s).
+    - Verified checked-out source: `60252ab598a7f29504660578b9268f8430cd82ec`
+    - SHA256: `d31c880eb76b4ecfd47262e6dbbd5f690073b9386e50dc0d71d1da5f976163d7`
+  - **Linux Artifact READY:** `candidate-39407774733-Nebulae-Linux-x86_64` (Job `118577804244` SUCCESS in 10m40s).
+  - **macOS ARM64 Artifact READY:** `candidate-39407774733-Nebulae-macOS-arm64.dmg` (Job `118577804179` SUCCESS in 10m11s).
+  - **macOS Intel Artifact:** Job `118577804190` in progress.
+  - **HANDOFF TO FACTORY AI:** Factory has exclusive Windows desktop ownership (`supermicro.local`). Factory can proceed immediately with the acceptance battery on `Nebulae-Setup-x64.exe` (SHA256: `d31c880e...`) without waiting for macOS Intel packaging.
   - Integrates all consolidated requirements:
     - Task 13: Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh (`127.0.0.1:1055`).
     - Task 14: PowerShell subprocess elimination (`GetDiskFreeSpaceExW` Win32 FFI call replaces 60s periodic script).
