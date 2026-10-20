@@ -73,8 +73,7 @@ candidate freeze. No other overlapping edits exist at this time.
 ## 4. Candidate & results
 
 - **Previous Candidate:** `dc444f0` (orphan sweep verified, all 4 platforms built in run 39361992611).
-- **Consolidated Windows Repairs Candidate:** `cb95871f1b490de9e6a061c4581811ceb674da45`.
-  - Dispatched `Candidate Build` workflow **run `39407035838`** with explicit source ref `cb95871f1b490de9e6a061c4581811ceb674da45`.
+- **Consolidated Windows Repairs Candidate:** `60252ab598a7f29504660578b9268f8430cd82ec`.
   - Integrates Tasks 13, 14, 15, 16, 17:
     - Task 13: Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh (`127.0.0.1:1055`).
     - Task 14: PowerShell subprocess elimination (`GetDiskFreeSpaceExW` FFI call replaces 60s periodic script).
@@ -82,7 +81,7 @@ candidate freeze. No other overlapping edits exist at this time.
     - Task 16: "Keep running in the notification area when the window is closed" checkbox and X / Alt+F4 close routing.
     - Task 17: Dynamic Transmission RPC client port allocation, watchdog recovery, and bounded retry loop.
 - **Discord reporter:** Delivery verified (run 39352687166, HTTP 2xx). Webhook rotation canceled by owner directive.
-- **Verification:** All 119 unit tests pass; `cargo check` clean; `npx tsc --noEmit` clean.
+- **Verification:** All 119 unit tests pass; `cargo check` clean; `cargo fmt` clean; `cargo clippy -- -D warnings` clean; `npx tsc --noEmit` clean.
 
 ## 5. Rules for this record
 
