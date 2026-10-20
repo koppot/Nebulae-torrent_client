@@ -568,70 +568,18 @@ fn start_playback_inner(
                         resolved.is_disc
                     );
                     if resolved.is_disc && !resume {
-                        // Enforce MENU-FIRST from the engine side: the Blu-ray
-                        // demuxer boots into the disc's first-play flow (FBI
-                        // warning → straight into the program chain). Keep
-                        // selecting the menu title until it reports 0. An
-                        // explicit resume (frontend passes resume:true) skips
-                        // the watcher so the first-play flow engages the
-                        // feature directly for the deferred seek.
-                        state
-                            .menu_watch
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                        let app2 = app.clone();
-                        std::thread::spawn(move || {
-                            use tauri::Manager;
-                            let state = app2.state::<PlayerState>();
-                            for _ in 0..30 {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                if !state.menu_watch.load(std::sync::atomic::Ordering::SeqCst) {
-                                    tracing::info!("[player] menu watcher cancelled");
-                                    return;
-                                }
-                                // Hold the player pointer guard across the VLC
-                                // calls: stop_session closes the session under
-                                // the same guard, so the watcher can never call
-                                // into a released media player (use-after-free
-                                // crash on close).
-                                let _mp_guard = match state.media_player_cell.lock() {
-                                    Ok(g) => g,
-                                    Err(_) => return,
-                                };
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 {
-                                    return; // session closed
-                                }
-                                let lib = match loaded_lib(&state) {
-                                    Ok(l) => l,
-                                    Err(_) => return,
-                                };
-                                let title = unsafe {
-                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                };
-                                if title == 0 {
-                                    tracing::info!("[player] menu watcher: at menu title");
-                                    state
-                                        .menu_watch
-                                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    return;
-                                }
-                                // UHD fix: flush decoder buffers before the
-                                // format-changing set_title(0) back to the
-                                // menu (same VideoToolbox transition issue
-                                // as menu_navigate/return_to_menu).
-                                unsafe {
-                                    (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                    (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-                                    (lib.libvlc_media_player_set_title)(mp as *mut c_void, 0);
-                                }
-                                tracing::info!("[player] menu watcher: flushed + set_title(0) (was {title})");
-                            }
-                            state
-                                .menu_watch
-                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                            tracing::warn!("[player] menu watcher finished 15 s window");
-                        });
+                        // MENU-FIRST: a normal disc Open plays the disc's own
+                        // first-play flow, which ends at the authored top
+                        // menu (verified against stock VLC 3.0.23 on the
+                        // affected HDMV discs). The engine must NOT force
+                        // titles underneath the disc's navigation state
+                        // machine: the previous 15 s watcher called
+                        // set_title(0) in a loop while the disc was still
+                        // running first play, which fought the disc's own
+                        // navigation and could leave it cycling logo
+                        // titles instead of settling on the menu. Explicit
+                        // resume (resume=true) still skips this branch and
+                        // opens the feature directly for the deferred seek.
 
                         // Deferred liveness check: detect silent decryption failure.
                         // When AACS keys (libaacs + KEYDB.cfg) are absent, the Blu-ray
