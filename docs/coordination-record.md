@@ -466,3 +466,38 @@ control's stop = the bounded test OR the already-observed dead-control
 evidence), the recovery after a fresh successful probe, and the
 persistence across the app's restart. Windows interaction/failure-
 recovery checks continue in parallel (the screenshot-based evidence).
+
+## 8. Windows runtime round — screenshot evidence (2026-10-20, Factory)
+
+**Screen-capture tooling added to Factory's battery** (the /IT scheduled
+task + System.Drawing CopyFromScreen): real visual evidence without
+owner assistance.
+
+1. **Owner's "PowerShell appears" — CONFIRMED AND ATTRIBUTED**: the
+   first capture shows a visible Administrator PowerShell window OPEN
+   on the desktop — Factory's OWN diagnostic script (the snap/read/quit
+   tasks ran without -WindowStyle Hidden). The APPLICATION spawns were
+   already all CREATE_NO_WINDOW; the visible windows = agent tooling.
+   FIX: every Factory diagnostic task now runs hidden (-WindowStyle
+   Hidden); the second capture shows a clean desktop — the Nebulae
+   window with NO console, NO flash, NO focus stealing. Application
+   process hygiene = runtime-confirmed on the installed candidate.
+2. **Transmission RPC readiness on the candidate**: the daemon alive
+   (pid verified from daemon.pid), the dynamic rpc-port 63354
+   (settings.json), the peer-port 41413; the RPC endpoint answers
+   HTTP 401 (auth enforced, as the app holds credentials) — the
+   endpoint is healthy on the CURRENT port. The owner's earlier
+   53540 failure = the pre-dynamic-endpoint era; the client now
+   follows the daemon's port changes (set_rpc_port) + the bounded
+   retry. The live Add Torrent UI action = the owner's 5-minute pass.
+3. **Manager 0 torrents**: the engine dir is a fresh test instance
+   (0 resume files) — consistent, not data loss.
+4. The close-behavior checkbox (both states + Alt+F4) remains the
+   owner's five-minute visual pass (the WebView's content is not
+   reachable by UIA text read; the screenshots confirm the app renders
+   normally).
+
+**Overall release acceptance: STILL OPEN** pending (a) the owner's
+macOS preauth enroll + Factory's post-enroll verification, (b) the
+owner's Windows visual pass. No rebuild, no updater change, no webhook
+rotation, no release publication.
