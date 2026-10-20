@@ -58,8 +58,7 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Proposed candidate:** main tip after Factory's drag-fix commit lands (see
-  §1) — Factory pushes, CI must be green on the exact candidate SHA.
+- **Proposed candidate:** `4b4584c` (main tip containing Factory's drag fix, Antigravity's coordinates refinement, rustfmt fix, and full test suites clean). CI in progress.
 - **Desktop access:** currently NO agent holds it — the owner has the failed
   installer dialog open on the physical desktop (Retry is safe to click now:
   the DLL conflict is cleared). Factory requests access for the verification
