@@ -994,7 +994,15 @@ pub async fn select_iso_file() -> Result<Option<String>, String> {
                 Ok(Some(path))
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let picked = rfd::FileDialog::new()
+                .set_title("Select a disc image (ISO)")
+                .add_filter("Disc images (*.iso)", &["iso"])
+                .pick_file();
+            Ok(picked.map(|p| p.to_string_lossy().to_string()))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Ok(None)
         }
@@ -1039,19 +1047,10 @@ pub async fn select_source_folder() -> Result<Option<String>, String> {
         }
         #[cfg(target_os = "windows")]
         {
-            let script = r#"
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-            Add-Type -AssemblyName System.Windows.Forms
-            $f = New-Object System.Windows.Forms.FolderBrowserDialog
-            $f.Description = "Select Folder for Torrent Creation"
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                $f.SelectedPath
-            }
-            "#;
-            let output = crate::utils::process::run_hidden_powershell(script)
-                .map_err(|e| format!("Failed to open folder picker: {e}"))?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+            let picked = rfd::FileDialog::new()
+                .set_title("Select Folder for Torrent Creation")
+                .pick_folder();
+            Ok(picked.map(|p| p.to_string_lossy().to_string()))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -1089,20 +1088,10 @@ pub async fn select_source_file() -> Result<Option<String>, String> {
         }
         #[cfg(target_os = "windows")]
         {
-            let script = r#"
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-            Add-Type -AssemblyName System.Windows.Forms
-            $f = New-Object System.Windows.Forms.OpenFileDialog
-            $f.Title = "Select File for Torrent Creation"
-            $f.Filter = "All Files (*.*)|*.*"
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                $f.FileName
-            }
-            "#;
-            let output = crate::utils::process::run_hidden_powershell(script)
-                .map_err(|e| format!("Failed to open file picker: {e}"))?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() { Ok(None) } else { Ok(Some(path)) }
+            let picked = rfd::FileDialog::new()
+                .set_title("Select File for Torrent Creation")
+                .pick_file();
+            Ok(picked.map(|p| p.to_string_lossy().to_string()))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -1144,24 +1133,12 @@ pub async fn select_torrent_file() -> Result<Option<String>, String> {
         }
         #[cfg(target_os = "windows")]
         {
-            let script = r#"
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-            Add-Type -AssemblyName System.Windows.Forms
-            $f = New-Object System.Windows.Forms.OpenFileDialog
-            $f.Filter = "Torrent & ADC Files (*.torrent;*.adc)|*.torrent;*.adc|BitTorrent Files (*.torrent)|*.torrent|ADC Metainfo Files (*.adc)|*.adc|All Files (*.*)|*.*"
-            $f.Title = "Select .torrent or .adc file"
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                $f.FileName
-            }
-            "#;
-            let output = crate::utils::process::run_hidden_powershell(script)
-                .map_err(|e| format!("Failed to open file picker: {e}"))?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(path))
-            }
+            let picked = rfd::FileDialog::new()
+                .set_title("Select .torrent or .adc file")
+                .add_filter("Torrent & ADC Files (*.torrent, *.adc)", &["torrent", "adc"])
+                .add_filter("All Files", &["*"])
+                .pick_file();
+            Ok(picked.map(|p| p.to_string_lossy().to_string()))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -1332,25 +1309,10 @@ pub async fn select_download_directory() -> Result<Option<String>, String> {
         }
         #[cfg(target_os = "windows")]
         {
-            let script = r#"
-            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-            Add-Type -AssemblyName System.Windows.Forms
-            $form = New-Object System.Windows.Forms.Form
-            $form.TopMost = $true
-            $f = New-Object System.Windows.Forms.FolderBrowserDialog
-            $f.Description = "Select Download Directory"
-            if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
-                $f.SelectedPath
-            }
-            "#;
-            let output = crate::utils::process::run_hidden_powershell_dialog(script)
-                .map_err(|e| format!("Failed to open directory picker: {e}"))?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(path))
-            }
+            let picked = rfd::FileDialog::new()
+                .set_title("Select Download Directory")
+                .pick_folder();
+            Ok(picked.map(|p| p.to_string_lossy().to_string()))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -1401,9 +1363,9 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
     };
     #[cfg(target_os = "windows")]
     let opened = if p.is_dir() {
-        std::process::Command::new("explorer").arg(&p).status()
+        crate::utils::process::create_hidden_command("explorer").arg(&p).status()
     } else {
-        std::process::Command::new("explorer")
+        crate::utils::process::create_hidden_command("explorer")
             .arg(format!("/select,{}", p.display()))
             .status()
     };
@@ -1654,35 +1616,20 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
     #[cfg(target_os = "windows")]
     {
         let _ = &app;
-        // Windows: file dialog for ISO first; folder dialog for a release
+        // Windows: native file dialog for ISO first; folder dialog for a release
         // root when the file dialog is cancelled.
-        let iso = r#"
-        Add-Type -AssemblyName System.Windows.Forms
-        $form = New-Object System.Windows.Forms.Form
-        $form.TopMost = $true
-        $f = New-Object System.Windows.Forms.OpenFileDialog
-        $f.Title = "Add Movie - select an ISO disc image (or cancel for a folder)"
-        $f.Filter = "Disc images (*.iso;*.img)|*.iso;*.img|All files|*.*"
-        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.FileName }
-        "#;
-        if let Ok(out) = crate::utils::process::run_hidden_powershell_dialog(iso) {
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(Some(path));
-            }
+        if let Some(picked) = rfd::FileDialog::new()
+            .set_title("Add Movie - select an ISO disc image (or cancel for a folder)")
+            .add_filter("Disc images (*.iso, *.img)", &["iso", "img"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+        {
+            return Ok(Some(picked.to_string_lossy().to_string()));
         }
-        let folder = r#"
-        Add-Type -AssemblyName System.Windows.Forms
-        $form = New-Object System.Windows.Forms.Form
-        $form.TopMost = $true
-        $f = New-Object System.Windows.Forms.FolderBrowserDialog
-        $f.Description = "Add Movie - select the release ROOT folder that holds ALL of its disc folders"
-        if ($f.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath }
-        "#;
-        let out = crate::utils::process::run_hidden_powershell_dialog(folder)
-            .map_err(|e| format!("Failed to open folder picker: {e}"))?;
-        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok(if path.is_empty() { None } else { Some(path) })
+        let picked_folder = rfd::FileDialog::new()
+            .set_title("Add Movie - select the release ROOT folder that holds ALL of its disc folders")
+            .pick_folder();
+        Ok(picked_folder.map(|p| p.to_string_lossy().to_string()))
     }
 
     #[cfg(target_os = "linux")]

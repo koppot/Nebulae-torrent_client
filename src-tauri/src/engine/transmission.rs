@@ -248,7 +248,7 @@ fn terminate_pid_if_transmission(pid: u32) {
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
+        let _ = crate::utils::process::create_hidden_command("taskkill")
             .args(["/F", "/PID", &pid.to_string()])
             .status();
     }

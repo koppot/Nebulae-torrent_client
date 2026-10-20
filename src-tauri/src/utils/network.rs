@@ -247,7 +247,7 @@ pub fn heal_stopped_tailscale() -> Option<String> {
         return None; // one attempt per process; never flap the VPN
     }
 
-    let output = std::process::Command::new("tailscale")
+    let output = crate::utils::process::create_hidden_command("tailscale")
         .arg("status")
         .arg("--json")
         .output()
@@ -264,7 +264,7 @@ pub fn heal_stopped_tailscale() -> Option<String> {
     }
 
     tracing::warn!("[tailscale] backend Stopped at startup — issuing one `tailscale up` auto-heal");
-    let up = std::process::Command::new("tailscale")
+    let up = crate::utils::process::create_hidden_command("tailscale")
         .arg("up")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

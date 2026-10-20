@@ -58,10 +58,12 @@ pub fn recover_stale_webviews() -> Vec<u32> {
 
 #[cfg(target_os = "windows")]
 fn run_recovery() -> Vec<u32> {
-    let out = std::process::Command::new("powershell")
+    let out = crate::utils::process::create_hidden_command("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-Command",
             &recovery_script(),
         ])

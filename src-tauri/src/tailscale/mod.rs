@@ -361,8 +361,15 @@ fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
              Get-CimInstance Win32_Process -Filter \"{filter}\" | \
              ForEach-Object {{ if ($_.CommandLine -like '*{marker}*') {{ Write-Output $_.ProcessId }} }}"
         );
-        match std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        match crate::utils::process::create_hidden_command("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &ps,
+            ])
             .output()
         {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
@@ -548,7 +555,19 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
             let mut guard = state.child.lock().unwrap();
             let exited = match guard.as_mut() {
                 Some(child) => child.try_wait().ok().flatten().is_some(),
-                None => true,
+                None => {
+                    if adopted_logged {
+                        if cli_on(&paths, &["status", "--json"], Duration::from_secs(3)).is_ok() {
+                            false
+                        } else {
+                            adopted_logged = false;
+                            resumed = false;
+                            true
+                        }
+                    } else {
+                        true
+                    }
+                }
             };
             if exited {
                 if !state.wanted.load(Ordering::SeqCst) {
