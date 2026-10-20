@@ -141,10 +141,10 @@ fn is_tailnet_ip(ip: &str) -> bool {
 pub fn probe_adc_over_tailnet() -> Option<(String, bool)> {
     use std::io::Read;
     use std::net::{SocketAddr, TcpStream};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::Duration;
 
-    let mut child = Command::new("tailscale")
+    let mut child = crate::utils::process::create_hidden_command("tailscale")
         .arg("status")
         .arg("--json")
         .stdout(Stdio::piped())

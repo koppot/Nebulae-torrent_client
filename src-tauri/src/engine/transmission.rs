@@ -370,19 +370,40 @@ impl TransmissionRpcClient {
         for attempt in 0..2 {
             let session_id = self.session_id.lock().unwrap().clone();
 
-            let mut req = self.client.post(&self.rpc_url).json(&payload);
-            if let Some(ref sid) = session_id {
-                req = req.header("X-Transmission-Session-Id", sid);
-            }
-            if let Some(ref auth) = self.auth_header {
-                req = req.header("Authorization", auth);
-            }
-
-            let resp = match req.send() {
-                Ok(r) => r,
-                Err(e) => {
-                    return Err(format!("Transmission RPC connection error: {e}"));
+            // Bounded retry on transport errors: the daemon may be briefly
+            // unreachable (watchdog restart backoff after a crash, or the
+            // first seconds after a relaunch). Re-sending is safe —
+            // torrent-add of the same metainfo is deduplicated by
+            // transmission-daemon and the remaining calls are idempotent —
+            // so the user's action fails only when the daemon is truly
+            // gone for the whole ~8.5s window.
+            let mut resp = None;
+            let mut last_err = String::new();
+            for wait_ms in [0u64, 1000, 2000, 2500, 3000] {
+                if wait_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(wait_ms));
                 }
+                let session_id = self.session_id.lock().unwrap().clone();
+                let mut retry_req = self.client.post(&self.rpc_url).json(&payload);
+                if let Some(ref sid) = session_id {
+                    retry_req = retry_req.header("X-Transmission-Session-Id", sid);
+                }
+                if let Some(ref auth) = self.auth_header {
+                    retry_req = retry_req.header("Authorization", auth);
+                }
+                match retry_req.send() {
+                    Ok(r) => {
+                        resp = Some(r);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = format!("Transmission RPC connection error: {e}");
+                    }
+                }
+            }
+            let resp = match resp {
+                Some(r) => r,
+                None => return Err(last_err),
             };
 
             // Handle 409 Conflict CSRF token handshake
@@ -672,6 +693,9 @@ impl TransmissionRpcClient {
 pub struct TransmissionTorrentEngine {
     rpc_client: Arc<TransmissionRpcClient>,
     child_process: Arc<Mutex<Option<std::process::Child>>>,
+    /// Set on graceful shutdown: the watchdog must stop respawning and the
+    /// stop helper must terminate the daemon exactly once.
+    shutdown_flag: Arc<AtomicBool>,
     config_dir: PathBuf,
     db: Arc<Database>,
     #[allow(dead_code)]
@@ -1398,9 +1422,14 @@ impl TransmissionTorrentEngine {
 
         let child_arc = Arc::new(Mutex::new(Some(child)));
 
+        // Graceful-shutdown flag: created here so the watchdog (spawned
+        // below) and the engine struct share the same instance.
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
         // 8. Spawn health watchdog
         {
             let child_watch = Arc::clone(&child_arc);
+            let shutdown_watch = Arc::clone(&shutdown_flag);
             let daemon_path_watch = daemon_path.clone();
             let engine_dir_watch = engine_dir.clone();
             let pid_file_watch = engine_dir.join("daemon.pid");
@@ -1412,6 +1441,11 @@ impl TransmissionTorrentEngine {
             tauri::async_runtime::spawn(async move {
                 let mut backoff = Duration::from_secs(1);
                 loop {
+                    // Graceful shutdown: never respawn after this point.
+                    if shutdown_watch.load(Ordering::SeqCst) {
+                        info!("transmission watchdog exiting (engine shutdown)");
+                        break;
+                    }
                     tokio::time::sleep(Duration::from_secs(2)).await;
 
                     let is_dead = {
@@ -1560,6 +1594,7 @@ impl TransmissionTorrentEngine {
         Ok(Self {
             rpc_client,
             child_process: child_arc,
+            shutdown_flag,
             config_dir: engine_dir,
             db,
             paths,
@@ -1626,6 +1661,8 @@ impl TransmissionTorrentEngine {
 
 impl Drop for TransmissionTorrentEngine {
     fn drop(&mut self) {
+        // Prevent watchdog respawn, then terminate.
+        self.shutdown_flag.store(true, Ordering::SeqCst);
         // Attempt clean RPC shutdown first
         let _ = self.rpc_client.request("session-close", None);
         // Terminate child process
@@ -1639,7 +1676,28 @@ impl Drop for TransmissionTorrentEngine {
     }
 }
 
+impl TransmissionTorrentEngine {
+    /// Graceful shutdown (tray Quit / app exit): flip the shutdown flag so
+    /// the watchdog stops respawning, then terminate the daemon. Bounded
+    /// wait, then hard kill. Idempotent.
+    pub fn shutdown_engine(&self) {
+        self.shutdown_flag.store(true, Ordering::SeqCst);
+        if let Ok(mut lock) = self.child_process.lock() {
+            if let Some(ref mut child) = *lock {
+                let _ = child.kill();
+                let _ = child.wait();
+                *lock = None;
+            }
+        }
+        info!("transmission engine shut down gracefully");
+    }
+}
+
 impl TorrentEngine for TransmissionTorrentEngine {
+    fn shutdown(&self) {
+        self.shutdown_engine();
+    }
+
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
         let raw_torrents = self.rpc_client.torrent_get(None)?;
         let cached = self.metadata_cache.lock().unwrap().clone();

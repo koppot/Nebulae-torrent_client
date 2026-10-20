@@ -43,6 +43,12 @@ pub trait TorrentEngine: Send + Sync {
     fn engine_status(&self) -> EngineStatus;
     fn supports_hook(&self, hook: EngineHook) -> bool;
 
+    /// Graceful shutdown: stop the engine's owned subprocesses and prevent
+    /// the supervisor/watchdog from respawning them. Called on app exit so
+    /// a tray Quit never leaves an orphaned transmission-daemon behind
+    /// (owner defect 2026-10-20). Default: nothing owned to stop.
+    fn shutdown(&self) {}
+
     // qBittorrent transfer & swarm management parity
     fn force_recheck(&self, id: &str) -> Result<(), String>;
     fn reannounce(&self, id: &str) -> Result<(), String>;

@@ -760,6 +760,16 @@ pub fn run() {
         tauri::RunEvent::ExitRequested { .. } => {
             updater::apply_staged_update_if_present(_app_handle);
             tailscale::shutdown(); // stop the embedded tailscaled
+                                   // Owner defect (2026-10-20): a tray Quit stopped tailscaled and
+                                   // the keepalive but ORPHANED the transmission-daemon. Shut the
+                                   // engine down too — the flag stops the watchdog's respawn, the
+                                   // daemon is terminated, and torrent state stays on disk.
+            {
+                use tauri::Manager;
+                if let Some(engine) = _app_handle.try_state::<crate::engine::SharedEngine>() {
+                    engine.shutdown();
+                }
+            }
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         tauri::RunEvent::Opened { urls } => {
