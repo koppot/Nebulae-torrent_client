@@ -831,20 +831,12 @@ pub async fn player_return_to_menu(
             tracing::info!("[player] return_to_menu: already at menu title");
             return Ok(());
         }
-        // UHD fix: flush decoder buffers before format-changing navigation.
-        // Same VideoToolbox transition issue applies when going from 4K HEVC
-        // feature back to 1080p menu.
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 0);
-        }
         // Send both popup navigation (Blu-ray popup/root menu) and set_title(0)
         unsafe {
             (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5); // libvlc_navigate_popup
             (lib.libvlc_media_player_set_title)(mp as *mut std::ffi::c_void, 0);
         }
-        tracing::info!("[player] return_to_menu: flushed + navigate(popup) and set_title(0) sent");
+        tracing::info!("[player] return_to_menu: navigate(popup) and set_title(0) sent");
     }
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let at_menu = {
@@ -1063,19 +1055,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let lib = loaded_lib(&state)?;
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
-    
-    // UHD playback fix: flush VideoToolbox decoder buffers before activate.
-    // When transitioning from 1080p menu to 4K HEVC main title, the decoder
-    // holds outstanding picture buffers from the menu stream. A brief pause
-    // forces buffer release, allowing clean reinit for the feature stream.
-    if mode == 0 {
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
-    
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }
