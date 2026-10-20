@@ -408,3 +408,40 @@ production control server (the app's enroll flow takes the control URL +
 a preauth key), OR say the local test tailnet should be resurrected and
 Factory will provision a new local headscale. No code change, no build,
 no server-policy change. Stable updater and webhook untouched.
+
+## 7. macOS recovery plan — owner-approved production re-enroll (2026-10-20)
+
+**Backup taken BEFORE any change** (owner's requirement): the live
+tailscaled.state (0600, the only enrollment = profile-218c, saved
+ControlURL = the dead local test control per the daemon's live cmdline)
+copied to ~/nebulae-state-backup-20261020/tailscaled.state.backup (0600).
+NO state-file edit, NO identity deletion.
+
+**Why the existing tailnet identity cannot be reused against the
+production control:** the node key in tailscaled.state was registered
+ONLY on the dead local test control. Tailside node identity is
+control-scoped — the production control server has never seen this node
+and will reject its key. Machine key is reusable; a fresh node
+registration against the production control is unavoidable. The app's
+user data (torrents, settings, keys, DB) is app-level and untouched by
+this; the tailscale state file is backed up and restorable verbatim.
+
+**Supported recovery flow (no credential exposure):** the app's enroll
+command exists backend-only (no UI), so the owner runs the daemon's own
+supported login directly in THEIR terminal on the macOS machine (the key
+never passes through chat/logs/commits):
+
+  /Applications/Nebulae.app/Contents/Resources/resources/engine/tailscale/tailscale \
+    --socket "$HOME/Library/Application Support/Nebulae/internal/tailscale/tailscaled.sock" \
+    up --login-server=https://control.asiandvdclub.org \
+    --auth-key <PASTE-PRODUCTION-PREAUTH-KEY> \
+    --accept-dns=false --hostname=nebulae-MacStudio.local
+
+(the daemon is already running; `up` re-targets it in place. The key is
+generated on the control server by the owner: `headscale preauthkeys
+create --user <user>`.) After the owner runs it, Factory verifies: the
+daemon's backend Running + the control endpoint = the production, the
+SOCKS listener ownership (the app's daemon process), the ADC peer +
+route in the netmap, the mesh TLS-verified HTTPS (verify=0), and the
+status bar's verified state + failure/recovery behavior. No build, no
+server change; the release-assets hold remains.
