@@ -527,6 +527,11 @@ fn resume_saved_profile(paths: &Paths) -> Result<(), String> {
             "--accept-dns=false",
             &format!("--login-server={control}"),
             &format!("--hostname={}", node_name()),
+            // Must stay in lockstep with enroll()'s flag set: `up` refuses
+            // to change any non-default setting that is not re-mentioned.
+            // Without it the ADC subnet route is not accepted and the
+            // SOCKS path silently falls back to public transit.
+            "--accept-routes",
         ],
         ENROLL_TIMEOUT,
     )
@@ -802,6 +807,12 @@ pub fn enroll(auth_key: &str, login_server: Option<&str>) -> Result<(), String> 
         "--hostname",
         node.as_str(),
         "--accept-dns=false",
+        // Accept the ADC node's advertised subnet route: WITHOUT this the
+        // daemon routes 45.135.163.139 out the DEFAULT path (public
+        // internet), so SOCKS "success" proved nothing about the private
+        // mesh. This flag is persisted in the daemon's prefs by `up`, so
+        // it survives restarts; resume_saved_profile re-mentions it.
+        "--accept-routes",
     ];
     if let Some(url) = login_server {
         args.push("--login-server");

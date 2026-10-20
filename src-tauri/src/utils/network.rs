@@ -144,7 +144,21 @@ pub fn probe_adc_over_tailnet() -> Option<(String, bool)> {
     use std::process::Stdio;
     use std::time::Duration;
 
-    let mut child = crate::utils::process::create_hidden_command("tailscale")
+    // Resolve the CLI explicitly: the app ships its own tailscale binary;
+    // relying on PATH fails under macOS GUI-app PATH constraints (the
+    // bundled binary is NOT on the default GUI PATH).
+    let cli = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("tailscale").join("tailscale"))),
+        Some(std::path::PathBuf::from("tailscale")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|p| p.exists())
+    .map(|p| p.to_string_lossy().to_string())?;
+
+    let mut child = crate::utils::process::create_hidden_command(&cli)
         .arg("status")
         .arg("--json")
         .stdout(Stdio::piped())
