@@ -158,3 +158,36 @@ journal access unblocked.
 - [Antigravity] Update the existing "Nebulae v0.2.2-beta.1" release from
   the final agreed candidate (originals preserved internally; stable
   updater untouched; NO webhook rotation).
+
+## 4c. CI triage + authorized build (2026-10-20)
+
+- **2d5facb lint-and-check failure — TRIAGED AND FIXED.** Run
+  39404433475 failed on clippy `-D warnings`: an unused `session_id`
+  read left by the RPC-retry refactor. Corrected in `1402208`; CI run
+  39405203026 = lint-and-check + windows-tests both SUCCESS. The current
+  candidate descends from the fix; the failure does not affect it.
+- **Consolidated candidate: `60252ab`** = Antigravity's `cb95871`
+  (PowerShell subprocess elimination, quit/close-to-tray lifecycle,
+  dynamic Transmission RPC endpoint via `set_rpc_port` — the actual
+  53540 root cause: the daemon restarts on a NEW ephemeral port and the
+  client now follows it — and truthful Tailnet status) + their cargo-fmt
+  fix, on top of Factory's status-probe and shutdown commits. Factory
+  reviewed the diff: compatible refinements of its own fixes, no
+  conflicts, all four lifecycle areas covered. The close-behavior
+  checkbox = the existing `close_to_tray` preference RE-LABELED to the
+  owner's wording (no duplicate preference); close interception now
+  main-window-only; unchecked close = graceful exit; tray menu =
+  "Quit application" with inline engine+tailscale shutdown before exit.
+- **Authorized build: run `39407774733`** (all four platforms). NOTE:
+  the dispatch used the branch ref, so the run's head = `3cf4d50` — a
+  DOCS-ONLY descendant of `60252ab` (the compiled tree is identical).
+  Flagged here per the no-silent-substitution rule; the artifacts'
+  candidate-source.txt will read 3cf4d50. A strict-identity re-dispatch
+  with the full `60252ab…` SHA needs owner authorization.
+- **Superseded runs** (billing already spent; artifacts unused):
+  39406029401 (1402208), 39407035838 (cb95871).
+- **Desktop:** housekeeping complete (0/0/0 processes, zero diagnostic
+  tasks, scripts/installers removed). Battery on the authorized bytes
+  starts when run 39407774733 completes: installer upgrade, quit-path
+  (all three counts), add-torrent RPC, scoped Tailnet failure/recovery,
+  30-minute window. Owner action needed: none yet.
