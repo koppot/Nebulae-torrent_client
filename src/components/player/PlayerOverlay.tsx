@@ -476,6 +476,10 @@ export default function PlayerOverlay() {
   // changes (each disc feature has its own chapter layout).
   useEffect(() => {
     if (!player.open) return;
+    if (poll.title === 0) {
+      setChapterMarks([]);
+      return;
+    }
     (async () => {
       // For discs, the playlist chapters (libbluray) are the source of
       // truth: VLC's own chapter marks for Blu-ray titles carry offsets
@@ -502,8 +506,7 @@ export default function PlayerOverlay() {
         /* ticks are best-effort */
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [player.open, poll.title, poll.title_count, Math.round(poll.length_ms / 30000)]);
+  }, [player.open, poll.title, poll.title_count, poll.length_ms]);
 
   // Fullscreen state mirror for the button's icon.
   // On macOS the player uses a manual NSWindow frame resize (not the native
@@ -718,14 +721,24 @@ export default function PlayerOverlay() {
   // demuxer exposes no offsets (plain files).
   const jumpChapter = (dir: number) => {
     const ch = poll.chapter;
-    if (chapterMarks.length > 1) {
-      let idx = chapterMarks.findIndex((m) => m.offset_ms > Math.max(poll.time_ms - 2000, 0));
-      if (idx < 0) idx = chapterMarks.length;
-      const target = dir > 0 ? Math.min(idx, chapterMarks.length - 1) : Math.max(idx - 2, 0);
+    if (chapterMarks.length > 1 && dur > 0) {
+      let curr = 0;
+      for (let i = 0; i < chapterMarks.length; i++) {
+        if (chapterMarks[i].offset_ms <= poll.time_ms) {
+          curr = i;
+        } else {
+          break;
+        }
+      }
+      let target: number;
+      if (dir > 0) {
+        target = Math.min(curr + 1, chapterMarks.length - 1);
+      } else {
+        const elapsedInChapter = poll.time_ms - chapterMarks[curr].offset_ms;
+        target = elapsedInChapter > 2500 ? curr : Math.max(curr - 1, 0);
+      }
       const mk = chapterMarks[target];
-      const base = mk.duration_ms > 0 ? mk.duration_ms : dur;
-      const seekMs = base > 0 ? Math.round((mk.offset_ms * dur) / base) : mk.offset_ms;
-      invoke('player_seek', { positionMs: Math.max(seekMs + 1, 0) }).catch(() => {});
+      invoke('player_seek', { positionMs: Math.max(mk.offset_ms, 0) }).catch(() => {});
     } else {
       const next = dir > 0 ? ch + 1 : Math.max(ch - 1, 0);
       invoke('player_set_chapter', { chapter: next }).catch(() => {});
@@ -1003,26 +1016,22 @@ export default function PlayerOverlay() {
               style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
             {/* Chapter marks: vertical ticks at the real chapter offsets.
-                Owner (screenshot feedback): the old 1px white ticks were
-                invisible against the light track. Render DARK notches that
-                extend past the track, centered on the offset, opaque so
-                they stay visible over both the played fill and the track. */}
-            {chapterMarks.slice(1).map((mk, i) => {
-              // The probe reads a PLAYLIST whose duration can differ from
-              // VLC's media (external Blu-ray opens resolve to a different
-              // playlist). Map each offset proportionally onto the FULL
-              // bar using the playlist's own duration, not VLC's.
-              const base = mk.duration_ms > 0 ? mk.duration_ms : dur;
-              const leftPct = base > 0 ? Math.min(100, (mk.offset_ms / base) * 100) : 0;
-              return (
-                <span
-                  key={i}
-                  className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
-                  style={{ left: `${leftPct}%` }}
-                  title={mk.name}
-                />
-              );
-            })}
+                Render dark notches that extend past the track, centered on the offset,
+                with a white ring for contrast over both played fill and unplayed track. */}
+            {dur > 0 &&
+              chapterMarks
+                .filter((mk) => mk.offset_ms > 0 && mk.offset_ms < dur)
+                .map((mk, i) => {
+                  const leftPct = Math.min(100, Math.max(0, (mk.offset_ms / dur) * 100));
+                  return (
+                    <span
+                      key={i}
+                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
+                      style={{ left: `${leftPct}%` }}
+                      title={mk.name}
+                    />
+                  );
+                })}
             {/* Playhead */}
             <span
               className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"

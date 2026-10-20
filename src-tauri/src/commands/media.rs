@@ -1196,7 +1196,7 @@ pub async fn player_disc_chapters(
                 }
             }
         }
-        let offsets =
+        let res =
             player::bluray_meta::disc_chapter_offsets(&probe_path.to_string_lossy(), duration_ms);
         if let Some(mp) = iso_mount {
             let _ = std::process::Command::new("hdiutil")
@@ -1205,9 +1205,9 @@ pub async fn player_disc_chapters(
                 .output();
             let _ = std::fs::remove_dir_all(&mp);
         }
-        let offsets = offsets?;
+        let (offsets, matched_dur) = res?;
         tracing::info!(
-            "[player] disc chapters for dur {duration_ms}: {} marks",
+            "[player] disc chapters for dur {duration_ms}: {} marks (playlist dur {matched_dur} ms)",
             offsets.len()
         );
         Ok(offsets
@@ -1215,7 +1215,7 @@ pub async fn player_disc_chapters(
             .enumerate()
             .map(|(i, off)| ChapterMark {
                 offset_ms: off,
-                duration_ms: 0,
+                duration_ms: matched_dur,
                 name: format!("Chapter {}", i + 1),
             })
             .collect())

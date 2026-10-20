@@ -70,13 +70,27 @@ struct BdTitleInfo {
     sdr_conversion_notification_flag: c_uchar,
 }
 
-/// libbluray's BLURAY_TITLE_CHAP: one chapter of a playlist. `start` is
-/// 90 kHz ticks from the title start.
+/// libbluray's BLURAY_TITLE_CHAPTER: one chapter of a playlist.
+/// In libbluray C header (bluray.h lines 289-298):
+///   uint32_t idx (offset 0)
+///   [4 bytes padding for uint64_t alignment]
+///   uint64_t start (offset 8, 90 kHz ticks)
+///   uint64_t duration (offset 16)
+///   uint64_t offset (offset 24, bytes from title start)
+///   unsigned clip_ref (offset 32)
+///   [4 bytes padding for pointer alignment]
+///   const char *chapter_name (offset 40)
+/// Total size = 48 bytes on 64-bit systems.
 #[repr(C)]
 struct BdTitleChap {
-    clip_ref: c_uint,
+    idx: u32,
+    _pad: u32,
     start: u64,
     duration: u64,
+    offset: u64,
+    clip_ref: c_uint,
+    _pad2: u32,
+    chapter_name: *const c_char,
 }
 
 static BLURAY_LIB: std::sync::OnceLock<Result<Library, String>> = std::sync::OnceLock::new();
@@ -273,7 +287,7 @@ pub fn disc_stream_languages(
         }
         let chosen_idx: Option<usize> = if duration_ms > 0 {
             best_match_idx
-                .filter(|(diff, _)| *diff <= 5000)
+                .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
                 .map(|(_, i)| i)
                 .or_else(|| most_audio_idx.map(|(_, i)| i))
         } else {
@@ -312,11 +326,39 @@ pub fn disc_stream_languages(
     }
 }
 
-/// Chapter start offsets (ms from title start) for the title whose
-/// duration matches `duration_ms` — same title selection as
-/// `disc_stream_languages`. VLC's own chapter API reports nothing for
+/// libbluray BLURAY_TITLE_CHAPTER element size in bytes.
+/// libbluray >= 1.5.0 has `const char *chapter_name` at offset 40 (48 bytes total).
+/// Older libbluray 1.x (< 1.5.0) omitted chapter_name (40 bytes total).
+unsafe fn bluray_chapter_stride(lib: &Library, chapters_ptr: *const c_void, count: usize) -> usize {
+    let mut stride = std::mem::size_of::<BdTitleChap>(); // 48 bytes
+    if let Ok(sym) = lib.get::<Symbol<unsafe extern "C" fn(*mut c_int, *mut c_int, *mut c_int)>>(b"bd_get_version") {
+        let mut major: c_int = 0;
+        let mut minor: c_int = 0;
+        let mut micro: c_int = 0;
+        sym(&mut major, &mut minor, &mut micro);
+        if major == 1 && minor < 5 {
+            stride = 40;
+        }
+    }
+    // Verify against chapter index of chapter 1 if at least 2 chapters exist
+    if count >= 2 && !chapters_ptr.is_null() {
+        let ptr_u8 = chapters_ptr as *const u8;
+        let idx_at_48 = std::ptr::read_unaligned(ptr_u8.add(48) as *const u32);
+        let idx_at_40 = std::ptr::read_unaligned(ptr_u8.add(40) as *const u32);
+        if idx_at_48 == 1 && idx_at_40 != 1 {
+            stride = 48;
+        } else if idx_at_40 == 1 && idx_at_48 != 1 {
+            stride = 40;
+        }
+    }
+    stride
+}
+
+/// Chapter start offsets (ms from title start) and the matched playlist's
+/// duration (ms) for the title whose duration matches `duration_ms` — same title
+/// selection as `disc_stream_languages`. VLC's own chapter API reports nothing for
 /// Blu-ray titles, so the seek bar's chapter ticks come from here.
-pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64>, String> {
+pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<(Vec<i64>, i64), String> {
     let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
@@ -344,9 +386,6 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
         let mut all_infos: Vec<*mut BdTitleInfo> = Vec::new();
         let mut best_match_idx: Option<(i64, usize)> = None;
         let mut most_audio_idx: Option<(u8, usize)> = None;
-        // Longest playlist (full-disc / whole-season title): the fallback
-        // when nothing closely matches what VLC reports. Episodic discs
-        // (e.g. 91 DAYS) hide the real chapter grid on the full playlist.
         let mut longest_idx: Option<(i64, usize, usize)> = None; // (dur_ms, chapters, index)
         for i in 0..count {
             let info = bd_get_title_info(bd, i as c_uint, 0);
@@ -406,26 +445,25 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
         }
         let chosen_idx: Option<usize> = if duration_ms > 0 {
             best_match_idx
-                .filter(|(diff, _)| *diff <= 5000)
+                .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
                 .map(|(_, i)| i)
-                // Episodic / full-disc fallback: when no playlist matches
-                // what VLC reports (e.g. 91 DAYS hides 251 chapters on the
-                // 5h55m whole-disc title while VLC reports a different
-                // length), use the LONGEST playlist - the menu plays the
-                // whole title, so its marks must span the FULL timeline.
-                .or_else(|| longest_idx.map(|(_, _, i)| i))
         } else {
-            most_audio_idx.map(|(_, i)| i)
+            most_audio_idx.map(|(_, i)| i).or_else(|| longest_idx.map(|(_, _, i)| i))
         };
         let mut offsets: Vec<i64> = Vec::new();
+        let mut matched_dur_ms: i64 = 0;
         if let Some(ci) = chosen_idx {
             let info = all_infos[ci];
             let ti = &*info;
+            matched_dur_ms = (ti.duration / 90) as i64;
             if !ti.chapters.is_null() && ti.chapter_count > 0 {
+                let stride = bluray_chapter_stride(lib, ti.chapters, ti.chapter_count as usize);
+                let base_ptr = ti.chapters as *const u8;
                 for k in 0..ti.chapter_count as usize {
-                    let ch = &*(ti.chapters as *const BdTitleChap).add(k);
+                    let chap_ptr = base_ptr.add(k * stride);
+                    let start_ticks = std::ptr::read_unaligned(chap_ptr.add(8) as *const u64);
                     // 90 kHz ticks → ms.
-                    offsets.push((ch.start / 90) as i64);
+                    offsets.push((start_ticks / 90) as i64);
                 }
                 offsets.sort_unstable();
                 offsets.dedup();
@@ -436,21 +474,23 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<Vec<i64
             bd_free_title_info(info);
         }
         bd_close(bd);
-        Ok(offsets)
+        Ok((offsets, matched_dur_ms))
     }
 }
 
 /// Debug variant used by the chap_probe example: prints the matched
 /// title's playlist duration vs the chapter spread.
 pub fn disc_chapter_offsets_debug(disc_path: &str, duration_ms: i64) -> Result<String, String> {
-    let offsets = disc_chapter_offsets(disc_path, duration_ms)?;
+    let (offsets, matched_dur) = disc_chapter_offsets(disc_path, duration_ms)?;
     let last = offsets.last().copied().unwrap_or(0);
     Ok(format!(
-        "matched dur={duration_ms} chapters={} first={} last={} spread={:.1}%",
+        "matched dur={duration_ms} (playlist dur={matched_dur}) chapters={} first={} last={} spread={:.1}%",
         offsets.len(),
         offsets.first().copied().unwrap_or(0),
         last,
-        if duration_ms > 0 {
+        if matched_dur > 0 {
+            (last as f64 / matched_dur as f64) * 100.0
+        } else if duration_ms > 0 {
             (last as f64 / duration_ms as f64) * 100.0
         } else {
             0.0
@@ -516,10 +556,13 @@ mod tests {
                 disc_stream_languages(disc, 1454000).expect("stream languages probe");
             assert!(!audio.is_empty(), "Audio tracks must be discovered");
 
-            let chapters = disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
+            let (chapters, dur) = disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
             assert!(!chapters.is_empty(), "Chapters must be discovered");
+            assert!(chapters.len() >= 5, "Episode must have at least 5 chapters, found {}", chapters.len());
+            let last = chapters.last().copied().unwrap_or(0);
+            assert!(last > 1_400_000, "Last chapter must start near episode end, found {last} ms for {dur} ms");
             println!(
-                "Iteration {i}: audio={audio:?} subs={subs:?} chapters={}",
+                "Iteration {i}: audio={audio:?} subs={subs:?} chapters={} dur={dur} last_chap={last}",
                 chapters.len()
             );
         }
