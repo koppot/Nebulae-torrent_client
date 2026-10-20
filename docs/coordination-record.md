@@ -69,19 +69,17 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Proposed candidate:** `e92d914` (built on `f9b26b5`). Contains:
-  - All Windows process & lifecycle fixes: NSIS pre-extract shutdown (`d8b7d42`), console window suppression (`af321dd`, `233474d`), Win32 synchronous native window drag with packed cursor coordinates (`644e3b4`).
+- **Proposed candidate:** `25cb9bd` (incorporating all prior client and backend repairs). Contains:
+  - All Windows process & lifecycle fixes: NSIS pre-extract shutdown (`d8b7d42`), console window suppression (`af321dd`, `233474d`), Win32 synchronous native window drag (`644e3b4`, type-repaired in `25cb9bd`).
   - Chapter timeline alignment & libbluray ABI 48-byte fix (`f9b26b5`).
   - Manager torrent-hover poster 30% dimension reduction (`e92d914`).
-  - Discord stats reporter categorized telemetry (`e92d914`).
+  - Discord stats reporter categorized telemetry (`8e8e048`).
+  - Windows MSVC compilation fixes (`25cb9bd`): resolved Win32 `SendMessageW` `Option<WPARAM>`/`Option<LPARAM>` arguments, `POINT` import from `windows::Win32::Foundation`, `HTCAPTION as usize`, and `CommandExt` in `tailscale/mod.rs`.
   - All test suites passing (119 Rust unit tests, 9 integration tests, TypeScript check clean).
-- **Packaging workflow:** Ready for `candidate-build.yml` dispatch with `ref=e92d9146e09f6d3c1a832d509871676787608405`.
-- **Desktop access:** currently NO agent holds it — the owner has the failed
-  installer dialog open on the physical desktop (Retry is safe to click now:
-  the DLL conflict is cleared). Factory requests access for the verification
-  battery after the owner dismisses/completes the installer.
+- **Packaging workflow:** Ready for `candidate-build.yml` dispatch with `ref=25cb9bd`. (Run 39351367957 on earlier ref 8f0accd succeeded on macOS arm64, macOS x64, and Linux, but failed on Windows MSVC due to the 4 Win32 type errors now resolved in `25cb9bd`).
+- **Desktop access:** Read-only process check via OpenSSH on `supermicro.local` confirmed the installer Retry dialog and all orphaned processes are already cleared; no Nebulae or installer process is running. Desktop is clear for Factory's candidate verification battery.
 - **Factory Windows acceptance verification (Task 5):**
-  Dispatched candidate build generates workflow artifacts without creating a public release or modifying tags. Factory downloads the candidate artifacts, verifies build identity/hashes, and executes the acceptance battery (drag, installer upgrade cases, 30-min connectivity, chapter display).
+  Dispatched replacement candidate build generates workflow artifacts without creating a public release or modifying tags. Factory downloads the candidate artifacts, verifies build identity/hashes, and executes the acceptance battery (drag, installer upgrade cases, 30-min connectivity, chapter display).
   The final coordinated v0.2.2-beta.1 asset update follows Factory's confirmation per §3.7.
 - **Windows acceptance evidence (prior, still valid):** integrated-package
   30+ min zero-disconnect run, mesh HTTPS 200 verified, kill/adopt held the
