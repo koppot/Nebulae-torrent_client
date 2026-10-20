@@ -1,0 +1,110 @@
+name: Download Statistics Report
+
+# Reports aggregate download statistics for the released packages to the
+# owner's `nebulae-stats` Discord channel. Replaces the external reporter
+# bot (last successful post 2026-10-13) with a GitHub-hosted workflow using
+# the SAME data source: the official GitHub Release distributions.
+#
+# Privacy: only AGGREGATE public download counts are posted. No user data,
+# no IP/identifiers, no private torrent info. The webhook is a repository
+# secret and is never printed. Scope is fixed to release assets; do not
+# expand it without owner approval.
+#
+# Delivery: one digest post per run (no duplicates). A failed post is VISIBLE
+# (the step exits non-zero) and self-heals on the next scheduled run because
+# counts are cumulative; transient Discord 429/5xx get a bounded retry with
+# backoff inside the run.
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily digest, 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'Optional label for a controlled test post (clearly identified in the message)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect release download statistics
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: koppot/Nebulae-torrent_client
+          NOTE: ${{ github.event.inputs.note }}
+        run: |
+          set -euo pipefail
+          # Aggregate public asset download counts across all published releases.
+          gh api "repos/$REPO/releases?per_page=100" --paginate --jq '
+            .[] | .assets[]? | {name: .name, count: .download_count}' > assets.jsonl
+          python3 - <<'PY'
+          import json, os
+          from collections import defaultdict
+
+          rows = [json.loads(l) for l in open('assets.jsonl') if l.strip()]
+          total = sum(r['count'] for r in rows)
+          # The same package name appears on several releases (stable + beta):
+          # report PER-PACKAGE totals, not per-release rows.
+          by_name = defaultdict(int)
+          for r in rows:
+              if not r['name'].endswith(('.sig', '.sha256')):
+                  by_name[r['name']] += r['count']
+          top = "\n".join(
+              f"`{name}`: {count:,}"
+              for name, count in sorted(by_name.items(), key=lambda kv: -kv[1])[:10]
+          ) or "_No public release assets yet._"
+          note = os.environ.get('NOTE', '').strip()
+          note_line = f"\n🧪 **CONTROLLED TEST POST** ({note}) — not a scheduled digest.\n" if note else ""
+          embed = {
+              "title": "Nebulae Torrent Client — Live Download Statistics",
+              "description": (
+                  "Real-time download telemetry for the **Nebulae** cross-platform "
+                  "BitTorrent client. Data is queried directly from official GitHub "
+                  "Release distributions." + note_line
+              ),
+              "color": 15010068,
+              "fields": [
+                  {"name": "Total Global Downloads", "value": f"[ {total:,} Downloads ]", "inline": False},
+                  {"name": "Downloads by Package", "value": top, "inline": False},
+              ],
+              "footer": {"text": "Asian DVD Club Community • aggregate public release stats"},
+          }
+          json.dump({"embeds": [embed], "allowed_mentions": {"parse": []}}, open('payload.json', 'w'))
+          print(f"collected: {len(rows)} asset rows, {len(by_name)} packages, total downloads {total}")
+          PY
+        # NOTE is provided only on manual dispatch (controlled tests).
+
+      - name: Deliver to nebulae-stats (bounded retry, never prints the secret)
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_STATS_WEBHOOK_URL }}
+          NOTE: ${{ github.event.inputs.note }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL:-}" ]; then
+            echo "::warning::DISCORD_STATS_WEBHOOK_URL is not configured; no statistics posted."
+            exit 1
+          fi
+          attempt=1
+          while true; do
+            code=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -d @payload.json \
+              "$WEBHOOK_URL") || code="000"
+            case "$code" in
+              200|204) echo "delivered (HTTP $code, attempt $attempt)"; exit 0 ;;
+              429|500|502|503|504)
+                if [ "$attempt" -ge 3 ]; then
+                  echo "::error::Discord delivery failed after $attempt attempts (last HTTP $code); next scheduled run will retry (counts are cumulative)."
+                  exit 1
+                fi
+                echo "HTTP $code on attempt $attempt; backing off."; sleep $((attempt * 20)); attempt=$((attempt + 1)) ;;
+              *)
+                echo "::error::Discord rejected the payload (HTTP $code). Response was not printed to avoid echoing configuration."
+                exit 1 ;;
+            esac
+          done
