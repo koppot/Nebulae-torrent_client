@@ -331,7 +331,9 @@ pub fn disc_stream_languages(
 /// Older libbluray 1.x (< 1.5.0) omitted chapter_name (40 bytes total).
 unsafe fn bluray_chapter_stride(lib: &Library, chapters_ptr: *const c_void, count: usize) -> usize {
     let mut stride = std::mem::size_of::<BdTitleChap>(); // 48 bytes
-    if let Ok(sym) = lib.get::<Symbol<unsafe extern "C" fn(*mut c_int, *mut c_int, *mut c_int)>>(b"bd_get_version") {
+    if let Ok(sym) = lib
+        .get::<Symbol<unsafe extern "C" fn(*mut c_int, *mut c_int, *mut c_int)>>(b"bd_get_version")
+    {
         let mut major: c_int = 0;
         let mut minor: c_int = 0;
         let mut micro: c_int = 0;
@@ -448,7 +450,9 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<(Vec<i6
                 .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
                 .map(|(_, i)| i)
         } else {
-            most_audio_idx.map(|(_, i)| i).or_else(|| longest_idx.map(|(_, _, i)| i))
+            most_audio_idx
+                .map(|(_, i)| i)
+                .or_else(|| longest_idx.map(|(_, _, i)| i))
         };
         let mut offsets: Vec<i64> = Vec::new();
         let mut matched_dur_ms: i64 = 0;
@@ -556,11 +560,19 @@ mod tests {
                 disc_stream_languages(disc, 1454000).expect("stream languages probe");
             assert!(!audio.is_empty(), "Audio tracks must be discovered");
 
-            let (chapters, dur) = disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
+            let (chapters, dur) =
+                disc_chapter_offsets(disc, 1454000).expect("chapter offsets probe");
             assert!(!chapters.is_empty(), "Chapters must be discovered");
-            assert!(chapters.len() >= 5, "Episode must have at least 5 chapters, found {}", chapters.len());
+            assert!(
+                chapters.len() >= 5,
+                "Episode must have at least 5 chapters, found {}",
+                chapters.len()
+            );
             let last = chapters.last().copied().unwrap_or(0);
-            assert!(last > 1_400_000, "Last chapter must start near episode end, found {last} ms for {dur} ms");
+            assert!(
+                last > 1_400_000,
+                "Last chapter must start near episode end, found {last} ms for {dur} ms"
+            );
             println!(
                 "Iteration {i}: audio={audio:?} subs={subs:?} chapters={} dur={dur} last_chap={last}",
                 chapters.len()

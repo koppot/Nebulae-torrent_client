@@ -163,7 +163,12 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
         GetCursorPos, SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
     };
     let hwnd = main_hwnd(app)?;
+    // HWND wraps *mut c_void (not Send) and run_on_main_thread requires
+    // FnOnce() + Send: ship the address as usize and rebuild the handle
+    // on the main thread inside the closure.
+    let hwnd_addr = hwnd.0 as usize;
     app.run_on_main_thread(move || unsafe {
+        let hwnd = HWND(hwnd_addr as *mut core::ffi::c_void);
         let _ = ReleaseCapture();
         let mut pt = POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
