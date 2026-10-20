@@ -72,14 +72,17 @@ candidate freeze. No other overlapping edits exist at this time.
 
 ## 4. Candidate & results
 
-- **Previous Candidate:** `dc444f0` (orphan sweep verified, all 4 platforms built in run 39361992611).
-- **Consolidated Windows Repairs Candidate:** `60252ab598a7f29504660578b9268f8430cd82ec`.
-  - Integrates Tasks 13, 14, 15, 16, 17:
+- **Previous Candidates:** `dc444f0` (orphan sweep verified), `1402208` (candidate build 39406029401 built Windows/Linux/macOS arm64).
+- **Consolidated Final Candidate:** `60252ab598a7f29504660578b9268f8430cd82ec`.
+  - **Candidate Build Run:** [Run 39407774733](https://github.com/koppot/Nebulae-torrent_client/actions/runs/39407774733) (dispatched per explicit owner authorization with source ref `60252ab598a7f29504660578b9268f8430cd82ec`).
+  - Integrates all consolidated requirements:
     - Task 13: Truthful Tailnet 5-state connectivity reporting over SOCKS5 WireGuard mesh (`127.0.0.1:1055`).
-    - Task 14: PowerShell subprocess elimination (`GetDiskFreeSpaceExW` FFI call replaces 60s periodic script).
+    - Task 14: PowerShell subprocess elimination (`GetDiskFreeSpaceExW` Win32 FFI call replaces 60s periodic script).
     - Task 15: Right-click tray menu "Quit application" with clean child process termination (`engine.shutdown()` + `tailscale::shutdown()`).
     - Task 16: "Keep running in the notification area when the window is closed" checkbox and X / Alt+F4 close routing.
     - Task 17: Dynamic Transmission RPC client port allocation, watchdog recovery, and bounded retry loop.
+    - Chapter Repairs: C ABI struct layout for `BLURAY_TITLE_CHAPTER` (48-byte layout) and timeline seekbar alignment.
+    - Poster hover popup: 70% scale reduction with non-blocking pointer events.
 - **Discord reporter:** Delivery verified (run 39352687166, HTTP 2xx). Webhook rotation canceled by owner directive.
 - **Verification:** All 119 unit tests pass; `cargo check` clean; `cargo fmt` clean; `cargo clippy -- -D warnings` clean; `npx tsc --noEmit` clean.
 
