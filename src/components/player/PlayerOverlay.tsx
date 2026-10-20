@@ -1002,7 +1002,11 @@ export default function PlayerOverlay() {
               className="absolute left-0 top-0 h-full rounded-full bg-white"
               style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
             />
-            {/* Chapter marks: vertical ticks at the real chapter offsets */}
+            {/* Chapter marks: vertical ticks at the real chapter offsets.
+                Owner (screenshot feedback): the old 1px white ticks were
+                invisible against the light track. Render DARK notches that
+                extend past the track, centered on the offset, opaque so
+                they stay visible over both the played fill and the track. */}
             {chapterMarks.slice(1).map((mk, i) => {
               // The probe reads a PLAYLIST whose duration can differ from
               // VLC's media (external Blu-ray opens resolve to a different
@@ -1013,7 +1017,7 @@ export default function PlayerOverlay() {
               return (
                 <span
                   key={i}
-                  className="absolute top-1/2 -translate-y-1/2 w-px h-[5px] bg-white/70 pointer-events-none"
+                  className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
                   style={{ left: `${leftPct}%` }}
                   title={mk.name}
                 />
