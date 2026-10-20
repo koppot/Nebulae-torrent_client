@@ -861,3 +861,48 @@ the Discord Support link (the = the verify = the), the UHD = the
 Antigravity's = the, the menus/wiki = the. The Windows interaction
 items (the checkbox/X/Alt+F4/tray/Quit + the authenticated RPC's UI) =
 the SEPARATE = the recorded = the next.
+
+## 16. Antigravity Handoff to Factory AI — Preserved Working Applications (2026-10-20)
+
+### Preserved Handoff Directory: `/Users/dev/handoff-to-factory-20261020/`
+
+#### 1. Bundle A: Owner-Confirmed Working Application ("Test Beta 1")
+- **Preserved App Path**: `/Users/dev/handoff-to-factory-20261020/owner-confirmed-test-beta-1/Nebulae.app`
+- **Installed System Copy**: `/Applications/Nebulae.app` (intact and identical)
+- **Primary Archive**: `/Users/dev/Test_Beta_1_Recovery_20261020/`
+- **Matching DMG**: `/Users/dev/handoff-to-factory-20261020/owner-confirmed-test-beta-1/Nebulae_Test_Beta_1.dmg` (126.39 MiB)
+  - DMG SHA-256: `5a485a560c66b5f3a32b443ac0c7dd4660f79153a88bb53f8241c431d8282be2`
+- **Executable**: `Nebulae.app/Contents/MacOS/nebulae`
+- **Executable SHA-256**: `7e8c508b5ae7e04dea0fdfff6fe15f0926bb25f74ac59a0345e28d4be9b1ef45`
+- **Mach-O UUID**: `C86B18B2-B2F3-3A9C-A4C5-6C334570252E` (arm64)
+- **Bundle Version**: `0.2.2` (`org.asiandvdclub.nebulae`)
+- **Source Revision**: `faa52a48348a38238db9d3d7453046314f20f5ba` on `main` (tag: `test-beta-1-recovery-20261020`)
+- **TailScale Adoption Patch**: **Predates** the adoption patch (does not include POSIX `find_owned_daemon_pids`).
+- **Owner-Confirmed Results**:
+  - Moving picture and audio confirmed visible around 5:04–5:06 PM and 5:12 PM on DVD and Blu-ray.
+  - Video presentation restored by reinstating `.transparent(true)` on programmatic window creation (`src-tauri/src/lib.rs`).
+  - HDR tone-mapping was observed working in earlier 15:47 session, but reported visibly washed out in current session (Factory's current investigation).
+  - UHD disc menus and format transitions remain unverified.
+
+#### 2. Bundle B: Candidate `24fabf2` + Transparency + TailScale Adoption
+- **Preserved App Path**: `/Users/dev/handoff-to-factory-20261020/candidate-24fabf2-tailscale-adoption/Nebulae.app`
+- **Executable SHA-256**: `28ec6f38618a91255a9a983067cafc09e3d0ce5cad803c926c1ba92621a23c3c`
+- **Source Revision**: `24fabf23530cbfb4a5ea5e3849c460cb440eba43` + `.transparent(true)` + `fix/tailscale-macos-adoption` (`5b2d505beea7e008d50feef07c70f3f26b527582`)
+- **TailScale Adoption Patch**: **Includes** the permanent macOS/Unix adoption patch (`ps -axo pid,command` matching statedir marker).
+- **Verified Results**:
+  - Reconstructed `24fabf2` 50ms pause/unpause buffer flush in `player_return_to_menu`.
+  - DVD ISO menu return and moving playback verified.
+  - Successfully adopts running embedded daemon PID 79031 with zero duplicate processes.
+
+#### 3. Loaded VLC / Runtime Paths (Self-Contained in Bundle)
+- Dynamic libVLC: `<bundle>/Contents/Resources/resources/vlc/lib/libvlc.dylib` (178 KiB)
+- libVLC Plugins: `<bundle>/Contents/Resources/resources/vlc/plugins/`
+- Embedded Transmission Daemon: `<bundle>/Contents/Resources/resources/engine/transmission/transmission-daemon`
+- Embedded TailScale: `<bundle>/Contents/Resources/resources/engine/tailscale/{tailscaled,tailscale}`
+- Embedded JRE (BD-J): `<bundle>/Contents/Resources/jre/`
+
+#### 4. Dedicated Branches & Patches
+- Tailscale macOS Adoption Patch: branch `origin/fix/tailscale-macos-adoption` (`5b2d505beea7e008d50feef07c70f3f26b527582`)
+- Patch file: `/Users/dev/patches/tailscale-macos-adoption.patch`
+- Zero HDR-related files modified.
+
