@@ -113,3 +113,70 @@ candidate freeze. No other overlapping edits exist at this time.
 - Update §1 (state) and §3 (board) at every task boundary.
 - New blocker → add a row, set the owner, never delete another agent's rows.
 - Candidate freeze = both agents confirm the same SHA here.
+
+## 4b. Second owner report — lifecycle round (2026-10-20)
+
+**Owner runtime evidence drove three Factory fixes (commit `2d5facb`, CI
+both-jobs green, candidate run `39406029401` from SHA
+`1402208af8ef9ee96af66c8c29eb74c1b0e74347`):**
+
+1. **Tray Quit orphaned transmission** — the owner's live-tray Quit test
+   (which PASSED: menu opens, Quit exits, icon removed — the earlier
+   "right-click does nothing" = zombie icons from test churn, resolved by
+   cleanup) left `app=0 tsd=0 trans=2`: tailscaled + keepalive stopped but
+   transmission-daemon was orphaned. Fix: `TorrentEngine::shutdown`
+   (default no-op) + a shutdown flag shared with the health watchdog
+   (which now exits instead of respawning), daemon terminated + waited,
+   wired into `RunEvent::ExitRequested`. Torrent state/settings/
+   identities untouched on disk.
+2. **"PowerShell appears during normal use"** — full spawn audit: every
+   application helper uses `CREATE_NO_WINDOW` (hidden); the ONE gap was
+   `probe_adc_over_tailnet` spawning the tailscale CLI without it — a
+   console flash every doctor cycle (10 min). Fixed. The other visible
+   PowerShell windows = Factory's own diagnostic scheduled tasks
+   (quit_test*.ps1 etc.), not application helpers; they are being
+   removed from the desktop. No accumulating leaks; no user shells
+   touched.
+3. **Add Torrent RPC failure (127.0.0.1:53540)** — a dead-or-restarting
+   daemon surfaced the error immediately (watchdog backoff gap up to
+   ~18s). Transport errors now retry bounded (~8.5s). Re-sending is
+   safe: transmission-daemon deduplicates torrent-add of the same
+   metainfo; remaining calls idempotent. Sweep-vs-spawn ordering
+   verified correct (sweep at 1156 precedes spawn at 1315 — no race
+   with the fresh daemon).
+
+**Tailnet false-healthy defect — FIXED (`59dac5a`, CI green):** root
+cause = the embedded-daemon branch reported `adc_reachable` from the
+CACHED netmap route entry (`adc_route_ip.is_some()`), which stays Some
+while the peer is merely listed, not online; the UI also rendered
+unknown as green. Fix: live bounded TCP probe (2s) of the ADC node's
+tailnet IP:443 using the embedded daemon's own peer data, 60s freshness
+cache keyed by the probed address (route change = invalidate),
+monotonic writes (an older success can never overwrite a newer
+failure), cache cleared when no node resolves. Frontend three states:
+green "verified" / amber "ADC host offline" / gray pulsing "ADC
+unverified". TLS validation untouched (TCP reachability here; full
+HTTPS stays with the doctor). Failure/recovery test on the packaged
+bytes = pending in this round's battery.
+
+**Webhook: rotation CANCELED by owner** — the working
+`DISCORD_STATS_WEBHOOK_URL` stays; nobody rotated it (secret unchanged
+since Factory's 01:17Z set); removed from blockers.
+
+**Control server SSH host key: owner-confirmed rebuilt/expected** —
+journal access unblocked.
+
+**Remaining for this round:**
+- [Factory] Battery on `1402208` bytes: installer upgrade, quit-path
+  (app/tsd/trans all stop), Tailnet failure/recovery (scoped firewall
+  block of the ADC node, reversible), add-torrent RPC, 30-min window.
+- [Antigravity] Close-behavior checkbox ("Keep running in the
+  notification area when the window is closed" — the setting exists;
+  consolidate, label clearly, persist, document the default for new
+  profiles) + tray menu wording ("Quit application" label at their
+  discretion; behavior verified). Then all-platform packaging.
+- [Factory] Verify both close-setting states after Antigravity lands
+  the checkbox; then record the RELEASE ACCEPTANCE verdict.
+- [Antigravity] Update the existing "Nebulae v0.2.2-beta.1" release from
+  the final agreed candidate (originals preserved internally; stable
+  updater untouched; NO webhook rotation).
