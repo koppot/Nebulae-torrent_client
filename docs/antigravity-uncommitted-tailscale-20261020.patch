@@ -1,0 +1,63 @@
+diff --git a/src-tauri/src/tailscale/mod.rs b/src-tauri/src/tailscale/mod.rs
+index 23ff57f..4905b62 100644
+--- a/src-tauri/src/tailscale/mod.rs
++++ b/src-tauri/src/tailscale/mod.rs
+@@ -367,8 +367,7 @@ fn daemon_cmdline_marker(paths: &Paths) -> String {
+ }
+ 
+ /// PIDs of tailscaled processes whose command line carries OUR state dir
+-/// (ownership proof). Empty on other platforms (the child handle covers
+-/// them) and when PowerShell is unavailable.
++/// (ownership proof).
+ fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
+     #[cfg(target_os = "windows")]
+     {
+@@ -399,8 +398,25 @@ fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
+     }
+     #[cfg(not(target_os = "windows"))]
+     {
+-        let _ = paths;
+-        Vec::new()
++        let marker = daemon_cmdline_marker(paths);
++        match Command::new("ps")
++            .args(["-axo", "pid,command"])
++            .output()
++        {
++            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
++                .lines()
++                .filter_map(|line| {
++                    let trimmed = line.trim_start();
++                    if let Some((pid_str, cmd)) = trimmed.split_once(char::is_whitespace) {
++                        if cmd.contains("tailscaled") && cmd.contains(&marker) {
++                            return pid_str.parse::<u32>().ok();
++                        }
++                    }
++                    None
++                })
++                .collect(),
++            _ => Vec::new(),
++        }
+     }
+ }
+ 
+@@ -1311,6 +1327,20 @@ mod tests {
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+ 
++    /// Unowned paths return empty PIDs list.
++    #[test]
++    fn find_owned_daemon_pids_unowned_returns_empty() {
++        let dir = temp_dir("nebulae-ts-unowned-fake-dir-12345");
++        let paths = Paths {
++            state_dir: dir.clone(),
++            socket: socket_path(&dir),
++            bin_dir: dir.clone(),
++        };
++        let pids = find_owned_daemon_pids(&paths);
++        assert!(pids.is_empty(), "fake statedir must have no running daemons");
++        let _ = std::fs::remove_dir_all(&dir);
++    }
++
+     /// Stopping a never-started state must be a no-op (no panic, clean flags).
+     #[test]
+     fn shutdown_without_daemon_is_clean_noop() {
