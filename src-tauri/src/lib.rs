@@ -419,6 +419,7 @@ pub fn run() {
                 .inner_size(1280., 840.)
                 .min_inner_size(980., 640.)
                 .decorations(false)
+                .transparent(true)
                 .center();
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
