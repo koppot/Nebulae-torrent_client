@@ -858,14 +858,18 @@ fn disc_library_title(xml: &str) -> Option<String> {
 #[tauri::command]
 pub async fn player_disc_display_title(
     state: tauri::State<'_, PlayerState>,
-    path: String,
+    // Optional: the overlay invokes this without arguments (Tauri rejects
+    // the call as a missing required key otherwise, which silently lost the
+    // authored title). The current session's resolved disc wins anyway.
+    path: Option<String>,
 ) -> Result<Option<DiscDisplayTitle>, String> {
     // Current session's resolved disc wins; the caller's path is the
     // fallback. Matches the probe_root pattern of the other disc probes.
     let path = poison(&state.current_resolved)
         .clone()
         .or_else(|| poison(&state.current_path).clone())
-        .unwrap_or(path);
+        .or(path)
+        .unwrap_or_default();
     if path.is_empty() {
         return Ok(None);
     }
