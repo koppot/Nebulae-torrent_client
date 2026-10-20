@@ -822,6 +822,112 @@ pub async fn player_return_to_menu(
     start_playback(&app, &state, &path, false).map(|_| ())
 }
 
+/// Authored disc-library display title (BDMV/META/DL/bdmt_*.xml, the BDA
+/// DiVIMeta format discs ship for menus/jackets). Feeds the player's
+/// upper-left label with the meaningful movie/disc name; None when the
+/// disc carries no usable authored name — generic entries (Fuuka's discs
+/// literally author their folder label "FUUKA_CS_D1") and missing
+/// metadata fall back to the caller's existing library/filename metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscDisplayTitle {
+    pub name: String,
+    pub lang: String,
+}
+
+/// Extract `<di:title><di:name>…</di:name></di:title>` text from a BDA
+/// disc-library (bdmt) XML document. Namespace-agnostic on purpose: discs
+/// vary in namespace prefixes but the local structure is fixed.
+fn disc_library_title(xml: &str) -> Option<String> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    for node in doc.descendants() {
+        if node.tag_name().name() == "name"
+            && node
+                .parent()
+                .map(|p| p.tag_name().name() == "title")
+                .unwrap_or(false)
+        {
+            let text = node.text()?.trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub async fn player_disc_display_title(
+    state: tauri::State<'_, PlayerState>,
+    path: String,
+) -> Result<Option<DiscDisplayTitle>, String> {
+    // Current session's resolved disc wins; the caller's path is the
+    // fallback. Matches the probe_root pattern of the other disc probes.
+    let path = poison(&state.current_resolved)
+        .clone()
+        .or_else(|| poison(&state.current_path).clone())
+        .unwrap_or(path);
+    if path.is_empty() {
+        return Ok(None);
+    }
+    tokio::task::spawn_blocking(move || {
+        let probe_path = probe_root(&path);
+        let dl = probe_path.join("BDMV").join("META").join("DL");
+        if !dl.is_dir() {
+            return Ok(None);
+        }
+        // Language preference: eng, then jpn, then any other authored file.
+        // Files are tiny (<1 KiB); reading all of them is negligible.
+        let mut lang_files: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(&dl)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let name = e.file_name().into_string().ok()?;
+                        let stem = name.strip_prefix("bdmt_")?.strip_suffix(".xml")?.to_string();
+                        Some((stem, e.path()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if lang_files.is_empty() {
+            return Ok(None);
+        }
+        lang_files.sort_by_key(|(lang, _)| match lang.as_str() {
+            "eng" => 0,
+            "jpn" => 1,
+            _ => 2,
+        });
+        for (lang, file) in lang_files {
+            let Ok(xml) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let Some(name) = disc_library_title(&xml) else {
+                continue;
+            };
+            // Reject generic authored names: the release's own folder label
+            // ("FUUKA_CS_D1") is a placeholder, not a display title. Keep
+            // the caller's trusted library metadata in that case.
+            let folder = probe_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let lower = name.to_lowercase();
+            if lower.is_empty()
+                || lower == folder
+                || matches!(
+                    lower.as_str(),
+                    "movie" | "bluray" | "blu-ray" | "uhd" | "dvd" | "disc" | "title" | "bdmv"
+                )
+            {
+                continue;
+            }
+            return Ok(Some(DiscDisplayTitle { name, lang }));
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|e| format!("display title join error: {e}"))?
+}
+
 /// Stop the post-open menu watcher: the user explicitly wants playback
 /// (media-screen resume, or the menu bar's Play button).
 #[tauri::command]

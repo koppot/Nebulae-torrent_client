@@ -156,6 +156,11 @@ export default function PlayerOverlay() {
   // Chapter marks: real per-chapter time offsets for the current title.
   const [chapterMarks, setChapterMarks] = useState<{ offset_ms: number; duration_ms: number; name: string }[]>([]);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
+  // Authored disc-library title (BDMV/META/DL/bdmt_*.xml). Probed once per
+  // disc, non-blocking; null while probing or when the disc carries no
+  // usable authored name (the label falls back to library metadata).
+  const [authoredTitle, setAuthoredTitle] = useState<string | null>(null);
+  const discTitleCacheRef = useMemo(() => new Map<string, string | null>(), []);
   const lastSaveRef = useRef(0);
   const dragArmedRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -192,6 +197,7 @@ export default function PlayerOverlay() {
     setEnded(false);
     setSeeking(null);
     setDiscChoices(null);
+    setAuthoredTitle(null);
     setErrorMessage(null);
 
     const apply = (p: Poll) => {
@@ -631,10 +637,39 @@ export default function PlayerOverlay() {
      
   }, [player.open, poll.title]);
 
+  // Authored display-title probe (owner: the upper-left label uses the
+  // movie/disc title from disc metadata when available). Non-blocking and
+  // cached per resolved path, so disc switches re-probe cleanly without
+  // ever touching playback.
+  useEffect(() => {
+    if (!player.open || !player.isDisc) return;
+    const key = player.resolvedPath;
+    if (discTitleCacheRef.has(key)) {
+      setAuthoredTitle(discTitleCacheRef.get(key) ?? null);
+      return;
+    }
+    let alive = true;
+    invoke<{ name: string; lang: string } | null>('player_disc_display_title')
+      .then((r) => {
+        const name = r && r.name ? r.name : null;
+        discTitleCacheRef.set(key, name);
+        if (alive) setAuthoredTitle(name);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [player.open, player.isDisc, player.resolvedPath, discTitleCacheRef]);
+
   // Top-left now playing title & release year (owner instruction):
   // Format: "Title (Year)" when reliable metadata is available; omit if missing.
   const displayTitleInfo = useMemo(() => {
-    let clean = (player.title || '').trim();
+    // Authored disc-library name wins when the disc supplies a meaningful
+    // one (owner: the label uses the movie/disc title from disc metadata).
+    // The filename/library title is the fallback; generic authored entries
+    // like "FUUKA_CS_D1" are rejected by the backend probe. Year still
+    // comes only from reliable metadata (the disc XML carries none).
+    let clean = (authoredTitle || player.title || '').trim();
     let year = player.year ? String(player.year) : null;
     if (!year) {
       const match = clean.match(/\s*\((\d{4})\)$/);
