@@ -397,22 +397,42 @@ fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>
 #[tauri::command]
 pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
     let ts = crate::tailscale::status();
-    if ts.backend_state == "Running" {
-        // Owner defect (2026-10-20): a Running daemon with a CACHED route
-        // entry reported ADC as reachable while the ADC Linux host was
-        // offline. Reachability must be a live bounded probe with a
-        // freshness window, never a cached netmap entry.
-        let target = ts.adc_route_ip.clone().or_else(|| ts.adc_node.clone());
-        let (adc_node, adc_reachable) = live_adc_probe(target.as_deref(), ts.adc_node);
+    // The app ALWAYS runs the embedded userspace daemon, so any non-empty
+    // backend state means THIS app owns a daemon and its state is the
+    // truth. Report it directly — a separate SYSTEM Tailscale (observed
+    // live on macOS: Tailscale.app + network-extension + utun4 with a
+    // 100.x address) must never leak into the app's status. The old
+    // legacy fallback could report the SYSTEM's interface as the app's
+    // "Tailnet connected" while the embedded daemon was logged out
+    // (mixed-stack defect, 2026-10-20).
+    if !ts.backend_state.is_empty() {
+        let running = ts.backend_state == "Running";
+        let (adc_node, adc_reachable) = if running {
+            // Owner defect (2026-10-20): a Running daemon with a CACHED
+            // route entry reported ADC as reachable while the ADC Linux
+            // host was offline. Reachability must be a live bounded probe
+            // with a freshness window, never a cached netmap entry.
+            let target = ts.adc_route_ip.clone().or_else(|| ts.adc_node.clone());
+            live_adc_probe(target.as_deref(), ts.adc_node)
+        } else {
+            // Not running: clear any cached probe result so a stale
+            // healthy indication cannot survive a daemon stop/logout.
+            if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
+                *c = None;
+            }
+            (ts.adc_node, None)
+        };
         return Ok(TailscaleStatus {
-            connected: true,
-            interface: Some("nebulae-embedded (userspace)".into()),
-            tailnet_ip: ts.tailnet_ip,
+            connected: running,
+            interface: running.then(|| "nebulae-embedded (userspace)".to_string()),
+            tailnet_ip: running.then_some(ts.tailnet_ip).flatten(),
             adc_reachable,
             adc_node,
         });
     }
 
+    // The embedded daemon has never been probed in this process (backend
+    // state empty): fall back to system-TUN detection for legacy installs.
     tokio::task::spawn_blocking(|| {
         if crate::utils::network::detect_tailscale().is_none() {
             // Stopped at login (observed after network-extension updates):
