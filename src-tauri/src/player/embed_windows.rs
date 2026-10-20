@@ -146,12 +146,39 @@ pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), St
     Ok(())
 }
 
-/// Window drag: Tauri's startDragging works on Windows.
+/// Window drag: start the native caption-drag move loop ourselves.
+///
+/// tao's `drag_window` (0.37.1) Posts `WM_NCLBUTTONDOWN` with an LPARAM
+/// that points to a stack local which is already gone when the modal
+/// move loop reads it — the drag returns Ok(()) but the window never
+/// moves (observed on the undecorated main window). Do the canonical
+/// dance instead: release the WebView2's mouse capture, then SYNCHRONOUS
+/// SendMessage the caption hit-test so the move loop runs with a valid
+/// POINTS lparam on the main thread (native title-bar behavior; the
+/// modal loop pumps messages, so the app stays responsive).
 pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("main") {
-        return win.start_dragging().map_err(|e| format!("drag: {e}"));
-    }
-    Err("main window not found".into())
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, SendMessageW, HTCAPTION, POINT, POINTS, WM_NCLBUTTONDOWN,
+    };
+    let hwnd = main_hwnd(app)?;
+    app.run_on_main_thread(move || unsafe {
+        let _ = ReleaseCapture();
+        let mut pt = POINT { x: 0, y: 0 };
+        let _ = GetCursorPos(&mut pt);
+        let points = POINTS {
+            x: pt.x as i16,
+            y: pt.y as i16,
+        };
+        SendMessageW(
+            hwnd,
+            WM_NCLBUTTONDOWN,
+            WPARAM(HTCAPTION.0 as usize as _),
+            LPARAM(&points as *const _ as _),
+        );
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
 /// Fullscreen via the Tauri window API (works for standard windows).

@@ -135,19 +135,28 @@ export const TitleBar: React.FC = () => {
 
   return (
     <header
-      data-tauri-drag-region
+     
       onMouseDown={(e) => {
         // Tauri's startDragging (async IPC) fails to move borderless windows
         // on current macOS; the backend synthesizes a native mouse-down and
         // hands it to performWindowDragWithEvent on the main thread.
-        if (e.button === 0 && (e.target as HTMLElement).closest('button') === null) {
+        // Windows: tao's PostMessage-based drag carries a dangling POINTS
+        // pointer (Ok result, no movement) — the backend runs the canonical
+        // synchronous WM_NCLBUTTONDOWN move loop instead. Never drag from
+        // interactive controls (buttons, inputs, selects, links).
+        if (
+          e.button === 0 &&
+          (e.target as HTMLElement).closest(
+            'button, input, select, textarea, a, [role="button"]',
+          ) === null
+        ) {
           invoke('window_begin_drag').catch(() => {});
         }
       }}
       onDoubleClick={handleToggleMaximize}
       className="relative border-b border-[#262626] bg-[#141414] flex flex-col select-none z-30 flex-shrink-0"
     >
-      <div className="flex items-center justify-between px-3 h-10" data-tauri-drag-region>
+      <div className="flex items-center justify-between px-3 h-10">
         {/* Mode buttons (owner): TWO separate buttons, centered on the top
             bar on both views, as colorful as Add/Create. The active mode
             is red like Add; the other is gold-accented like Create. */}
@@ -181,7 +190,7 @@ export const TitleBar: React.FC = () => {
             <span>Manager</span>
           </button>
         </div>
-        <div className="flex items-center gap-2.5 flex-shrink-0" data-tauri-drag-region>
+        <div className="flex items-center gap-2.5 flex-shrink-0">
           {/* Nebula icon (owner): visible on BOTH views; opens the
               release/app info popup with the Update button. */}
           <button
@@ -197,7 +206,7 @@ export const TitleBar: React.FC = () => {
             —  Client by Asian DVD Club
           </span>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0" data-tauri-drag-region>
+        <div className="flex items-center gap-2 flex-shrink-0">
           {/* Add Movie button (owner): prominent in top bar during Media mode */}
           {viewMode === 'media' && (
             <button
@@ -285,7 +294,7 @@ export const TitleBar: React.FC = () => {
       </div>
       {/* Second row (owner): manager-only — nothing on it belongs to
           the Media Center. */}
-      {viewMode !== 'media' && <div className="flex items-center px-3 h-10" data-tauri-drag-region>
+      {viewMode !== 'media' && <div className="flex items-center px-3 h-10">
         {/* Left slot (owner): the torrent controls float left on row 2. */}
         {/* Primary Action Buttons: Add, Create, Resume, Pause, Delete —
             MANAGER ONLY (owner): none of the transfer actions belong to
