@@ -54,7 +54,8 @@ candidate freeze. No other overlapping edits exist at this time.
 | 4 | Unexpected console/CMD windows | Antigravity | **DONE (af321dd, 233474d)** | `create_hidden_command`/`run_hidden_powershell` adopted across spawn sites; Factory's duplicate edits dropped. |
 | 5 | Windows runtime verification of candidate (drag battery, installer 4 cases, 30-min connectivity) | Factory | **IN PROGRESS** | Candidate 644e3b4 confirmed. BLOCKED on a packaged artifact: no CI artifacts, no toolchain on the desktop — requested a prerelease RC dispatch from Antigravity (§4). Battery plan ready; runs the moment bytes exist + desktop is handed over. |
 | 6 | macOS regression + preservation of prior client fixes | Antigravity | **DONE** | Verified: all Antigravity client repairs intact (disc menus, non-blocking media probes, status bar, sequential toggle, super-seeding, first-run prompt, in-process rfd dialogs). 119 unit tests + 9 integration tests + tsc pass. |
-| 7 | Coordinated packaging + v0.2.2-beta.1 asset update | Antigravity | **AFTER 5+6** | Factory delivers the confirmed candidate SHA + Windows acceptance; Antigravity = sole uploader. |
+| 7 | Coordinated packaging + v0.2.2-beta.1 asset update | Antigravity | **AFTER 5+6+8** | Factory delivers the confirmed candidate SHA + Windows acceptance; Antigravity = sole uploader. Keep the release name "Nebulae v0.2.2-beta.1". |
+| 8 | **REOPENED: chapter markers crowd into first ~50% of seek bar** (owner confirms the prior "verified" entry does not hold for the owner's workflow) | Antigravity (investigation + repair); Factory (integration + candidate verification) | **OPEN** | Not yet reproduced with captured values. Factory's read-only reading of `src/components/player/PlayerOverlay.tsx` (lines 722-727, 1011-1025): markers use `offset_ms / base` where `base = mk.duration_ms \|\| dur`, while the seek thumb uses `pos / dur` — a playlist-vs-title duration mismatch produces exactly the reported ~50% crowding. NOTE: this is a reading, not the verified cause; per the owner's directive the actual values must be captured on the failing disc (title/playlist, both durations, raw chapter timestamps, units, track widths) BEFORE the repair. Repair must not force the last marker to 100% or stretch containers. Factory adds the targeted regression-test wiring + re-verifies on the packaged app; do NOT mark resolved until the failing workflow passes on real bytes. |
 
 ## 4. Candidate & results
 
@@ -63,6 +64,11 @@ candidate freeze. No other overlapping edits exist at this time.
   packaging (local tree synced at `6473593`, docs-only on top). Antigravity's
   packed-lParam drag refinement reviewed and adopted — it corrects Factory's
   POINTS-pointer form to the proper Win32 packed coordinates. Agents agree.
+- **Candidate supersession warning (task 8):** the chapter-timeline repair
+  WILL change the agreed candidate. Task 8's fix must land on main, the record
+  §4 must be updated with the new shared SHA, and the affected checks
+  (lint/test + Factory's runtime battery) rerun BEFORE packaging. Do not
+  package `644e3b4` while task 8 is open.
 - **Desktop access:** currently NO agent holds it — the owner has the failed
   installer dialog open on the physical desktop (Retry is safe to click now:
   the DLL conflict is cleared). Factory requests access for the verification
