@@ -501,3 +501,54 @@ owner assistance.
 macOS preauth enroll + Factory's post-enroll verification, (b) the
 owner's Windows visual pass. No rebuild, no updater change, no webhook
 rotation, no release publication.
+
+## 9. Evidence-gap round — corrections per owner review (2026-10-20)
+
+1. **macOS system-Tailscale reconciliation (CORRECTION of Factory's
+   earlier claim).** Factory's earlier "no separate system daemon" was a
+   FLAWED CHECK (the process grep matched the daemon name, not the
+   network-extension process name). Full reconciliation, 2026-10-20
+   14:04 UTC: /Applications/Tailscale.app IS INSTALLED and RUNNING
+   (pid 41727 + the io.tailscale.ipn.macsys network-extension pid
+   41748, the login-item helper registered in launchctl); utun4 is UP
+   with the tailnet address 100.109.251.80 — a LIVE system enrollment
+   exists. What changed since the earlier report: NOTHING on the
+   machine — the earlier CHECK was wrong, not the state. Status:
+   system Tailscale = installed AND currently running AND enrolled.
+   The app's embedded daemon (pid 50940) is separate; all recovery
+   targeting stays on the verified embedded socket. Consequence: the
+   mixed-stack leak was LIVE (the app's status could read the system's
+   utun4 as the app's own) — fixed in `492ffff` (CI both jobs green):
+   any non-empty embedded backend state owns the report; the legacy
+   fallback fires only when the embedded daemon was never probed; the
+   probe cache is cleared whenever the embedded daemon is not Running.
+2. **SSH trust change (honest record).** The replacement ED25519
+   fingerprint (SHA256:G7Ig…) was added after the owner-confirmed
+   rebuild. That is OWNER CONFIRMATION, not independent verification —
+   recorded as such. No further host-key replacements or verification
+   bypasses will be made; SSH administration beyond read-only checks
+   is paused unless the owner supplies independent verification (e.g.
+   the fingerprint from the server's console/provider). No credentials
+   or private-key material in this record.
+3. **Windows conclusions limited to what was observed.** The visible
+   PowerShell window = Factory's diagnostic task (proven for THAT
+   window); earlier owner-reported console appearances are attributed
+   only as "consistent with agent tooling," not proven. HTTP 401 =
+   the endpoint responds and requires auth; it does NOT prove the
+   app's authenticated integration. The integration evidence = the
+   app's own UI successfully performs RPC list calls against the live
+   daemon (the Manager renders from the same authenticated client);
+   a raw credential replay is not needed and was not used. The fresh
+   test profile does NOT prove preservation of existing user torrents
+   — preservation claims remain explicitly open until the owner's
+   real-profile upgrade case.
+4. **Onboarding gap (standing):** the app's enrollment is backend-only
+   (no UI). Ordinary-user setup currently requires terminal use. This
+   is a product/onboarding gap for a future release, NOT resolved by
+   the manual terminal recovery.
+
+**Current candidate: `492ffff` (status truthfulness + mixed-stack fix;
+CI both jobs green).** A rebuild covering it requires owner
+authorization per the standing build-control rule; the macOS recovery
+and the Windows interaction checks proceed on the already-authorized
+39407774733 artifacts + local verification in the meantime.
