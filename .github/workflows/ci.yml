@@ -45,3 +45,24 @@ jobs:
       - name: Rust tests
         run: cargo test
         working-directory: ./src-tauri
+
+  # Windows compile + test gate: the ubuntu job above never compiles the
+  # windows-only code paths (cfg(windows) native window/drag/spawn code),
+  # which is how the candidate build 39351367957 failed on errors that CI
+  # never saw. This job compiles and unit-tests on the real target.
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Windows compile check
+        run: cargo check --lib
+        working-directory: ./src-tauri
+
+      - name: Windows unit tests
+        run: cargo test --lib
+        working-directory: ./src-tauri

@@ -334,6 +334,7 @@ fn spawn_keepalive(state: &TsState, paths: &Paths) {
 fn stop_keepalive(state: &TsState) {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         state.adopted_keepalive.store(false, Ordering::SeqCst);
         let mut guard = state.keepalive.lock().unwrap();
         if let Some(child) = guard.as_mut() {
