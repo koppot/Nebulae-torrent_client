@@ -198,3 +198,58 @@ journal access unblocked.
   starts when run 39407774733 completes: installer upgrade, quit-path
   (all three counts), add-torrent RPC, scoped Tailnet failure/recovery,
   30-minute window. Owner action needed: none yet.
+
+## 4d. Windows package inventory + macOS "unavailable" diagnosis (2026-10-20)
+
+**Authorized build 39407774733 = ALL FOUR PLATFORMS SUCCESS. Identity
+VERIFIED: candidate-source.txt = 60252ab598a7f29504660578b9268f8430c d82ec;
+the Setup sha256 = d31c880e… = matches.** The earlier provenance flag is
+RESOLVED — the dispatch used the exact full SHA (the run's headSha display
+was the branch tip at dispatch time; the checkout honors the ref).
+
+**Windows package completeness (owner's 4x observation) — COMPLETE
+PACKAGE, size explained by measurement:**
+- Artifact archives: Windows 112 MB, Linux 688 MB, macOS 436/432 MB.
+- Windows installed footprint: **428.7 MB** = jre 144.5 MB + vlc 179.2 MB
+  (369 DLLs, 29 plugin categories) + engine 77.7 MB (tailscale 1.104.1,
+  transmission-daemon 4.1.3, libcrypto DLLs) + the app + frontend.
+  geo/ = player/ = .gitkeep placeholders (runtime-populated), expected.
+- The 106 MB installer is NSIS LZMA: 4.0x compression of the installed
+  tree. macOS DMG and Linux tar compress far less (1.2-1.5x for the same
+  component set, plus larger per-OS runtimes). The difference = packaging
+  compression, NOT missing components. Every component loads (versions
+  printed) and the app demonstrably launches the PACKAGED binaries (the
+  daemon's cmdline = resources\engine\... paths).
+- WebView2 = system-provided (the Windows evergreen); the app installs no
+  JRE/VLC/runtimes from the network at install time: fully OFFLINE-capable
+  installer.
+
+**macOS "Tailnet/ADC unavailable" — the status is TRUTHFUL; the
+environment is the cause.** The installed macOS app (0.2.2) runs the
+embedded tailscaled pointed at a LOCAL test control server,
+http://127.0.0.1:8080, which is DEAD (connection refused, health check:
+"You are logged out... fetch control key... connect: connection refused",
+BackendState=NoState). The "online Linux host" the owner sees is the
+PRODUCTION control (45.135.163.140), which this app is NOT enrolled
+against. The status logic correctly shows disconnected/unavailable for a
+daemon that cannot reach its control server — this is also in-wild proof
+of the failure display path (no stale green). NOT a regression of the
+candidate. **Owner decision needed:** re-enroll the macOS app to the
+production control server (identity-preserving reconnect), or restart the
+local test control if that tailnet is still wanted.
+
+**Tailnet failure/recovery test note:** the scoped firewall injection
+(TCP 443 block on tailscaled) does NOT affect the userspace WireGuard
+data path (the mesh rides UDP to peer endpoints), so the probe stayed
+correctly 200 and the rule was removed. Healthy-path runtime evidence:
+mesh HTTPS 200 with full TLS verification (ssl_verify_result=0), multiple
+timestamped probes across the day. Failure-path display evidence: the
+macOS dead-control state above. Cache-freshness semantics verified by
+unit tests (119 pass) and the 60s window bounds detection delay to
+<=75s by construction.
+
+**30-minute window: RUNNING on the 60252ab-installed bytes** (the stack
+app=1 tsd=1 trans=1 at the start; the timestamped evidence =
+conn_window.txt on the desktop; the verdict appends on completion).
+Scoped injection variant for a future round: block the daemon's UDP to
+the peer endpoint, or use the already-observed dead-control state.
