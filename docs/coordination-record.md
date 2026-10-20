@@ -630,3 +630,43 @@ acceptance remains OPEN. Candidate separation: installed candidate =
 60252ab (39407774733 bytes); newer source corrections (492ffff: the
 mixed-stack status fix) are recorded separately and require owner
 authorization to build.
+
+## 12. macOS production recovery — COMPLETE (2026-10-20, Factory)
+
+All timestamps UTC, 2026-10-20. Owner approved the replacement Auth ID
+(q7I-sG10…); Factory re-confirmed it STILL_CURRENT at 14:21:06 (the
+exact-approval rule) and registered:
+`Node nebulae-macstudio registered` (14:21:14, strict host-key checking
+against the owner's provider-console-verified fingerprint).
+
+**Verification chain, all PASSED on the installed candidate 60252ab:**
+1. **Running**: BackendState = Running at 14:21:32.
+2. **Assigned address**: 100.64.0.7 (+ fd7a:115c:a1e0::7), DNS =
+   nebulae-macstudio.adc.asiandvdclub.org (the production tailnet).
+3. **Intended ADC peer + private route**: the `asiandvdclub` node ONLINE
+   advertising 45.135.163.139/32 (the verified-listener route).
+4. **SOCKS ownership**: 127.0.0.1:1055 LISTEN owned by the app's
+   embedded daemon (pid 50940) — lsof proof.
+5. **TLS-verified private HTTPS**: https://asiandvdclub.org through the
+   daemon's SOCKS = **HTTP 200 in 0.23s, ssl_verify_result=0** (14:22).
+6. **Restart persistence**: the graceful quit left 0 app processes; the
+   relaunch resumed Running with the SAME address and the SAME live
+   ADC peer + route at 14:22:17 — NO re-enrollment, identity preserved
+   (the app's user data untouched throughout).
+7. **Status truthfulness**: with the daemon Running + the route live,
+   the status bar's verified state follows (the same candidate code
+   that showed the truthful unavailable/disconnect tiers while the
+   control was dead and the mixed-stack leak was live — the fix
+   492ffff is recorded separately, NOT in the installed 60252ab bytes).
+
+**The macOS blocker: RESOLVED.** System Tailscale untouched; no
+server-network changes; no preauth key generated; state backup retained
+at ~/nebulae-state-backup-20261020/ (the deletable once the owner is
+satisfied).
+
+**Remaining for the FINAL verdict:** the Windows interaction tests
+(checkbox both states, X/Alt+F4, tray restore, explicit Quit — via the
+screenshot/UIA access) + a valid Windows private-path failure/recovery
+test (the scoped UDP-layer injection, since the TCP block cannot affect
+the userspace mesh). The release hold stays; Antigravity's Beta 1 asset
+update follows the FINAL Factory verdict.
