@@ -782,3 +782,41 @@ check + windows-tests both SUCCESS (run 39440976940).**
 **Awaiting owner authorization for this one build. No dispatch, no
 release update, no server-network change, no updater change, no webhook
 rotation. UHD work deferred.**
+
+## 14. Handoff for the minimal packaging decision (2026-10-20, Factory)
+
+1. **Is the current Mac installation still working? YES — verified at
+   14:55:24 UTC:** the embedded daemon is Running (the self address =
+   100.64.0.7), the ADC peer `asiandvdclub` is ONLINE advertising
+   45.135.163.139/32, the daemon's effective config shows
+   `"RouteAll": true`, and mesh HTTPS through the daemon's SOCKS =
+   HTTP 200 with full TLS verification. The working production
+   enrollment and the user data are untouched. NOTE: RouteAll=true is
+   LIVE in the daemon's prefs because the recovery `up` happened to run
+   with the flag; the app's own startup path does not yet guarantee it
+   (see 2).
+2. **Which minimal source change makes the working route setting
+   automatic? ONE line-level change, already committed on main in
+   `1b4f732`**: `--accept-routes` added to BOTH `tailscale up`
+   invocations (enroll + resume_saved_profile). `up` persists the flag
+   in the daemon's prefs, so every future enrollment, restart, and
+   supervisor recovery reapplies it with no owner action. The commit
+   also includes two small companion corrections on the same defect
+   path: the probe resolves the bundled CLI explicitly (macOS GUI PATH
+   constraint), and the two tier tests are environment-honest. CI:
+   lint-and-check + windows-tests both green on `1b4f732` (run
+   39440976940). 119 lib tests pass locally.
+3. **Has any new candidate build actually been dispatched? NO.** The
+   last candidate build remains run `39407774733` (completed/success,
+   SHA 60252ab — the installed binaries). No build exists for
+   `1b4f732`, and the superseded draft `b65528c` was force-removed from
+   main and never built.
+
+**Minimal packaging step (owner's decision):** the only commit between
+the installed-candidate source (60252ab) and the corrected source
+(1b4f732) is 1b4f732 itself — one code commit. Packaging that fix =
+ONE candidate build from `1b4f7323167246420893b7ae7d92cb98460aefb4`,
+then a bounded verification (start/connect, visible status, restart
+reconnect, one scoped local path interruption + recovery). No other
+commits ride along: the docs-only merges carry no code. Awaiting the
+owner's build approval; nothing dispatched.
