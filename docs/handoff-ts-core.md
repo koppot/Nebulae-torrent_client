@@ -1,6 +1,42 @@
 # Tailscale-core handoff — FINAL 2026-10-19 (Windows private ADC access WORKING)
 
-## RESULT: END-TO-END SUCCESS on build 243084c
+## INTEGRATED RELEASE VERIFICATION (v0.2.2-beta.1, the tagged candidate)
+
+Provenance (confirmed against the owner's `docs/acceptance-reconciliation.md`):
+tag `v0.2.2-beta.1` → tag object `3fe3215719b15bd5f9367c08525b25f2437dff63`
+→ peeled source `4cf142f2e423147ad48fdb7305f1f318e52aaabf` = the Release
+workflow run 39330027020's checked-out build SHA (no drift). The
+tailscale code in the tag = byte-identical to the Factory-tested branch
+(diff empty; all fixes present: keepalive, peer selector, probe target,
+webview recovery, TLS validation). Post-tag main commits are clippy/fmt
+only. The published Setup's sha256 matched before install.
+
+**Verification of the INSTALLED package (Nebulae 0.2.2 from
+Nebulae-Setup-x64.exe, sha256 012acb90…38, silent install, real install
+path %LOCALAPPDATA%\Nebulae):**
+
+- The app spawned its bundled daemon AND the keepalive client (the fix
+  is live in the shipped build).
+- The daemon-level chain (the same path the app's probe uses): backend
+  Running; ADC peer asiandvdclub 100.64.0.1 online with route
+  45.135.163.139/32; HTTPS via the daemon's SOCKS to
+  https://asiandvdclub.org = 200, curl ssl_verify_result=0 (certificate
+  VERIFIED), ~190ms; control health via mesh = 200 verified.
+- **30+ minutes continuous: ZERO disconnects, ONE login event** (the
+  journal, 23:52:24Z launch → 00:22+), probes passing throughout.
+- Mid-cycle hard-kill → the orphan daemon NEVER lost its stream (the
+  keepalive held it through the app's death — the fix working as
+  designed) → the relaunched app adopted the SAME daemon pid → the mesh
+  restored.
+- Known minor defect found and FIXED on main (5d3a555, CI
+  39345213085): the hard-killed app's keepalive client orphans, and the
+  next app instance spawned a second one. Now adopted
+  (ownership-checked) instead of duplicated; adopted clients are
+  cleaned up on shutdown. Queued for the next versioned beta — the
+  published beta is functionally unaffected (both clients hold the
+  backend; connectivity verified perfect throughout).
+
+## RESULT: END-TO-END SUCCESS on build 243084c (the standalone acceptance)
 
 `243084c82cce24ba99df0874cdaa5627e9487722` (CI 39316981556 ✓, all jobs)
 is the final tested SHA; the desktop package `nebtestF` = the CI artifact
