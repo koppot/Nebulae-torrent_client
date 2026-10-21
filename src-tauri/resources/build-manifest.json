@@ -1,11 +1,11 @@
 {
-  "staged_at_utc": "2026-10-21T21:43:09Z",
-  "git_rev": "72026f5",
+  "staged_at_utc": "2026-10-21T22:16:07Z",
+  "git_rev": "2ee0ae3",
   "vlc_version": "3.0.23",
   "sources": {
     "official_app": "/Applications/VLC.app",
     "custom_build_dir": "/tmp/vlc-3.0.23-build",
-    "custom_patches": ["patches/vlc-3.0.23/vt-305.patch", "patches/vlc-3.0.23/navigate-menu.patch"]
+    "custom_patches": ["patches/vlc-3.0.23/vt-305.patch", "patches/vlc-3.0.23/navigate-menu.patch", "patches/vlc-3.0.23/hdr-tonemap.patch"]
   },
   "files": [
     { "path": "vlc/lib/libvlc.5.dylib", "sha256": "0c65e0e0222b78d59459b869afa814c9f1cba77f681351e0dca3aa0e9357dfef", "source": "custom-build" },
@@ -65,7 +65,7 @@
     { "path": "vlc/plugins/libcache_read_plugin.dylib", "sha256": "4e7547ab161074a3007dfa5abcbbdc2233de99df6f42ee6ccb7c25c22ad4c62f", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcaf_plugin.dylib", "sha256": "1a318914e11e318f245016388c485bd9bf34392a06e34d5466c00cad878f1fb7", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcanvas_plugin.dylib", "sha256": "e6c1ee6e3d68ab61267428c7d094e0f82bf5ec90f667ed3ca41ec488fa06aeb0", "source": "official-vlc-app" },
-    { "path": "vlc/plugins/libcaopengllayer_plugin.dylib", "sha256": "1ff62c53c5c1fc2b097e91521ccfc73989404048669dad2418751014d181e92a", "source": "official-vlc-app" },
+    { "path": "vlc/plugins/libcaopengllayer_plugin.dylib", "sha256": "99fdcda91fecd2f4483244f7753d55a54b2223cfe45f5a833dadd69ca58e6e68", "source": "custom-build" },
     { "path": "vlc/plugins/libcc_plugin.dylib", "sha256": "9742d534c9e8d18275bea46994e1465ad8bd1afcd1d5e639b788e591ca5b3f52", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcdda_plugin.dylib", "sha256": "dd5553bd20486db3adac27d2ddba8d0c957592c037ac561f80912be9cc606fdc", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcdg_plugin.dylib", "sha256": "2c0dff67e2ab3083c7e5ed8405996f1ec59f22d2d88b9aba8cba708a6ac8978d", "source": "official-vlc-app" },

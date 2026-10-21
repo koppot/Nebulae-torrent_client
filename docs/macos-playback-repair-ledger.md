@@ -230,3 +230,38 @@ defects: **unverified** (no playback testing performed).
   - Git commit: `c93553a` on `recovery/macos-playback-20261020`
   - Preserved package: `~/nebulae-candidates/Nebulae-20261021-c93553a.app`
   - Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-c93553a.dmg`
+
+## 8. GLSL ITU-R BT.2390-10 Tone Mapping & Display P3 Colorspace Repair (2026-10-21)
+
+### Defect: UHD HDR Washed-Out Colors on Displays Without XDR Headroom
+- **Root Cause**:
+  1. Official VLC 3.0.23 is compiled without `libplacebo` (`#ifndef HAVE_LIBPLACEBO`).
+  2. In `modules/video_output/opengl/fragment_shaders.c`, when `HAVE_LIBPLACEBO` is absent, VLC emits zero tone mapping or color primary conversion. Raw non-linear SMPTE ST 2084 (PQ) floats in BT.2020 are passed directly to `gl_FragColor` into an 8-bit framebuffer (`kCGLPFAColorSize, 24`).
+  3. In raw PQ, diffuse reference white (100 nits) is encoded at code value 0.508 (130/255 in 8-bit). Specular highlights (1000 nits) occupy the upper 0.75-1.0 range.
+  4. On SDR displays (or external displays in SDR mode where macOS reports `maximumExtendedDynamicRangeColorComponentValue = 1.0`, such as the dual Samsung Odyssey G95NC setup), setting `kCGColorSpaceITUR_2100_PQ` caused macOS WindowServer to treat the 8-bit buffer as absolute 10,000-nit luminance and compress it into 100 nits, severely crushing midtone contrast and stripping saturation.
+  5. Setting no colorspace (sRGB default) left raw PQ floats interpreted as sRGB gamma, which also squashed all scene content into the lower 50% brightness range.
+
+### Fix:
+1. **GLSL ITU-R BT.2390-10 Hermite Spline Tone Mapper (`hdr-tonemap.patch`)**:
+   - Added built-in shader functions to `modules/video_output/opengl/fragment_shaders.c` for `#ifndef HAVE_LIBPLACEBO` when `is_hdr_tonemap` is detected (`TRANSFER_FUNC_SMPTE_ST2084` or `COLOR_PRIMARIES_BT2020` / `COLOR_SPACE_BT2020`):
+     - `vlc_pq_to_linear(vec3 pq)`: Inverse PQ EOTF converting normalized PQ floats to linear scene nits [0, 10000].
+     - `vlc_hermite(float E1, float ks, float maxLum)`: ITU-R BT.2390-10 Hermite spline curve compressing high dynamic range while preserving 1:1 contrast up to the knee point `ks`.
+     - `vlc_nits_to_pq_s(float nits)`: Forward PQ transfer function.
+     - `vlc_hdr_tonemap(vec3 bt2020_pq)`: Transforms BT.2020 PQ to linear nits, evaluates the BT.2390 Hermite curve against display peak luminance, transforms BT.2020 linear coordinates into Display P3 linear coordinates via standard 3x3 color matrix, clamps to [0, 1], and encodes with Display P3 gamma 2.2 (`pow(p3, 1.0 / 2.2)`).
+   - SDR video (1080p Blu-ray, DVD, HD) completely bypasses this tone mapper and retains stock bit-identical VLC output.
+2. **Custom `libcaopengllayer_plugin.dylib`**:
+   - Compiled with Apple Clang and linked against `@rpath/libvlccore.dylib` with zero external dependencies.
+   - Verified shader string `vlc_hdr_tonemap` in binary.
+   - Staged to `src-tauri/resources/vlc/plugins/libcaopengllayer_plugin.dylib`.
+3. **Display P3 CALayer Configuration (`embed_macos.rs`)**:
+   - In `apply_edr_to_layer`, when `is_hdr` is true:
+     - Sets `layer.setWantsExtendedDynamicRangeContent(false)`
+     - Sets `layer.setPreferredDynamicRange(&CADynamicRangeStandard)`
+     - Sets `setContentsHeadroom: 1.0f64`
+     - Sets `layer.setColorspace: kCGColorSpaceDisplayP3`
+   - This aligns the OpenGL output (Display P3 gamma 2.2 in [0, 1]) with macOS WindowServer's compositor expectations. WindowServer maps Display P3 directly to the display hardware color profile with rich contrast, natural brightness, and vivid wide-gamut saturation.
+   - When `is_hdr` is false (SDR Blu-ray / DVD): tags `layer.setColorspace: kCGColorSpaceSRGB`.
+4. **Build System & Verification**:
+   - Updated `scripts/stage-vlc-runtime.sh` to stage `libcaopengllayer_plugin.dylib` and verify its HDR tone-mapping patch.
+   - Regenerated `src-tauri/resources/build-manifest.json` with SHA-256 for all 3 custom artifacts.
+   - Updated `scripts/verify-vlc-runtime.sh` to check `libcaopengllayer_plugin.dylib`.

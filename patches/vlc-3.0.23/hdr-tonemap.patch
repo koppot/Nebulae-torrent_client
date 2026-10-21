@@ -1,0 +1,81 @@
+--- a/modules/video_output/opengl/fragment_shaders.c
++++ b/modules/video_output/opengl/fragment_shaders.c
+@@ -706,6 +706,68 @@
+     if (is_yuv)
+         ADD("uniform vec4 Coefficients[4];\n");
+ 
++#ifndef HAVE_LIBPLACEBO
++    const bool is_hdr_tonemap = (tc->fmt.transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
++                                 tc->fmt.primaries == COLOR_PRIMARIES_BT2020 ||
++                                 yuv_space == COLOR_SPACE_BT2020);
++    if (is_hdr_tonemap) {
++        ADD("vec3 vlc_pq_to_linear(vec3 pq) {\n"
++            " vec3 c = clamp(pq, 0.0, 1.0);\n"
++            " vec3 cp = pow(c, vec3(0.0126833135));\n"
++            " vec3 num = max(cp - 0.8359375, 0.0);\n"
++            " vec3 den = max(18.8515625 - 18.6875 * cp, 1e-6);\n"
++            " return pow(num / den, vec3(6.2773946)) * 10000.0;\n"
++            "}\n"
++            "float vlc_hermite(float E1, float ks, float maxLum) {\n"
++            " if (E1 <= ks) return E1;\n"
++            " if (E1 >= 1.0) return maxLum;\n"
++            " float denom = max(1.0 - ks, 1e-6);\n"
++            " float T = (E1 - ks) / denom;\n"
++            " float T2 = T * T;\n"
++            " float T3 = T2 * T;\n"
++            " float h00 = 2.0 * T3 - 3.0 * T2 + 1.0;\n"
++            " float h10 = T3 - 2.0 * T2 + T;\n"
++            " float h01 = -2.0 * T3 + 3.0 * T2;\n"
++            " float E2 = h00 * ks + h10 * denom + h01 * maxLum;\n"
++            " return clamp(E2, ks, maxLum);\n"
++            "}\n"
++            "float vlc_nits_to_pq_s(float nits) {\n"
++            " if (nits <= 0.0) return 0.0;\n"
++            " float y = min(nits, 10000.0) / 10000.0;\n"
++            " float ym1 = pow(y, 0.1593017578);\n"
++            " float num = 0.8359375 + 18.8515625 * ym1;\n"
++            " float den = 1.0 + 18.6875 * ym1;\n"
++            " return pow(num / den, 78.84375);\n"
++            "}\n"
++            "vec3 vlc_hdr_tonemap(vec3 bt2020_pq) {\n"
++            " vec3 linear_nits = vlc_pq_to_linear(bt2020_pq);\n"
++            " const float src_pq = 0.751827;\n"
++            " const float dst_pq = 0.508078;\n"
++            " const float maxLum = 0.675791;\n"
++            " const float ks = 0.513686;\n"
++            " const float display_peak = 100.0;\n"
++            " float max_nits = max(max(linear_nits.r, linear_nits.g), max(linear_nits.b, 1e-4));\n"
++            " float p = vlc_nits_to_pq_s(max_nits);\n"
++            " float E1 = clamp(p / src_pq, 0.0, 1.0);\n"
++            " float E2 = vlc_hermite(E1, ks, maxLum);\n"
++            " float out_pq = E2 * src_pq;\n"
++            " vec3 c = clamp(vec3(out_pq), 0.0, 1.0);\n"
++            " vec3 cp = pow(c, vec3(0.0126833135));\n"
++            " vec3 num = max(cp - 0.8359375, 0.0);\n"
++            " vec3 den = max(18.8515625 - 18.6875 * cp, 1e-6);\n"
++            " float mapped_nits = pow(num.r / den.r, 6.2773946) * 10000.0;\n"
++            " float scale = mapped_nits / (max_nits * display_peak);\n"
++            " vec3 sdr_linear_bt2020 = linear_nits * scale;\n"
++            " vec3 sdr_linear_p3;\n"
++            " sdr_linear_p3.r =  1.3435787 * sdr_linear_bt2020.r - 0.2821800 * sdr_linear_bt2020.g - 0.0613987 * sdr_linear_bt2020.b;\n"
++            " sdr_linear_p3.g = -0.0652973 * sdr_linear_bt2020.r + 1.0757879 * sdr_linear_bt2020.g - 0.0104906 * sdr_linear_bt2020.b;\n"
++            " sdr_linear_p3.b =  0.0028218 * sdr_linear_bt2020.r - 0.0540806 * sdr_linear_bt2020.g + 1.0512588 * sdr_linear_bt2020.b;\n"
++            " sdr_linear_p3 = clamp(sdr_linear_p3, 0.0, 1.0);\n"
++            " return pow(sdr_linear_p3, vec3(1.0 / 2.2));\n"
++            "}\n");
++    }
++#endif
++
+     ADD("uniform vec4 FillColor;\n"
+         "void main(void) {\n"
+         " float val;vec4 colors;\n");
+@@ -774,6 +836,9 @@
+         assert(res->output == PL_SHADER_SIG_COLOR);
+         ADDF(" result = %s(result);\n", res->name);
+     }
++#else
++    if (is_hdr_tonemap)
++        ADD(" result.rgb = vlc_hdr_tonemap(result.rgb);\n");
+ #endif
+ 
+     ADD(" gl_FragColor = result * FillColor;\n"

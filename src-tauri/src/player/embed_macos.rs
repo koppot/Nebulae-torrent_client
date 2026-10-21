@@ -24,7 +24,7 @@ use objc2::rc::Retained;
 use objc2::{class, sel, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
-use objc2_quartz_core::{CALayer, CADynamicRangeHigh};
+use objc2_quartz_core::{CALayer, CADynamicRangeHigh, CADynamicRangeStandard};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
@@ -114,61 +114,54 @@ fn overlay_app_init(app: AppHandle) {
 extern "C" {
     fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
     fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
-    static kCGColorSpaceITUR_2100_PQ: *const std::ffi::c_void;
+    static kCGColorSpaceDisplayP3: *const std::ffi::c_void;
     static kCGColorSpaceSRGB: *const std::ffi::c_void;
 }
 
 /// Apply EDR (Extended Dynamic Range) settings and colorspace to a CALayer.
 ///
-/// Configures `wantsExtendedDynamicRangeContent`, `preferredDynamicRange = CADynamicRangeHigh`,
-/// screen `contentsHeadroom`, `toneMapMode = "ifSupported"`, and crucially sets
-/// the layer's `colorspace` to ITU-R BT.2100 PQ when `is_hdr` is true.
-/// Without the colorspace tag, the macOS WindowServer compositor treats raw PQ pixels
-/// as standard sRGB gamma, causing the washed-out / desaturated UHD symptom.
-/// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-771
+/// Follows MacLC 1.3 `caopengllayer.m:1303-1340` for SDR tone-mapped output:
+/// - When `is_hdr` is true:
+///   The custom `libcaopengllayer_plugin.dylib` OpenGL fragment shader evaluates
+///   the ITU-R BT.2390-10 Hermite spline tone-mapping curve and transforms BT.2020 PQ
+///   into Display P3 (gamma 2.2). We tag the layer with `kCGColorSpaceDisplayP3`,
+///   `wantsExtendedDynamicRangeContent = false`, and `preferredDynamicRange = CADynamicRangeStandard`.
+///   This ensures macOS WindowServer interprets the tone-mapped 8-bit framebuffer
+///   in its native wide Display P3 color gamut without compositor clipping or washed-out colors.
+/// - When `is_hdr` is false (SDR Blu-ray / DVD):
+///   `colorspace = kCGColorSpaceSRGB`, standard dynamic range.
 pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, is_hdr: bool) {
-    // 1. Extended Dynamic Range content opt-in (REQUIRED on macOS for EDR values > 1.0)
+    // 1. Extended Dynamic Range content opt-in: false because shader tone-maps to SDR [0, 1]
     #[allow(deprecated)]
-    layer.setWantsExtendedDynamicRangeContent(true);
+    layer.setWantsExtendedDynamicRangeContent(false);
 
     // 2. Modern dynamic range preference (macOS 14+)
     if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
-        layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+        layer.setPreferredDynamicRange(&CADynamicRangeStandard);
     }
 
-    // 3. Headroom configuration from screen (macOS 14+)
+    // 3. Headroom configuration (macOS 14+)
     if layer.respondsToSelector(sel!(setContentsHeadroom:)) {
-        let screen = objc2_app_kit::NSScreen::mainScreen(MainThreadMarker::new_unchecked());
-        if let Some(scr) = screen {
-            let max_edr = scr.maximumExtendedDynamicRangeColorComponentValue();
-            let pot_edr = scr.maximumPotentialExtendedDynamicRangeColorComponentValue();
-            let headroom = if max_edr > 1.0 { max_edr } else if pot_edr > 1.0 { pot_edr } else { 1.0 };
-            if headroom > 1.0 {
-                let _: () = objc2::msg_send![layer, setContentsHeadroom: headroom];
-            }
-        }
+        let _: () = objc2::msg_send![layer, setContentsHeadroom: 1.0f64];
     }
 
     // 4. Tone map mode (macOS 15+)
     if layer.respondsToSelector(sel!(setToneMapMode:)) {
-        let mode = objc2_foundation::NSString::from_str("ifSupported");
+        let mode = objc2_foundation::NSString::from_str("automatic");
         let _: () = objc2::msg_send![layer, setToneMapMode: &*mode];
     }
 
     // 5. Colorspace (supported on CAOpenGLLayer and CAMetalLayer)
     if layer.respondsToSelector(sel!(setColorspace:)) {
-        if is_hdr {
-            let cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
-            if !cs.is_null() {
-                let _: () = objc2::msg_send![layer, setColorspace: cs];
-                CGColorSpaceRelease(cs);
-            }
+        let cs_name = if is_hdr {
+            kCGColorSpaceDisplayP3
         } else {
-            let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-            if !cs.is_null() {
-                let _: () = objc2::msg_send![layer, setColorspace: cs];
-                CGColorSpaceRelease(cs);
-            }
+            kCGColorSpaceSRGB
+        };
+        let cs = CGColorSpaceCreateWithName(cs_name);
+        if !cs.is_null() {
+            let _: () = objc2::msg_send![layer, setColorspace: cs];
+            CGColorSpaceRelease(cs);
         }
     }
 }
@@ -796,9 +789,9 @@ mod tests {
     #[test]
     fn test_coregraphics_colorspaces() {
         unsafe {
-            let cs_pq = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
-            assert!(!cs_pq.is_null(), "kCGColorSpaceITUR_2100_PQ must resolve to a valid CGColorSpaceRef");
-            CGColorSpaceRelease(cs_pq);
+            let cs_p3 = CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
+            assert!(!cs_p3.is_null(), "kCGColorSpaceDisplayP3 must resolve to a valid CGColorSpaceRef");
+            CGColorSpaceRelease(cs_p3);
 
             let cs_srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
             assert!(!cs_srgb.is_null(), "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef");

@@ -9,9 +9,10 @@ release tarball.
 | Artifact | Source | Patch |
 |----------|--------|-------|
 | `lib/libvlccore.9.dylib` | official `/Applications/VLC.app` | none |
-| `plugins/*` (339 files) | official `/Applications/VLC.app` | none |
+| `plugins/*` (338 files) | official `/Applications/VLC.app` | none |
 | `lib/libvlc.5.dylib` | local build | `navigate-menu.patch` |
 | `plugins/libvideotoolbox_plugin.dylib` | local build | `vt-305.patch` |
+| `plugins/libcaopengllayer_plugin.dylib` | local build | `hdr-tonemap.patch` |
 
 ## Source identity
 
@@ -68,6 +69,30 @@ Provenance: written for Nebulae, not an upstream VLC patch. Regenerate with:
 `lib/media_player.c` and `lib/libvlc.sym` (the declaration in
 `include/vlc/libvlc_media_player.h` is also required; it is part of the
 build tree and documented in BUILD_NOTES.md).
+
+## hdr-tonemap.patch — `modules/video_output/opengl/fragment_shaders.c`
+
+Implements built-in GLSL ITU-R BT.2390-10 Hermite spline tone mapping and
+Display P3 color gamut conversion for UHD HDR video:
+
+1. When playing HDR10 content (`TRANSFER_FUNC_SMPTE_ST2084` or
+   `COLOR_PRIMARIES_BT2020` / `COLOR_SPACE_BT2020`) without `libplacebo`,
+   VLC 3.0.23 previously emitted no tone mapping, leaving raw BT.2020 PQ floats
+   in `gl_FragColor`. On SDR displays and monitors with headroom = 1.0 (such
+   as Samsung Odyssey G95NC in SDR mode), this squashed all normal scene content
+   into the lower 50% of the range and desaturated wide-gamut colors, causing
+   the washed-out, dim, flat picture.
+2. The patch injects:
+   - PQ inverse EOTF (`vlc_pq_to_linear`): converts PQ values to linear nits.
+   - ITU-R BT.2390-10 Hermite spline compression (`vlc_hermite`): preserves 1:1
+     shadow and midtone contrast while rolling off highlights smoothly to peak white.
+   - Wide-gamut matrix mapping: converts BT.2020 linear to Display P3 linear.
+   - Display gamma 2.2 / sRGB OETF: encodes to Display P3 for rich, vivid,
+     accurate color reproduction.
+3. SDR videos (1080p Blu-ray, DVD, HD) bypass tone-mapping completely and remain
+   bit-identical to stock VLC.
+
+Status: **compiled** into `plugins/libcaopengllayer_plugin.dylib`.
 
 ## Build requirements
 

@@ -8,16 +8,14 @@ Nebulae bundles a **hybrid VLC 3.0.23 runtime**:
   exactly 3.0.23) provide `libvlccore.9.dylib` and the complete plugin set —
   the same binaries the reference VLC player uses, linking only system
   libraries.
-- **Two locally built artifacts** carry Nebulae's patches (see
+- **Three locally built artifacts** carry Nebulae's patches (see
   `patches/vlc-3.0.23/`):
   - `lib/libvlc.5.dylib` — adds the `libvlc_media_player_navigate_menu()`
     export (`navigate-menu.patch`).
   - `plugins/libvideotoolbox_plugin.dylib` — VideoToolbox session-reuse fix
     (`vt-305.patch`).
-
-This split exists because a fully custom runtime previously shipped a
-Homebrew-dbus-linked `libvlccore` and a mixed-age plugin set, which was
-implicated in washed-out UHD HDR output and made provenance unauditable.
+  - `plugins/libcaopengllayer_plugin.dylib` — GLSL ITU-R BT.2390 tone mapping
+    and Display P3 gamut mapping (`hdr-tonemap.patch`).
 
 ## Prerequisites
 
@@ -38,10 +36,11 @@ cd /tmp && tar xf vlc-3.0.23.tar.xz   # from videolan.org
 cd /tmp/vlc-3.0.23
 patch -p1 < <repo>/patches/vlc-3.0.23/vt-305.patch
 patch -p1 < <repo>/patches/vlc-3.0.23/navigate-menu.patch
+patch -p1 < <repo>/patches/vlc-3.0.23/hdr-tonemap.patch
 #    (navigate-menu.patch covers lib/media_player.c, lib/libvlc.sym, and the
 #    public declaration in include/vlc/libvlc_media_player.h)
 
-# 3. Configure + build ONLY the two artifacts (a full module build is
+# 3. Configure + build ONLY the three artifacts (a full module build is
 #    unnecessary and currently fails on webvtt's bison grammar)
 mkdir -p /tmp/vlc-3.0.23-build && cd /tmp/vlc-3.0.23-build
 ../vlc-3.0.23/configure --prefix=/tmp/vlc-3.0.23-install \
@@ -51,9 +50,11 @@ mkdir -p /tmp/vlc-3.0.23-build && cd /tmp/vlc-3.0.23-build
 export PATH="/opt/homebrew/opt/bison/bin:$PATH"
 make -j"$(sysctl -n hw.ncpu)" libvlc.la
 make -j"$(sysctl -n hw.ncpu)" libvideotoolbox_plugin.la
+make -j"$(sysctl -n hw.ncpu)" -C modules libcaopengllayer_plugin.la
 # Artifacts:
 #   lib/.libs/libvlc.5.dylib
 #   modules/.libs/libvideotoolbox_plugin.dylib
+#   modules/.libs/libcaopengllayer_plugin.dylib
 ```
 
 ## Staging the runtime
