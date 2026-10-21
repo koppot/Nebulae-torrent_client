@@ -696,7 +696,20 @@ fn start_playback_inner(
                                         Ok(l) => l,
                                         Err(_) => return,
                                     };
-                                    if let Some(navigate_menu) =
+                                    // BD-J (UHD Blu-ray) interactive titles use
+                                    // navigate(popup) to show the BD-J overlay menu.
+                                    // Regular HDMV menus use navigate_menu().
+                                    if is_current_title_interactive(&lib, mp) {
+                                        tracing::info!(
+                                            "[player] menu-first open: BD-J interactive title, sending navigate(popup)"
+                                        );
+                                        unsafe {
+                                            (lib.libvlc_media_player_navigate)(
+                                                mp as *mut c_void,
+                                                5,
+                                            ); // popup
+                                        }
+                                    } else if let Some(navigate_menu) =
                                         lib.libvlc_media_player_navigate_menu
                                     {
                                         tracing::info!(
@@ -922,6 +935,31 @@ pub fn player_menu_navigate_menu(
     dispatch_main_menu(&state)
 }
 
+/// Check whether the current title is a BD-J interactive title (UHD Blu-ray).
+/// BD-J uses the INPUT_TITLE_INTERACTIVE flag (0x02) rather than the menu flag
+/// (0x01) on program titles; the menu is shown via navigate(popup) overlay.
+fn is_current_title_interactive(lib: &crate::player::engine::VlcLib, mp: usize) -> bool {
+    use crate::player::engine::VlcTitleDescription;
+    unsafe {
+        let m = mp as *mut std::ffi::c_void;
+        let current = (lib.libvlc_media_player_get_title)(m) as i32;
+        let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+        let count = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+        if count <= current as i32 || titles.is_null() {
+            return false;
+        }
+        let title_ptr = *titles.offset(current as isize);
+        if title_ptr.is_null() {
+            (lib.libvlc_title_descriptions_release)(titles, count);
+            return false;
+        }
+        const INTERACTIVE_FLAG: u32 = 0x02;
+        let interactive = ((*title_ptr).i_flags & INTERACTIVE_FLAG) != 0;
+        (lib.libvlc_title_descriptions_release)(titles, count);
+        interactive
+    }
+}
+
 /// Shared implementation for main-menu dispatch. Both commands delegate here.
 fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), String> {
     let (mp, lib) = {
@@ -935,6 +973,28 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
     };
     if mp == 0 {
         return Err("no active player session".into());
+    }
+
+    // VideoToolbox buffer flush: when transitioning between drastically
+    // different stream formats (1080p SDR menu <-> 4K HDR HEVC feature),
+    // the decoder holds outstanding picture buffers and may report error 305.
+    // A brief pause/unpause forces the decoder to flush its buffer queue,
+    // allowing clean reinitialization for the new stream format.
+    unsafe {
+        (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 0);
+    }
+
+    // BD-J (UHD Blu-ray) interactive titles use navigate(popup) to show the
+    // BD-J overlay menu instead of navigate_menu(). Regular HDMV menus use
+    // navigate_menu().
+    if is_current_title_interactive(&lib, mp) {
+        tracing::info!("[player] return_to_menu: BD-J interactive title, sending navigate(popup)");
+        unsafe {
+            (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5); // popup
+        }
+        return Ok(());
     }
 
     // Direct main-menu dispatch through the runtime extension.
@@ -1246,6 +1306,19 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let lib = loaded_lib(&state)?;
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
+
+    // VideoToolbox buffer flush: when transitioning from 1080p menu to 4K HEVC
+    // main title (mode 0 = activate), the decoder holds outstanding picture
+    // buffers from the menu stream. A brief pause forces buffer release,
+    // allowing clean reinitialization for the feature stream.
+    if mode == 0 {
+        unsafe {
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
+        }
+    }
+
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }

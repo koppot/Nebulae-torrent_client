@@ -101,7 +101,8 @@ pub const INPUT_TITLE_MENU: u32 = 0x01;
 pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 
 /// Return true if the current title is a menu (interactive title) based on its
-/// flags. This is more reliable than checking `title_index == 0` which some
+/// flags. Checks both INPUT_TITLE_MENU (0x01) for regular HDMV menus and
+/// INPUT_TITLE_INTERACTIVE (0x02) for BD-J interactive titles (UHD Blu-ray).
 /// discs violate (multi-edition releases may have menu titles at non-zero indices).
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
@@ -119,7 +120,7 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
         return false;
     }
     let t = &**titles.add(current);
-    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+    let is_menu = (t.i_flags & (INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE)) != 0;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
 }
@@ -548,13 +549,13 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=3000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // HDR Tone-Mapping:
-            // When playing BT.2020 PQ (ST2084) HDR content, apply Hable filmic tone-mapping
-            // so contrast, saturation, and highlight roll-off render accurately without washed-out colors.
-            // On standard SDR content (BT.709), this setting remains inactive.
-            // Integer-valued option per this runtime: 0=hard clip, 1=Mobius,
-            // 2=Reinhard, 3=Hable (recommended), 4=Gamma-Power, 5=Linear stretch.
-            CString::new("--tone-mapping=3").unwrap(),
+            // HDR Tone-Mapping for UHD Blu-ray:
+            // BT.2020 PQ (ST2084) HDR content needs tone-mapping to SDR displays.
+            // caopengllayer with OpenGL shaders enables the tone-mapping pipeline.
+            // Without it, --tone-mapping flags are ignored and HDR content
+            // appears washed out on SDR displays.
+            CString::new("--vout=caopengllayer").unwrap(),
+            CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
         ];
