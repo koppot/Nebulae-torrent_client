@@ -177,11 +177,14 @@ defects: **unverified** (no playback testing performed).
   3. Bound `libvlc_video_get_size` in `engine.rs` and added resolution detection in `player_poll` to latch `is_hdr = true` and call `force_apply_edr` if dimensions >= 3840x2160.
   4. Added `force_apply_edr` in `embed_macos.rs` to allow dynamic re-tagging when transitioning from SDR menus to HDR features.
 
+  5. Added `if layer.respondsToSelector(sel!(setColorspace:))` guard in `apply_edr_to_layer` to ensure base `CALayer` instances (such as container NSViews) do not receive unrecognized selector exceptions, which caused SIGABRT upon playback start.
+
 ## 6. Verification & Packaging
 
 - Automated checks:
-  - `cargo test --lib`: 124 passed, 0 failed (including `test_coregraphics_colorspaces`, `test_is_disc_uhd_or_hdr`, `test_chapter_marks_from_entries`, and DVD/bluray detector tests).
+  - `cargo test --lib`: 125 passed, 0 failed (including `test_apply_edr_to_layer_does_not_crash`, `test_coregraphics_colorspaces`, `test_is_disc_uhd_or_hdr`, and `test_chapter_marks_from_entries`).
   - `cargo check`: clean dev profile.
   - `pnpm tsc --noEmit`: 0 errors.
   - `scripts/verify-vlc-runtime.sh`: all 339 plugins and staged binaries verified.
-- Playback status: packaged as isolated candidate for user verification; `/Applications/Nebulae.app` untouched.
+- Installed application: `/Applications/Nebulae.app` updated with candidate `5a625f4` (binary SHA-256: `e118299f4c36507fea609bbe5b23b944b80631f7969fd889a50b6888dbcea96c`, UUID: `D8A529F9-1522-3466-AB82-EF53084096DC`).
+- Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-5a625f4.dmg` (SHA-256: `f08a447a5c382987d8e7760181590f1d259d86dc3d6a042b9cdff2f6b5ab1ad6`).
