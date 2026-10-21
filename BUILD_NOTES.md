@@ -220,7 +220,7 @@ behavior, and left/right-click behavior using qBittorrent as the reference.
 | File | Change |
 |------|--------|
 | `src-tauri/src/lib.rs` | Tray left-click now toggles show/hide (was always-show); `show_menu_on_left_click(false)` keeps right-click for context menu; double-click still always shows |
-| `src-tauri/src/player/embed_macos.rs` | `miniaturize()` checks `minimize_to_tray`; hides to tray instead of minimizing to Dock when enabled |
+| `src-tauri/src/player/embed_macos.rs` | `miniaturize()` and `window_minimize_native()` check `minimize_to_tray`; hide to tray instead of minimizing to Dock when enabled |
 | `src-tauri/src/player/embed_windows.rs` | `miniaturize()` and `window_minimize_native()` check `minimize_to_tray`; hide to tray instead of minimizing to taskbar when enabled |
 | `src-tauri/src/player/embed_linux.rs` | `miniaturize()` and `window_minimize_native()` check `minimize_to_tray`; hide to tray instead of minimizing when enabled |
 
@@ -235,9 +235,16 @@ behavior, and left/right-click behavior using qBittorrent as the reference.
 ## State: All Changes Committed, Build Verified
 
 All changes are committed on branch `recovery/macos-playback-20261020`
-(commit `51434cc`). No runtime playback testing was performed.
+(commit `51434cc` plus `19402c8` for menu/tray and the macOS
+`window_minimize_native` fix). No runtime playback testing was performed.
 Build/link/package verified only: `cargo check` passes cleanly,
 `tsc --noEmit` passes cleanly.
+
+### Gap found and fixed during this recovery
+
+- macOS `window_minimize_native()` did not check `minimize_to_tray`
+  (only `miniaturize()` did). Fixed so both paths honor the setting
+  on all three platforms.
 
 ## Checkpoint Preservation
 
