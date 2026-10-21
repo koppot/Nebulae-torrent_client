@@ -16,6 +16,7 @@ echo "=== Verifying VLC runtime staging ==="
 # Required files
 for f in lib/libvlc.5.dylib lib/libvlccore.9.dylib \
          plugins/libvideotoolbox_plugin.dylib plugins/libcaopengllayer_plugin.dylib \
+         plugins/libglconv_cvpx_plugin.dylib \
          plugins/liblibbluray_plugin.dylib plugins/libdvdnav_plugin.dylib; do
   [ -f "$DEST/$f" ] || fail "required file missing: $f"
   echo "OK: $f ($(du -sh "$DEST/$f" | cut -f1))"

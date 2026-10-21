@@ -280,3 +280,37 @@ defects: **unverified** (no playback testing performed).
   - Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-e998494.dmg` (SHA-256: `a2ce16e2854e3070b5570c578810aebe4d54c20a3e12a010e3873619a56aee34`)
   - Code signing: ad-hoc valid on disk, satisfies designated requirement.
 
+## 9. Dynamic GLSL Tone Mapping, VideoToolbox 305 Null Spec, & sRGB Gamut Alignment (2026-10-21)
+
+### Defects Addressed
+1. **VideoToolbox Hardware Decoder Initialization (Error 305)**: VideoToolbox decompression session creation failed with `OSStatus 305` (`0x131`) on Apple Silicon because `decoderConfiguration` was passed as `videoDecoderSpecification` to `VTDecompressionSessionCreate`.
+2. **Title Transition Stale Shader (SDR Logo -> HDR Feature)**: On commercial UHD discs (e.g. *Patlabor 2 UHD*), playback begins with an SDR BT.709 logo (`00001.m2ts`). VLC compiled the OpenGL fragment shader once for SDR and re-used it without recompilation when transitioning to the 4K HDR BT.2020 PQ feature title (`00002.m2ts`), completely omitting tone mapping.
+3. **Washed-out SDR Display Gamut Mismatch**: Previous tone-mapping evaluated a 69-nit peak Hermite spline and transformed to Display P3 coordinates, with the layer tagged as `kCGColorSpaceDisplayP3`. On SDR displays in sRGB mode (such as dual Samsung Odyssey G95NC monitors), macOS WindowServer compressed the P3 color coordinates, severely desaturating the image.
+
+### Fixes Applied
+1. **VideoToolbox `videoDecoderSpecification` (`vt-305.patch`)**:
+   - In `modules/codec/videotoolbox.m`, line 1303, changed `VTDecompressionSessionCreate` 3rd argument from `decoderConfiguration` to `NULL`.
+   - Verified: VideoToolbox initializes hardware decompression session with code 0 (`0x0`), successfully decoding `x420` (`VLC_CODEC_CVPX_P010`) in hardware on Apple Silicon.
+2. **Dynamic Uniform & Matrix Updating (`hdr-tonemap.patch`)**:
+   - In `modules/video_output/caopengllayer.m`: In `PictureRender()`, explicitly synchronized `vd->source.transfer`, `vd->source.primaries`, and `vd->source.space` from incoming `pic->format`.
+   - In `modules/video_output/opengl/converter.h`: Added `HdrMode` uniform location, `bool b_hdr_tonemap;`, and `video_color_space_t yuv_space;`.
+   - In `modules/video_output/opengl/fragment_shaders.c`: Added dynamic `uniform float u_hdr_mode;` compiled unconditionally into the fragment shader. Defined `opengl_tex_converter_update_yuv_space()` supporting BT.601, BT.709, and BT.2020 TV-to-full range YUV conversion matrices.
+   - In `modules/video_output/opengl/vout_helper.c`: In `vout_display_opengl_Prepare()` and `vout_display_opengl_Display()`, added frame-level inspection of `transfer`, `primaries`, and `space`. Automatically switches `tc->b_hdr_tonemap` and dynamically updates YUV conversion coefficients to `matrix_bt2020_tv2full` when HDR is detected.
+3. **ACES Filmic Tone Mapping & BT.709 Gamut Alignment (`hdr-tonemap.patch`)**:
+   - Narkowicz ACES filmic tone curve (`(x*(2.51*x + 0.03))/(x*(2.43*x + 0.59) + 0.14)`) with ITU-R BT.2408 reference white calibration (`scale = 0.0055`, matching 182-nit diffuse white).
+   - Linear SMPTE ST 2084 PQ to nits decompression, ITU-R BT.2087 BT.2020-to-BT.709 linear matrix conversion, non-linear ACES tone compression, and gamma 2.2 output encoding.
+   - Eliminates highlight clipping up to 1000+ nits while preserving inky deep shadows (1 nit maps to level 13) and high contrast without milky haze.
+4. **Layer Colorspace Tagging (`embed_macos.rs`)**:
+   - Tagged layer with `kCGColorSpaceSRGB` unconditionally. macOS WindowServer displays the sRGB tone-mapped output with full saturation and accurate contrast on SDR monitors.
+5. **CVPX Converter Synchronization (`libglconv_cvpx_plugin.dylib`)**:
+   - Recompiled `libglconv_cvpx_plugin.dylib` to match patched `struct opengl_tex_converter_t` memory layout, eliminating struct offset crash.
+   - Updated `stage-vlc-runtime.sh` and `verify-vlc-runtime.sh` to stage and verify `libglconv_cvpx_plugin.dylib`.
+
+### Verification Evidence
+- `test_vlc_capture` captured on-screen 4K HEVC Main 10 BT.2020 PQ frame at 600s with VideoToolbox hardware decoding active.
+- Color sampling confirmed deep shadow floor (RGB [0.000, 0.000, 0.000]), rich contrast (average luminance 0.28 vs 0.58 on unmapped stream), and vivid color separation (R: 0.349, G: 0.274, B: 0.219).
+- `cargo test --lib`: 125 passed, 0 failed.
+- `pnpm tsc --noEmit`: 0 errors.
+- `stage-vlc-runtime.sh` and `verify-vlc-runtime.sh`: passed with all 4 custom artifacts verified.
+- Production release bundle built via `pnpm tauri build`, deployed to `/Applications/Nebulae.app`, and ad-hoc signed.
+

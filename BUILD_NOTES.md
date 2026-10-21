@@ -8,14 +8,16 @@ Nebulae bundles a **hybrid VLC 3.0.23 runtime**:
   exactly 3.0.23) provide `libvlccore.9.dylib` and the complete plugin set —
   the same binaries the reference VLC player uses, linking only system
   libraries.
-- **Three locally built artifacts** carry Nebulae's patches (see
+- **Four locally built artifacts** carry Nebulae's patches (see
   `patches/vlc-3.0.23/`):
   - `lib/libvlc.5.dylib` — adds the `libvlc_media_player_navigate_menu()`
     export (`navigate-menu.patch`).
   - `plugins/libvideotoolbox_plugin.dylib` — VideoToolbox session-reuse fix
     (`vt-305.patch`).
   - `plugins/libcaopengllayer_plugin.dylib` — GLSL ITU-R BT.2390 tone mapping
-    and Display P3 gamut mapping (`hdr-tonemap.patch`).
+    and BT.709 gamut mapping (`hdr-tonemap.patch`).
+  - `plugins/libglconv_cvpx_plugin.dylib` — CVPX texture converter matched to
+    patched OpenGL converter struct layout.
 
 ## Prerequisites
 
@@ -50,11 +52,12 @@ mkdir -p /tmp/vlc-3.0.23-build && cd /tmp/vlc-3.0.23-build
 export PATH="/opt/homebrew/opt/bison/bin:$PATH"
 make -j"$(sysctl -n hw.ncpu)" libvlc.la
 make -j"$(sysctl -n hw.ncpu)" libvideotoolbox_plugin.la
-make -j"$(sysctl -n hw.ncpu)" -C modules libcaopengllayer_plugin.la
+make -j"$(sysctl -n hw.ncpu)" -C modules libcaopengllayer_plugin.la libglconv_cvpx_plugin.la
 # Artifacts:
 #   lib/.libs/libvlc.5.dylib
 #   modules/.libs/libvideotoolbox_plugin.dylib
 #   modules/.libs/libcaopengllayer_plugin.dylib
+#   modules/.libs/libglconv_cvpx_plugin.dylib
 ```
 
 ## Staging the runtime

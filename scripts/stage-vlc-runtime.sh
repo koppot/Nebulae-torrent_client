@@ -59,9 +59,11 @@ VLC_VER="$(defaults read "$OFFICIAL_APP/Contents/Info.plist" CFBundleShortVersio
 SRC_LIBVLC="$BUILD_DIR/lib/.libs/libvlc.5.dylib"
 SRC_VT="$BUILD_DIR/modules/.libs/libvideotoolbox_plugin.dylib"
 SRC_GL="$BUILD_DIR/modules/.libs/libcaopengllayer_plugin.dylib"
+SRC_CVPX="$BUILD_DIR/modules/.libs/libglconv_cvpx_plugin.dylib"
 [ -f "$SRC_LIBVLC" ] || fail "custom libvlc missing: $SRC_LIBVLC (build per BUILD_NOTES.md)"
 [ -f "$SRC_VT" ]     || fail "custom videotoolbox plugin missing: $SRC_VT (build per BUILD_NOTES.md)"
 [ -f "$SRC_GL" ]     || fail "custom caopengllayer plugin missing: $SRC_GL (build per BUILD_NOTES.md)"
+[ -f "$SRC_CVPX" ]   || fail "custom glconv_cvpx plugin missing: $SRC_CVPX (build per BUILD_NOTES.md)"
 [ -f "$OFFICIAL/lib/libvlccore.9.dylib" ] || fail "official libvlccore.9.dylib missing"
 [ -d "$OFFICIAL/plugins" ] || fail "official plugins dir missing"
 
@@ -111,6 +113,7 @@ cp "$OFFICIAL/plugins/"* "$DEST/plugins/"
 rm -f "$DEST/plugins/plugins.dat"   # cache is mtime-keyed; bundling rewrites mtimes
 cp "$SRC_VT" "$DEST/plugins/libvideotoolbox_plugin.dylib"
 cp "$SRC_GL" "$DEST/plugins/libcaopengllayer_plugin.dylib"
+cp "$SRC_CVPX" "$DEST/plugins/libglconv_cvpx_plugin.dylib"
 
 PLUGIN_COUNT=$(find "$DEST/plugins" -type f | wc -l | tr -d ' ')
 [ "$PLUGIN_COUNT" -ge 300 ] || fail "suspiciously few plugins staged: $PLUGIN_COUNT"
@@ -135,7 +138,7 @@ MANIFEST="$REPO_ROOT/src-tauri/resources/build-manifest.json"
   find "$DEST" -type f | sort | while IFS= read -r f; do
     rel="${f#"$DEST"/}"
     case "$rel" in
-      lib/libvlc.5.dylib|plugins/libvideotoolbox_plugin.dylib|plugins/libcaopengllayer_plugin.dylib) src="custom-build" ;;
+      lib/libvlc.5.dylib|plugins/libvideotoolbox_plugin.dylib|plugins/libcaopengllayer_plugin.dylib|plugins/libglconv_cvpx_plugin.dylib) src="custom-build" ;;
       *) src="official-vlc-app" ;;
     esac
     sha="$(shasum -a 256 "$f" | awk '{print $1}')"

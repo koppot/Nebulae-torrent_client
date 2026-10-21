@@ -114,6 +114,7 @@ fn overlay_app_init(app: AppHandle) {
 extern "C" {
     fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
     fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+    #[allow(dead_code)]
     static kCGColorSpaceDisplayP3: *const std::ffi::c_void;
     static kCGColorSpaceSRGB: *const std::ffi::c_void;
 }
@@ -121,16 +122,16 @@ extern "C" {
 /// Apply EDR (Extended Dynamic Range) settings and colorspace to a CALayer.
 ///
 /// Follows MacLC 1.3 `caopengllayer.m:1303-1340` for SDR tone-mapped output:
-/// - When `is_hdr` is true:
+/// - When `_is_hdr` is true:
 ///   The custom `libcaopengllayer_plugin.dylib` OpenGL fragment shader evaluates
-///   the ITU-R BT.2390-10 Hermite spline tone-mapping curve and transforms BT.2020 PQ
-///   into Display P3 (gamma 2.2). We tag the layer with `kCGColorSpaceDisplayP3`,
+///   the ACES filmic tone-mapping curve and transforms BT.2020 PQ
+///   into BT.709 (gamma 2.2). We tag the layer with `kCGColorSpaceSRGB`,
 ///   `wantsExtendedDynamicRangeContent = false`, and `preferredDynamicRange = CADynamicRangeStandard`.
 ///   This ensures macOS WindowServer interprets the tone-mapped 8-bit framebuffer
-///   in its native wide Display P3 color gamut without compositor clipping or washed-out colors.
-/// - When `is_hdr` is false (SDR Blu-ray / DVD):
+///   accurately without compositor clipping or washed-out colors.
+/// - When `_is_hdr` is false (SDR Blu-ray / DVD):
 ///   `colorspace = kCGColorSpaceSRGB`, standard dynamic range.
-pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, is_hdr: bool) {
+pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, _is_hdr: bool) {
     // 1. Extended Dynamic Range content opt-in: false because shader tone-maps to SDR [0, 1]
     #[allow(deprecated)]
     layer.setWantsExtendedDynamicRangeContent(false);
@@ -152,13 +153,11 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, is_hdr: bool) {
     }
 
     // 5. Colorspace (supported on CAOpenGLLayer and CAMetalLayer)
+    // Our custom fragment shader tone-maps BT.2020 PQ to standard sRGB / BT.709
+    // SDR color space with gamma 2.2. Tagging the layer with kCGColorSpaceSRGB ensures
+    // macOS WindowServer displays 100% accurate, rich, saturated colors without gamut clipping.
     if layer.respondsToSelector(sel!(setColorspace:)) {
-        let cs_name = if is_hdr {
-            kCGColorSpaceDisplayP3
-        } else {
-            kCGColorSpaceSRGB
-        };
-        let cs = CGColorSpaceCreateWithName(cs_name);
+        let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         if !cs.is_null() {
             let _: () = objc2::msg_send![layer, setColorspace: cs];
             CGColorSpaceRelease(cs);

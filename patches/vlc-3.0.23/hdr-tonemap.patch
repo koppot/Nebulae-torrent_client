@@ -1,81 +1,264 @@
---- a/modules/video_output/opengl/fragment_shaders.c
-+++ b/modules/video_output/opengl/fragment_shaders.c
-@@ -706,6 +706,68 @@
+--- a/modules/video_output/caopengllayer.m	2025-12-19 10:55:20
++++ b/modules/video_output/caopengllayer.m	2026-10-21 19:32:16
+@@ -469,6 +469,13 @@
+ 
+     if (vlc_gl_MakeCurrent(sys->gl) == VLC_SUCCESS)
+     {
++        if (pic != NULL)
++        {
++            vd->source.transfer = pic->format.transfer;
++            vd->source.primaries = pic->format.primaries;
++            vd->source.space = pic->format.space;
++        }
++
+         vout_display_opengl_Prepare(sys->vgl, pic, subpicture);
+         vlc_gl_ReleaseCurrent(sys->gl);
+ 
+--- a/modules/video_output/opengl/converter.h	2025-12-19 10:55:20
++++ b/modules/video_output/opengl/converter.h	2026-10-21 19:03:38
+@@ -344,9 +344,13 @@
+         GLint TexSize[PICTURE_PLANE_MAX]; /* for GL_TEXTURE_RECTANGLE */
+         GLint Coefficients;
+         GLint FillColor;
++        GLint HdrMode;
+         GLint *pl_vars; /* for pl_sh_res */
+     } uloc;
+     bool yuv_color;
++    bool b_hdr_tonemap;
++    video_color_space_t yuv_space;
++    float yuv_range_correction;
+     GLfloat yuv_coefficients[16];
+ 
+ # if PL_API_VER >= 157
+@@ -459,4 +463,6 @@
+     return tc->pf_fragment_shader_init(tc, tex_target, chroma, yuv_space);
+ }
+ 
++void opengl_tex_converter_update_yuv_space(opengl_tex_converter_t *tc, video_color_space_t space);
++
+ #endif /* include-guard */
+--- a/modules/video_output/opengl/fragment_shaders.c	2025-12-19 10:55:20
++++ b/modules/video_output/opengl/fragment_shaders.c	2026-10-21 19:45:39
+@@ -95,6 +95,44 @@
+     return size > 0 ? size * mul : size;
+ }
+ 
++void opengl_tex_converter_update_yuv_space(opengl_tex_converter_t *tc, video_color_space_t space)
++{
++    static const float matrix_bt601_tv2full[12] = {
++        1.164383561643836,  0.0000,             1.596026785714286, -0.874202217873451 ,
++        1.164383561643836, -0.391762290094914, -0.812967647237771,  0.531667823499146 ,
++        1.164383561643836,  2.017232142857142,  0.0000,            -1.085630789302022 ,
++    };
++    static const float matrix_bt709_tv2full[12] = {
++        1.164383561643836,  0.0000,             1.792741071428571, -0.972945075016308 ,
++        1.164383561643836, -0.21324861427373,  -0.532909328559444,  0.301482665475862 ,
++        1.164383561643836,  2.112401785714286,  0.0000,            -1.133402217873451 ,
++    };
++    static const float matrix_bt2020_tv2full[12] = {
++        1.164383530616760,  0.0000,             1.678674221038818, -0.915687978267670 ,
++        1.164383530616760, -0.187326118350029, -0.650424420833588,  0.347458571195602 ,
++        1.164383530616760,  2.141772270202637,  0.0000,            -1.148145079612732 ,
++    };
++
++    const float *matrix;
++    switch (space)
++    {
++        case COLOR_SPACE_BT601:
++            matrix = matrix_bt601_tv2full;
++            break;
++        case COLOR_SPACE_BT2020:
++            matrix = matrix_bt2020_tv2full;
++            break;
++        default:
++            matrix = matrix_bt709_tv2full;
++    }
++
++    for (int i = 0; i < 4; i++) {
++        float correction = (i < 3 && tc->yuv_range_correction > 0.0f) ? tc->yuv_range_correction : 1.f;
++        for (int j = 0; j < 4; j++)
++            tc->yuv_coefficients[i*4+j] = j < 3 ? correction * matrix[j*4+i] : 0.f;
++    }
++}
++
+ static int
+ tc_yuv_base_init(opengl_tex_converter_t *tc, GLenum tex_target,
+                  vlc_fourcc_t chroma, const vlc_chroma_description_t *desc,
+@@ -247,48 +285,12 @@
+     else
+         return VLC_EGENERIC;
+ 
+-    /* [R/G/B][Y U V O] from TV range to full range
+-     * XXX we could also do hue/brightness/constrast/gamma
+-     * by simply changing the coefficients
+-     */
+-    static const float matrix_bt601_tv2full[12] = {
+-        1.164383561643836,  0.0000,             1.596026785714286, -0.874202217873451 ,
+-        1.164383561643836, -0.391762290094914, -0.812967647237771,  0.531667823499146 ,
+-        1.164383561643836,  2.017232142857142,  0.0000,            -1.085630789302022 ,
+-    };
+-    static const float matrix_bt709_tv2full[12] = {
+-        1.164383561643836,  0.0000,             1.792741071428571, -0.972945075016308 ,
+-        1.164383561643836, -0.21324861427373,  -0.532909328559444,  0.301482665475862 ,
+-        1.164383561643836,  2.112401785714286,  0.0000,            -1.133402217873451 ,
+-    };
+-    static const float matrix_bt2020_tv2full[12] = {
+-        1.164383530616760,  0.0000,             1.678674221038818, -0.915687978267670 ,
+-        1.164383530616760, -0.187326118350029, -0.650424420833588,  0.347458571195602 ,
+-        1.164383530616760,  2.141772270202637,  0.0000,            -1.148145079612732 ,
+-    };
+-
+-    const float *matrix;
+-    switch (yuv_space)
+-    {
+-        case COLOR_SPACE_BT601:
+-            matrix = matrix_bt601_tv2full;
+-            break;
+-        case COLOR_SPACE_BT2020:
+-            matrix = matrix_bt2020_tv2full;
+-            break;
+-        default:
+-            matrix = matrix_bt709_tv2full;
+-    };
+-
+-    for (int i = 0; i < 4; i++) {
+-        float correction = i < 3 ? yuv_range_correction : 1.f;
+-        /* We place coefficient values for coefficient[4] in one array from
+-         * matrix values. Notice that we fill values from top down instead
+-         * of left to right.*/
+-        for (int j = 0; j < 4; j++)
+-            tc->yuv_coefficients[i*4+j] = j < 3 ? correction * matrix[j*4+i] : 0.f;
+-    }
+-
++    tc->yuv_range_correction = yuv_range_correction;
++    tc->yuv_space = yuv_space;
++    tc->b_hdr_tonemap = (tc->fmt.transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
++                         tc->fmt.primaries == COLOR_PRIMARIES_BT2020 ||
++                         yuv_space == COLOR_SPACE_BT2020);
++    opengl_tex_converter_update_yuv_space(tc, tc->b_hdr_tonemap ? COLOR_SPACE_BT2020 : yuv_space);
+     tc->yuv_color = true;
+ 
+     *swap_uv = chroma == VLC_CODEC_YV12 || chroma == VLC_CODEC_YV9 ||
+@@ -357,6 +359,10 @@
+     if (tc->uloc.FillColor == -1)
+         return VLC_EGENERIC;
+ 
++#ifndef HAVE_LIBPLACEBO
++    tc->uloc.HdrMode = tc->vt->GetUniformLocation(program, "u_hdr_mode");
++#endif
++
+ #ifdef HAVE_LIBPLACEBO
+     const struct pl_shader_res *res = tc->pl_sh_res;
+     for (int i = 0; res && i < res->num_variables; i++) {
+@@ -378,6 +384,11 @@
+     if (tc->yuv_color)
+         tc->vt->Uniform4fv(tc->uloc.Coefficients, 4, tc->yuv_coefficients);
+ 
++#ifndef HAVE_LIBPLACEBO
++    if (tc->uloc.HdrMode != -1)
++        tc->vt->Uniform1f(tc->uloc.HdrMode, tc->b_hdr_tonemap ? 1.0f : 0.0f);
++#endif
++
+     for (unsigned i = 0; i < tc->tex_count; ++i)
+         tc->vt->Uniform1i(tc->uloc.Texture[i], i);
+ 
+@@ -706,6 +717,35 @@
      if (is_yuv)
          ADD("uniform vec4 Coefficients[4];\n");
  
 +#ifndef HAVE_LIBPLACEBO
-+    const bool is_hdr_tonemap = (tc->fmt.transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
-+                                 tc->fmt.primaries == COLOR_PRIMARIES_BT2020 ||
-+                                 yuv_space == COLOR_SPACE_BT2020);
-+    if (is_hdr_tonemap) {
-+        ADD("vec3 vlc_pq_to_linear(vec3 pq) {\n"
-+            " vec3 c = clamp(pq, 0.0, 1.0);\n"
-+            " vec3 cp = pow(c, vec3(0.0126833135));\n"
-+            " vec3 num = max(cp - 0.8359375, 0.0);\n"
-+            " vec3 den = max(18.8515625 - 18.6875 * cp, 1e-6);\n"
-+            " return pow(num / den, vec3(6.2773946)) * 10000.0;\n"
-+            "}\n"
-+            "float vlc_hermite(float E1, float ks, float maxLum) {\n"
-+            " if (E1 <= ks) return E1;\n"
-+            " if (E1 >= 1.0) return maxLum;\n"
-+            " float denom = max(1.0 - ks, 1e-6);\n"
-+            " float T = (E1 - ks) / denom;\n"
-+            " float T2 = T * T;\n"
-+            " float T3 = T2 * T;\n"
-+            " float h00 = 2.0 * T3 - 3.0 * T2 + 1.0;\n"
-+            " float h10 = T3 - 2.0 * T2 + T;\n"
-+            " float h01 = -2.0 * T3 + 3.0 * T2;\n"
-+            " float E2 = h00 * ks + h10 * denom + h01 * maxLum;\n"
-+            " return clamp(E2, ks, maxLum);\n"
-+            "}\n"
-+            "float vlc_nits_to_pq_s(float nits) {\n"
-+            " if (nits <= 0.0) return 0.0;\n"
-+            " float y = min(nits, 10000.0) / 10000.0;\n"
-+            " float ym1 = pow(y, 0.1593017578);\n"
-+            " float num = 0.8359375 + 18.8515625 * ym1;\n"
-+            " float den = 1.0 + 18.6875 * ym1;\n"
-+            " return pow(num / den, 78.84375);\n"
-+            "}\n"
-+            "vec3 vlc_hdr_tonemap(vec3 bt2020_pq) {\n"
-+            " vec3 linear_nits = vlc_pq_to_linear(bt2020_pq);\n"
-+            " const float src_pq = 0.751827;\n"
-+            " const float dst_pq = 0.508078;\n"
-+            " const float maxLum = 0.675791;\n"
-+            " const float ks = 0.513686;\n"
-+            " const float display_peak = 100.0;\n"
-+            " float max_nits = max(max(linear_nits.r, linear_nits.g), max(linear_nits.b, 1e-4));\n"
-+            " float p = vlc_nits_to_pq_s(max_nits);\n"
-+            " float E1 = clamp(p / src_pq, 0.0, 1.0);\n"
-+            " float E2 = vlc_hermite(E1, ks, maxLum);\n"
-+            " float out_pq = E2 * src_pq;\n"
-+            " vec3 c = clamp(vec3(out_pq), 0.0, 1.0);\n"
-+            " vec3 cp = pow(c, vec3(0.0126833135));\n"
-+            " vec3 num = max(cp - 0.8359375, 0.0);\n"
-+            " vec3 den = max(18.8515625 - 18.6875 * cp, 1e-6);\n"
-+            " float mapped_nits = pow(num.r / den.r, 6.2773946) * 10000.0;\n"
-+            " float scale = mapped_nits / (max_nits * display_peak);\n"
-+            " vec3 sdr_linear_bt2020 = linear_nits * scale;\n"
-+            " vec3 sdr_linear_p3;\n"
-+            " sdr_linear_p3.r =  1.3435787 * sdr_linear_bt2020.r - 0.2821800 * sdr_linear_bt2020.g - 0.0613987 * sdr_linear_bt2020.b;\n"
-+            " sdr_linear_p3.g = -0.0652973 * sdr_linear_bt2020.r + 1.0757879 * sdr_linear_bt2020.g - 0.0104906 * sdr_linear_bt2020.b;\n"
-+            " sdr_linear_p3.b =  0.0028218 * sdr_linear_bt2020.r - 0.0540806 * sdr_linear_bt2020.g + 1.0512588 * sdr_linear_bt2020.b;\n"
-+            " sdr_linear_p3 = clamp(sdr_linear_p3, 0.0, 1.0);\n"
-+            " return pow(sdr_linear_p3, vec3(1.0 / 2.2));\n"
-+            "}\n");
-+    }
++    ADD("uniform float u_hdr_mode;\n"
++        "vec3 vlc_pq_to_nits(vec3 e) {\n"
++        " vec3 c = clamp(e, 0.0, 1.0);\n"
++        " vec3 em2 = pow(c, vec3(0.0126833135));\n"
++        " vec3 num = max(em2 - 0.8359375, 0.0);\n"
++        " vec3 den = max(18.8515625 - 18.6875 * em2, 1e-6);\n"
++        " return pow(num / den, vec3(6.2773946)) * 10000.0;\n"
++        "}\n"
++        "vec3 vlc_aces_tonemap(vec3 x) {\n"
++        " const float a = 2.51;\n"
++        " const float b = 0.03;\n"
++        " const float c = 2.43;\n"
++        " const float d = 0.59;\n"
++        " const float e = 0.14;\n"
++        " return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);\n"
++        "}\n"
++        "vec3 vlc_hdr_tonemap(vec3 bt2020_pq) {\n"
++        " vec3 linear_nits = vlc_pq_to_nits(bt2020_pq);\n"
++        " vec3 linear_scaled = linear_nits * 0.0055;\n"
++        " vec3 linear_709;\n"
++        " linear_709.r =  1.6604910 * linear_scaled.r - 0.5876411 * linear_scaled.g - 0.0728499 * linear_scaled.b;\n"
++        " linear_709.g = -0.1245505 * linear_scaled.r + 1.1328999 * linear_scaled.g - 0.0083494 * linear_scaled.b;\n"
++        " linear_709.b = -0.0181508 * linear_scaled.r - 0.1005789 * linear_scaled.g + 1.1187297 * linear_scaled.b;\n"
++        " vec3 mapped = vlc_aces_tonemap(max(linear_709, vec3(0.0)));\n"
++        " return pow(mapped, vec3(1.0 / 2.2));\n"
++        "}\n");
 +#endif
 +
      ADD("uniform vec4 FillColor;\n"
          "void main(void) {\n"
          " float val;vec4 colors;\n");
-@@ -774,6 +836,9 @@
+@@ -774,6 +814,9 @@
          assert(res->output == PL_SHADER_SIG_COLOR);
          ADDF(" result = %s(result);\n", res->name);
      }
 +#else
-+    if (is_hdr_tonemap)
-+        ADD(" result.rgb = vlc_hdr_tonemap(result.rgb);\n");
++    ADD(" if (u_hdr_mode > 0.5)\n"
++        "     result.rgb = vlc_hdr_tonemap(result.rgb);\n");
  #endif
  
      ADD(" gl_FragColor = result * FillColor;\n"
+--- a/modules/video_output/opengl/vout_helper.c	2025-12-19 10:55:20
++++ b/modules/video_output/opengl/vout_helper.c	2026-10-21 19:45:52
+@@ -1167,6 +1167,24 @@
+ 
+     opengl_tex_converter_t *tc = vgl->prgm->tc;
+ 
++    if (tc && picture)
++    {
++        bool is_hdr = (picture->format.transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
++                       picture->format.transfer == TRANSFER_FUNC_HLG ||
++                       picture->format.primaries == COLOR_PRIMARIES_BT2020 ||
++                       picture->format.space == COLOR_SPACE_BT2020 ||
++                       picture->format.i_chroma == VLC_CODEC_CVPX_P010 ||
++                       picture->format.i_chroma == VLC_CODEC_P010 ||
++                       picture->format.i_chroma == VLC_CODEC_I420_10L);
++        video_color_space_t target_space = is_hdr ? COLOR_SPACE_BT2020 : picture->format.space;
++        if (tc->b_hdr_tonemap != is_hdr || tc->yuv_space != target_space)
++        {
++            tc->b_hdr_tonemap = is_hdr;
++            tc->yuv_space = target_space;
++            opengl_tex_converter_update_yuv_space(tc, target_space);
++        }
++    }
++
+     /* Update the texture */
+     int ret = tc->pf_update(tc, vgl->texture, vgl->tex_width, vgl->tex_height,
+                             picture, NULL);
+@@ -1676,6 +1694,26 @@
+                                 const video_format_t *source)
+ {
+     GL_ASSERT_NOERROR();
++
++    if (vgl->prgm && vgl->prgm->tc)
++    {
++        opengl_tex_converter_t *tc = vgl->prgm->tc;
++        bool is_hdr = (source->transfer == TRANSFER_FUNC_SMPTE_ST2084 ||
++                       source->transfer == TRANSFER_FUNC_HLG ||
++                       source->primaries == COLOR_PRIMARIES_BT2020 ||
++                       source->space == COLOR_SPACE_BT2020 ||
++                       source->i_chroma == VLC_CODEC_CVPX_P010 ||
++                       source->i_chroma == VLC_CODEC_P010 ||
++                       source->i_chroma == VLC_CODEC_I420_10L ||
++                       tc->b_hdr_tonemap);
++        video_color_space_t target_space = is_hdr ? COLOR_SPACE_BT2020 : source->space;
++        if (tc->b_hdr_tonemap != is_hdr || tc->yuv_space != target_space)
++        {
++            tc->b_hdr_tonemap = is_hdr;
++            tc->yuv_space = target_space;
++            opengl_tex_converter_update_yuv_space(tc, target_space);
++        }
++    }
+ 
+     /* Why drawing here and not in Render()? Because this way, the
+        OpenGL providers can call vout_display_opengl_Display to force redraw.
