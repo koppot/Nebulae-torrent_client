@@ -188,3 +188,45 @@ defects: **unverified** (no playback testing performed).
   - `scripts/verify-vlc-runtime.sh`: all 339 plugins and staged binaries verified.
 - Installed application: `/Applications/Nebulae.app` updated with candidate `5a625f4` (binary SHA-256: `e118299f4c36507fea609bbe5b23b944b80631f7969fd889a50b6888dbcea96c`, UUID: `D8A529F9-1522-3466-AB82-EF53084096DC`).
 - Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-5a625f4.dmg` (SHA-256: `f08a447a5c382987d8e7760181590f1d259d86dc3d6a042b9cdff2f6b5ab1ad6`).
+
+## 7. Menu Timing & EDR Layer Retargeting Pass (2026-10-21)
+
+### Blocker A: Blu-ray 1-Second Delay Before Entering Menu
+- **Root Cause**:
+  The menu watcher previously slept 250ms *before* checking title count readiness, polling at 250ms/500ms intervals. By the time `navigate_menu` was dispatched, ~1s of Title 1 (Play All) had already rendered on screen before transitioning to Top Menu.
+- **Fix**:
+  1. Reduced demuxer title count polling from 250ms to a tight 20ms cadence. On commercial Blu-rays (Fuuka D1), title count is ready in 20-25ms.
+  2. `navigate_menu` (`INPUT_NAV_MENU`) is dispatched immediately at 25ms, reaching the Top Menu in 51ms (119ms total from start), eliminating the 1-second delay and visible Play All glitch.
+
+### Blocker B: UHD Playing All (Patlabor 2 UHD FirstPlay menu_call_mask=1)
+- **Root Cause**:
+  Commercial UHD discs such as Patlabor 2 author First Play (Title 9, 62s + 14s logo sequence) with `menu_call_mask=1`. When `navigate_menu` was dispatched, libbluray rejected it with `bluray.c:3494: menu call masked` (`Can't select Top Menu title`). The watcher timed out after 15s and stopped, leaving First Play to run for 76 seconds before reaching Top Menu, which the user perceived as "playing all".
+- **Fix**:
+  1. Bound `libvlc_media_player_set_position` in `VlcLib`.
+  2. Added `engine::has_menu_title(&lib, mp)` and `engine::is_first_play_or_intro(&lib, mp)` helpers.
+  3. In the menu watcher: if `navigate_menu` does not reach Top Menu within 200ms, and the disc has an authored menu while currently playing First Play / a short intro (<= 300s), dispatch `libvlc_media_player_set_position(mp, 0.99)`.
+  4. Verified empirically via ctypes probe: Patlabor 2 UHD immediately finishes First Play and executes its authored `JumpTitle 0` into Top Menu in 877ms total.
+
+### Blocker C: UHD Washed Out Colors (Premature EDR Latching & Video Layer Retargeting)
+- **Root Cause**:
+  1. In `embed_macos.rs`, `apply_edr_to_video_layer` previously checked `if let Some(layer) = view.layer()`. Because the overlay `NSView` is layer-backed in Tauri via its window contentView, `view.layer()` is non-nil (a plain `CALayer`), and `apply_edr_to_video_layer` set `applied = true`.
+  2. This caused `state.edr_applied` to latch `true` immediately at `player_open` *before* VLC's video output thread asynchronously created `VLCVideoLayerView` and its `VLCCAOpenGLLayer` (~100-300ms later).
+  3. When `VLCVideoLayerView` appeared, `maybe_apply_edr` returned early because `edr_applied` was already `true`.
+  4. Consequently, the actual OpenGL video layer (`VLCCAOpenGLLayer`) NEVER had `kCGColorSpaceITUR_2100_PQ`, `wantsExtendedDynamicRangeContent`, or `preferredDynamicRange = CADynamicRangeHigh` set on it. WindowServer treated the raw BT.2020 PQ output as sRGB SDR, washing out the colors.
+- **Fix**:
+  1. Updated `apply_edr_to_video_layer` to recursively search the subview tree specifically for a layer responding to `setColorspace:` (`VLCCAOpenGLLayer`).
+  2. `apply_edr_to_video_layer` returns `true` (and latches `edr_applied`) ONLY when the actual `VLCCAOpenGLLayer` is found and configured.
+  3. Added an asynchronous 30ms EDR retry worker in `player_open` for up to 3s (100 attempts) to immediately configure `VLCCAOpenGLLayer` as soon as VLC creates it.
+
+### Verification & Artifacts
+- **Automated checks**:
+  - `cargo check`: clean.
+  - `cargo test --lib`: 125 passed, 0 failed.
+  - `pnpm tsc --noEmit`: clean (0 errors).
+  - Runtime verification: `scripts/verify-vlc-runtime.sh` passed.
+- **Built & Installed Candidate**:
+  - Binary path: `/Applications/Nebulae.app/Contents/MacOS/nebulae`
+  - SHA-256: `5ebc8b655bc2f3c5584fdf5fbd0629d54c5da7692efca40d2d8f32c282aedf5d`
+  - Git commit: `c93553a` on `recovery/macos-playback-20261020`
+  - Preserved package: `~/nebulae-candidates/Nebulae-20261021-c93553a.app`
+  - Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-c93553a.dmg`
