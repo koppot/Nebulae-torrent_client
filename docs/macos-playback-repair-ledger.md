@@ -265,3 +265,18 @@ defects: **unverified** (no playback testing performed).
    - Updated `scripts/stage-vlc-runtime.sh` to stage `libcaopengllayer_plugin.dylib` and verify its HDR tone-mapping patch.
    - Regenerated `src-tauri/resources/build-manifest.json` with SHA-256 for all 3 custom artifacts.
    - Updated `scripts/verify-vlc-runtime.sh` to check `libcaopengllayer_plugin.dylib`.
+
+### Verification & Artifacts
+- **Automated checks**:
+  - `cargo check`: clean (0 warnings, 0 errors).
+  - `cargo test --lib`: 125 passed, 0 failed (including `test_coregraphics_colorspaces` verifying `kCGColorSpaceDisplayP3` and `kCGColorSpaceSRGB`, and `test_apply_edr_to_layer_does_not_crash`).
+  - `pnpm tsc --noEmit`: clean (0 errors).
+  - Runtime verification: `scripts/verify-vlc-runtime.sh` passed.
+- **Built & Installed Candidate**:
+  - Binary path: `/Applications/Nebulae.app/Contents/MacOS/nebulae`
+  - SHA-256: `6739556f54fb323fb2216432883395b0289f008eb30bb9c8cfcc6ba4b62e1f1c`
+  - Git commit: `0c71af2` (code fix `e998494`) on `recovery/macos-playback-20261020`
+  - Preserved package: `~/nebulae-candidates/Nebulae-20261021-e998494.app`
+  - Backup DMG: `~/nebulae-candidates/Nebulae_0.2.2_aarch64-e998494.dmg` (SHA-256: `a2ce16e2854e3070b5570c578810aebe4d54c20a3e12a010e3873619a56aee34`)
+  - Code signing: ad-hoc valid on disk, satisfies designated requirement.
+
