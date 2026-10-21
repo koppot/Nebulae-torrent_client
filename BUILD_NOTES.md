@@ -191,6 +191,47 @@ All bundled artifacts in the `.app` match the build checksums above.
 | `src/lib/playerStore.ts` | `at_menu: boolean` added to `PlayerPollShape` interface (pre-existing) |
 | `src/components/media/SimpleMediaView.tsx` | Removed size line below external-media card titles (title + year only) |
 
+## Application Menu / Tray / Minimize-to-Tray Implementation
+
+Recovered and implemented the application-shell menu, Dock/taskbar/tray/menu-bar
+behavior, and left/right-click behavior using qBittorrent as the reference.
+
+### Requirements Implemented
+
+| Platform | UI Surface | Appearance | Left-Click | Right-Click | Double-Click | Menu Items/Order | Window/Quit Behavior |
+|----------|-----------|------------|------------|-------------|--------------|------------------|---------------------|
+| All | System Tray / Notification Area | Icon, tooltip "Nebulae — Client by Asian DVD Club" | Toggle show/hide main window | Open context menu | Show/restore main window | Show, Add Torrent, Create Torrent, Pause All, Resume All, separator, Quit application | Quit = engine.shutdown + tailscale.shutdown + exit(0) |
+| macOS | Dock Icon | Standard macOS Dock icon | Bring window to front (Reopen event) | N/A | N/A | N/A | Reopen = show/unminimize/set_focus |
+| macOS | Menu Bar | Native app menu (Nebulae/File/Edit/View/Window/Help) | N/A | N/A | N/A | About, Settings, Services, Hide, Quit / File items / Edit items / View items / Window items / Help items | Quit = exit app |
+| Windows | Taskbar + System Tray | Taskbar icon when visible; tray always | Show/restore (toggle) | Open context menu | Show/restore | Same as tray | Close-to-tray: hide on X if setting enabled; else exit |
+| Linux | Taskbar + System Tray/AppIndicator | Taskbar icon when visible; tray always | Show/restore (toggle) | Open context menu | Show/restore | Same as tray | Close-to-tray: hide on X if setting enabled; else exit |
+
+### Settings
+
+| Setting | Default | Honored By |
+|---------|---------|------------|
+| `start_on_boot` | false | — |
+| `start_minimized` | false | — |
+| `minimize_to_tray` | true | `window_minimize_native()` / `miniaturize()` on all platforms |
+| `close_to_tray` | true | `CloseRequested` handler in lib.rs |
+
+### Source Changes
+
+| File | Change |
+|------|--------|
+| `src-tauri/src/lib.rs` | Tray left-click now toggles show/hide (was always-show); `show_menu_on_left_click(false)` keeps right-click for context menu; double-click still always shows |
+| `src-tauri/src/player/embed_macos.rs` | `miniaturize()` checks `minimize_to_tray`; hides to tray instead of minimizing to Dock when enabled |
+| `src-tauri/src/player/embed_windows.rs` | `miniaturize()` and `window_minimize_native()` check `minimize_to_tray`; hide to tray instead of minimizing to taskbar when enabled |
+| `src-tauri/src/player/embed_linux.rs` | `miniaturize()` and `window_minimize_native()` check `minimize_to_tray`; hide to tray instead of minimizing when enabled |
+
+### Behavior Notes
+
+- Tray left-click toggles: if the main window is visible, it is hidden; if hidden/minimized, it is shown, unminimized, and focused.
+- Tray double-click always shows/restores (no toggle).
+- Right-click tray opens the context menu (Show, Add Torrent, Create Torrent, Pause All, Resume All, Quit).
+- `minimize_to_tray` defaults to `true`. When enabled, minimizing (via frontend command or OS minimize button where interceptable) hides the window to the tray instead of leaving it on the taskbar/dock.
+- `close_to_tray` (default `true`) continues to be honored by the `CloseRequested` handler.
+
 ## State: All Changes Committed, Build Verified
 
 All changes are committed on branch `recovery/macos-playback-20261020`
@@ -201,4 +242,4 @@ Build/link/package verified only: `cargo check` passes cleanly,
 ## Checkpoint Preservation
 
 Checkpoint `pre-menu-implementation-20261020-232306` is preserved and unaltered.
-The installed application at `/Applications/MacLC.app` is not modified.
+The installed application at `/Applications/Nebulae.app` is not modified by this change set.

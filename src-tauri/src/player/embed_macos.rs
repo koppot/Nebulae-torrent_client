@@ -299,8 +299,27 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
 /// Toggle fullscreen for the player window (F key / fullscreen button /
 /// double-click). Sets the corner radius to 0 in fullscreen, 3 px out.
 /// Miniaturize (yellow traffic light) the main window. Commanded from the
-/// webview dot controls on the borderless player window.
+/// webview dot controls on the borderless player window. Honors the
+/// `minimize_to_tray` setting: when enabled, hides the window to the tray
+/// instead of minimizing it to the Dock.
 pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    let minimize_to_tray = app
+        .try_state::<std::sync::Arc<crate::db::Database>>()
+        .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+        .and_then(|json| {
+            serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+        })
+        .map(|s| s.minimize_to_tray)
+        .unwrap_or(true);
+
+    if minimize_to_tray {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+            return Ok(());
+        }
+        return Err("main window not found".into());
+    }
+
     let app2 = app.clone();
     app.run_on_main_thread(move || {
         let Some(win) = app2.get_webview_window("main") else {
