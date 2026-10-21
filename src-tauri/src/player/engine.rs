@@ -45,6 +45,7 @@ pub struct VlcLib {
     pub libvlc_media_player_is_playing: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
+    pub libvlc_media_player_set_position: unsafe extern "C" fn(*mut c_void, f32),
     pub libvlc_media_player_get_length: unsafe extern "C" fn(*mut c_void) -> i64,
     // DVD/Blu-ray navigation: titles map to disc features, title 0 is the
     // menu domain on DVD (dvdnav); chapters are per-title.
@@ -133,6 +134,52 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
+}
+
+/// Return true if the disc exposes at least one authored menu title.
+pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    let mut found = false;
+    for i in 0..n {
+        let t = &**titles.add(i as usize);
+        if (t.i_flags & INPUT_TITLE_MENU) != 0 {
+            found = true;
+            break;
+        }
+    }
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    found
+}
+
+/// Return true if the currently active title is First Play or a short intro clip (<= 300s).
+pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    let current = (lib.libvlc_media_player_get_title)(m);
+    if current < 0 || current >= n {
+        (lib.libvlc_title_descriptions_release)(titles, n);
+        return false;
+    }
+    let t = &**titles.add(current as usize);
+    let dur_s = t.i_duration / 1000;
+    let is_short = dur_s <= 300;
+    let is_named_fp = if !t.psz_name.is_null() {
+        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
+        cstr.to_string_lossy().to_ascii_lowercase().contains("first play")
+    } else {
+        false
+    };
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    is_named_fp || is_short
 }
 
 /// Mirror of libvlc_chapter_description_t (C layout, header-verified).
@@ -468,6 +515,7 @@ impl VlcLib {
             libvlc_media_player_is_playing: sym!("libvlc_media_player_is_playing": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),
+            libvlc_media_player_set_position: sym!("libvlc_media_player_set_position": unsafe extern "C" fn(*mut c_void, f32)),
             libvlc_media_player_get_length: sym!("libvlc_media_player_get_length": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_get_title_count: sym!("libvlc_media_player_get_title_count": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_title: sym!("libvlc_media_player_get_title": unsafe extern "C" fn(*mut c_void) -> c_int),

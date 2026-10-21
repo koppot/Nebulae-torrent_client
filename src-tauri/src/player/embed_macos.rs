@@ -196,20 +196,43 @@ pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) -> bool {
     }
     let is_hdr = state.is_hdr.load(std::sync::atomic::Ordering::SeqCst);
     let view = &*(ptr as *mut NSView);
-    let mut applied = false;
-    // Defensive: if the view ever becomes layer-backed, its own layer wins.
+
+    let mut gl_layer_found = false;
+
+    // Apply EDR dynamic range properties to the hosting overlay view's layer
     if let Some(layer) = view.layer() {
         apply_edr_to_layer(&layer, is_hdr);
-        applied = true;
-    }
-    let subviews = view.subviews();
-    for sub in subviews.iter() {
-        if let Some(layer) = sub.layer() {
-            apply_edr_to_layer(&layer, is_hdr);
-            applied = true;
+        if layer.respondsToSelector(sel!(setColorspace:)) {
+            gl_layer_found = true;
         }
     }
-    applied
+
+    // Traverse the subview tree to find the actual video rendering layer
+    // (the layer that responds to setColorspace:, specifically VLCCAOpenGLLayer).
+    // We only return true (latching edr_applied) when that target layer is found and configured.
+    unsafe fn visit_view_for_edr(v: &NSView, is_hdr: bool, found: &mut bool) {
+        if let Some(layer) = v.layer() {
+            apply_edr_to_layer(&layer, is_hdr);
+            if layer.respondsToSelector(sel!(setColorspace:)) {
+                *found = true;
+            }
+        }
+        let subviews = v.subviews();
+        for sub in subviews.iter() {
+            visit_view_for_edr(&sub, is_hdr, found);
+        }
+    }
+
+    let subviews = view.subviews();
+    for sub in subviews.iter() {
+        visit_view_for_edr(&sub, is_hdr, &mut gl_layer_found);
+    }
+
+    if gl_layer_found {
+        tracing::info!("[player] EDR/HDR video layer (VLCCAOpenGLLayer) configured: is_hdr={is_hdr}");
+    }
+
+    gl_layer_found
 }
 
 /// Apply EDR to the video layer once per playback session. Cheap to call

@@ -597,6 +597,32 @@ fn start_playback_inner(
                             .edr_applied
                             .store(false, std::sync::atomic::Ordering::SeqCst);
                         maybe_apply_edr(app);
+
+                        // EDR retry worker: VLC creates the video layer (VLCCAOpenGLLayer)
+                        // asynchronously ~100-300ms after play(). Poll at a tight 30ms cadence
+                        // for up to 3s so EDR and BT.2100 PQ colorspace are latched immediately
+                        // upon layer creation, preventing washed-out presentation.
+                        let app_edr = app.clone();
+                        let edr_gen = state
+                            .session_gen
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        std::thread::spawn(move || {
+                            use tauri::Manager;
+                            for _ in 0..100 {
+                                std::thread::sleep(std::time::Duration::from_millis(30));
+                                let state = app_edr.state::<PlayerState>();
+                                let gen_now = state
+                                    .session_gen
+                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                if gen_now != edr_gen || !*poison(&state.started) {
+                                    return;
+                                }
+                                if state.edr_applied.load(std::sync::atomic::Ordering::SeqCst) {
+                                    return;
+                                }
+                                maybe_apply_edr(&app_edr);
+                            }
+                        });
                     }
 
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
@@ -612,11 +638,10 @@ fn start_playback_inner(
                         // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
                         // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
                         // unless an interactive menu call is dispatched.
-                        // We wait for the demuxer title count to be ready (> 0), check if already
-                        // at Top Menu (e.g. DVD VMGM Title 0), and if not, dispatch navigate_menu.
-                        // We then poll up to 15s to confirm reaching the authored menu, retrying
-                        // navigate_menu every 2.5s to handle discs where introductory studio logos
-                        // mask menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD).
+                        // We poll at a tight 20ms cadence for demuxer readiness, dispatch
+                        // navigate_menu immediately, and if First Play masks menu calls
+                        // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
+                        // end of First Play (0.99) so it triggers its authored JumpTitle 0 into Top Menu.
                         let app_menu = app.clone();
                         let menu_gen = state
                             .session_gen
@@ -624,10 +649,10 @@ fn start_playback_inner(
                         let menu_mp = session.media_player;
                         std::thread::spawn(move || {
                             use tauri::Manager;
-                            let max_wait_attempts = 20; // 20 * 250ms = 5s
+                            let max_wait_attempts = 150; // 150 * 20ms = 3s
                             let mut ready = false;
                             for _ in 0..max_wait_attempts {
-                                std::thread::sleep(std::time::Duration::from_millis(250));
+                                std::thread::sleep(std::time::Duration::from_millis(20));
                                 let state = app_menu.state::<PlayerState>();
                                 let gen_now = state
                                     .session_gen
@@ -681,10 +706,50 @@ fn start_playback_inner(
                                 navigate_menu(mp as *mut c_void);
                             }
 
-                            // Poll up to 15s (30 * 500ms). If introductory logos mask menu calls,
-                            // retry periodically every 2.5s.
-                            for i in 0..30 {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
+                            // Check if navigate_menu succeeded within 200ms (10 * 20ms)
+                            let mut menu_reached = false;
+                            for _ in 0..10 {
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                                let gen_now = state
+                                    .session_gen
+                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                if gen_now != menu_gen || !*poison(&state.started) {
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 || mp != menu_mp {
+                                    return;
+                                }
+                                if unsafe { engine::is_menu_title(&lib, mp) } {
+                                    menu_reached = true;
+                                    break;
+                                }
+                            }
+
+                            if menu_reached {
+                                tracing::info!("[player] menu watcher: disc reached authored menu via navigate_menu");
+                                return;
+                            }
+
+                            // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
+                            // navigate_menu is rejected by libbluray. If the disc has an authored menu title
+                            // and we are currently in First Play / short intro (<= 300s), seek to the end of
+                            // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
+                            let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+                            let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
+                            if has_menu && is_fp {
+                                tracing::info!(
+                                    "[player] menu watcher: navigate_menu masked in First Play; seeking near end (0.99) to reach menu"
+                                );
+                                unsafe {
+                                    (lib.libvlc_media_player_set_position)(mp as *mut c_void, 0.99);
+                                }
+                            }
+
+                            // Poll up to 15s (75 * 200ms). If introductory logos mask menu calls,
+                            // retry periodically every 2s.
+                            for i in 0..75 {
+                                std::thread::sleep(std::time::Duration::from_millis(200));
                                 let gen_now = state
                                     .session_gen
                                     .load(std::sync::atomic::Ordering::SeqCst);
@@ -699,7 +764,7 @@ fn start_playback_inner(
                                     tracing::info!("[player] menu watcher: disc reached authored menu at iteration {i}");
                                     return;
                                 }
-                                if i > 0 && i % 5 == 0 {
+                                if i > 0 && i % 10 == 0 {
                                     tracing::info!("[player] menu watcher: retrying INPUT_NAV_MENU at iteration {i}");
                                     unsafe {
                                         navigate_menu(mp as *mut c_void);
