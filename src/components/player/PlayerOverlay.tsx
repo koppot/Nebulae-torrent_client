@@ -30,6 +30,7 @@ interface Poll {
   title_count: number;
   chapter: number;
   chapter_count: number;
+  at_menu: boolean;
 }
 
 /**
@@ -125,6 +126,7 @@ export default function PlayerOverlay() {
     title_count: 0,
     chapter: 0,
     chapter_count: 0,
+    at_menu: false,
   });
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);

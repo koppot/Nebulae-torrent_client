@@ -1,0 +1,65 @@
+--- a/modules/codec/videotoolbox.m
++++ b/modules/codec/videotoolbox.m
+@@ -115,6 +115,7 @@ static int HandleVTStatus(decoder_t *p_dec, OSStatus status,
+         case kVTVideoDecoderBadDataErr:
+         case kVTVideoDecoderMalfunctionErr:
+         case kVTVideoDecoderNotAvailableNowErr:
++        case kVTFormatDescriptionChangeNotSupportedErr:
+         case kVTImageRotationNotSupportedErr:
+         case kVTVideoEncoderNotAvailableNowErr:
+         case -12219:
+@@ -1208,6 +1209,22 @@ static int StartVideoToolbox(decoder_t *p_dec)
+         return VLC_SUCCESS;
+     }
+ 
++    /* Check if existing session can accept the new format before restarting.
++     * This avoids VT error 305 on format transitions (1080p SDR -> 4K HDR).
++     * If the existing session can accept the format, skip the restart entirely. */
++    if (p_sys->session && p_sys->videoFormatDescription)
++    {
++        OSStatus status = VTDecompressionSessionCanAcceptFormatDescription(
++            p_sys->session, p_sys->videoFormatDescription);
++        if (status == noErr)
++        {
++            msg_Dbg(p_dec, "existing VT session can accept format, skipping restart");
++            return VLC_SUCCESS;
++        }
++        msg_Dbg(p_dec, "VT session cannot accept format, will restart (%d)", (int)status);
++    }
++
+     /* Fills fmt_out (from extradata if any) */
+     if(ConfigureVout(p_dec) != VLC_SUCCESS)
+         return VLC_EGENERIC;
+@@ -1326,6 +1343,12 @@ static void StopVideoToolbox(decoder_t *p_dec, bool closing)
+         CFRelease(p_sys->session);
+         p_sys->session = nil;
+ 
++        /* Release format description after invalidation so it can be recreated
++         * with the new format on next StartVideoToolbox. */
++        if (p_sys->videoFormatDescription != nil) {
++            CFRelease(p_sys->videoFormatDescription);
++            p_sys->videoFormatDescription = nil;
++        }
++
+ #if TARGET_OS_IPHONE
+         /* In case of 4K 10bits (BGRA), we can easily reach the device max
+          * memory when flushing. Indeed, we'll create a new VT session that
+@@ -1340,15 +1363,11 @@ static void StopVideoToolbox(decoder_t *p_dec, bool closing)
+         }
+ #endif
+ 
+-        p_sys->b_format_propagated = false;
+         p_dec->fmt_out.i_codec = 0;
+     }
+ 
+-
+-    if (p_sys->videoFormatDescription != nil) {
+-        CFRelease(p_sys->videoFormatDescription);
+-        p_sys->videoFormatDescription = nil;
+-    }
+-    p_sys->b_vt_feed = false;
+-    p_sys->b_drop_blocks = false;
++    p_sys->b_format_propagated = false;
++    p_sys->b_vt_feed = false;
++    p_sys->b_drop_blocks = false;
+ }

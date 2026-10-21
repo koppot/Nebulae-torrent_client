@@ -21,9 +21,10 @@
 //! between displays.
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::{class, sel, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
+use objc2_quartz_core::{CALayer, CADynamicRangeHigh};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
@@ -104,22 +105,62 @@ fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
 
-/// Apply EDR (Extended Dynamic Range) settings to the window's content view
-/// layer. When on an XDR display, this allows the caopengllayer vout to emit
-/// HDR values above 1.0 without being clipped by the compositor.
+/// Apply EDR (Extended Dynamic Range) settings to a CALayer.
+///
+/// On macOS 14+, uses `preferredDynamicRange = CADynamicRangeHigh`.
+/// On older macOS, falls back to the deprecated `wantsExtendedDynamicRangeContent`.
 /// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
-unsafe fn apply_edr_settings(win: &NSWindow) {
+unsafe fn apply_edr_to_layer(layer: &CALayer) {
+    // Try the modern API first (macOS 14+).
+    // `setPreferredDynamicRange` is a no-op on older OS versions where the
+    // selector doesn't exist, so we guard with a respondsToSelector check.
+    let uses_modern_api: bool = unsafe {
+        let responds: bool = objc2::msg_send![layer, respondsToSelector: sel!(setPreferredDynamicRange:)];
+        responds
+    };
+    if uses_modern_api {
+        unsafe {
+            layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+        }
+    } else {
+        #[allow(deprecated)]
+        {
+            layer.setWantsExtendedDynamicRangeContent(true);
+        }
+    }
+}
+
+/// Observer for NSScreenDidChangeNotification. Re-applies EDR settings when
+/// the window moves between displays with different dynamic range capabilities.
+objc2::define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "NebulaeEDRScreenObserver"]
+    struct EDRScreenObserver;
+
+    impl EDRScreenObserver {
+        #[unsafe(method(screenDidChange:))]
+        unsafe fn screen_did_change(&self, _notification: *mut std::ffi::c_void) {
+            if let Some(app) = crate::player::embed_macos::overlay_app() {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Ok(raw) = win.ns_window() {
+                        let ns_win = raw as *mut NSWindow;
+                        let _ = apply_edr_to_window(&*ns_win);
+                    }
+                }
+            }
+        }
+    }
+);
+
+/// Apply EDR settings to a window's content view layer.
+unsafe fn apply_edr_to_window(win: &NSWindow) {
     let Some(content) = win.contentView() else {
         return;
     };
     content.setWantsLayer(true);
     if let Some(layer) = content.layer() {
-        // Enable extended dynamic range content.
-        // macOS 14+ also supports layer.preferredDynamicRange = CADynamicRangeHigh,
-        // but that requires additional runtime checks for the API availability.
-        // For compatibility, we set the base flag; the system handles the rest.
-        #[allow(deprecated)]
-        layer.setWantsExtendedDynamicRangeContent(true);
+        apply_edr_to_layer(&layer);
     }
 }
 
@@ -332,10 +373,27 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         // which allows the caopengllayer vout to emit HDR values above 1.0
         // without clipping when the window is on an XDR display.
         // Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m
-        content.setWantsLayer(true);
-        if let Some(layer) = content.layer() {
-            layer.setWantsExtendedDynamicRangeContent(true);
-        }
+        apply_edr_to_window(&*ns_win);
+
+        // Register for screen change notifications so EDR settings are
+        // re-applied when the window moves between displays with different
+        // dynamic range capabilities.
+        let observer: Retained<EDRScreenObserver> =
+            objc2::msg_send![EDRScreenObserver::alloc(mtm), init];
+        let nc: *mut objc2::runtime::AnyObject = unsafe {
+            objc2::msg_send![class!(NSNotificationCenter), defaultCenter]
+        };
+        let _: () = unsafe {
+            objc2::msg_send![
+                nc,
+                addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
+                selector: sel!(screenDidChange:),
+                name: sel!(NSScreenDidChangeNotification),
+                object: std::ptr::null_mut::<objc2::runtime::AnyObject>()
+            ]
+        };
+        // Intentionally leak the observer for the process lifetime.
+        let _ = Retained::into_raw(observer);
 
         Ok(Retained::into_raw(view) as usize)
     }

@@ -1,6 +1,6 @@
 use crate::player;
 use crate::player::engine;
-use crate::player::engine::{is_menu_title, INPUT_TITLE_MENU, VlcSession};
+use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -797,13 +797,17 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Return DVD/BD playback to its interactive menu.
 ///
-/// `set_title(0)` is the textbook way to jump to the dvdnav menu domain, but
-/// some dvdnav builds ignore it mid-title. When the title number does not
-/// change after a grace period we simply restart the disc fresh — a freshly
-/// opened DVD always presents its menu.
+/// Uses `libvlc_media_player_navigate()` with `libvlc_navigate_popup` — the
+/// only disc-menu navigation exposed by the libVLC 3 public API. VLC 3 does
+/// not expose `INPUT_NAV_MENU` (root/top menu) through this function; that
+/// internal value (6) exists in `include/vlc_input.h` but is not mapped in
+/// `lib/media_player.c:1798`. For Blu-ray, `navigate_popup` requests the
+/// popup menu; for DVD, dvdnav handles menu navigation internally.
+///
+/// Verification uses `is_menu_title()` (flag-based) rather than
+/// `title_index == 0`, since some discs carry menu titles at non-zero indices.
 #[tauri::command]
 pub async fn player_return_to_menu(
-    app: tauri::AppHandle,
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     tracing::info!("[player] return_to_menu: requested");
@@ -816,46 +820,38 @@ pub async fn player_return_to_menu(
         let lib = loaded_lib(&state)?;
         (mp, lib)
     };
-    if mp != 0 {
-        let title = unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) };
-        if title == 0 {
-            tracing::info!("[player] return_to_menu: already at menu title");
-            return Ok(());
-        }
-        // UHD fix: flush decoder buffers before format-changing navigation.
-        // Same VideoToolbox transition issue applies when going from 4K HEVC
-        // feature back to 1080p menu.
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 0);
-        }
-        // Send both popup navigation (Blu-ray popup/root menu) and set_title(0)
-        unsafe {
-            (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5); // libvlc_navigate_popup
-            (lib.libvlc_media_player_set_title)(mp as *mut std::ffi::c_void, 0);
-        }
-        tracing::info!("[player] return_to_menu: flushed + navigate(popup) and set_title(0) sent");
+    if mp == 0 {
+        return Err("no active player session".into());
     }
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    let at_menu = {
-        let _mp_guard = state.media_player_cell.lock().ok();
-        let mp = *poison(&state.media_player);
-        mp != 0 && unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) } == 0
-    };
-    if at_menu {
-        tracing::info!("[player] return_to_menu: now at menu title");
+
+    // Already at a menu title: nothing to navigate.
+    if unsafe { engine::is_menu_title(&lib, mp) } {
+        tracing::info!("[player] return_to_menu: already at interactive menu");
         return Ok(());
     }
-    // If navigation mid-title was ignored by the demuxer, restart playback fresh to land at the interactive menu.
-    let path = poison(&state.current_path).clone().unwrap_or_default();
-    if path.is_empty() {
-        tracing::warn!("[player] return_to_menu: no current path to restart");
-        return Err("no current media to restart".into());
+
+    // Request disc menu via the only public navigation available in libVLC 3.
+    // Mode 5 = libvlc_navigate_popup = INPUT_NAV_POPUP.
+    tracing::info!("[player] return_to_menu: sending navigate_popup");
+    unsafe {
+        (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5);
     }
-    tracing::info!("[player] return_to_menu: restarting disc '{path}'");
-    stop_session(&app, &state);
-    start_playback(&app, &state, &path, false).map(|_| ())
+
+    // Verify the navigation reached a menu title using flag-based classification.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    if unsafe { engine::is_menu_title(&lib, mp) } {
+        tracing::info!("[player] return_to_menu: now at interactive menu");
+        return Ok(());
+    }
+
+    // Navigation was dispatched but state did not confirm a menu. Report the
+    // actual state instead of silently restarting the disc.
+    let title = unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) };
+    tracing::warn!(
+        "[player] return_to_menu: navigate_popup dispatched; current title={}, at_menu=false",
+        title
+    );
+    Err("menu navigation dispatched but player did not reach a menu title".into())
 }
 
 /// Authored disc-library display title (BDMV/META/DL/bdmt_*.xml, the BDA

@@ -16,6 +16,7 @@ interface PlayerPollShape {
   title_count: number;
   chapter: number;
   chapter_count: number;
+  at_menu: boolean;
 }
 
 interface PlayerStoreState {
