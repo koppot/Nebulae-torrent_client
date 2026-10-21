@@ -257,14 +257,14 @@ export default function PlayerOverlay() {
   // captured by the native overlay NSView, which forwards key presses as
   // "player-native-key" events; when the webview itself has focus the same
   // handling runs from the window keydown listener. One handler covers
-  // both: disc-menu navigation while the menu domain is active (title 0),
+  // both: disc-menu navigation while the menu domain is active (poll.at_menu),
   // and standard playback shortcuts otherwise (space pause, arrows
   // seek/volume, F fullscreen, M mute).
   useEffect(() => {
     if (!player.open) return;
     const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
     const handle = (key: string) => {
-      if (player.isDisc && pollRef.current.title === 0) {
+      if (player.isDisc && pollRef.current.at_menu) {
         // In the menu domain, navigation keys route to dvdnav/libbluray.
         // Only intercept these specific keys; all other shortcuts (Q, F, M,
         // volume) must fall through to the standard handler below.
@@ -719,7 +719,7 @@ export default function PlayerOverlay() {
     // At the disc menu the button is PLAY (owner: a pause button has no
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
-    if (player.isDisc && pollRef.current.title === 0) {
+    if (player.isDisc && pollRef.current.at_menu) {
       // The menu demuxer idles until an entry is activated (set_title is
       // ignored in the menu domain): activate the highlighted entry (Play
       // All), then seek to the save point if one exists.
@@ -939,7 +939,7 @@ export default function PlayerOverlay() {
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.
               Enter activates the highlighted entry on the first press. */}
-          {player.isDisc && poll.title === 0 && (
+          {player.isDisc && poll.at_menu && (
             <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
               {([
                 ['◀', 3, 'Menu: left'],

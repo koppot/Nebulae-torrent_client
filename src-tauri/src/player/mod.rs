@@ -78,11 +78,6 @@ pub struct PlayerState {
     pub current_path: Mutex<Option<String>>,
     /// The resolved playback target (ISO/VIDEO_TS root) of the session.
     pub current_resolved: Mutex<Option<String>>,
-    /// While true, a post-open watcher keeps forcing the disc's MENU title:
-    /// VLC's Blu-ray demuxer starts the disc's FIRST-PLAY flow (warning →
-    /// program chain) and would otherwise run straight into playback.
-    /// Cleared when the frontend wants playback (resume / menu Play).
-    pub menu_watch: std::sync::atomic::AtomicBool,
     /// Guard around every VLC call that uses the media-player pointer and
     /// around the session teardown that releases it: background helpers
     /// (menu watcher) must never call into a released player. Held for the

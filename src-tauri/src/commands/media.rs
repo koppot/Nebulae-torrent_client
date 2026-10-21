@@ -1,5 +1,7 @@
-use crate::player::engine::{is_menu_title, VlcSession};
-use crate::player::{self, PlayerState};
+use crate::player;
+use crate::player::engine;
+use crate::player::engine::{is_menu_title, INPUT_TITLE_MENU, VlcSession};
+use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
 use std::ffi::{c_int, c_void};
@@ -428,9 +430,6 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
-    state
-        .menu_watch
-        .store(false, std::sync::atomic::Ordering::SeqCst);
     let mp_guard = match state.media_player_cell.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -627,10 +626,12 @@ fn start_playback_inner(
                             }
                         });
 
-                        // Pause-at-menu: when the disc's first-play flow reaches
-                        // the interactive menu, freeze the animated menu background
-                        // so it doesn't auto-advance. Navigation still works; the
-                        // frontend's Play button unpauses before activating.
+                        // Menu state tracking: when the disc's first-play flow reaches
+                        // the interactive menu, report via player_poll.at_menu. The
+                        // frontend can then enable menu-specific controls.
+                        // Automatic pausing is NOT applied — the menu remains live and
+                        // navigable. The frontend's Play button (when at_menu) handles
+                        // activation.
                         let app4 = app.clone();
                         std::thread::spawn(move || {
                             use tauri::{Emitter, Manager};
@@ -649,20 +650,15 @@ fn start_playback_inner(
                                     Ok(l) => l,
                                     Err(_) => return,
                                 };
-                                let title = unsafe {
-                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                };
-                                if title == 0 {
-                                    // Menu reached — pause the animated background.
-                                    unsafe {
-                                        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-                                    }
-                                    tracing::info!("[player] pause-at-menu: paused at title 0");
+                                // Use title flags to detect if current title is a menu.
+                                let is_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                if is_menu {
+                                    tracing::info!("[player] menu state: at interactive menu (title flags)");
                                     return;
                                 }
                                 std::thread::sleep(std::time::Duration::from_millis(500));
                             }
-                            tracing::info!("[player] pause-at-menu: timeout, menu did not appear within 30 s");
+                            tracing::info!("[player] menu state: timeout, menu did not confirmed within 30 s");
                         });
                     }
                     Ok(resolved)
@@ -972,16 +968,6 @@ pub async fn player_disc_display_title(
     .map_err(|e| format!("display title join error: {e}"))?
 }
 
-/// Stop the post-open menu watcher: the user explicitly wants playback
-/// (media-screen resume, or the menu bar's Play button).
-#[tauri::command]
-pub fn player_cancel_menu_watch(state: tauri::State<PlayerState>) -> Result<(), String> {
-    state
-        .menu_watch
-        .store(false, std::sync::atomic::Ordering::SeqCst);
-    Ok(())
-}
-
 // Audio/subtitle language names for the CURRENT title. Blu-ray: read from
 // the disc playlists via libbluray (VLC mislabels streams from CLIPINFO
 // metadata on some discs), matched by `duration_ms`. DVD: read from the
@@ -1128,9 +1114,6 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
 /// return to the interactive menu.
 #[tauri::command]
 pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<(), String> {
-    state
-        .menu_watch
-        .store(false, std::sync::atomic::Ordering::SeqCst);
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -1166,11 +1149,6 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
 pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
-    if mode == 0 {
-        state
-            .menu_watch
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-    }
     let _mp_guard = state
         .media_player_cell
         .lock()
