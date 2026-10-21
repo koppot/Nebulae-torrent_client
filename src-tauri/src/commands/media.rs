@@ -1,4 +1,4 @@
-use crate::player::engine::VlcSession;
+use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::{self, PlayerState};
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -492,8 +492,10 @@ fn start_playback_inner(
 ) -> Result<ResolvedPlayback, String> {
     let resolved = if let Some(feature) = explicit_feature {
         // Explicit resume: the caller already resolved the feature file.
-        // Treat it as a plain (non-disc) file so resolve_playback cannot
-        // redirect it back to the disc root via the BDMV/VIDEO_TS ancestor walk.
+        // Treat it as a plain file path so resolve_playback cannot redirect
+        // it back to the disc root, BUT preserve is_disc=true so the
+        // frontend's seekWhenFeatureStarts branch runs (openInPlayer checks
+        // info.is_disc && resume && seekTo to invoke the seek poller).
         let path = Path::new(feature);
         let title = path
             .file_stem()
@@ -507,7 +509,7 @@ fn start_playback_inner(
         ResolvedPlayback {
             resolved_path: feature.to_string(),
             title,
-            is_disc: false,
+            is_disc: true,
             external: false,
         }
     } else {
@@ -623,6 +625,44 @@ fn start_playback_inner(
                                     "[player] liveness check OK: get_time={ms} ms after 6 s"
                                 );
                             }
+                        });
+
+                        // Pause-at-menu: when the disc's first-play flow reaches
+                        // the interactive menu, freeze the animated menu background
+                        // so it doesn't auto-advance. Navigation still works; the
+                        // frontend's Play button unpauses before activating.
+                        let app4 = app.clone();
+                        std::thread::spawn(move || {
+                            use tauri::{Emitter, Manager};
+                            std::thread::sleep(std::time::Duration::from_secs(4));
+                            let state = app4.state::<PlayerState>();
+                            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                            while std::time::Instant::now() < deadline {
+                                if !*poison(&state.started) {
+                                    return; // session closed
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 {
+                                    return;
+                                }
+                                let lib = match loaded_lib(&state) {
+                                    Ok(l) => l,
+                                    Err(_) => return,
+                                };
+                                let title = unsafe {
+                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                };
+                                if title == 0 {
+                                    // Menu reached — pause the animated background.
+                                    unsafe {
+                                        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+                                    }
+                                    tracing::info!("[player] pause-at-menu: paused at title 0");
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                            }
+                            tracing::info!("[player] pause-at-menu: timeout, menu did not appear within 30 s");
                         });
                     }
                     Ok(resolved)
@@ -1043,6 +1083,9 @@ pub struct PlayerPoll {
     pub title_count: i32,
     pub chapter: i32,
     pub chapter_count: i32,
+    // Whether the current title is an interactive menu (INPUT_TITLE_MENU flag).
+    // Prefer this over checking `title == 0` for menu detection.
+    pub at_menu: bool,
 }
 
 #[tauri::command]
@@ -1061,6 +1104,7 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             title_count: 0,
             chapter: 0,
             chapter_count: 0,
+            at_menu: false,
         });
     }
     let lib = loaded_lib(&state)?;
@@ -1074,6 +1118,7 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             title_count: (lib.libvlc_media_player_get_title_count)(m),
             chapter: (lib.libvlc_media_player_get_chapter)(m),
             chapter_count: (lib.libvlc_media_player_get_chapter_count)(m),
+            at_menu: is_menu_title(&lib, mp),
         })
     }
 }

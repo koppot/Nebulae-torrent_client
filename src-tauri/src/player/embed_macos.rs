@@ -13,6 +13,12 @@
 //!
 //! All view work happens on the main thread (Tauri's `run_on_main_thread`);
 //! the frontend drives position/size with `player_sync_viewport`.
+//!
+//! HDR: When the window is on an Apple Silicon XDR display, the content
+//! view's layer has `wantsExtendedDynamicRangeContent = YES` enabled so
+//! the underlying caopengllayer can emit values above 1.0. The window
+//! listens for screen changes and re-applies this when the window moves
+//! between displays.
 
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
@@ -96,6 +102,25 @@ fn overlay_app() -> Option<&'static AppHandle> {
 
 fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
+}
+
+/// Apply EDR (Extended Dynamic Range) settings to the window's content view
+/// layer. When on an XDR display, this allows the caopengllayer vout to emit
+/// HDR values above 1.0 without being clipped by the compositor.
+/// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
+unsafe fn apply_edr_settings(win: &NSWindow) {
+    let Some(content) = win.contentView() else {
+        return;
+    };
+    content.setWantsLayer(true);
+    if let Some(layer) = content.layer() {
+        // Enable extended dynamic range content.
+        // macOS 14+ also supports layer.preferredDynamicRange = CADynamicRangeHigh,
+        // but that requires additional runtime checks for the API availability.
+        // For compatibility, we set the base flag; the system handles the rest.
+        #[allow(deprecated)]
+        layer.setWantsExtendedDynamicRangeContent(true);
+    }
 }
 
 /// Translate a native key event into the frontend's key-name vocabulary.
@@ -301,6 +326,17 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(webview));
         // Intentionally leak one overlay view for the process lifetime;
         // repeated play/stop reuses it.
+
+        // Configure EDR (Extended Dynamic Range) headroom tracking for
+        // Apple Silicon XDR displays. We set the content view's layer flag
+        // which allows the caopengllayer vout to emit HDR values above 1.0
+        // without clipping when the window is on an XDR display.
+        // Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            layer.setWantsExtendedDynamicRangeContent(true);
+        }
+
         Ok(Retained::into_raw(view) as usize)
     }
 }

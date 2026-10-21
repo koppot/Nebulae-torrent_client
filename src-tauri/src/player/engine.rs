@@ -94,6 +94,35 @@ pub struct VlcTitleDescription {
     pub i_flags: u32,
 }
 
+/// Title flags per libvlc: INPUT_TITLE_MENU=0x01, INPUT_TITLE_INTERACTIVE=0x02
+/// From upstream include/vlc_input.h (3.0.x)
+pub const INPUT_TITLE_MENU: u32 = 0x01;
+pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
+
+/// Return true if the current title is a menu (interactive title) based on its
+/// flags. This is more reliable than checking `title_index == 0` which some
+/// discs violate (multi-edition releases may have menu titles at non-zero indices).
+pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    // libvlc_media_player_get_full_title_descriptions fills titles pointer and returns count.
+    // The function signature is: (mp, titles) -> count
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    // libvlc_media_player_get_title returns the current title index (0-based).
+    let current = (lib.libvlc_media_player_get_title)(m) as usize;
+    if current >= n as usize {
+        (lib.libvlc_title_descriptions_release)(titles, n);
+        return false;
+    }
+    let t = &**titles.add(current);
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    is_menu
+}
+
 /// Mirror of libvlc_chapter_description_t (C layout, header-verified).
 #[repr(C)]
 pub struct VlcChapterDescription {
