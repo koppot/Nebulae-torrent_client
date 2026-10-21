@@ -155,18 +155,20 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, is_hdr: bool) {
         let _: () = objc2::msg_send![layer, setToneMapMode: &*mode];
     }
 
-    // 5. Colorspace
-    if is_hdr {
-        let cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
-        if !cs.is_null() {
-            let _: () = objc2::msg_send![layer, setColorspace: cs];
-            CGColorSpaceRelease(cs);
-        }
-    } else {
-        let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        if !cs.is_null() {
-            let _: () = objc2::msg_send![layer, setColorspace: cs];
-            CGColorSpaceRelease(cs);
+    // 5. Colorspace (supported on CAOpenGLLayer and CAMetalLayer)
+    if layer.respondsToSelector(sel!(setColorspace:)) {
+        if is_hdr {
+            let cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
+            if !cs.is_null() {
+                let _: () = objc2::msg_send![layer, setColorspace: cs];
+                CGColorSpaceRelease(cs);
+            }
+        } else {
+            let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            if !cs.is_null() {
+                let _: () = objc2::msg_send![layer, setColorspace: cs];
+                CGColorSpaceRelease(cs);
+            }
         }
     }
 }
@@ -778,6 +780,27 @@ mod tests {
             let cs_srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
             assert!(!cs_srgb.is_null(), "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef");
             CGColorSpaceRelease(cs_srgb);
+        }
+    }
+
+    #[test]
+    fn test_apply_edr_to_layer_does_not_crash() {
+        let layer = CALayer::new();
+        unsafe {
+            apply_edr_to_layer(&layer, true);
+            apply_edr_to_layer(&layer, false);
+        }
+
+        // Also test with CAOpenGLLayer if available at runtime
+        if let Some(cls) = objc2::runtime::AnyClass::get(c"CAOpenGLLayer") {
+            let gl_layer: Retained<CALayer> = unsafe {
+                objc2::msg_send![cls, new]
+            };
+            assert!(gl_layer.respondsToSelector(sel!(setColorspace:)), "CAOpenGLLayer must respond to setColorspace:");
+            unsafe {
+                apply_edr_to_layer(&gl_layer, true);
+                apply_edr_to_layer(&gl_layer, false);
+            }
         }
     }
 }
