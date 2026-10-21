@@ -1047,11 +1047,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                         <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
                       ) : null}
                     </h4>
-                    {discInfo?.total_bytes ? (
-                      <p className="text-[10px] font-mono text-[#8c8c8c] text-center mt-0.5">
-                        {formatBytes(discInfo.total_bytes)}
-                      </p>
-                    ) : null}
+
                   </div>
                 </div>
               );

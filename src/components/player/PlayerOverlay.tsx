@@ -20,7 +20,7 @@ import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositio
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
-import { formatBytes } from '../../lib/formatters';
+
 
 interface Poll {
   time_ms: number;
@@ -452,7 +452,7 @@ export default function PlayerOverlay() {
         setDiscChoices(
           set.map((d, idx) => ({
             label: `Disc ${d.disc_number || idx + 1}`,
-            detail: `${d.play_target.split('/').pop() || d.play_target} · ${formatBytes(d.total_bytes)}`,
+            detail: d.play_target.split('/').pop() || d.play_target,
             path: d.play_target,
           })),
         );
@@ -683,7 +683,7 @@ export default function PlayerOverlay() {
       clean = clean.replace(new RegExp(`\\s*\\(${year}\\)$`), '').trim();
     }
     return { title: clean || player.title, year };
-  }, [player.title, player.year]);
+  }, [player.title, player.year, authoredTitle]);
 
   if (!player.open) return null;
 

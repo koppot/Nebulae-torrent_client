@@ -1,7 +1,7 @@
 use crate::player;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
-use crate::player::embed_macos::edr_observer_cleanup;
+use crate::player::embed_macos::{apply_edr_to_video_layer, edr_observer_cleanup};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -564,6 +564,15 @@ fn start_playback_inner(
                     *poison(&state.media_player) = session.media_player;
                     *poison(&state.started) = true;
 
+                    // HDR: apply extended-dynamic-range headroom to the
+                    // VLC-owned video layer (CAOpenGLLayer) so HDR content
+                    // can emit values above 1.0 on XDR displays. The content
+                    // view's EDR flag alone does not propagate to it.
+                    let app_for_edr = app.clone();
+                    let _ = app.run_on_main_thread(move || unsafe {
+                        apply_edr_to_video_layer(&app_for_edr);
+                    });
+
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
                     // can fail inside the demuxer while libvlc_media_player_play
                     // still reports success (reproduced: black screen, no
@@ -612,17 +621,28 @@ fn start_playback_inner(
                             let ms =
                                 unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) };
                             if ms == -1 {
-                                // No media progress after 6 s — almost certainly a
-                                // decryption failure (AACS) or unsupported disc format.
-                                tracing::error!(
-                                    "[player] liveness check failed: get_time=-1 after 6 s \
-                                     — disc may require AACS decryption keys (libaacs + KEYDB.cfg)"
-                                );
-                                let msg = "Playback did not start. \
-                                    This disc may be encrypted (AACS copy protection). \
-                                    Install libaacs and a valid KEYDB.cfg, then try again. \
-                                    If the disc is not encrypted, check that the BDMV folder is readable.";
-                                let _ = app3.emit("nebulae://player-error", msg);
+                                // Menu-first open: navigate_menu() may have put the
+                                // disc at its authored menu, where get_time is -1
+                                // (idle, no playback). That is not a failure — only
+                                // report an error when we are NOT at the menu.
+                                let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                if at_menu {
+                                    tracing::info!(
+                                        "[player] liveness check: at disc menu, get_time=-1 is expected"
+                                    );
+                                } else {
+                                    // No media progress after 6 s — almost certainly a
+                                    // decryption failure (AACS) or unsupported disc format.
+                                    tracing::error!(
+                                        "[player] liveness check failed: get_time=-1 after 6 s \
+                                         — disc may require AACS decryption keys (libaacs + KEYDB.cfg)"
+                                    );
+                                    let msg = "Playback did not start. \
+                                        This disc may be encrypted (AACS copy protection). \
+                                        Install libaacs and a valid KEYDB.cfg, then try again. \
+                                        If the disc is not encrypted, check that the BDMV folder is readable.";
+                                    let _ = app3.emit("nebulae://player-error", msg);
+                                }
                             } else {
                                 tracing::info!(
                                     "[player] liveness check OK: get_time={ms} ms after 6 s"
@@ -630,19 +650,25 @@ fn start_playback_inner(
                             }
                         });
 
-                        // Menu state tracking: when the disc's first-play flow reaches
-                        // the interactive menu, report via player_poll.at_menu. The
-                        // frontend can then enable menu-specific controls.
-                        // Automatic pausing is NOT applied — the menu remains live and
-                        // navigable. The frontend's Play button (when at_menu) handles
-                        // activation.
+                        // Menu-first Open: after play() starts the disc's first-play
+                        // flow, dispatch INPUT_NAV_MENU to reach the authored top/root
+                        // menu (Blu-ray: bd_menu_call(Top Menu); DVD: dvdnav_menu_call()).
+                        // This replaces the old behaviour where play() went straight to
+                        // the feature. The watcher waits for the demuxer to report
+                        // titles (readiness), dispatches the menu, then confirms we are
+                        // at the menu so player_poll.at_menu flips to true.
                         let app4 = app.clone();
                         std::thread::spawn(move || {
-                            use tauri::{Emitter, Manager};
-                            std::thread::sleep(std::time::Duration::from_secs(4));
+                            use tauri::Manager;
                             let state = app4.state::<PlayerState>();
-                            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-                            while std::time::Instant::now() < deadline {
+
+                            // Phase 1: wait for the demuxer to finish reading the disc
+                            // structure so INPUT_NAV_MENU is accepted. Readiness =
+                            // title count > 0.
+                            let mut ready = false;
+                            let ready_deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(10);
+                            while std::time::Instant::now() < ready_deadline {
                                 if !*poison(&state.started) {
                                     return; // session closed
                                 }
@@ -654,15 +680,71 @@ fn start_playback_inner(
                                     Ok(l) => l,
                                     Err(_) => return,
                                 };
-                                // Use title flags to detect if current title is a menu.
+                                let tc =
+                                    unsafe { (lib.libvlc_media_player_get_title_count)(mp as *mut c_void) };
+                                if tc > 0 {
+                                    ready = true;
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(300));
+                            }
+
+                            if ready {
+                                let mp = *poison(&state.media_player);
+                                if mp != 0 {
+                                    let lib = match loaded_lib(&state) {
+                                        Ok(l) => l,
+                                        Err(_) => return,
+                                    };
+                                    if let Some(navigate_menu) =
+                                        lib.libvlc_media_player_navigate_menu
+                                    {
+                                        tracing::info!(
+                                            "[player] menu-first open: dispatching INPUT_NAV_MENU"
+                                        );
+                                        unsafe {
+                                            navigate_menu(mp as *mut c_void);
+                                        }
+                                    } else {
+                                        tracing::warn!(
+                                            "[player] menu-first open: libvlc_media_player_navigate_menu unavailable"
+                                        );
+                                    }
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "[player] menu-first open: demuxer did not report titles within 10 s"
+                                );
+                            }
+
+                            // Phase 2: confirm we reached the menu (player_poll reports
+                            // at_menu from is_menu_title on every poll).
+                            let menu_deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(20);
+                            while std::time::Instant::now() < menu_deadline {
+                                if !*poison(&state.started) {
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 {
+                                    return;
+                                }
+                                let lib = match loaded_lib(&state) {
+                                    Ok(l) => l,
+                                    Err(_) => return,
+                                };
                                 let is_menu = unsafe { engine::is_menu_title(&lib, mp) };
                                 if is_menu {
-                                    tracing::info!("[player] menu state: at interactive menu (title flags)");
+                                    tracing::info!(
+                                        "[player] menu-first open: at interactive menu"
+                                    );
                                     return;
                                 }
                                 std::thread::sleep(std::time::Duration::from_millis(500));
                             }
-                            tracing::info!("[player] menu state: timeout, menu did not confirmed within 30 s");
+                            tracing::info!(
+                                "[player] menu-first open: menu not confirmed within 20 s (may still be in first play)"
+                            );
                         });
                     }
                     Ok(resolved)
@@ -1293,6 +1375,13 @@ pub async fn player_disc_chapters(
     }
     tokio::task::spawn_blocking(move || {
         let mut probe_path = probe_root(&path);
+        // libbluray is Blu-ray only: DVDs (VIDEO_TS) have no BDMV and cannot
+        // be probed by libbluray. Return empty so the frontend falls through
+        // to VLC's chapter API (dvdnav exposes chapters for DVD titles)
+        // without any delay from bd_open on a non-Blu-ray path.
+        if probe_path.join("VIDEO_TS").is_dir() && !probe_path.join("BDMV").is_dir() {
+            return Ok(Vec::new());
+        }
         // ISO disc image: libbluray cannot read through the image file —
         // mount it read-only in the BACKGROUND (no dialogs, invisible to the
         // owner) and probe the BDMV inside, then detach.

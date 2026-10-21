@@ -113,7 +113,7 @@ fn overlay_app_init(app: AppHandle) {
 /// where it simply returns false and we fall back to the deprecated
 /// `wantsExtendedDynamicRangeContent`.
 /// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
-unsafe fn apply_edr_to_layer(layer: &CALayer) {
+pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer) {
     // Try the modern API first. `setPreferredDynamicRange:` selector is
     // documented for macOS 26+. The respondsToSelector check guards against
     // its absence on older systems where the selector simply does not exist.
@@ -131,6 +131,25 @@ unsafe fn apply_edr_to_layer(layer: &CALayer) {
             layer.setWantsExtendedDynamicRangeContent(true);
         }
     }
+}
+
+/// Apply EDR to the VLC-owned video layer attached to the overlay view.
+/// libVLC's caopengllayer vout attaches a CAOpenGLLayer to the VideoOverlayView
+/// when set_nsobject is called. The content-view EDR flag alone does not
+/// propagate to that layer, so we set preferredDynamicRange on it directly.
+/// Safe to call once per session; re-applying is idempotent.
+#[cfg(target_os = "macos")]
+pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) {
+    let state = app.state::<crate::player::PlayerState>();
+    let ptr = state.overlay_view.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr == 0 {
+        return;
+    }
+    let view = &*(ptr as *mut NSView);
+    let Some(layer) = view.layer() else {
+        return;
+    };
+    apply_edr_to_layer(&layer);
 }
 
 /// Observer for NSWindow.didChangeScreenNotification. Re-applies EDR settings
@@ -152,6 +171,9 @@ objc2::define_class!(
                         let _ = apply_edr_to_window(&*ns_win);
                     }
                 }
+                // Re-apply EDR to the VLC-owned video layer on screen change
+                // (XDR vs non-XDR displays have different dynamic range).
+                let _ = apply_edr_to_video_layer(app);
             }
         }
     }
