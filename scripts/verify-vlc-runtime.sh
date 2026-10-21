@@ -55,13 +55,14 @@ else
   exit 1
 fi
 
-# Verify navigate_menu extension is present in libvlc
+# Verify navigate_menu extension is present in libvlc (dynamically exported).
+# Use dyld_info -exports to check the export trie, which is what dlsym()
+# (used by libloading) resolves against. Static nm output is insufficient.
 LIBVLC="$DEST/lib/libvlc.5.dylib"
-nm_output=$(nm "$LIBVLC" 2>/dev/null || true)
-if echo "$nm_output" | grep -q "_libvlc_media_player_navigate_menu"; then
-  echo "OK: libvlc.5.dylib contains libvlc_media_player_navigate_menu extension"
+if dyld_info -exports "$LIBVLC" 2>/dev/null | grep -q "_libvlc_media_player_navigate_menu"; then
+  echo "OK: libvlc.5.dylib exports libvlc_media_player_navigate_menu"
 else
-  echo "ERROR: libvlc.5.dylib missing libvlc_media_player_navigate_menu extension"
+  echo "ERROR: libvlc.5.dylib does not export libvlc_media_player_navigate_menu"
   exit 1
 fi
 

@@ -38,7 +38,7 @@ pub use embed_linux::{
 };
 
 #[cfg(target_os = "macos")]
-mod embed_macos;
+pub(crate) mod embed_macos;
 
 #[cfg(target_os = "windows")]
 mod embed_windows;
@@ -58,6 +58,9 @@ use std::sync::Mutex;
 pub struct PlayerState {
     /// macOS: raw `NSView*` of the video overlay layering above the webview.
     pub overlay_view: AtomicUsize,
+    /// macOS: raw `NebulaeEDRScreenObserver*` for screen-change notifications.
+    /// Stored as AtomicUsize because Retained<EDRScreenObserver> is !Send.
+    pub edr_observer: AtomicUsize,
     /// The loaded libVLC, created on first use.
     pub lib: Mutex<Option<std::sync::Arc<engine::VlcLib>>>,
     /// libvlc_instance_t*

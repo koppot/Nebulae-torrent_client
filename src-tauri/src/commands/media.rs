@@ -1,6 +1,7 @@
 use crate::player;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
+use crate::player::embed_macos::edr_observer_cleanup;
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -463,6 +464,9 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     *poison(&state.media_player) = 0;
     *poison(&state.started) = false;
     drop(mp_guard);
+    // Remove the EDR screen-change observer so it cannot fire against a
+    // destroyed window or stale session.
+    unsafe { edr_observer_cleanup(app) };
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
@@ -816,14 +820,35 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 pub async fn player_return_to_menu(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
-    tracing::info!("[player] return_to_menu: requested");
+    dispatch_main_menu(&state)
+}
+
+/// Send a disc root / main menu request through the libvlc_media_player_navigate_menu()
+/// runtime extension. This is the deterministic main-menu path, distinct from
+/// popup navigation (INPUT_NAV_POPUP).
+///
+/// Unlike player_menu_navigate (modes 0-5, public libvlc_navigate_mode_t), this
+/// command reaches INPUT_NAV_MENU directly:
+///   - Blu-ray: bd_menu_call() (Top Menu / Root Menu)
+///   - DVD:     dvdnav_menu_call() (Title/Root menu)
+///
+/// Returns Err if the runtime does not export libvlc_media_player_navigate_menu.
+#[tauri::command]
+pub fn player_menu_navigate_menu(
+    state: tauri::State<'_, PlayerState>,
+) -> Result<(), String> {
+    dispatch_main_menu(&state)
+}
+
+/// Shared implementation for main-menu dispatch. Both commands delegate here.
+fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), String> {
     let (mp, lib) = {
         let _mp_guard = state
             .media_player_cell
             .lock()
             .map_err(|_| "player state poisoned")?;
         let mp = *poison(&state.media_player);
-        let lib = loaded_lib(&state)?;
+        let lib = loaded_lib(state)?;
         (mp, lib)
     };
     if mp == 0 {
@@ -843,39 +868,6 @@ pub async fn player_return_to_menu(
         navigate_menu(mp as *mut std::ffi::c_void);
     }
 
-    Ok(())
-}
-
-/// Send a disc root / main menu request through the libvlc_media_player_navigate_menu()
-/// runtime extension. This is the deterministic main-menu path, distinct from
-/// popup navigation (INPUT_NAV_POPUP).
-///
-/// Unlike player_menu_navigate (modes 0-5, public libvlc_navigate_mode_t), this
-/// command reaches INPUT_NAV_MENU directly:
-///   - Blu-ray: bd_menu_call() (Top Menu / Root Menu)
-///   - DVD:     dvdnav_menu_call() (Title/Root menu)
-///
-/// Returns Err if the runtime does not export libvlc_media_player_navigate_menu.
-#[tauri::command]
-pub fn player_menu_navigate_menu(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
-    let _mp_guard = state
-        .media_player_cell
-        .lock()
-        .map_err(|_| "player state poisoned")?;
-    let mp = *poison(&state.media_player);
-    if mp == 0 {
-        return Ok(());
-    }
-    let lib = loaded_lib(&state)?;
-    let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
-        return Err("main menu navigation not supported by this runtime".into());
-    };
-    tracing::info!("[player] menu_navigate_menu");
-    unsafe {
-        navigate_menu(mp as *mut c_void);
-    }
     Ok(())
 }
 
@@ -1145,15 +1137,6 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
     }
     let lib = loaded_lib(&state)?;
     tracing::info!("[player] set_title({title})");
-    // UHD fix: flush decoder buffers before the format-changing jump to
-    // the menu domain (title 0), same as return_to_menu.
-    if title == 0 {
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
     unsafe { (lib.libvlc_media_player_set_title)(mp as *mut c_void, title.max(0)) };
     Ok(())
 }
@@ -1181,19 +1164,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let lib = loaded_lib(&state)?;
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
-    
-    // UHD playback fix: flush VideoToolbox decoder buffers before activate.
-    // When transitioning from 1080p menu to 4K HEVC main title, the decoder
-    // holds outstanding picture buffers from the menu stream. A brief pause
-    // forces buffer release, allowing clean reinit for the feature stream.
-    if mode == 0 {
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
-    
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }

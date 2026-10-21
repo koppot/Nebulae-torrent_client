@@ -38,13 +38,15 @@ for src in "$SRC_LIBVLC" "$SRC_VLCCORE" "$SRC_VIDEOTOOLBOX" "$SRC_CAOPENGLLLAYER
 done
 
 # Verify VT-305 patch is in videotoolbox plugin
-if ! nm -nm "$SRC_VIDEOTOOLBOX" 2>/dev/null | grep -q "VTDecompressionSessionCanAcceptFormatDescription"; then
+nm_output=$(nm -nm "$SRC_VIDEOTOOLBOX" 2>/dev/null || true)
+if echo "$nm_output" | grep -q "VTDecompressionSessionCanAcceptFormatDescription"; then
+  echo "OK: videotoolbox plugin contains VT-305 patch"
+else
   echo "ERROR: $SRC_VIDEOTOOLBOX missing VT-305 patch symbol"
   exit 1
 fi
-echo "OK: videotoolbox plugin contains VT-305 patch"
 
-# Verify navigate_menu extension is in libvlc
+# Verify navigate_menu extension is in libvlc (exported via libvlc.sym)
 if ! nm "$SRC_LIBVLC" 2>/dev/null | grep -q "_libvlc_media_player_navigate_menu"; then
   echo "ERROR: $SRC_LIBVLC missing libvlc_media_player_navigate_menu symbol"
   exit 1

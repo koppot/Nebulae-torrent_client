@@ -22,7 +22,7 @@
 
 use objc2::rc::Retained;
 use objc2::{class, sel, MainThreadOnly};
-use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
+use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
 use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
 use objc2_quartz_core::{CALayer, CADynamicRangeHigh};
 use std::sync::atomic::Ordering;
@@ -108,17 +108,15 @@ fn overlay_app_init(app: AppHandle) {
 /// Apply EDR (Extended Dynamic Range) settings to a CALayer.
 ///
 /// Tries `preferredDynamicRange = CADynamicRangeHigh` first via
-/// `respondsToSelector` (selector available since macOS 10.15; the
-/// `CADynamicRangeHigh` constant is defined in the macOS 14+ SDK but the
-/// selector check guards against its absence at runtime). Falls back to the
-/// deprecated `wantsExtendedDynamicRangeContent` on older macOS where the
-/// selector does not exist.
+/// `respondsToSelector: sel!(setPreferredDynamicRange:)`. The selector is
+/// documented for macOS 26+; the guard makes the call safe on older systems
+/// where it simply returns false and we fall back to the deprecated
+/// `wantsExtendedDynamicRangeContent`.
 /// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
 unsafe fn apply_edr_to_layer(layer: &CALayer) {
-    // Try the modern API first. `setPreferredDynamicRange:` selector exists
-    // since macOS 10.15; `CADynamicRangeHigh` constant is defined in the
-    // macOS 14+ SDK. The respondsToSelector check guards against the
-    // selector's absence at runtime on older systems.
+    // Try the modern API first. `setPreferredDynamicRange:` selector is
+    // documented for macOS 26+. The respondsToSelector check guards against
+    // its absence on older systems where the selector simply does not exist.
     let uses_modern_api: bool = unsafe {
         let responds: bool = objc2::msg_send![layer, respondsToSelector: sel!(setPreferredDynamicRange:)];
         responds
@@ -135,8 +133,9 @@ unsafe fn apply_edr_to_layer(layer: &CALayer) {
     }
 }
 
-/// Observer for NSScreenDidChangeNotification. Re-applies EDR settings when
-/// the window moves between displays with different dynamic range capabilities.
+/// Observer for NSWindow.didChangeScreenNotification. Re-applies EDR settings
+/// when the window moves between displays with different dynamic range
+/// capabilities.
 objc2::define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -167,6 +166,30 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
     if let Some(layer) = content.layer() {
         apply_edr_to_layer(&layer);
     }
+}
+
+/// Remove and release the EDR screen-change observer for the main window.
+/// Must be called on the main thread.
+pub unsafe fn edr_observer_cleanup(app: &AppHandle) {
+    let state = app.state::<crate::player::PlayerState>();
+    let ptr = state.edr_observer.load(Ordering::SeqCst);
+    if ptr == 0 {
+        return;
+    }
+    let observer = Retained::<EDRScreenObserver>::from_raw(ptr as *mut EDRScreenObserver)
+        .expect("EDR observer pointer should be valid");
+    let nc: *mut objc2::runtime::AnyObject = unsafe {
+        objc2::msg_send![class!(NSNotificationCenter), defaultCenter]
+    };
+    let _: () = unsafe {
+        objc2::msg_send![
+            nc,
+            removeObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject
+        ]
+    };
+    state.edr_observer.store(0, Ordering::SeqCst);
+    // Drop observer to release the retain from from_raw.
+    drop(observer);
 }
 
 /// Translate a native key event into the frontend's key-name vocabulary.
@@ -380,9 +403,10 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         // Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m
         apply_edr_to_window(&*ns_win);
 
-        // Register for screen change notifications so EDR settings are
+        // Register for window screen-change notifications so EDR settings are
         // re-applied when the window moves between displays with different
-        // dynamic range capabilities.
+        // dynamic range capabilities. The observer is tied to this specific
+        // window and stored in PlayerState for cleanup.
         let observer: Retained<EDRScreenObserver> =
             objc2::msg_send![EDRScreenObserver::alloc(mtm), init];
         let nc: *mut objc2::runtime::AnyObject = unsafe {
@@ -393,12 +417,15 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
                 nc,
                 addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
                 selector: sel!(screenDidChange:),
-                name: sel!(NSScreenDidChangeNotification),
-                object: std::ptr::null_mut::<objc2::runtime::AnyObject>()
+                name: NSWindowDidChangeScreenNotification,
+                object: ns_win as *mut objc2::runtime::AnyObject
             ]
         };
-        // Intentionally leak the observer for the process lifetime.
-        let _ = Retained::into_raw(observer);
+        // Store the observer in PlayerState for cleanup. Leak the raw pointer
+        // (Retained is !Send, and the observer is only accessed on the main thread).
+        app.state::<crate::player::PlayerState>()
+            .edr_observer
+            .store(Retained::into_raw(observer) as usize, Ordering::SeqCst);
 
         Ok(Retained::into_raw(view) as usize)
     }
@@ -455,16 +482,6 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
             (*view).setHidden(hidden);
-            // Configure EDR on the actual video renderer layer (caopengllayer
-            // attaches its own CALayer to this view via
-            // libvlc_media_player_set_nsobject). Setting it on the parent
-            // content view's layer (done in attach_main_window_view) handles
-            // compositing; setting it here covers the renderer layer itself.
-            if !hidden {
-                if let Some(layer) = (*view).layer() {
-                    apply_edr_to_layer(&layer);
-                }
-            }
             // Player window: 3 px corners; media/manager UI: 4 px corners.
             apply_window_corner_radius(&app2, 10.0);
             // The video view always covers the whole window; the frontend's
