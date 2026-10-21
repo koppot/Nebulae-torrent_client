@@ -101,6 +101,12 @@ fn overlay_app() -> Option<&'static AppHandle> {
     OVERLAY_APP.get()
 }
 
+/// Handle for cross-module use (e.g. the poll-driven EDR retry in the
+/// player commands). None until the first overlay is created.
+pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
+    OVERLAY_APP.get()
+}
+
 fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
@@ -134,27 +140,68 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer) {
 }
 
 /// Apply EDR to the VLC-owned video layer attached to the overlay view.
-/// libVLC's caopengllayer vout attaches a CAOpenGLLayer to the VideoOverlayView
-/// when set_nsobject is called. The content-view EDR flag alone does not
-/// propagate to that layer, so we set preferredDynamicRange on it directly.
-/// Safe to call once per session; re-applying is idempotent.
+/// Returns true when a layer was found and configured.
+///
+/// The overlay NSView is deliberately NOT layer-backed (VLC's caopengllayer
+/// vout refuses views that manage their own layer), so the overlay's own
+/// layer is nil and the previous implementation never applied anything. The
+/// vout instead inserts its own layer-backed VLCVideoLayerView as a SUBVIEW
+/// (modules/video_output/caopengllayer.m, Open(): addSubview:), and that
+/// subview's layer IS the CAOpenGLLayer the video renders into. That is the
+/// layer that must carry preferredDynamicRange /
+/// wantsExtendedDynamicRangeContent for native HDR headroom on XDR displays.
+///
+/// The video subview is created asynchronously when the vout opens (after the
+/// decoder starts), so a call right after play() usually finds nothing yet;
+/// callers retry via maybe_apply_edr until it reports true. Idempotent.
 #[cfg(target_os = "macos")]
-pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) {
+pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) -> bool {
     let state = app.state::<crate::player::PlayerState>();
     let ptr = state.overlay_view.load(std::sync::atomic::Ordering::SeqCst);
     if ptr == 0 {
-        return;
+        return false;
     }
     let view = &*(ptr as *mut NSView);
-    let Some(layer) = view.layer() else {
-        return;
-    };
-    apply_edr_to_layer(&layer);
+    // Defensive: if the view ever becomes layer-backed, its own layer wins.
+    if let Some(layer) = view.layer() {
+        apply_edr_to_layer(&layer);
+        return true;
+    }
+    let subviews = view.subviews();
+    for sub in subviews.iter() {
+        if let Some(layer) = sub.layer() {
+            apply_edr_to_layer(&layer);
+            return true;
+        }
+    }
+    false
 }
 
-/// Observer for NSWindow.didChangeScreenNotification. Re-applies EDR settings
-/// when the window moves between displays with different dynamic range
-/// capabilities.
+/// Apply EDR to the video layer once per playback session. Cheap to call
+/// from any thread and on every player poll: it dispatches to the main
+/// thread only until the layer has actually been found and configured, and
+/// PlayerState::edr_applied latches the success. No timers or sleeps: the
+/// frontend's existing 1 Hz poll is the retry cadence.
+#[cfg(target_os = "macos")]
+pub fn maybe_apply_edr(app: &AppHandle) {
+    let state = app.state::<crate::player::PlayerState>();
+    if state.edr_applied.load(Ordering::SeqCst) {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let applied = unsafe { apply_edr_to_video_layer(&app2) };
+        if applied {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+// Observer for NSWindow.didChangeScreenNotification. Re-applies EDR settings
+// when the window moves between displays with different dynamic range
+// capabilities.
 objc2::define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -190,29 +237,6 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
     }
 }
 
-/// Remove and release the EDR screen-change observer for the main window.
-/// Must be called on the main thread.
-pub unsafe fn edr_observer_cleanup(app: &AppHandle) {
-    let state = app.state::<crate::player::PlayerState>();
-    let ptr = state.edr_observer.load(Ordering::SeqCst);
-    if ptr == 0 {
-        return;
-    }
-    let observer = Retained::<EDRScreenObserver>::from_raw(ptr as *mut EDRScreenObserver)
-        .expect("EDR observer pointer should be valid");
-    let nc: *mut objc2::runtime::AnyObject = unsafe {
-        objc2::msg_send![class!(NSNotificationCenter), defaultCenter]
-    };
-    let _: () = unsafe {
-        objc2::msg_send![
-            nc,
-            removeObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject
-        ]
-    };
-    state.edr_observer.store(0, Ordering::SeqCst);
-    // Drop observer to release the retain from from_raw.
-    drop(observer);
-}
 
 /// Translate a native key event into the frontend's key-name vocabulary.
 fn native_key_name(event: &NSEvent) -> Option<String> {
@@ -450,20 +474,21 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         // window and stored in PlayerState for cleanup.
         let observer: Retained<EDRScreenObserver> =
             objc2::msg_send![EDRScreenObserver::alloc(mtm), init];
-        let nc: *mut objc2::runtime::AnyObject = unsafe {
-            objc2::msg_send![class!(NSNotificationCenter), defaultCenter]
-        };
-        let _: () = unsafe {
-            objc2::msg_send![
-                nc,
-                addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
-                selector: sel!(screenDidChange:),
-                name: NSWindowDidChangeScreenNotification,
-                object: ns_win as *mut objc2::runtime::AnyObject
-            ]
-        };
-        // Store the observer in PlayerState for cleanup. Leak the raw pointer
-        // (Retained is !Send, and the observer is only accessed on the main thread).
+        let nc: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![class!(NSNotificationCenter), defaultCenter];
+        let _: () = objc2::msg_send![
+            nc,
+            addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
+            selector: sel!(screenDidChange:),
+            name: NSWindowDidChangeScreenNotification,
+            object: ns_win as *mut objc2::runtime::AnyObject
+        ];
+        // Store the observer in PlayerState for bookkeeping. Like the
+        // overlay view, it is intentionally leaked for the process lifetime:
+        // the window and view outlive individual sessions, so removing the
+        // observer at session stop (the old behavior) silently disabled
+        // screen-change EDR re-application for every later session, because
+        // ensure_overlay reuses the view and never re-registers.
         app.state::<crate::player::PlayerState>()
             .edr_observer
             .store(Retained::into_raw(observer) as usize, Ordering::SeqCst);

@@ -60,7 +60,12 @@ pub struct PlayerState {
     pub overlay_view: AtomicUsize,
     /// macOS: raw `NebulaeEDRScreenObserver*` for screen-change notifications.
     /// Stored as AtomicUsize because Retained<EDRScreenObserver> is !Send.
+    /// Lives for the process lifetime, like the overlay view itself.
     pub edr_observer: AtomicUsize,
+    /// macOS: latches true once the EDR dynamic-range flag has actually been
+    /// applied to the VLC video layer for the current session. Reset on each
+    /// new session; the player poll retries until the layer exists.
+    pub edr_applied: std::sync::atomic::AtomicBool,
     /// The loaded libVLC, created on first use.
     pub lib: Mutex<Option<std::sync::Arc<engine::VlcLib>>>,
     /// libvlc_instance_t*
@@ -86,6 +91,12 @@ pub struct PlayerState {
     /// (menu watcher) must never call into a released player. Held for the
     /// duration of each call, never across waits.
     pub media_player_cell: std::sync::Mutex<()>,
+    /// Monotonic session generation: bumped by stop_session and by every
+    /// successful open. Background helpers (liveness probe) capture the
+    /// generation at spawn and must bail out when it changes, so a stale
+    /// helper can never act on a session that replaced the one it was
+    /// started for.
+    pub session_gen: AtomicUsize,
     /// Serializes session open and teardown calls so concurrent open requests
     /// cannot race and create duplicate concurrent playback sessions.
     pub open_lock: tokio::sync::Mutex<()>,

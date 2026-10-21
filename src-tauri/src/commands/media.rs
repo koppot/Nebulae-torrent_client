@@ -1,7 +1,8 @@
 use crate::player;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
-use crate::player::embed_macos::{apply_edr_to_video_layer, edr_observer_cleanup};
+#[cfg(target_os = "macos")]
+use crate::player::embed_macos::maybe_apply_edr;
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -431,6 +432,11 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+    // Invalidate every background helper belonging to the outgoing session
+    // BEFORE touching the player pointer.
+    state
+        .session_gen
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mp_guard = match state.media_player_cell.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -464,9 +470,14 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     *poison(&state.media_player) = 0;
     *poison(&state.started) = false;
     drop(mp_guard);
-    // Remove the EDR screen-change observer so it cannot fire against a
-    // destroyed window or stale session.
-    unsafe { edr_observer_cleanup(app) };
+    // The EDR screen-change observer is intentionally NOT removed here: the
+    // overlay view and the window outlive the session, and re-registration
+    // never happens (ensure_overlay reuses the view), so removing it disabled
+    // screen-change EDR updates for every later session.
+    #[cfg(target_os = "macos")]
+    state
+        .edr_applied
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
@@ -566,12 +577,18 @@ fn start_playback_inner(
 
                     // HDR: apply extended-dynamic-range headroom to the
                     // VLC-owned video layer (CAOpenGLLayer) so HDR content
-                    // can emit values above 1.0 on XDR displays. The content
-                    // view's EDR flag alone does not propagate to it.
-                    let app_for_edr = app.clone();
-                    let _ = app.run_on_main_thread(move || unsafe {
-                        apply_edr_to_video_layer(&app_for_edr);
-                    });
+                    // can emit values above 1.0 on XDR displays. The vout's
+                    // layer-backed subview appears asynchronously after
+                    // play(), so this first attempt usually finds nothing;
+                    // the player poll retries (maybe_apply_edr) until the
+                    // layer exists. edr_applied is per-session.
+                    #[cfg(target_os = "macos")]
+                    {
+                        state
+                            .edr_applied
+                            .store(false, std::sync::atomic::Ordering::SeqCst);
+                        maybe_apply_edr(app);
+                    }
 
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
                     // can fail inside the demuxer while libvlc_media_player_play
@@ -582,18 +599,22 @@ fn start_playback_inner(
                         resolved.is_disc
                     );
                     if resolved.is_disc && !resume {
-                        // MENU-FIRST: a normal disc Open plays the disc's own
-                        // first-play flow, which ends at the authored top
-                        // menu (verified against stock VLC 3.0.23 on the
-                        // affected HDMV discs). The engine must NOT force
-                        // titles underneath the disc's navigation state
-                        // machine: the previous 15 s watcher called
-                        // set_title(0) in a loop while the disc was still
-                        // running first play, which fought the disc's own
-                        // navigation and could leave it cycling logo
-                        // titles instead of settling on the menu. Explicit
-                        // resume (resume=true) still skips this branch and
-                        // opens the feature directly for the deferred seek.
+                        // AUTHORED FIRST-PLAY OPEN: a normal disc Open plays the
+                        // disc's own first-play flow, which ends at the authored
+                        // top menu by itself (verified against stock VLC 3.0.23 on
+                        // the affected HDMV discs: Fuuka D1 chains its intro titles
+                        // into JumpTitle TopMenu; Patlabor 2 UHD's First Play runs
+                        // two logo clips, then JumpTitle TopMenu). The engine sends
+                        // NO navigation at startup: the removed menu-first watcher
+                        // dispatched INPUT_NAV_MENU / BD_VK_POPUP while the disc was
+                        // still inside First Play, where Patlabor's authored
+                        // menu_call_mask rejects the menu call (Menu appeared dead),
+                        // and its flag-based menu detection mistook every HDMV title
+                        // for the menu (INPUT_TITLE_INTERACTIVE is set on all of
+                        // them), so the overlay offered Play/activate during the
+                        // intro chain. Explicit resume (resume=true) still skips
+                        // this branch and opens the feature directly for the
+                        // deferred seek.
 
                         // Deferred liveness check: detect silent decryption failure.
                         // When AACS keys (libaacs + KEYDB.cfg) are absent, the Blu-ray
@@ -602,16 +623,25 @@ fn start_playback_inner(
                         // struct is valid, but get_time stays at -1 because no frames are
                         // decoded. This produces the black-screen / 0:00:00 symptom.
                         // Emit a user-facing error event after 6 seconds if still frozen.
+                        // Session-scoped: the probe captures the session generation and
+                        // the player pointer at spawn and acts only if both are unchanged.
                         let app3 = app.clone();
+                        let spawn_gen = state
+                            .session_gen
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let spawn_mp = session.media_player;
                         std::thread::spawn(move || {
                             use tauri::{Emitter, Manager};
                             std::thread::sleep(std::time::Duration::from_secs(6));
                             let state = app3.state::<PlayerState>();
-                            if !*poison(&state.started) {
-                                return; // session already closed
+                            let gen_now = state
+                                .session_gen
+                                .load(std::sync::atomic::Ordering::SeqCst);
+                            if gen_now != spawn_gen || !*poison(&state.started) {
+                                return; // session replaced or closed
                             }
                             let mp = *poison(&state.media_player);
-                            if mp == 0 {
+                            if mp == 0 || mp != spawn_mp {
                                 return;
                             }
                             let lib = match loaded_lib(&state) {
@@ -621,10 +651,10 @@ fn start_playback_inner(
                             let ms =
                                 unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) };
                             if ms == -1 {
-                                // Menu-first open: navigate_menu() may have put the
-                                // disc at its authored menu, where get_time is -1
-                                // (idle, no playback). That is not a failure — only
-                                // report an error when we are NOT at the menu.
+                                // The disc may be sitting at its authored menu, where
+                                // get_time is -1 (idle, no playback). That is not a
+                                // failure — only report an error when we are NOT at
+                                // the menu.
                                 let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
                                 if at_menu {
                                     tracing::info!(
@@ -648,116 +678,6 @@ fn start_playback_inner(
                                     "[player] liveness check OK: get_time={ms} ms after 6 s"
                                 );
                             }
-                        });
-
-                        // Menu-first Open: after play() starts the disc's first-play
-                        // flow, dispatch INPUT_NAV_MENU to reach the authored top/root
-                        // menu (Blu-ray: bd_menu_call(Top Menu); DVD: dvdnav_menu_call()).
-                        // This replaces the old behaviour where play() went straight to
-                        // the feature. The watcher waits for the demuxer to report
-                        // titles (readiness), dispatches the menu, then confirms we are
-                        // at the menu so player_poll.at_menu flips to true.
-                        let app4 = app.clone();
-                        std::thread::spawn(move || {
-                            use tauri::Manager;
-                            let state = app4.state::<PlayerState>();
-
-                            // Phase 1: wait for the demuxer to finish reading the disc
-                            // structure so INPUT_NAV_MENU is accepted. Readiness =
-                            // title count > 0.
-                            let mut ready = false;
-                            let ready_deadline =
-                                std::time::Instant::now() + std::time::Duration::from_secs(10);
-                            while std::time::Instant::now() < ready_deadline {
-                                if !*poison(&state.started) {
-                                    return; // session closed
-                                }
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 {
-                                    return;
-                                }
-                                let lib = match loaded_lib(&state) {
-                                    Ok(l) => l,
-                                    Err(_) => return,
-                                };
-                                let tc =
-                                    unsafe { (lib.libvlc_media_player_get_title_count)(mp as *mut c_void) };
-                                if tc > 0 {
-                                    ready = true;
-                                    break;
-                                }
-                                std::thread::sleep(std::time::Duration::from_millis(300));
-                            }
-
-                            if ready {
-                                let mp = *poison(&state.media_player);
-                                if mp != 0 {
-                                    let lib = match loaded_lib(&state) {
-                                        Ok(l) => l,
-                                        Err(_) => return,
-                                    };
-                                    // BD-J (UHD Blu-ray) interactive titles use
-                                    // navigate(popup) to show the BD-J overlay menu.
-                                    // Regular HDMV menus use navigate_menu().
-                                    if is_current_title_interactive(&lib, mp) {
-                                        tracing::info!(
-                                            "[player] menu-first open: BD-J interactive title, sending navigate(popup)"
-                                        );
-                                        unsafe {
-                                            (lib.libvlc_media_player_navigate)(
-                                                mp as *mut c_void,
-                                                5,
-                                            ); // popup
-                                        }
-                                    } else if let Some(navigate_menu) =
-                                        lib.libvlc_media_player_navigate_menu
-                                    {
-                                        tracing::info!(
-                                            "[player] menu-first open: dispatching INPUT_NAV_MENU"
-                                        );
-                                        unsafe {
-                                            navigate_menu(mp as *mut c_void);
-                                        }
-                                    } else {
-                                        tracing::warn!(
-                                            "[player] menu-first open: libvlc_media_player_navigate_menu unavailable"
-                                        );
-                                    }
-                                }
-                            } else {
-                                tracing::warn!(
-                                    "[player] menu-first open: demuxer did not report titles within 10 s"
-                                );
-                            }
-
-                            // Phase 2: confirm we reached the menu (player_poll reports
-                            // at_menu from is_menu_title on every poll).
-                            let menu_deadline =
-                                std::time::Instant::now() + std::time::Duration::from_secs(20);
-                            while std::time::Instant::now() < menu_deadline {
-                                if !*poison(&state.started) {
-                                    return;
-                                }
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 {
-                                    return;
-                                }
-                                let lib = match loaded_lib(&state) {
-                                    Ok(l) => l,
-                                    Err(_) => return,
-                                };
-                                let is_menu = unsafe { engine::is_menu_title(&lib, mp) };
-                                if is_menu {
-                                    tracing::info!(
-                                        "[player] menu-first open: at interactive menu"
-                                    );
-                                    return;
-                                }
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                            }
-                            tracing::info!(
-                                "[player] menu-first open: menu not confirmed within 20 s (may still be in first play)"
-                            );
                         });
                     }
                     Ok(resolved)
@@ -935,31 +855,6 @@ pub fn player_menu_navigate_menu(
     dispatch_main_menu(&state)
 }
 
-/// Check whether the current title is a BD-J interactive title (UHD Blu-ray).
-/// BD-J uses the INPUT_TITLE_INTERACTIVE flag (0x02) rather than the menu flag
-/// (0x01) on program titles; the menu is shown via navigate(popup) overlay.
-fn is_current_title_interactive(lib: &crate::player::engine::VlcLib, mp: usize) -> bool {
-    use crate::player::engine::VlcTitleDescription;
-    unsafe {
-        let m = mp as *mut std::ffi::c_void;
-        let current = (lib.libvlc_media_player_get_title)(m) as i32;
-        let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
-        let count = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
-        if count <= current as i32 || titles.is_null() {
-            return false;
-        }
-        let title_ptr = *titles.offset(current as isize);
-        if title_ptr.is_null() {
-            (lib.libvlc_title_descriptions_release)(titles, count);
-            return false;
-        }
-        const INTERACTIVE_FLAG: u32 = 0x02;
-        let interactive = ((*title_ptr).i_flags & INTERACTIVE_FLAG) != 0;
-        (lib.libvlc_title_descriptions_release)(titles, count);
-        interactive
-    }
-}
-
 /// Shared implementation for main-menu dispatch. Both commands delegate here.
 fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), String> {
     let (mp, lib) = {
@@ -975,29 +870,18 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
         return Err("no active player session".into());
     }
 
-    // VideoToolbox buffer flush: when transitioning between drastically
-    // different stream formats (1080p SDR menu <-> 4K HDR HEVC feature),
-    // the decoder holds outstanding picture buffers and may report error 305.
-    // A brief pause/unpause forces the decoder to flush its buffer queue,
-    // allowing clean reinitialization for the new stream format.
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 1);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 0);
-    }
-
-    // BD-J (UHD Blu-ray) interactive titles use navigate(popup) to show the
-    // BD-J overlay menu instead of navigate_menu(). Regular HDMV menus use
-    // navigate_menu().
-    if is_current_title_interactive(&lib, mp) {
-        tracing::info!("[player] return_to_menu: BD-J interactive title, sending navigate(popup)");
-        unsafe {
-            (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5); // popup
-        }
-        return Ok(());
-    }
-
-    // Direct main-menu dispatch through the runtime extension.
+    // Direct main-menu dispatch through the runtime extension, for every
+    // disc state. INPUT_NAV_MENU reaches bd_menu_call() (Blu-ray) and
+    // dvdnav_menu_call() (DVD); on Blu-ray the demux itself falls back to
+    // the popup-menu keystroke when the top-menu call is rejected
+    // (modules/access/bluray.c DEMUX_NAV_MENU), so no app-level popup
+    // branch is needed. The previous navigate(popup) shortcut for
+    // "interactive" titles was dropped: INPUT_TITLE_INTERACTIVE is set on
+    // every HDMV title (intro chain and features included), so that branch
+    // fired everywhere EXCEPT the authored top menu and made the Menu
+    // button appear dead during First Play (menu_call masked there by
+    // authoring).
+    //
     // If the symbol is missing, this runtime predates the extension:
     // report unsupported rather than falling back to popup or title-0.
     let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
@@ -1249,6 +1133,13 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
         });
     }
     let lib = loaded_lib(&state)?;
+    // macOS: the EDR flag must reach the vout's CAOpenGLLayer, which is
+    // created asynchronously after play(). Retry from this existing 1 Hz
+    // poll until applied (latched per session); no timers or sleeps.
+    #[cfg(target_os = "macos")]
+    if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+        maybe_apply_edr(app);
+    }
     unsafe {
         let m = mp as *mut c_void;
         Ok(PlayerPoll {
@@ -1307,17 +1198,11 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
 
-    // VideoToolbox buffer flush: when transitioning from 1080p menu to 4K HEVC
-    // main title (mode 0 = activate), the decoder holds outstanding picture
-    // buffers from the menu stream. A brief pause forces buffer release,
-    // allowing clean reinitialization for the feature stream.
-    if mode == 0 {
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
+    // NOTE: a former pause/unpause pair slept 50 ms here on activate to
+    // "flush VideoToolbox buffers" before the menu->feature transition.
+    // Sleeping on the command path never reached the decoder's restart
+    // logic (the demux restarts streams on its own schedule), so it was
+    // removed rather than kept as cargo-cult.
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
@@ -1351,6 +1236,38 @@ pub struct ChapterMark {
     pub name: String,
 }
 
+/// Entry count from libvlc_media_player_get_full_title_descriptions /
+/// libvlc_media_player_get_full_chapter_descriptions. The return value IS the
+/// count: > 0 means that many entries (the array is NOT NULL-terminated —
+/// verified against lib/media_player.c in the bundled VLC 3.0.23 source),
+/// 0 means "no entries", and -1 means the call failed (no input thread yet).
+/// The previous code treated any non-zero return as an error and then scanned
+/// for a NULL terminator that never comes, which is why DVD titles (dvdnav
+/// exposes chapters) never produced seek-bar marks. Capped defensively; the
+/// release call still receives the original count.
+fn vlc_description_count(rc: i32) -> usize {
+    if rc <= 0 {
+        0
+    } else {
+        (rc as usize).min(512)
+    }
+}
+
+/// Build seek-bar marks from raw chapter entries (offset, duration, optional
+/// name). Extracted as a pure function so the mapping is unit-testable
+/// without a live VLC session.
+fn chapter_marks_from_entries(entries: Vec<(i64, i64, Option<String>)>) -> Vec<ChapterMark> {
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(i, (offset_ms, duration_ms, name))| ChapterMark {
+            offset_ms,
+            duration_ms,
+            name: name.unwrap_or_else(|| format!("Chapter {}", i + 1)),
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<ChapterMark>, String> {
     let _mp_guard = state
@@ -1365,33 +1282,46 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
     unsafe {
         let m = mp as *mut c_void;
         let title = (lib.libvlc_media_player_get_title)(m);
+        if title < 0 {
+            // Demuxer still starting: no title selected yet.
+            return Ok(Vec::new());
+        }
         let mut chapters: *mut *mut crate::player::engine::VlcChapterDescription =
             std::ptr::null_mut();
         let rc = (lib.libvlc_media_player_get_full_chapter_descriptions)(m, title, &mut chapters);
-        if rc != 0 || chapters.is_null() {
+        let count = vlc_description_count(rc);
+        if count == 0 {
+            if rc < 0 {
+                tracing::debug!("[player] chapter marks: description call failed (rc={rc})");
+            }
+            if !chapters.is_null() {
+                (lib.libvlc_chapter_descriptions_release)(chapters, 0);
+            }
             return Ok(Vec::new());
         }
-        let mut marks = Vec::new();
-        let mut i = 0;
-        // The array is NULL-name-terminated per the libvlc docs (count via
-        // entries until NULL); iterate defensively with a cap.
-        while i < 512 && !(*chapters.add(i)).is_null() {
+        let mut entries = Vec::with_capacity(count);
+        for i in 0..count {
             let ch = *chapters.add(i);
+            if ch.is_null() {
+                continue;
+            }
             let name = if (*ch).psz_name.is_null() {
-                format!("Chapter {}", i + 1)
+                None
             } else {
-                CStr::from_ptr((*ch).psz_name)
-                    .to_string_lossy()
-                    .into_owned()
+                Some(
+                    CStr::from_ptr((*ch).psz_name)
+                        .to_string_lossy()
+                        .into_owned(),
+                )
             };
-            marks.push(ChapterMark {
-                offset_ms: (*ch).i_time_offset,
-                duration_ms: (*ch).i_duration,
-                name,
-            });
-            i += 1;
+            entries.push(((*ch).i_time_offset, (*ch).i_duration, name));
         }
-        (lib.libvlc_chapter_descriptions_release)(chapters, i as i32);
+        (lib.libvlc_chapter_descriptions_release)(chapters, rc);
+        let marks = chapter_marks_from_entries(entries);
+        tracing::info!(
+            "[player] chapter marks: title {title} -> {} marks (rc={rc})",
+            marks.len()
+        );
         Ok(marks)
     }
 }
@@ -1511,6 +1441,21 @@ pub async fn player_disc_chapters(
                 }
             }
         }
+        // No BDMV at the (possibly freshly mounted) probe root: this is not
+        // a Blu-ray tree — e.g. a DVD ISO, where the mount holds VIDEO_TS.
+        // libbluray can only fail here; skip the bd_open attempt so the
+        // frontend falls through to VLC's chapter API (dvdnav exposes DVD
+        // chapters) without the wasted mount/probe delay.
+        if !probe_path.join("BDMV").is_dir() {
+            if let Some(mp) = iso_mount {
+                let _ = std::process::Command::new("hdiutil")
+                    .args(["detach", "-force"])
+                    .arg(&mp)
+                    .output();
+                let _ = std::fs::remove_dir_all(&mp);
+            }
+            return Ok(Vec::new());
+        }
         let res =
             player::bluray_meta::disc_chapter_offsets(&probe_path.to_string_lossy(), duration_ms);
         if let Some(mp) = iso_mount {
@@ -1616,9 +1561,17 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
     unsafe {
         let m = mp as *mut c_void;
         let current = (lib.libvlc_media_player_get_title)(m);
+        if current < 0 {
+            tracing::info!("[player] step_title: no current title yet, ignoring");
+            return Ok(());
+        }
         let mut titles: *mut *mut crate::player::engine::VlcTitleDescription = std::ptr::null_mut();
         let rc = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
-        if rc != 0 || titles.is_null() {
+        let count = vlc_description_count(rc);
+        if count == 0 || titles.is_null() {
+            if !titles.is_null() {
+                (lib.libvlc_title_descriptions_release)(titles, rc.max(0));
+            }
             tracing::info!(
                 "[player] step_title: no title list, set_title({})",
                 current + dir
@@ -1626,20 +1579,16 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
             (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
             return Ok(());
         }
-        let mut count = 0usize;
-        while count < 512 && !(*titles.add(count)).is_null() {
-            count += 1;
-        }
         // Feature titles: duration >= 2 min. Index 0 (menu domain) excluded.
         let mut features: Vec<usize> = Vec::new();
         for i in 1..count {
             let t = *titles.add(i);
-            if (*t).i_duration >= 120_000 {
+            if !t.is_null() && (*t).i_duration >= 120_000 {
                 features.push(i);
             }
         }
         if features.len() < 2 {
-            (lib.libvlc_title_descriptions_release)(titles, count as i32);
+            (lib.libvlc_title_descriptions_release)(titles, rc);
             tracing::info!(
                 "[player] step_title: single feature, set_title({})",
                 current + dir
@@ -1664,7 +1613,7 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
             features.len()
         );
         (lib.libvlc_media_player_set_title)(m, next as i32);
-        (lib.libvlc_title_descriptions_release)(titles, count as i32);
+        (lib.libvlc_title_descriptions_release)(titles, rc);
     }
     Ok(())
 }
@@ -2098,6 +2047,36 @@ pub fn fetch_adc_page(url: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vlc_description_count_semantics() {
+        // libvlc returns the entry count (> 0), 0 for "no entries", -1 on
+        // failure. Regression test: the old code treated rc != 0 as failure,
+        // which discarded every DVD chapter list.
+        assert_eq!(vlc_description_count(-1), 0);
+        assert_eq!(vlc_description_count(0), 0);
+        assert_eq!(vlc_description_count(1), 1);
+        assert_eq!(vlc_description_count(23), 23);
+        // Defensive cap: absurd counts never drive unbounded reads.
+        assert_eq!(vlc_description_count(i32::MAX), 512);
+    }
+
+    #[test]
+    fn test_chapter_marks_from_entries() {
+        let marks = chapter_marks_from_entries(vec![
+            (0, 600_000, Some("Opening".to_string())),
+            (600_000, 540_000, None),
+            (1_140_000, 0, None),
+        ]);
+        assert_eq!(marks.len(), 3);
+        assert_eq!(marks[0].offset_ms, 0);
+        assert_eq!(marks[0].name, "Opening");
+        assert_eq!(marks[1].offset_ms, 600_000);
+        assert_eq!(marks[1].name, "Chapter 2"); // generated 1-based fallback
+        assert_eq!(marks[2].name, "Chapter 3");
+        assert_eq!(marks[2].duration_ms, 0);
+        assert!(chapter_marks_from_entries(Vec::new()).is_empty());
+    }
 
     #[test]
     fn test_launch_nonexistent_media() {

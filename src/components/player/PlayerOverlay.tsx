@@ -501,16 +501,23 @@ export default function PlayerOverlay() {
       setChapterMarks([]);
       return;
     }
+    // Stale guard: the probes below are async and the title can change
+    // (menu -> feature, chapter jump across titles) while a probe is in
+    // flight. The cleanup flips `alive` for the superseded run so its late
+    // answer can never overwrite the fresh title's marks.
+    let alive = true;
     (async () => {
-      // For discs, the playlist chapters (libbluray) are the source of
-      // truth: VLC's own chapter marks for Blu-ray titles carry offsets
-      // that only cover the head of the timeline. VLC's marks are used
-      // only when the disc probe yields nothing (plain video files).
+      // For Blu-ray discs, the playlist chapters (libbluray) are the source
+      // of truth: VLC's own chapter marks for Blu-ray titles carry offsets
+      // that only cover the head of the timeline. VLC's marks are the
+      // fallback for plain video files AND the primary source for DVDs
+      // (dvdnav exposes chapters; the libbluray probe returns empty there).
       try {
         const disc = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
           'player_disc_chapters',
           { durationMs: Math.round(poll.length_ms) },
         );
+        if (!alive) return;
         if (disc.length > 1) {
           setChapterMarks(disc);
           return;
@@ -522,11 +529,15 @@ export default function PlayerOverlay() {
         const marks = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
           'player_chapter_marks',
         );
+        if (!alive) return;
         setChapterMarks(marks);
       } catch {
         /* ticks are best-effort */
       }
     })();
+    return () => {
+      alive = false;
+    };
   }, [player.open, poll.title, poll.title_count, poll.length_ms]);
 
   // Fullscreen state mirror for the button's icon.
@@ -726,7 +737,6 @@ export default function PlayerOverlay() {
       // ignored in the menu domain): activate the highlighted entry (Play
       // All), then seek to the save point if one exists.
       const savedMs = savedPositionMs(player.resolvedPath);
-      invoke('player_cancel_menu_watch').catch(() => {});
       invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       if (savedMs >= 10000) {
         resumeFromMenu(player.resolvedPath, savedMs);

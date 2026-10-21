@@ -1,0 +1,53 @@
+diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+--- a/include/vlc/libvlc_media_player.h	2026-10-21 16:15:45
++++ b/include/vlc/libvlc_media_player.h	2026-10-21 16:15:45
+@@ -141,6 +141,7 @@
+  *
+  * \param p_mi media player
+  */
++LIBVLC_API void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi );
+ 
+ /**
+  * Enumeration of values used to set position (e.g. of video title).
+diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
+--- a/lib/libvlc.sym	2026-10-21 16:09:26
++++ b/lib/libvlc.sym	2026-10-21 16:09:26
+@@ -203,6 +203,7 @@
+ libvlc_media_player_stop
+ libvlc_media_player_will_play
+ libvlc_media_player_navigate
++libvlc_media_player_navigate_menu
+ libvlc_media_player_set_video_title_display
+ libvlc_media_release
+ libvlc_media_retain
+diff -ruN a/lib/media_player.c b/lib/media_player.c
+--- a/lib/media_player.c	2026-10-21 16:09:26
++++ b/lib/media_player.c	2026-10-21 16:09:26
+@@ -1815,6 +1815,27 @@
+     vlc_object_release( p_input );
+ }
+ 
++/* Request the disc root / main menu (INPUT_NAV_MENU).
++ *
++ * Unlike libvlc_media_player_navigate() with libvlc_navigate_popup, which
++ * only sends a popup keystroke (BD_VK_POPUP for Blu-ray), this function
++ * directly invokes INPUT_NAV_MENU, which reaches:
++ *   - Blu-ray: bd_menu_call() (Top Menu / Root Menu)
++ *   - DVD:     dvdnav_menu_call() (Title/Root menu)
++ *
++ * This is a distinct exported symbol so callers can detect its presence
++ * at runtime against unmodified libVLC builds.
++ */
++void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi )
++{
++    input_thread_t *p_input = libvlc_get_input_thread ( p_mi );
++    if ( p_input == NULL )
++        return;
++
++    input_Control( p_input, INPUT_NAV_MENU, NULL );
++    vlc_object_release( p_input );
++}
++
+ /* internal function, used by audio, video */
+ libvlc_track_description_t *
+         libvlc_get_track_description( libvlc_media_player_t *p_mi,

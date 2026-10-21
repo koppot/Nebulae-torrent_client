@@ -100,27 +100,35 @@ pub struct VlcTitleDescription {
 pub const INPUT_TITLE_MENU: u32 = 0x01;
 pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 
-/// Return true if the current title is a menu (interactive title) based on its
-/// flags. Checks both INPUT_TITLE_MENU (0x01) for regular HDMV menus and
-/// INPUT_TITLE_INTERACTIVE (0x02) for BD-J interactive titles (UHD Blu-ray).
-/// discs violate (multi-edition releases may have menu titles at non-zero indices).
+/// Return true if the current title is the disc's authored TOP MENU.
+///
+/// Only INPUT_TITLE_MENU (0x01) qualifies. INPUT_TITLE_INTERACTIVE (0x02)
+/// must NOT be treated as "at menu": VLC's bluray demux (3.0.23
+/// modules/access/bluray.c, blurayInitTitles) flags EVERY HDMV title that
+/// has a movie object as INTERACTIVE — including First Play, the intro
+/// chain, and feature titles — so a 0x02-based test reports "at menu"
+/// from the first poll on a pure-HDMV disc (observed on Patlabor 2 UHD:
+/// at_menu was true during the studio logos). dvdnav (modules/access/
+/// dvdnav.c) likewise marks only its menu title with INPUT_TITLE_MENU.
+///
+/// Title indices are validated defensively: libvlc_media_player_get_title
+/// returns -1 while the demuxer is still starting.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
-    // libvlc_media_player_get_full_title_descriptions fills titles pointer and returns count.
-    // The function signature is: (mp, titles) -> count
+    // libvlc_media_player_get_full_title_descriptions fills titles pointer
+    // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
     let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
     if n <= 0 || titles.is_null() {
         return false;
     }
-    // libvlc_media_player_get_title returns the current title index (0-based).
-    let current = (lib.libvlc_media_player_get_title)(m) as usize;
-    if current >= n as usize {
+    let current = (lib.libvlc_media_player_get_title)(m);
+    if current < 0 || current >= n {
         (lib.libvlc_title_descriptions_release)(titles, n);
         return false;
     }
-    let t = &**titles.add(current);
-    let is_menu = (t.i_flags & (INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE)) != 0;
+    let t = &**titles.add(current as usize);
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
 }
@@ -549,12 +557,19 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=3000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // HDR Tone-Mapping for UHD Blu-ray:
-            // BT.2020 PQ (ST2084) HDR content needs tone-mapping to SDR displays.
-            // caopengllayer with OpenGL shaders enables the tone-mapping pipeline.
-            // Without it, --tone-mapping flags are ignored and HDR content
-            // appears washed out on SDR displays.
-            CString::new("--vout=caopengllayer").unwrap(),
+            // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
+            // SDR): handled by the vout's OpenGL tone-mapping shader
+            // pipeline (VLC 3.0.x has no libplacebo; it lives in the
+            // OpenGL vout helper). These variables are inherited by the
+            // vout's GL
+            // helper; they are NOT among the player-object variables that
+            // libvlc_media_player_set_nsobject() resets, so they survive
+            // embedding. A --vout pin is deliberately absent: set_nsobject
+            // resets the player object's "vout" variable anyway (upstream
+            // 3.0.x lib/media_player.c), and the default module probe
+            // already selects caopengllayer for an embedded NSView
+            // (priority 300 > vout_macosx 250, verified in
+            // modules/video_output/caopengllayer.m and macosx.m).
             CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
@@ -635,15 +650,17 @@ impl VlcSession {
                     (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
                     // NOTE: set_nsobject clears "vout" (and "avcodec-hw",
                     // "window") on the player (upstream sets them to ""),
-                    // which shadows the --vout libvlc_new arg for every vout
-                    // created under this player. To pin a specific display
-                    // module, re-set "vout" here AFTER the embedding call,
-                    // e.g. with var_SetChecked (bound above; VLC_VAR_STRING =
-                    // 0x0040, the vlc_value_t union is 8 bytes so the C
-                    // string pointer travels as usize). Deliberately NOT set
-                    // for normal playback: the default probe (caopengllayer)
-                    // is the accepted output and the one carrying the
-                    // tone-mapping shader pipeline.
+                    // which would shadow a --vout libvlc_new arg for every
+                    // vout created under this player. This is why no --vout
+                    // is passed at all: the default probe selects
+                    // caopengllayer for the embedded NSView, and that module
+                    // carries the OpenGL tone-mapping pipeline (VLC 3.0.x
+                    // has no libplacebo). If a future change ever needs a
+                    // forced display module, it
+                    // must re-set "vout" here AFTER the embedding call via
+                    // var_SetChecked (bound above; VLC_VAR_STRING = 0x0040,
+                    // the vlc_value_t union is 8 bytes so the C string
+                    // pointer travels as usize).
                 }
                 #[cfg(target_os = "windows")]
                 {
