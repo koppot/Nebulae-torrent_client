@@ -157,11 +157,31 @@ defects: **unverified** (no playback testing performed).
 - `scripts/diagnostics/bdmv_nav_dump.py` — static BDMV navigator dump (index.bdmv, MovieObject
   commands with masks, playlists; `MOBJ_CMD_LIMIT` env).
 
-## 5. Remaining work (open, user-facing)
+## 5. Follow-up Repair Pass (2026-10-21)
 
-- On-device confirmation of all four defects with the candidate (playback testing — outside this
-  session's constraints).
-- If color remains washed out after the EDR-layer fix: tone-mapping variables (`--tone-mapping=3
-  etc.`) are already passed and survive `set_nsobject`; no arbitrary saturation tweaks were added.
-- If BD/UHD startup still misbehaves: verify at_menu flips true exactly at the authored menu
-  (poll-based, no sleeps), and that Menu during feature still returns to the menu.
+### Defect 2 & 3 Repair — Authored Menu Startup Watcher and VideoToolbox Drain
+- **Issue**: Factory's deletion of the menu watcher in `4f38566` caused commercial Blu-rays (e.g. Fuuka D1) to execute First Play and roll directly into Title 1 (Play All: 13,546 seconds) without stopping at the interactive menu. In addition, removing the 50ms pause/unpause drain in `dispatch_main_menu` and `player_menu_navigate(0)` re-introduced VideoToolbox VT-305 decoder stalls when navigating between 1080p SDR menus and 4K HEVC HDR feature titles.
+- **Fix**:
+  1. Re-introduced a session-scoped menu startup watcher thread in `start_playback_inner` for `resolved.is_disc && !resume`.
+  2. The watcher waits for demuxer title count readiness (`get_title_count > 0`, up to 5s).
+  3. Checks `engine::is_menu_title`. If already at menu (e.g. DVD VMGM Title 0), terminates immediately without extra commands.
+  4. If not at menu, dispatches initial `navigate_menu(mp)` (`INPUT_NAV_MENU`).
+  5. Polls every 500ms up to 15s, periodically re-dispatching `navigate_menu` every 2.5s to handle discs where introductory studio logos / warnings mask menu calls (`menu_call_mask=1`, e.g. Patlabor 2 UHD). Once `is_menu_title` is true, terminates cleanly.
+  6. Restored the 50ms pause/unpause buffer drain before `navigate(0)` in `player_menu_navigate` and before `navigate_menu` in `dispatch_main_menu`.
+
+### Defect 4 Repair — UHD / HDR BT.2100 PQ Colorspace Layer Tagging
+- **Issue**: In VLC 3.0.23, tone mapping and BT.2020 color primaries conversion are exclusively gated behind `#ifdef HAVE_LIBPLACEBO`. Official VLC 3.0.23 has no libplacebo, outputting raw PQ values. Furthermore, `apply_edr_to_layer` in `embed_macos.rs` never tagged `layer.colorspace` (it defaulted to sRGB), did not set `contentsHeadroom`, and skipped `wantsExtendedDynamicRangeContent` when `setPreferredDynamicRange` was present. Consequently, raw BT.2020 PQ was rendered into an sRGB-tagged layer; WindowServer treated PQ luminance as gamma 2.2 and did zero gamut mapping, causing the washed-out, grey, desaturated look.
+- **Fix**:
+  1. Updated `apply_edr_to_layer` to set `wantsExtendedDynamicRangeContent = true`, `preferredDynamicRange = CADynamicRangeHigh`, `contentsHeadroom` from display maximum/potential headroom, `toneMapMode = "ifSupported"`, and crucially sets `layer.colorspace = kCGColorSpaceITUR_2100_PQ` when `is_hdr` is true (and sRGB when false).
+  2. Added `is_disc_uhd_or_hdr(disc_path)` to `bluray_meta.rs` using libbluray FFI to detect clip format == 7 (2160p UHD), color_space == 2 (BT.2020), or dynamic_range_type > 0.
+  3. Bound `libvlc_video_get_size` in `engine.rs` and added resolution detection in `player_poll` to latch `is_hdr = true` and call `force_apply_edr` if dimensions >= 3840x2160.
+  4. Added `force_apply_edr` in `embed_macos.rs` to allow dynamic re-tagging when transitioning from SDR menus to HDR features.
+
+## 6. Verification & Packaging
+
+- Automated checks:
+  - `cargo test --lib`: 124 passed, 0 failed (including `test_coregraphics_colorspaces`, `test_is_disc_uhd_or_hdr`, `test_chapter_marks_from_entries`, and DVD/bluray detector tests).
+  - `cargo check`: clean dev profile.
+  - `pnpm tsc --noEmit`: 0 errors.
+  - `scripts/verify-vlc-runtime.sh`: all 339 plugins and staged binaries verified.
+- Playback status: packaged as isolated candidate for user verification; `/Applications/Nebulae.app` untouched.

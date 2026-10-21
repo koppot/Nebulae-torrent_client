@@ -543,6 +543,65 @@ pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
     }
 }
 
+/// Inspect the disc's titles and clips via libbluray to determine whether
+/// the disc is an Ultra HD Blu-ray or contains HDR10 / BT.2020 streams.
+/// Returns true if any clip has format == 7 (2160p UHD), color_space == 2 (BT.2020),
+/// or dynamic_range_type > 0 (HDR10/Dolby Vision/Philips HDR).
+pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
+    let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let Ok(lib) = open_bluray_lib() else {
+            return false;
+        };
+        let Ok(bd_open): Result<Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void>, _> =
+            lib.get(b"bd_open") else { return false; };
+        let Ok(bd_get_titles): Result<Symbol<unsafe extern "C" fn(*mut c_void, c_uchar, c_uint) -> c_int>, _> =
+            lib.get(b"bd_get_titles") else { return false; };
+        let Ok(bd_get_title_info): Result<Symbol<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut BdTitleInfo>, _> =
+            lib.get(b"bd_get_title_info") else { return false; };
+        let Ok(bd_free_title_info): Result<Symbol<unsafe extern "C" fn(*mut BdTitleInfo)>, _> =
+            lib.get(b"bd_free_title_info") else { return false; };
+        let Ok(bd_close): Result<Symbol<unsafe extern "C" fn(*mut c_void)>, _> =
+            lib.get(b"bd_close") else { return false; };
+
+        let Ok(cpath) = std::ffi::CString::new(disc_path) else { return false; };
+        let bd = bd_open(cpath.as_ptr(), std::ptr::null());
+        if bd.is_null() {
+            return false;
+        }
+        let count = bd_get_titles(bd, 0, 999);
+        let mut is_uhd = false;
+        for i in 0..count.min(25) as c_uint {
+            let info = bd_get_title_info(bd, i, 0);
+            if info.is_null() {
+                continue;
+            }
+            let ti = &*info;
+            if !ti.clips.is_null() && ti.clip_count > 0 {
+                for k in 0..ti.clip_count as usize {
+                    let c = &*ti.clips.add(k);
+                    for v in 0..c.video_stream_count as usize {
+                        let vs = &*c.video_streams.add(v);
+                        if vs.format == 7 || vs.color_space == 2 || vs.dynamic_range_type > 0 {
+                            is_uhd = true;
+                            break;
+                        }
+                    }
+                    if is_uhd {
+                        break;
+                    }
+                }
+            }
+            bd_free_title_info(info);
+            if is_uhd {
+                break;
+            }
+        }
+        bd_close(bd);
+        is_uhd
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +636,18 @@ mod tests {
                 "Iteration {i}: audio={audio:?} subs={subs:?} chapters={} dur={dur} last_chap={last}",
                 chapters.len()
             );
+        }
+    }
+
+    #[test]
+    fn test_is_disc_uhd_or_hdr() {
+        let patlabor = "/Volumes/300TB/UHD/Patlabor 2 the Movie (2002) UHD/PATLABOR2_THE_MOVIE_4K_UHD";
+        if std::path::Path::new(patlabor).exists() {
+            assert!(is_disc_uhd_or_hdr(patlabor), "Patlabor 2 must be detected as UHD/HDR");
+        }
+        let fuuka = "/Volumes/300TB/Blu-ray/Fuuka (2017) Funimation/FUUKA_CS_D1";
+        if std::path::Path::new(fuuka).exists() {
+            assert!(!is_disc_uhd_or_hdr(fuuka), "Fuuka D1 must NOT be detected as UHD/HDR");
         }
     }
 }

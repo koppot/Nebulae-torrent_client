@@ -2,7 +2,7 @@ use crate::player;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 #[cfg(target_os = "macos")]
-use crate::player::embed_macos::maybe_apply_edr;
+use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -575,13 +575,22 @@ fn start_playback_inner(
                     *poison(&state.media_player) = session.media_player;
                     *poison(&state.started) = true;
 
-                    // HDR: apply extended-dynamic-range headroom to the
-                    // VLC-owned video layer (CAOpenGLLayer) so HDR content
-                    // can emit values above 1.0 on XDR displays. The vout's
-                    // layer-backed subview appears asynchronously after
-                    // play(), so this first attempt usually finds nothing;
-                    // the player poll retries (maybe_apply_edr) until the
-                    // layer exists. edr_applied is per-session.
+                    // HDR: detect UHD / HDR content from disc metadata or file path,
+                    // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
+                    // to the VLC-owned video layer (CAOpenGLLayer).
+                    let is_uhd_disc = if resolved.is_disc {
+                        crate::player::bluray_meta::is_disc_uhd_or_hdr(&resolved.resolved_path)
+                    } else {
+                        false
+                    };
+                    let is_hdr_file = {
+                        let p_lower = resolved.resolved_path.to_ascii_lowercase();
+                        p_lower.contains("2160p") || p_lower.contains("uhd") || p_lower.contains("hdr")
+                    };
+                    state
+                        .is_hdr
+                        .store(is_uhd_disc || is_hdr_file, std::sync::atomic::Ordering::SeqCst);
+
                     #[cfg(target_os = "macos")]
                     {
                         state
@@ -599,22 +608,105 @@ fn start_playback_inner(
                         resolved.is_disc
                     );
                     if resolved.is_disc && !resume {
-                        // AUTHORED FIRST-PLAY OPEN: a normal disc Open plays the
-                        // disc's own first-play flow, which ends at the authored
-                        // top menu by itself (verified against stock VLC 3.0.23 on
-                        // the affected HDMV discs: Fuuka D1 chains its intro titles
-                        // into JumpTitle TopMenu; Patlabor 2 UHD's First Play runs
-                        // two logo clips, then JumpTitle TopMenu). The engine sends
-                        // NO navigation at startup: the removed menu-first watcher
-                        // dispatched INPUT_NAV_MENU / BD_VK_POPUP while the disc was
-                        // still inside First Play, where Patlabor's authored
-                        // menu_call_mask rejects the menu call (Menu appeared dead),
-                        // and its flag-based menu detection mistook every HDMV title
-                        // for the menu (INPUT_TITLE_INTERACTIVE is set on all of
-                        // them), so the overlay offered Play/activate during the
-                        // intro chain. Explicit resume (resume=true) still skips
-                        // this branch and opens the feature directly for the
-                        // deferred seek.
+                        // AUTHORED MENU WATCHER:
+                        // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
+                        // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
+                        // unless an interactive menu call is dispatched.
+                        // We wait for the demuxer title count to be ready (> 0), check if already
+                        // at Top Menu (e.g. DVD VMGM Title 0), and if not, dispatch navigate_menu.
+                        // We then poll up to 15s to confirm reaching the authored menu, retrying
+                        // navigate_menu every 2.5s to handle discs where introductory studio logos
+                        // mask menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD).
+                        let app_menu = app.clone();
+                        let menu_gen = state
+                            .session_gen
+                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let menu_mp = session.media_player;
+                        std::thread::spawn(move || {
+                            use tauri::Manager;
+                            let max_wait_attempts = 20; // 20 * 250ms = 5s
+                            let mut ready = false;
+                            for _ in 0..max_wait_attempts {
+                                std::thread::sleep(std::time::Duration::from_millis(250));
+                                let state = app_menu.state::<PlayerState>();
+                                let gen_now = state
+                                    .session_gen
+                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                if gen_now != menu_gen || !*poison(&state.started) {
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 || mp != menu_mp {
+                                    return;
+                                }
+                                let lib = match loaded_lib(&state) {
+                                    Ok(l) => l,
+                                    Err(_) => return,
+                                };
+                                let count = unsafe {
+                                    (lib.libvlc_media_player_get_title_count)(mp as *mut c_void)
+                                };
+                                if count > 0 {
+                                    ready = true;
+                                    break;
+                                }
+                            }
+                            if !ready {
+                                return;
+                            }
+
+                            let state = app_menu.state::<PlayerState>();
+                            let lib = match loaded_lib(&state) {
+                                Ok(l) => l,
+                                Err(_) => return,
+                            };
+                            let mp = *poison(&state.media_player);
+                            if mp == 0 || mp != menu_mp {
+                                return;
+                            }
+
+                            // If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
+                            if unsafe { engine::is_menu_title(&lib, mp) } {
+                                tracing::info!("[player] disc already at authored menu");
+                                return;
+                            }
+
+                            let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
+                                tracing::warn!("[player] menu watcher: navigate_menu unavailable");
+                                return;
+                            };
+
+                            tracing::info!("[player] menu watcher: dispatching initial INPUT_NAV_MENU");
+                            unsafe {
+                                navigate_menu(mp as *mut c_void);
+                            }
+
+                            // Poll up to 15s (30 * 500ms). If introductory logos mask menu calls,
+                            // retry periodically every 2.5s.
+                            for i in 0..30 {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                let gen_now = state
+                                    .session_gen
+                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                if gen_now != menu_gen || !*poison(&state.started) {
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 || mp != menu_mp {
+                                    return;
+                                }
+                                if unsafe { engine::is_menu_title(&lib, mp) } {
+                                    tracing::info!("[player] menu watcher: disc reached authored menu at iteration {i}");
+                                    return;
+                                }
+                                if i > 0 && i % 5 == 0 {
+                                    tracing::info!("[player] menu watcher: retrying INPUT_NAV_MENU at iteration {i}");
+                                    unsafe {
+                                        navigate_menu(mp as *mut c_void);
+                                    }
+                                }
+                            }
+                        });
 
                         // Deferred liveness check: detect silent decryption failure.
                         // When AACS keys (libaacs + KEYDB.cfg) are absent, the Blu-ray
@@ -889,6 +981,15 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
         return Err("main menu navigation not supported by this runtime".into());
     };
 
+    // VideoToolbox VT-305 buffer drain before returning to menu:
+    unsafe {
+        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    unsafe {
+        (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
+    }
+
     tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
     unsafe {
         navigate_menu(mp as *mut std::ffi::c_void);
@@ -1137,8 +1238,24 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
     // created asynchronously after play(). Retry from this existing 1 Hz
     // poll until applied (latched per session); no timers or sleeps.
     #[cfg(target_os = "macos")]
-    if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
-        maybe_apply_edr(app);
+    {
+        if let Some(get_size) = lib.libvlc_video_get_size {
+            let mut width: std::ffi::c_uint = 0;
+            let mut height: std::ffi::c_uint = 0;
+            let res = unsafe { get_size(mp as *mut c_void, 0, &mut width, &mut height) };
+            if res == 0 && (width >= 3840 || height >= 2160) {
+                if !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst) {
+                    tracing::info!("[player] UHD resolution detected: {width}x{height}, latching is_hdr=true");
+                    state.is_hdr.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+                        force_apply_edr(app);
+                    }
+                }
+            }
+        }
+        if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+            maybe_apply_edr(app);
+        }
     }
     unsafe {
         let m = mp as *mut c_void;
@@ -1198,11 +1315,19 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
 
-    // NOTE: a former pause/unpause pair slept 50 ms here on activate to
-    // "flush VideoToolbox buffers" before the menu->feature transition.
-    // Sleeping on the command path never reached the decoder's restart
-    // logic (the demux restarts streams on its own schedule), so it was
-    // removed rather than kept as cargo-cult.
+    if mode == 0 {
+        // VideoToolbox VT-305 format-transition drain:
+        // When activating a menu button that transitions to a feature
+        // (especially 1080p SDR menu -> 4K HEVC HDR feature), draining the
+        // decoder buffer avoids format change stalls on Apple Silicon.
+        unsafe {
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        unsafe {
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
+        }
+    }
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())

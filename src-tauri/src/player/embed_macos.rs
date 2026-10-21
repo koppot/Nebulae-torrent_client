@@ -23,7 +23,7 @@
 use objc2::rc::Retained;
 use objc2::{class, sel, MainThreadOnly};
 use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
-use objc2_foundation::{MainThreadMarker, NSObject, NSPoint, NSRect, NSSize};
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
 use objc2_quartz_core::{CALayer, CADynamicRangeHigh};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -111,30 +111,62 @@ fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
 
-/// Apply EDR (Extended Dynamic Range) settings to a CALayer.
+extern "C" {
+    fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+    static kCGColorSpaceITUR_2100_PQ: *const std::ffi::c_void;
+    static kCGColorSpaceSRGB: *const std::ffi::c_void;
+}
+
+/// Apply EDR (Extended Dynamic Range) settings and colorspace to a CALayer.
 ///
-/// Tries `preferredDynamicRange = CADynamicRangeHigh` first via
-/// `respondsToSelector: sel!(setPreferredDynamicRange:)`. The selector is
-/// documented for macOS 26+; the guard makes the call safe on older systems
-/// where it simply returns false and we fall back to the deprecated
-/// `wantsExtendedDynamicRangeContent`.
-/// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
-pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer) {
-    // Try the modern API first. `setPreferredDynamicRange:` selector is
-    // documented for macOS 26+. The respondsToSelector check guards against
-    // its absence on older systems where the selector simply does not exist.
-    let uses_modern_api: bool = unsafe {
-        let responds: bool = objc2::msg_send![layer, respondsToSelector: sel!(setPreferredDynamicRange:)];
-        responds
-    };
-    if uses_modern_api {
-        unsafe {
-            layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+/// Configures `wantsExtendedDynamicRangeContent`, `preferredDynamicRange = CADynamicRangeHigh`,
+/// screen `contentsHeadroom`, `toneMapMode = "ifSupported"`, and crucially sets
+/// the layer's `colorspace` to ITU-R BT.2100 PQ when `is_hdr` is true.
+/// Without the colorspace tag, the macOS WindowServer compositor treats raw PQ pixels
+/// as standard sRGB gamma, causing the washed-out / desaturated UHD symptom.
+/// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-771
+pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, is_hdr: bool) {
+    // 1. Extended Dynamic Range content opt-in (REQUIRED on macOS for EDR values > 1.0)
+    #[allow(deprecated)]
+    layer.setWantsExtendedDynamicRangeContent(true);
+
+    // 2. Modern dynamic range preference (macOS 14+)
+    if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
+        layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+    }
+
+    // 3. Headroom configuration from screen (macOS 14+)
+    if layer.respondsToSelector(sel!(setContentsHeadroom:)) {
+        let screen = objc2_app_kit::NSScreen::mainScreen(MainThreadMarker::new_unchecked());
+        if let Some(scr) = screen {
+            let max_edr = scr.maximumExtendedDynamicRangeColorComponentValue();
+            let pot_edr = scr.maximumPotentialExtendedDynamicRangeColorComponentValue();
+            let headroom = if max_edr > 1.0 { max_edr } else if pot_edr > 1.0 { pot_edr } else { 1.0 };
+            if headroom > 1.0 {
+                let _: () = objc2::msg_send![layer, setContentsHeadroom: headroom];
+            }
+        }
+    }
+
+    // 4. Tone map mode (macOS 15+)
+    if layer.respondsToSelector(sel!(setToneMapMode:)) {
+        let mode = objc2_foundation::NSString::from_str("ifSupported");
+        let _: () = objc2::msg_send![layer, setToneMapMode: &*mode];
+    }
+
+    // 5. Colorspace
+    if is_hdr {
+        let cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
+        if !cs.is_null() {
+            let _: () = objc2::msg_send![layer, setColorspace: cs];
+            CGColorSpaceRelease(cs);
         }
     } else {
-        #[allow(deprecated)]
-        {
-            layer.setWantsExtendedDynamicRangeContent(true);
+        let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if !cs.is_null() {
+            let _: () = objc2::msg_send![layer, setColorspace: cs];
+            CGColorSpaceRelease(cs);
         }
     }
 }
@@ -144,12 +176,11 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer) {
 ///
 /// The overlay NSView is deliberately NOT layer-backed (VLC's caopengllayer
 /// vout refuses views that manage their own layer), so the overlay's own
-/// layer is nil and the previous implementation never applied anything. The
-/// vout instead inserts its own layer-backed VLCVideoLayerView as a SUBVIEW
-/// (modules/video_output/caopengllayer.m, Open(): addSubview:), and that
-/// subview's layer IS the CAOpenGLLayer the video renders into. That is the
-/// layer that must carry preferredDynamicRange /
-/// wantsExtendedDynamicRangeContent for native HDR headroom on XDR displays.
+/// layer is nil. The vout instead inserts its own layer-backed VLCVideoLayerView
+/// as a SUBVIEW (modules/video_output/caopengllayer.m, Open(): addSubview:),
+/// and that subview's layer IS the CAOpenGLLayer the video renders into. That is
+/// the layer that carries preferredDynamicRange, wantsExtendedDynamicRangeContent,
+/// contentsHeadroom, and colorspace for native HDR headroom on XDR displays.
 ///
 /// The video subview is created asynchronously when the vout opens (after the
 /// decoder starts), so a call right after play() usually finds nothing yet;
@@ -161,20 +192,22 @@ pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) -> bool {
     if ptr == 0 {
         return false;
     }
+    let is_hdr = state.is_hdr.load(std::sync::atomic::Ordering::SeqCst);
     let view = &*(ptr as *mut NSView);
+    let mut applied = false;
     // Defensive: if the view ever becomes layer-backed, its own layer wins.
     if let Some(layer) = view.layer() {
-        apply_edr_to_layer(&layer);
-        return true;
+        apply_edr_to_layer(&layer, is_hdr);
+        applied = true;
     }
     let subviews = view.subviews();
     for sub in subviews.iter() {
         if let Some(layer) = sub.layer() {
-            apply_edr_to_layer(&layer);
-            return true;
+            apply_edr_to_layer(&layer, is_hdr);
+            applied = true;
         }
     }
-    false
+    applied
 }
 
 /// Apply EDR to the video layer once per playback session. Cheap to call
@@ -188,6 +221,22 @@ pub fn maybe_apply_edr(app: &AppHandle) {
     if state.edr_applied.load(Ordering::SeqCst) {
         return;
     }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let applied = unsafe { apply_edr_to_video_layer(&app2) };
+        if applied {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+/// Force re-application of EDR and colorspace to the video layer,
+/// bypassing the edr_applied check. Used when transitioning from SDR to HDR
+/// (e.g. menu to UHD feature).
+#[cfg(target_os = "macos")]
+pub fn force_apply_edr(app: &AppHandle) {
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         let applied = unsafe { apply_edr_to_video_layer(&app2) };
@@ -233,7 +282,11 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
     };
     content.setWantsLayer(true);
     if let Some(layer) = content.layer() {
-        apply_edr_to_layer(&layer);
+        #[allow(deprecated)]
+        layer.setWantsExtendedDynamicRangeContent(true);
+        if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
+            layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+        }
     }
 }
 
@@ -709,4 +762,22 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
         return win.is_maximized().map_err(|e| format!("is_maximized: {e}"));
     }
     Err("main window not found".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_coregraphics_colorspaces() {
+        unsafe {
+            let cs_pq = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
+            assert!(!cs_pq.is_null(), "kCGColorSpaceITUR_2100_PQ must resolve to a valid CGColorSpaceRef");
+            CGColorSpaceRelease(cs_pq);
+
+            let cs_srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            assert!(!cs_srgb.is_null(), "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef");
+            CGColorSpaceRelease(cs_srgb);
+        }
+    }
 }

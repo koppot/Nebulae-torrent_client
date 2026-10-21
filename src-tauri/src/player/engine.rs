@@ -85,6 +85,8 @@ pub struct VlcLib {
     pub libvlc_audio_get_track_description:
         unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_track_description_list_release: unsafe extern "C" fn(*mut VlcTrackDescription),
+    pub libvlc_video_get_size:
+        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int>,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -490,6 +492,7 @@ impl VlcLib {
             libvlc_audio_set_track: sym!("libvlc_audio_set_track": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
+            libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
             lib,
             deps,
         }
