@@ -62,6 +62,7 @@ pub struct VlcLib {
     // libvlc_media_player_navigate(activate) switched title 0 -> 1 on the
     // first call). This API is therefore the ONLY reliable menu input path.
     pub libvlc_media_player_navigate: unsafe extern "C" fn(*mut c_void, c_int),
+    pub libvlc_media_player_navigate_menu: Option<unsafe extern "C" fn(*mut c_void)>,
     // Full title/chapter descriptions: real chapter time offsets for the
     // seek bar marks, and duration-aware title navigation (features only).
     pub libvlc_media_player_get_full_title_descriptions:
@@ -415,6 +416,14 @@ impl VlcLib {
                 *s
             }};
         }
+        macro_rules! sym_opt {
+            ($name:literal : $ty:ty) => {{
+                let s: Option<Symbol<$ty>> = lib
+                    .get::<$ty>(concat!($name, "\0").as_bytes())
+                    .ok();
+                s.map(|s| *s)
+            }};
+        }
         VlcLib {
             libvlc_new: sym!("libvlc_new": unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void),
             libvlc_release: sym!("libvlc_release": unsafe extern "C" fn(*mut c_void)),
@@ -458,6 +467,7 @@ impl VlcLib {
             libvlc_audio_set_volume: sym!("libvlc_audio_set_volume": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_video_set_deinterlace: sym!("libvlc_video_set_deinterlace": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_media_player_navigate: sym!("libvlc_media_player_navigate": unsafe extern "C" fn(*mut c_void, c_int)),
+            libvlc_media_player_navigate_menu: sym_opt!("libvlc_media_player_navigate_menu": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_get_full_title_descriptions: sym!("libvlc_media_player_get_full_title_descriptions": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcTitleDescription) -> c_int),
             libvlc_title_descriptions_release: sym!("libvlc_title_descriptions_release": unsafe extern "C" fn(*mut *mut VlcTitleDescription, c_int)),
             libvlc_media_player_get_full_chapter_descriptions: sym!("libvlc_media_player_get_full_chapter_descriptions": unsafe extern "C" fn(*mut c_void, c_int, *mut *mut *mut VlcChapterDescription) -> c_int),

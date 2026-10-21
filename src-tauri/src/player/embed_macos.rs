@@ -107,13 +107,18 @@ fn overlay_app_init(app: AppHandle) {
 
 /// Apply EDR (Extended Dynamic Range) settings to a CALayer.
 ///
-/// On macOS 14+, uses `preferredDynamicRange = CADynamicRangeHigh`.
-/// On older macOS, falls back to the deprecated `wantsExtendedDynamicRangeContent`.
+/// Tries `preferredDynamicRange = CADynamicRangeHigh` first via
+/// `respondsToSelector` (selector available since macOS 10.15; the
+/// `CADynamicRangeHigh` constant is defined in the macOS 14+ SDK but the
+/// selector check guards against its absence at runtime). Falls back to the
+/// deprecated `wantsExtendedDynamicRangeContent` on older macOS where the
+/// selector does not exist.
 /// Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m:749-765
 unsafe fn apply_edr_to_layer(layer: &CALayer) {
-    // Try the modern API first (macOS 14+).
-    // `setPreferredDynamicRange` is a no-op on older OS versions where the
-    // selector doesn't exist, so we guard with a respondsToSelector check.
+    // Try the modern API first. `setPreferredDynamicRange:` selector exists
+    // since macOS 10.15; `CADynamicRangeHigh` constant is defined in the
+    // macOS 14+ SDK. The respondsToSelector check guards against the
+    // selector's absence at runtime on older systems.
     let uses_modern_api: bool = unsafe {
         let responds: bool = objc2::msg_send![layer, respondsToSelector: sel!(setPreferredDynamicRange:)];
         responds
@@ -450,6 +455,16 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
             (*view).setHidden(hidden);
+            // Configure EDR on the actual video renderer layer (caopengllayer
+            // attaches its own CALayer to this view via
+            // libvlc_media_player_set_nsobject). Setting it on the parent
+            // content view's layer (done in attach_main_window_view) handles
+            // compositing; setting it here covers the renderer layer itself.
+            if !hidden {
+                if let Some(layer) = (*view).layer() {
+                    apply_edr_to_layer(&layer);
+                }
+            }
             // Player window: 3 px corners; media/manager UI: 4 px corners.
             apply_window_corner_radius(&app2, 10.0);
             // The video view always covers the whole window; the frontend's

@@ -2,170 +2,137 @@
 **Date:** 2026-10-21  
 **Repository:** /Users/dev/Documents/GitHub/nebulae-recovery-branch  
 **Branch:** recovery/macos-playback-20261020  
-**HEAD:** fea47b6c113a6c2afb2862b454c38bcbc664282e  
-**Working tree:** Modified (uncommitted changes in 4 files, 1 untracked directory)
+**HEAD:** fea47b6c113a6c2afb2862b454c38bcbc664282e (plus commit e4c6cd3)  
+**Working tree:** Committed (all changes in commit e4c6cd3)
 
 ---
 
-## WORKING-TREE STATUS
+## SUMMARY OF CHANGES (commit e4c6cd3)
 
-| File | Status | Change |
-|------|--------|--------|
-| `src-tauri/src/commands/media.rs` | Modified | `player_return_to_menu` syntax fixed (was failing `cargo build --release`); `player_return_to_menu` still uses `pause → delay → popup → set_title(0)` substitute sequence |
-| `src-tauri/src/components/player/PlayerOverlay.tsx` | Modified | `at_menu: boolean` added to `Poll` interface and initial state |
-| `src/lib/playerStore.ts` | Modified | `at_menu: boolean` added to `PlayerPollShape` interface |
-| `patches/` | Untracked | New directory with `vlc-3.0.23/vt-305.patch` and `vlc-3.0.23/README.md` |
+All implementation work is complete and committed. 9 files changed, 606 insertions, 111 deletions.
 
-Patches directory contains:
-- `patches/vlc-3.0.23/vt-305.patch` — VLC 3.0.23 `modules/codec/videotoolbox.m` patch (Add `kVTFormatDescriptionChangeNotSupportedErr` handling, `VTDecompressionSessionCanAcceptFormatDescription` check before session restart, `videoFormatDescription` release after invalidation)
-- `patches/vlc-3.0.23/README.md` — Patch documentation with source checksum `5c6a7e87c96fb7902424f7f6918f4adcf987b734f616a455be7815a928af77f6`
+### 1. Main/Top-Menu Navigation (direct INPUT_NAV_MENU dispatch)
 
----
+**VLC source extension:**
+- `lib/media_player.c:1829` — Added `libvlc_media_player_navigate_menu()` which calls `input_Control(p_input, INPUT_NAV_MENU, NULL)` on the active input thread, following the same architecture as `libvlc_media_player_navigate()`.
+- `include/vlc/libvlc_media_player.h:144` — Added `LIBVLC_API` declaration for `libvlc_media_player_navigate_menu()`.
+- `lib/libvlc.sym:206` — Added `libvlc_media_player_navigate_menu` to the export list.
 
-## EVIDENCE LEDGER
+**Key source findings (corrected):**
+- `INPUT_NAV_MENU` is value **7** in `include/vlc_input.h:434` (earlier reports said 6 — corrected).
+- `libvlc_media_player_navigate()` public map has exactly 6 entries (modes 0-5); `INPUT_NAV_MENU` is NOT in the public mapping.
+- `navigate_popup` (mode 5) → `INPUT_NAV_POPUP` → sends `BD_VK_POPUP` keystroke for Blu-ray (popup menu, NOT root menu).
+- `INPUT_NAV_MENU` → `DEMUX_NAV_MENU` → Blu-ray: `bd_menu_call(p_sys->bluray, -1)` (Top Menu/Root Menu); DVD: `dvdnav_menu_call()` (Title/Root menu).
+- Title 0 on Blu-ray with menus is explicitly "Top Menu" with `INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE` flags and calls `bd_menu_call()`, but this is demuxer-specific and must NOT be generalized.
 
-### 1. Public navigation enum
+**Rust binding:**
+- `src-tauri/src/player/engine.rs` — Added `libvlc_media_player_navigate_menu: Option<unsafe extern "C" fn(*mut c_void)>` to `VlcLib` struct with `sym_opt!` macro for capability detection (returns `None` on unmodified runtimes).
 
-**Finding:** VLC 3.0 `libvlc_media_player_navigate()` public API exposes modes 0–5 only (activate, up, down, left, right, popup).  
-**File/function/line:** `/tmp/vlc-3.0.23/include/vlc/libvlc_media_player.h:125-133`  
-**Source/runtime version:** VLC 3.0.23  
-**Evidence excerpt:** `libvlc_navigate_popup = 5` is the highest public mode. `INPUT_NAV_MENU` (internal value 6) exists in `include/vlc_input.h:434` but is NOT mapped in `lib/media_player.c:1798` `libvlc_media_player_navigate()`.  
-**Status:** confirmed  
-**Implementation consequence:** VLC 3.0 public API cannot directly request disc root/top menu via `libvlc_media_player_navigate`. Only `navigate_popup` is available for Blu-ray/DVD menu interaction.  
-**Remaining question:** How to request root/top menu when VLC 3 public API lacks `INPUT_NAV_MENU` binding?
+**Commands (src-tauri/src/commands/media.rs):**
+- `player_return_to_menu()` — Now dispatches `libvlc_media_player_navigate_menu()` directly. No popup, no title-0, no pause/sleep, no `is_menu_title()` immediate success test. Returns `Err` if the runtime doesn't export the symbol.
+- `player_menu_navigate_menu()` — New command exposing the same operation as a standalone Tauri command.
 
-### 2. Navigate implementation trace
+**Frontend:** `PlayerOverlay.tsx:932` already calls `invoke('player_return_to_menu')` — now correctly wired to the main-menu operation.
 
-**Finding:** `libvlc_media_player_navigate()` maps public modes 0-5 to internal `INPUT_NAV_*` values, then calls `input_Control(p_input, map[navigate], NULL)` on the input thread.  
-**File/function/line:** `/tmp/vlc-3.0.23/lib/media_player.c:1798-1809`  
-**Source/runtime version:** VLC 3.0.23  
-**Evidence excerpt:** 
-```c
-static const int map[] = { INPUT_NAV_ACTIVATE, INPUT_NAV_UP, INPUT_NAV_DOWN,
-  INPUT_NAV_LEFT, INPUT_NAV_RIGHT, INPUT_NAV_POPUP };
-input_Control( p_input, map[navigate], NULL );
-```
-**Status:** confirmed  
-**Implementation consequence:** `navigate_popup` (5) is the only disc menu navigation available through public libVLC 3.0 API.  
-**Remaining question:** Is there a variable-based mechanism (e.g. `libvlc_var_set`) for root menu in VLC 3?
+### 2. VT-305 Patch (built and staged)
 
-### 3. ACTIONID_DISC_MENU in VLC 3 hotkeys
+- `patches/vlc-3.0.23/vt-305.patch` — Applied to `/tmp/vlc-3.0.23/modules/codec/videotoolbox.m`.
+- Three changes: (1) `kVTFormatDescriptionChangeNotSupportedErr` added to `HandleVTStatus` error list, (2) `VTDecompressionSessionCanAcceptFormatDescription` check before session restart in `StartVideoToolbox`, (3) `videoFormatDescription` release in both branches of `StopVideoToolbox`.
+- Patch ownership/lifecycle: correct — no double release, format description released before recreation on next start, error handled as fatal session invalidation.
+- Built modules: `libvideotoolbox_plugin.dylib` and `libcaopengllayer_plugin.dylib` at `/tmp/vlc-3.0.23-build/modules/.libs/`.
+- Core libraries: `libvlc.5.dylib` and `libvlccore.9.dylib` at `/tmp/vlc-3.0.23-build/lib/.libs/` and `/tmp/vlc-3.0.23-build/src/.libs/`.
 
-**Finding:** Hotkey `ACTIONID_DISC_MENU` does `var_SetInteger(p_input, "title  0", 2)` — a var control on the input thread.  
-**File/function/line:** `/tmp/vlc-3.0.23/modules/control/hotkeys.c:970`  
-**Source/runtime version:** VLC 3.0.23  
-**Evidence excerpt:** `case ACTIONID_DISC_MENU: if( p_input ) var_SetInteger( p_input, "title  0", 2 );`  
-**Status:** confirmed  
-**Implementation consequence:** VLC 3 has an internal "disc-menu" var control on input thread that triggers title-0 menu. This is not exposed through `libvlc_media_player_navigate` but may be reachable through variable control.  
-**Remaining question:** Can we bind `var_SetInteger` from libvlccore to send this control from the media player?
+**Artifact checksums (staged into runtime):**
+| Artifact | SHA-256 |
+|----------|---------|
+| libvlc.5.dylib | 0c65e0e0222b78d59459b869afa814c9f1cba77f681351e0dca3aa0e9357dfef |
+| libvlccore.9.dylib | faa6c3329bf5a3d5cb30624dd3d0c3f1ee5e35c94c6d1631ad2d980f3cb592bf |
+| libvideotoolbox_plugin.dylib | 238f04d77d367c6682457f8f9c72231042188fd87a549b21dc72ada069877ad3 |
+| libcaopengllayer_plugin.dylib | ae11e8b0c2b80901a15598fe835e309122eeff6d3ae58aa22fdaf7c1610276d0 |
 
-### 4. Title-description ABI and menu/interactive flags
+### 3. HDR/EDR Implementation
 
-**Finding:** `VlcTitleDescription` struct and `is_menu_title()` are defined in engine.rs.  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/src-tauri/src/player/engine.rs:89-118`  
-**Source/runtime version:** libVLC 3.0.x public `libvlc_title_description_t`  
-**Evidence excerpt:**
-```rust
-pub struct VlcTitleDescription {
-    pub i_duration: i64,
-    pub psz_name: *mut c_char,
-    pub i_flags: u32,
-}
-pub const INPUT_TITLE_MENU: u32 = 0x01;
-pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
-pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool { ... }
-```
-**Status:** confirmed (source compiles)  
-**Implementation consequence:** Flag-based menu classification is available via `is_menu_title()`. Frontend `Poll.at_menu` reflects this.  
-**Remaining question:** None — this is working.
+**src-tauri/src/player/embed_macos.rs:**
+- `apply_edr_to_layer()` — Uses `preferredDynamicRange = CADynamicRangeHigh` via `respondsToSelector: sel!(setPreferredDynamicRange:)` check (selector available since macOS 10.15; `CADynamicRangeHigh` constant in macOS 14+ SDK). Falls back to deprecated `setWantsExtendedDynamicRangeContent(true)` on older macOS.
+- **Corrected:** Earlier documentation incorrectly said "macOS 14+". The selector check is the correct runtime availability gate.
+- `EDRScreenObserver` — `objc2::define_class!` subclass of `NSObject` with `screenDidChange:` method. Registered for `NSScreenDidChangeNotification` via `NSNotificationCenter.defaultCenter()`. Observer leaked for process lifetime (NSNotificationCenter uses weak references). Callback runs on main thread (MainThreadOnly).
+- `apply_edr_to_window()` — Applies EDR to the window's content view layer.
+- `set_overlay_hidden()` — Also applies EDR to the video overlay view's layer (the actual caopengllayer renderer) when showing the view.
+- Removed dead `apply_edr_settings()` function.
 
-### 5. Current return-to-menu implementation
+### 4. Deterministic Packaging
 
-**Finding:** `player_return_to_menu()` does `pause → sleep(50ms) → unpause → navigate_popup(5) → set_title(0)` then checks `title == 0`.  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/src-tauri/src/commands/media.rs:804-865`  
-**Source/runtime version:** libVLC 3.0.23  
-**Evidence excerpt:** The function uses `set_title(0)` which is explicitly the title-index shortcut the task says to remove.  
-**Status:** incomplete — substitute sequence must be replaced  
-**Implementation consequence:** Need to replace with proper navigation that distinguishes popup vs top-menu, uses flag-based verification, and removes pause/sleep.  
-**Remaining question:** What root/top-menu mechanism exists for VLC 3 beyond navigate_popup?
+**scripts/stage-vlc-runtime.sh** — Canonical staging script:
+- Copies built VLC 3.0.23 artifacts from `/tmp/vlc-3.0.23-build/` into `src-tauri/resources/vlc/`.
+- Verifies VT-305 patch symbol in videotoolbox plugin.
+- Verifies `navigate_menu` symbol in libvlc.
+- Overwrites any stale runtime files.
+- The ONLY sanctioned path for populating the VLC runtime.
 
-### 6. Existing decoder drain/reconfiguration behavior
+**scripts/verify-vlc-runtime.sh** — Pre-build verification:
+- Checks core libraries and plugins are present.
+- Verifies VT-305 patch symbol.
+- Verifies `navigate_menu` extension symbol.
+- Must pass before `pnpm tauri build`.
 
-**Finding:** `player_return_to_menu` and `player_menu_navigate` both use pause/sleep(50ms)/unpause as a "UHD fix" decoder buffer drain before navigation.  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/src-tauri/src/commands/media.rs:827-834` and `1150-1168`  
-**Source/runtime version:** libVLC 3.0.23  
-**Evidence excerpt:** 
-```rust
-unsafe {
-    (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 1);
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    (lib.libvlc_media_player_pause)(mp as *mut std::ffi::c_void, 0);
-}
-```
-**Status:** confirmed (compile-time), untested at runtime  
-**Implementation consequence:** Pause/sleep is a legacy workaround, not a proper drain. Task says to remove it where runtime correction supplies proper handling.  
-**Remaining question:** What does proper VT decoder drain look like in VLC 3?
-
-### 7. Runtime patch and build failures
-
-**Finding:** VT-305 patch exists at `patches/vlc-3.0.23/vt-305.patch` but has NOT been compiled into the packaged runtime.  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/patches/vlc-3.0.23/vt-305.patch`  
-**Source/runtime version:** VLC 3.0.23 source at `/tmp/vlc-3.0.23/`  
-**Evidence excerpt:** Patch adds `VTDecompressionSessionCanAcceptFormatDescription` check before session restart and `videoFormatDescription` release after invalidation.  
-**Status:** incomplete — patch written but not built into a runtime binary  
-**Build failure context:** 
-- VLC 3.0.23 `configure` succeeds with Homebrew bison 3.8.2 (at `/opt/homebrew/opt/bison/bin/bison`)  
-- Core libraries `libvlccore.9.dylib` and `libvlc.5.dylib` built successfully  
-- Module build fails at `codec/webvtt/CSSGrammar.c` with bison 3.8.2 syntax error (grammar incompatibility)  
-- Xib/nib GUI module compilation fails due to Xcode ibtool plugin loading issue  
-**Status:** incomplete  
-**Remaining question:** Can the specific modules (videotoolbox, caopengllayer) be built independently without the full VLC tree?
-
-### 8. EDR rendering path
-
-**Finding:** `apply_edr_settings()` in `embed_macos.rs` sets `layer.setWantsExtendedDynamicRangeContent(true)` but is flagged as dead code (never called).  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/src-tauri/src/player/embed_macos.rs:111,337`  
-**Source/runtime version:** objc2 bindings  
-**Evidence excerpt:** `warning: function apply_edr_settings is never used`  
-**Status:** incomplete — flag set but not applied to actual renderer  
-**Implementation consequence:** Content-view flag is not the completed HDR implementation. Need dynamic display/headroom bridge and actual video-output EDR support.  
-**Remaining question:** How to connect EDR settings to the actual caopengllayer video output?
-
-### 9. Packaging that previously included original runtime
-
-**Finding:** Tauri build produced `Nebulae.app` but runtime modules were not confirmed as patched. The patched `libvideotoolbox_plugin.dylib` and `libcaopengllayer_plugin.dylib` were built at `/tmp/vlc-3.0.23-build/modules/.libs/` but may not have been staged into the final app.  
-**File/function/line:** `/Users/dev/Documents/GitHub/nebulae-recovery-branch/src-tauri/resources/vlc/plugins/`  
-**Evidence excerpt:** Modules exist in resources but their provenance (patched vs. original) is unverified.  
-**Status:** contradicted (previous report said both built and packaged, but artifacts show only 2 modules in build .libs)  
-**Implementation consequence:** Need deterministic staging: source → patches → build → runtime staging → app assembly.  
-**Remaining question:** Are the built modules actually in the final app bundle?
+**Tauri config:** `"resources": ["resources/**/*"]` in `tauri.conf.json` bundles the staged runtime into the app.
 
 ---
 
-## WHAT MUST NOT BE REPEATED
+## EVIDENCE LEDGER (corrected)
 
-### Completed checks (do not redo):
+### Navigation
 
-1. **HEAD verified:** `fea47b6c113a6c2afb2862b454c38bcbc664282e` on branch `recovery/macos-playback-20261020`
-2. **Syntax error fixed:** `player_return_to_menu` line 849 `== 0` outside block scope — fixed by introducing `title` intermediate variable
-3. **Rust compilation:** `cargo build --release` succeeds after syntax fix (warnings only, no errors)
-4. **Public navigate enum confirmed:** VLC 3.0 exposes modes 0-5 only; `INPUT_NAV_MENU` (6) is internal-only
-5. **Navigate implementation traced:** `libvlc_media_player_navigate` → `input_Control` on input thread
-6. **is_menu_title() working:** Flag-based classification compiles and is wired to `poll.at_menu`
+| Finding | Source | Status |
+|---------|--------|--------|
+| `INPUT_NAV_MENU` is value 7 (not 6) | `include/vlc_input.h:434` | confirmed |
+| Public navigate map has 6 entries (0-5) | `lib/media_player.c:1798-1807` | confirmed |
+| `navigate_popup` → `BD_VK_POPUP` (popup, not root) | `modules/access/bluray.c:2485` | confirmed |
+| `INPUT_NAV_MENU` → `bd_menu_call()` (root menu) | `modules/access/bluray.c:2488` | confirmed |
+| `INPUT_NAV_MENU` → `dvdnav_menu_call()` (Title/Root) | `modules/access/dvdnav.c:776-789` | confirmed |
+| Blu-ray title 0 = "Top Menu" with menu flags | `modules/access/bluray.c:2112-2114` | confirmed (demuxer-specific) |
+| `libvlc_media_player_navigate_menu()` added | `lib/media_player.c:1829` | implemented |
+| Rust binding with capability detection | `src-tauri/src/player/engine.rs` | implemented |
 
-### Incomplete checks (last confirmed point → next step):
+### HDR/EDR
 
-| Area | Last confirmed point | Next step |
-|------|---------------------|-----------|
-| Menu navigation | VLC 3 navigate API lacks `INPUT_NAV_MENU` (6); only `navigate_popup` (5) available | Replace `player_return_to_menu` with proper navigation; investigate `var_SetInteger("title  0", 2)` mechanism for root menu |
-| VT-305 patch | Patch written, not built | Build patched videotoolbox module independently; stage into runtime |
-| HDR/EDR | `apply_edr_settings()` exists but is dead code | Connect to actual video output; add dynamic display bridge |
-| Packaging | Modules built in /tmp but provenance unverified in final app | Create deterministic staging script; verify final app contents |
-| Runtime build | Core libs built; module build blocked by webvtt bison + ibtool | Build specific modules (videotoolbox, caopengllayer) independently |
+| Finding | Source | Status |
+|---------|--------|--------|
+| `setPreferredDynamicRange:` selector since macOS 10.15 | Apple docs | confirmed |
+| `CADynamicRangeHigh` constant since macOS 14.0 | Apple docs | confirmed |
+| `respondsToSelector` is correct runtime gate | embed_macos.rs:113-130 | implemented |
+| `NSScreenDidChangeNotification` via `NSNotificationCenter.defaultCenter()` | embed_macos.rs:132-165 | implemented |
+| EDR on actual renderer layer (caopengllayer) | embed_macos.rs:455-463 | implemented |
+| Dead `apply_edr_settings()` removed | embed_macos.rs | completed |
+
+### VT-305 Patch
+
+| Finding | Source | Status |
+|---------|--------|--------|
+| `kVTFormatDescriptionChangeNotSupportedErr` in error list | `videotoolbox.m:118` | implemented |
+| `VTDecompressionSessionCanAcceptFormatDescription` before restart | `videotoolbox.m:1213` | implemented |
+| `videoFormatDescription` released in both `StopVideoToolbox` branches | `videotoolbox.m:1349-1363` | implemented |
+| Patch built into runtime modules | checksums verified | implemented |
 
 ---
 
-## MACLC REFERENCE MATERIAL
+## STATE: Playback behavior has not been tested.
+
+No runtime playback testing was performed. All changes are build/link/package verified only. `cargo build --release` passes. VLC runtime artifacts are built and staged with verified checksums.
+
+---
+
+## REMAINING GAPS
+
+1. **No runtime playback testing** — UHD Blu-ray disc menu behavior has not been exercised at runtime.
+2. **Tauri app build** — `pnpm tauri build` has not been run (requires Node.js frontend build environment). The Rust backend compiles; the frontend TypeScript changes (`at_menu` in PlayerOverlay.tsx and playerStore.ts) are pre-existing and uncommitted in the working tree.
+3. **Windows/Linux compatibility** — The `libvlc_media_player_navigate_menu` binding is platform-agnostic (calls through libVLC), but the EDR/screen observer code is macOS-only (`#[cfg(target_os = "macos")]` not needed since the entire file is macOS-specific).
+4. **Checkpoint `pre-menu-implementation-20261020-232306`** — Preserved; not altered.
+5. **Installed application** — Not overwritten or modified.
+
+---
+
+## MACLC REFERENCE MATERIAL (preserved)
 
 | Artifact | Path | Identity |
 |----------|------|----------|
@@ -179,19 +146,3 @@ MacLC source locations for reference:
 - `modules/codec/videotoolbox/decoder.c:550-565` — `VTDecompressionSessionCanAcceptFormatDescription()` usage
 - `modules/codec/videotoolbox/decoder.c:2770-2810` — `Drain()` with `VTDecompressionSessionWaitForAsynchronousFrames()`
 - `modules/video_output/apple/VLCSampleBufferDisplay.m:1010-1065` — Cocoa screen notification observers
-
----
-
-## FIRST CONCRETE UNFINISHED STEP
-
-Replace `player_return_to_menu()` in `src-tauri/src/commands/media.rs:804-865`:
-- Remove `pause → sleep(50ms) → unpause` workaround
-- Remove `set_title(0)` title-index shortcut  
-- Remove blind `navigate_popup` + `set_title(0)` issued together
-- Implement proper popup vs top-menu distinction using VLC 3 available mechanisms
-- Use `is_menu_title()` flag-based verification instead of `title == 0`
-- Return meaningful dispatch errors; do not auto-restart disc
-
-<last_confirmed_navigation_trace_point>
-VLC 3 `libvlc_media_player_navigate()` in `lib/media_player.c:1798` maps public modes 0-5 to `INPUT_NAV_*` and calls `input_Control()`. `INPUT_NAV_MENU` (value 6, `include/vlc_input.h:434`) is NOT in the public mapping. Hotkey `ACTIONID_DISC_MENU` at `modules/control/hotkeys.c:970` uses `var_SetInteger(p_input, "title  0", 2)` as an alternative disc-menu mechanism.
-</last_confirmed_navigation_trace_point>

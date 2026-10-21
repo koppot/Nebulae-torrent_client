@@ -55,6 +55,16 @@ else
   exit 1
 fi
 
+# Verify navigate_menu extension is present in libvlc
+LIBVLC="$DEST/lib/libvlc.5.dylib"
+nm_output=$(nm "$LIBVLC" 2>/dev/null || true)
+if echo "$nm_output" | grep -q "_libvlc_media_player_navigate_menu"; then
+  echo "OK: libvlc.5.dylib contains libvlc_media_player_navigate_menu extension"
+else
+  echo "ERROR: libvlc.5.dylib missing libvlc_media_player_navigate_menu extension"
+  exit 1
+fi
+
 PLUGIN_COUNT=$(find "$DEST/plugins" -type f | wc -l | tr -d ' ')
 echo "Total plugins staged: $PLUGIN_COUNT"
 

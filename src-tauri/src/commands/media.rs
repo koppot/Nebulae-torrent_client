@@ -795,17 +795,23 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
     r
 }
 
-/// Return DVD/BD playback to its interactive menu.
+/// Return DVD/BD playback to its disc root / main menu.
 ///
-/// Uses `libvlc_media_player_navigate()` with `libvlc_navigate_popup` — the
-/// only disc-menu navigation exposed by the libVLC 3 public API. VLC 3 does
-/// not expose `INPUT_NAV_MENU` (root/top menu) through this function; that
-/// internal value (6) exists in `include/vlc_input.h` but is not mapped in
-/// `lib/media_player.c:1798`. For Blu-ray, `navigate_popup` requests the
-/// popup menu; for DVD, dvdnav handles menu navigation internally.
+/// Dispatches INPUT_NAV_MENU through the new libvlc_media_player_navigate_menu()
+/// runtime extension, which reaches:
+///   - Blu-ray: bd_menu_call() (Top Menu / Root Menu)
+///   - DVD:     dvdnav_menu_call() (Title/Root menu)
 ///
-/// Verification uses `is_menu_title()` (flag-based) rather than
-/// `title_index == 0`, since some discs carry menu titles at non-zero indices.
+/// This is a deliberate, direct main-menu operation — not popup navigation
+/// (INPUT_NAV_POPUP sends a popup keystroke, a different operation), and not
+/// a title-index shortcut (set_title(0) is demuxer-specific and must not be
+/// generalized).
+///
+/// Verification is intentionally NOT done via is_menu_title() immediately
+/// after dispatch: a menu flag may coexist with a feature-classified title,
+/// no menu flag immediately after dispatch does not prove failure, and
+/// navigation may complete asynchronously. The command reports dispatch
+/// acceptance, not menu visibility.
 #[tauri::command]
 pub async fn player_return_to_menu(
     state: tauri::State<'_, PlayerState>,
@@ -824,34 +830,53 @@ pub async fn player_return_to_menu(
         return Err("no active player session".into());
     }
 
-    // Already at a menu title: nothing to navigate.
-    if unsafe { engine::is_menu_title(&lib, mp) } {
-        tracing::info!("[player] return_to_menu: already at interactive menu");
-        return Ok(());
-    }
+    // Direct main-menu dispatch through the runtime extension.
+    // If the symbol is missing, this runtime predates the extension:
+    // report unsupported rather than falling back to popup or title-0.
+    let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
+        tracing::warn!("[player] return_to_menu: libvlc_media_player_navigate_menu unavailable");
+        return Err("main menu navigation not supported by this runtime".into());
+    };
 
-    // Request disc menu via the only public navigation available in libVLC 3.
-    // Mode 5 = libvlc_navigate_popup = INPUT_NAV_POPUP.
-    tracing::info!("[player] return_to_menu: sending navigate_popup");
+    tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
     unsafe {
-        (lib.libvlc_media_player_navigate)(mp as *mut std::ffi::c_void, 5);
+        navigate_menu(mp as *mut std::ffi::c_void);
     }
 
-    // Verify the navigation reached a menu title using flag-based classification.
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    if unsafe { engine::is_menu_title(&lib, mp) } {
-        tracing::info!("[player] return_to_menu: now at interactive menu");
+    Ok(())
+}
+
+/// Send a disc root / main menu request through the libvlc_media_player_navigate_menu()
+/// runtime extension. This is the deterministic main-menu path, distinct from
+/// popup navigation (INPUT_NAV_POPUP).
+///
+/// Unlike player_menu_navigate (modes 0-5, public libvlc_navigate_mode_t), this
+/// command reaches INPUT_NAV_MENU directly:
+///   - Blu-ray: bd_menu_call() (Top Menu / Root Menu)
+///   - DVD:     dvdnav_menu_call() (Title/Root menu)
+///
+/// Returns Err if the runtime does not export libvlc_media_player_navigate_menu.
+#[tauri::command]
+pub fn player_menu_navigate_menu(
+    state: tauri::State<'_, PlayerState>,
+) -> Result<(), String> {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
         return Ok(());
     }
-
-    // Navigation was dispatched but state did not confirm a menu. Report the
-    // actual state instead of silently restarting the disc.
-    let title = unsafe { (lib.libvlc_media_player_get_title)(mp as *mut std::ffi::c_void) };
-    tracing::warn!(
-        "[player] return_to_menu: navigate_popup dispatched; current title={}, at_menu=false",
-        title
-    );
-    Err("menu navigation dispatched but player did not reach a menu title".into())
+    let lib = loaded_lib(&state)?;
+    let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
+        return Err("main menu navigation not supported by this runtime".into());
+    };
+    tracing::info!("[player] menu_navigate_menu");
+    unsafe {
+        navigate_menu(mp as *mut c_void);
+    }
+    Ok(())
 }
 
 /// Authored disc-library display title (BDMV/META/DL/bdmt_*.xml, the BDA
