@@ -164,8 +164,8 @@ All bundled artifacts in the `.app` match the build checksums above.
 | File | Change |
 |------|--------|
 | `src-tauri/src/player/engine.rs` | Added `libvlc_media_player_navigate_menu: Option<...>` binding with `sym_opt!` macro for capability detection |
-| `src-tauri/src/commands/media.rs` | Replaced `player_return_to_menu` with direct `navigate_menu()` dispatch; added `player_menu_navigate_menu()`; removed pause/sleep workarounds from `player_set_title` and `player_menu_navigate`; added EDR observer cleanup in `stop_session` |
-| `src-tauri/src/player/embed_macos.rs` | Corrected EDR availability (macOS 26+, not 10.15); switched to `NSWindow.didChangeScreenNotification`; added `edr_observer_cleanup()` with proper lifecycle; removed unreliable overlay-view-layer EDR |
+| `src-tauri/src/commands/media.rs` | Replaced `player_return_to_menu` with direct `navigate_menu()` dispatch; added `player_menu_navigate_menu()`; removed pause/sleep workarounds from `player_set_title` and `player_menu_navigate`; added EDR observer cleanup in `stop_session`; menu-first Open dispatches INPUT_NAV_MENU after play() for discs (not resume); liveness check is menu-aware; DVD paths skip libbluray in `player_disc_chapters`; applies EDR to VLC-owned video layer after session setup |
+| `src-tauri/src/player/embed_macos.rs` | Corrected EDR availability (macOS 26+, not 10.15); switched to `NSWindow.didChangeScreenNotification`; added `edr_observer_cleanup()` with proper lifecycle; made `apply_edr_to_layer` pub(crate); added `apply_edr_to_video_layer()` to set preferredDynamicRange on the VLC-owned CAOpenGLLayer; re-applies EDR to video layer on screen change |
 | `src-tauri/src/player/mod.rs` | Added `edr_observer: AtomicUsize` field to `PlayerState`; made `embed_macos` module `pub(crate)` |
 
 ## VLC Source Changes
@@ -183,19 +183,20 @@ All bundled artifacts in the `.app` match the build checksums above.
 | `scripts/stage-vlc-runtime.sh` | Canonical staging: copies built VLC artifacts to `src-tauri/resources/vlc/`, verifies symbols, overwrites stale files |
 | `scripts/verify-vlc-runtime.sh` | Pre-build verification: checks core libs, plugins, VT-305 patch, navigate_menu export |
 
-## Frontend Changes (pre-existing, uncommitted in working tree)
+## Frontend Changes
 
 | File | Change |
 |------|--------|
-| `src/components/player/PlayerOverlay.tsx` | `at_menu: boolean` added to `Poll` interface |
-| `src/lib/playerStore.ts` | `at_menu: boolean` added to `PlayerPollShape` interface |
+| `src/components/player/PlayerOverlay.tsx` | `at_menu: boolean` added to `Poll` interface (pre-existing); `authoredTitle` added to `displayTitleInfo` dependency array so the libbluray-authored disc name is reflected once the probe completes; removed size from disc-switcher detail (title + year only); removed unused `formatBytes` import |
+| `src/lib/playerStore.ts` | `at_menu: boolean` added to `PlayerPollShape` interface (pre-existing) |
+| `src/components/media/SimpleMediaView.tsx` | Removed size line below external-media card titles (title + year only) |
 
-## State: Playback Behavior Has Not Been Tested
+## State: All Changes Committed, Build Verified
 
-No runtime playback testing was performed. All changes are build/link/package
-verified only. `cargo build --release` passes. Tauri app bundle builds
-successfully. VLC runtime artifacts are built and staged with verified
-checksums.
+All changes are committed on branch `recovery/macos-playback-20261020`
+(commit `51434cc`). No runtime playback testing was performed.
+Build/link/package verified only: `cargo check` passes cleanly,
+`tsc --noEmit` passes cleanly.
 
 ## Checkpoint Preservation
 
