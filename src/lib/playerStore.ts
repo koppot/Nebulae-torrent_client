@@ -47,6 +47,11 @@ export const playerStore = {
   },
   close() {
     state = { ...state, open: false };
+    try {
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('player-active');
+      }
+    } catch {}
     emit();
   },
   subscribe(fn: () => void) {

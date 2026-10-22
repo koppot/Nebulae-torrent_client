@@ -360,7 +360,7 @@ export default function PlayerOverlay() {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const keys = new Set([' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
+      const keys = new Set(['Escape', ' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
       handle(e.key);

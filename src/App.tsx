@@ -72,6 +72,12 @@ export const App: React.FC = () => {
       if (cur.open && cur.resolvedPath === e.payload.resolved_path) return;
       playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
     });
+    const unClosed1 = listen('player-closed', () => {
+      playerStore.close();
+    });
+    const unClosed2 = listen('player://closed', () => {
+      playerStore.close();
+    });
     // Belt-and-braces: poll the engine for a live session while the player
     // UI is closed. Event delivery raced the webview's own loading in the
     // autoplay path (owner: player UI never appeared).
@@ -98,6 +104,8 @@ export const App: React.FC = () => {
     }, 1000);
     return () => {
       un.then((f) => f()).catch(() => {});
+      unClosed1.then((f) => f()).catch(() => {});
+      unClosed2.then((f) => f()).catch(() => {});
       window.clearInterval(iv);
     };
   }, []);

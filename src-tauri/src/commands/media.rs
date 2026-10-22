@@ -479,6 +479,10 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     state
         .edr_applied
         .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    use tauri::Emitter;
+    let _ = app.emit("player://closed", ());
+    let _ = app.emit("player-closed", ());
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
