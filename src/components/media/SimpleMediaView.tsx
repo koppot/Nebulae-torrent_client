@@ -27,6 +27,7 @@ import {
   FolderOpen,
   ArrowDownCircle,
   Disc,
+  Folder,
   FolderArchive,
   X,
   Info,
@@ -69,14 +70,18 @@ const isMac = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCas
  * release folder/file is save_path + name.
  */
 export const contentPath = (t: TorrentItem): string => {
-  const base = t.save_path.replace(/\/+$/, '');
-  return base.endsWith(t.name) ? base : `${base}/${t.name}`;
+  const isWindows = t.save_path.includes('\\');
+  const sep = isWindows ? '\\' : '/';
+  const base = t.save_path.replace(/[\\/]+$/, '');
+  return base.endsWith(t.name) ? base : `${base}${sep}${t.name}`;
 };
 
-/** Folder to reveal in Finder: the release folder, or the parent of a file. */
+/** Folder to reveal in Finder/Explorer: the release folder, or the parent of a file. */
 export const folderOf = (t: TorrentItem): string => {
   const p = contentPath(t);
-  return /\.[a-z0-9]+$/i.test(p) ? p.split(/[/\\]/).slice(0, -1).join('/') : p;
+  const isWindows = p.includes('\\');
+  const sep = isWindows ? '\\' : '/';
+  return /\.[a-z0-9]+$/i.test(p) ? p.split(/[/\\]/).slice(0, -1).join(sep) : p;
 };
 
 export const SimpleMediaView: React.FC = () => {
@@ -204,7 +209,11 @@ export const SimpleMediaView: React.FC = () => {
   // Title-bar controls (media mode): Add Movie + Player prefs live in the
   // top bar and reach this component through window events.
   useEffect(() => {
-    const onAdd = () => void handlePlayExternalDisc();
+    const onAdd = (e: Event) => {
+      const custom = e as CustomEvent<{ kind?: 'folder' | 'file' }>;
+      const kind = custom.detail?.kind;
+      void handlePlayExternalDisc(kind);
+    };
     const onPrefs = () => setShowPlayerPrefs(true);
     window.addEventListener('nebulae:add-movie', onAdd);
     window.addEventListener('nebulae:player-prefs', onPrefs);
@@ -622,12 +631,12 @@ export const SimpleMediaView: React.FC = () => {
       setExternalTitlePrompt({ path: p, guess });
     }
   };
-  // ONE entry point (owner): the dialog accepts the release ROOT folder
-  // (holding all disc folders, like a torrent download) OR an ISO image.
-  const handlePlayExternalDisc = async () => {
+  // The dialog accepts the release ROOT folder (holding all disc folders,
+  // like a torrent download) OR an ISO disc image.
+  const handlePlayExternalDisc = async (kind?: 'folder' | 'file') => {
     setExternalDiscError(null);
     try {
-      const src = await invoke<string | null>('select_disc_source');
+      const src = await invoke<string | null>('select_disc_source', { kind: kind || null });
       if (!src) return;
       await importExternal(src);
     } catch (err: unknown) {
@@ -1076,11 +1085,18 @@ export const SimpleMediaView: React.FC = () => {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => void handlePlayExternalDisc()}
+              onClick={() => void handlePlayExternalDisc('folder')}
               className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-md"
             >
-              <Plus className="w-4 h-4" />
-              <span>Add Movie / Disc</span>
+              <Folder className="w-4 h-4" />
+              <span>Add Movie Folder</span>
+            </button>
+            <button
+              onClick={() => void handlePlayExternalDisc('file')}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-semibold transition shadow-md"
+            >
+              <Disc className="w-4 h-4" />
+              <span>Add Disc Image (.iso)</span>
             </button>
             <button
               onClick={() => setShowAddTorrent(true)}

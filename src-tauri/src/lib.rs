@@ -765,6 +765,8 @@ pub fn run() {
             commands::media::remove_external_media,
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
+            commands::torrent::select_disc_folder,
+            commands::torrent::select_disc_file,
             commands::media::player_disc_chapters,
             commands::media::player_disc_display_title,
             commands::media::player_always_on_top,

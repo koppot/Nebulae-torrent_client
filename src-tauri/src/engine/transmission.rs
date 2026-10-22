@@ -2280,20 +2280,28 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
         // 3. Magnet or HTTP(S) URL
         let dest = normalize_download_dir(download_dir)?;
+        let do_not_start = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
+            .map(|s| s.do_not_start_automatically)
+            .unwrap_or(false);
+
         let mut args = json!({
             "filename": trimmed,
-            "paused": true
+            "paused": do_not_start
         });
         if let Some(ref d) = dest {
             args["download-dir"] = json!(d);
         }
 
         let hash = self.rpc_client.torrent_add(args)?;
-        // Verify FIRST (finds renamed existing data), then start.
-        let _ = self.rpc_client.torrent_verify(&hash);
-        let _ = self.rpc_client.torrent_start(Some(&hash));
         self.apply_racing_mode_on_add(&hash);
-        info!("Added torrent {hash} via Transmission sidecar (verify-then-start)");
+        info!("Added torrent {hash} via Transmission sidecar (active download)");
         Ok(hash)
     }
 
@@ -2324,22 +2332,29 @@ impl TorrentEngine for TransmissionTorrentEngine {
             None
         };
 
+        let do_not_start = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
+            .map(|s| s.do_not_start_automatically)
+            .unwrap_or(false);
+
         let mut args = json!({
             "metainfo": b64,
-            "paused": true
+            "paused": do_not_start
         });
         if let Some(ref d) = effective_dest {
             args["download-dir"] = json!(d);
         }
 
         let hash = self.rpc_client.torrent_add(args)?;
-        // Verify FIRST (finds renamed existing data), then start: without
-        // the initial check the torrent re-downloads from scratch.
-        let _ = self.rpc_client.torrent_verify(&hash);
-        let _ = self.rpc_client.torrent_start(Some(&hash));
         self.apply_racing_mode_on_add(&hash);
         info!(
-            "Added torrent {hash} from metainfo bytes via Transmission sidecar (verify-then-start)"
+            "Added torrent {hash} from metainfo bytes via Transmission sidecar (active download)"
         );
         Ok(hash)
     }

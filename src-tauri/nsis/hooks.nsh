@@ -36,6 +36,10 @@
   ; Refresh shell icon cache
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 
+  ; Register inbound firewall rules for Nebulae and transmission-daemon silently without visible windows
+  nsExec::Exec `netsh.exe advfirewall firewall add rule name="Nebulae Torrent Client" dir=in action=allow program="$INSTDIR\nebulae.exe" enable=yes`
+  nsExec::Exec `netsh.exe advfirewall firewall add rule name="Nebulae Transmission Daemon" dir=in action=allow program="$INSTDIR\resources\engine\transmission\transmission-daemon.exe" enable=yes`
+
   ; SignPath Foundation auto-update disclosure:
   ; "Applications that update themselves silently must allow users to disable this behavior.
   ; A notification must be displayed to the user that an update will be applied, e.g. in the installer."
@@ -58,6 +62,10 @@
   DeleteRegKey HKCU "Software\Classes\Nebulae.adc"
   DeleteRegValue HKCU "Software\Classes\.torrent" ""
   DeleteRegValue HKCU "Software\Classes\.adc" ""
+
+  ; Remove firewall rules
+  nsExec::Exec `netsh.exe advfirewall firewall delete rule name="Nebulae Torrent Client"`
+  nsExec::Exec `netsh.exe advfirewall firewall delete rule name="Nebulae Transmission Daemon"`
 
   ; Refresh shell icon cache
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'

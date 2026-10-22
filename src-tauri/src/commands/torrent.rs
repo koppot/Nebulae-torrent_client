@@ -1615,8 +1615,56 @@ mod tests {
 /// presented NATIVELY on the app's main thread: an osascript-hosted
 /// panel opens beneath the app window (invisible), which read as
 /// "nothing happens".
+/// Dedicated folder selection for external movie / disc releases (BDMV, VIDEO_TS, box sets).
 #[tauri::command]
-pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub async fn select_disc_folder() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let picked = rfd::FileDialog::new()
+            .set_title(
+                "Add Movie - select the release ROOT folder that holds ALL of its disc folders",
+            )
+            .pick_folder();
+        Ok(picked.map(|p| p.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| format!("folder picker join error: {e}"))?
+}
+
+/// Dedicated file selection for external ISO / IMG disc images.
+#[tauri::command]
+pub async fn select_disc_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let picked = rfd::FileDialog::new()
+            .set_title("Add Movie - select an ISO disc image")
+            .add_filter("Disc images (*.iso, *.img)", &["iso", "img"])
+            .add_filter("All files", &["*"])
+            .pick_file();
+        Ok(picked.map(|p| p.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| format!("file picker join error: {e}"))?
+}
+
+/// One dialog for external playback: accepts a release ROOT folder
+/// (containing all disc folders, like a torrent download) or an ISO
+/// disc image. Files and folders must both be selectable, so a plain
+/// `choose folder`/`choose file` pair cannot be used. The panel is
+/// presented NATIVELY on the app's main thread: an osascript-hosted
+/// panel opens beneath the app window (invisible), which read as
+/// "nothing happens".
+#[tauri::command]
+pub async fn select_disc_source(
+    app: tauri::AppHandle,
+    kind: Option<String>,
+) -> Result<Option<String>, String> {
+    if let Some(ref k) = kind {
+        if k == "folder" {
+            return select_disc_folder().await;
+        } else if k == "file" {
+            return select_disc_file().await;
+        }
+    }
+
     #[cfg(target_os = "macos")]
     {
         let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
@@ -1631,41 +1679,28 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
     #[cfg(target_os = "windows")]
     {
         let _ = &app;
-        // Windows: native file dialog for ISO first; folder dialog for a release
-        // root when the file dialog is cancelled.
-        if let Some(picked) = rfd::FileDialog::new()
-            .set_title("Add Movie - select an ISO disc image (or cancel for a folder)")
+        // Windows: release folders (BDMV, VIDEO_TS, multi-disc) are the primary
+        // movie structure. Present the folder browser first. If cancelled,
+        // present the ISO file picker.
+        if let Some(picked_folder) = rfd::FileDialog::new()
+            .set_title(
+                "Add Movie - select the release ROOT folder (or cancel to choose an ISO file)",
+            )
+            .pick_folder()
+        {
+            return Ok(Some(picked_folder.to_string_lossy().to_string()));
+        }
+        let picked_file = rfd::FileDialog::new()
+            .set_title("Add Movie - select an ISO disc image")
             .add_filter("Disc images (*.iso, *.img)", &["iso", "img"])
             .add_filter("All files", &["*"])
-            .pick_file()
-        {
-            return Ok(Some(picked.to_string_lossy().to_string()));
-        }
-        let picked_folder = rfd::FileDialog::new()
-            .set_title(
-                "Add Movie - select the release ROOT folder that holds ALL of its disc folders",
-            )
-            .pick_folder();
-        Ok(picked_folder.map(|p| p.to_string_lossy().to_string()))
+            .pick_file();
+        Ok(picked_file.map(|p| p.to_string_lossy().to_string()))
     }
 
     #[cfg(target_os = "linux")]
     {
         let _ = &app;
-        // Linux: zenity file selection (ISO); directory selection when
-        // the file dialog is cancelled.
-        let out = std::process::Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--title",
-                "Add Movie - select an ISO disc image",
-            ])
-            .output()
-            .map_err(|e| format!("Failed to open picker: {e}"))?;
-        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if out.status.success() && !path.is_empty() {
-            return Ok(Some(path));
-        }
         let out = std::process::Command::new("zenity")
             .args([
                 "--file-selection",
@@ -1676,11 +1711,29 @@ pub async fn select_disc_source(app: tauri::AppHandle) -> Result<Option<String>,
             .output()
             .map_err(|e| format!("Failed to open picker: {e}"))?;
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() && !path.is_empty() {
+            return Ok(Some(path));
+        }
+        let out = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title",
+                "Add Movie - select an ISO disc image",
+            ])
+            .output()
+            .map_err(|e| format!("Failed to open picker: {e}"))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok(if out.status.success() && !path.is_empty() {
             Some(path)
         } else {
             None
         })
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = &app;
+        Ok(None)
     }
 }
 

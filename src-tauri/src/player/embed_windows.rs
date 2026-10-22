@@ -12,10 +12,12 @@ use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, SetWindowPos, ShowWindow, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DISABLED, WS_EX_NOACTIVATE,
+    WS_EX_TRANSPARENT, WS_VISIBLE,
 };
 
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
@@ -58,10 +60,12 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     };
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_NOACTIVATE,
+            WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TRANSPARENT.0),
             w!("STATIC"),
             w!(""),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+            WINDOW_STYLE(
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0 | WS_DISABLED.0,
+            ),
             x,
             y,
             w,
@@ -76,6 +80,7 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     // Place BELOW the webview sibling so the transparent webview receives all
     // mouse clicks (play, pause, seek, volume, controls, popovers) and keyboard input first.
     unsafe {
+        let _ = EnableWindow(hwnd, false);
         let _ = SetWindowPos(
             hwnd,
             Some(HWND_BOTTOM),
@@ -210,6 +215,23 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
         let fs = win.is_fullscreen().unwrap_or(false);
         win.set_fullscreen(!fs)
             .map_err(|e| format!("fullscreen: {e}"))?;
+        let hwnd = app
+            .state::<crate::player::PlayerState>()
+            .overlay_view
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if hwnd != 0 {
+            unsafe {
+                let _ = SetWindowPos(
+                    HWND(hwnd as _),
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+                );
+            }
+        }
         let _ = win.set_focus();
         use tauri::Emitter;
         let _ = app.emit("player://fullscreen-changed", !fs);

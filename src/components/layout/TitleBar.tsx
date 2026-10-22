@@ -27,6 +27,8 @@ import {
   Maximize2,
   Wrench,
   ChevronDown,
+  Folder,
+  Disc,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -51,11 +53,15 @@ export const TitleBar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [showAppInfo, setShowAppInfo] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showAddMovieMenu, setShowAddMovieMenu] = useState(false);
   const [, setPlatform] = useState<'windows' | 'mac' | 'linux'>('windows');
 
   useEffect(() => {
     const handleOpenAbout = () => setShowAppInfo(true);
-    const handleClickOutside = () => setShowToolsMenu(false);
+    const handleClickOutside = () => {
+      setShowToolsMenu(false);
+      setShowAddMovieMenu(false);
+    };
     window.addEventListener('nebulae:open-about', handleOpenAbout);
     window.addEventListener('click', handleClickOutside);
     return () => {
@@ -225,18 +231,60 @@ export const TitleBar: React.FC = () => {
         <div className="flex items-center gap-2 flex-shrink-0">
           {/* Add Movie button (owner): prominent in top bar during Media mode */}
           {viewMode === 'media' && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                window.dispatchEvent(new CustomEvent('nebulae:add-movie'));
-              }}
-              className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
-              title="Add Movie / Disc — select release root folder or ISO image"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Movie</span>
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAddMovieMenu((prev) => !prev);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition shadow-sm"
+                title="Add Movie / Disc — select release root folder or ISO image"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Movie</span>
+                <ChevronDown className="w-3 h-3 ml-0.5 opacity-80" />
+              </button>
+              {showAddMovieMenu && (
+                <div
+                  className="absolute right-0 mt-1 w-52 rounded-md bg-[#1f1f1f] border border-[#333333] shadow-xl py-1 z-50 text-xs"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddMovieMenu(false);
+                      window.dispatchEvent(
+                        new CustomEvent('nebulae:add-movie', { detail: { kind: 'folder' } }),
+                      );
+                    }}
+                    className="w-full text-left px-3 py-2 text-white hover:bg-[#2a2a2a] flex items-center gap-2.5 transition"
+                  >
+                    <Folder className="w-4 h-4 text-[#e50914] shrink-0" />
+                    <div>
+                      <div className="font-medium">Movie Folder...</div>
+                      <div className="text-[10px] text-[#a3a3a3]">BDMV, VIDEO_TS, release root</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddMovieMenu(false);
+                      window.dispatchEvent(
+                        new CustomEvent('nebulae:add-movie', { detail: { kind: 'file' } }),
+                      );
+                    }}
+                    className="w-full text-left px-3 py-2 text-white hover:bg-[#2a2a2a] flex items-center gap-2.5 transition"
+                  >
+                    <Disc className="w-4 h-4 text-[#e50914] shrink-0" />
+                    <div>
+                      <div className="font-medium">Disc Image (.iso)...</div>
+                      <div className="text-[10px] text-[#a3a3a3]">Single DVD or Blu-ray ISO</div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Help (?) (owner): top bar, right before Settings — it carries

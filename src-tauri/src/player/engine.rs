@@ -654,6 +654,10 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
+            // Nebulae's UI overlay handles all mouse clicks and keyboard shortcuts:
+            // libVLC must never intercept mouse or keyboard events on the video window.
+            CString::new("--no-mouse-events").unwrap(),
+            CString::new("--no-keyboard-events").unwrap(),
             // VLC internal log is routed via the NEBULAE_VLC_LOG shim dylib
             // (libvlc_log_set C callback). The --file-logging / --logfile args
             // are VLC application flags and are silently ignored by libvlc_new.
