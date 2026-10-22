@@ -253,8 +253,12 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::
 }
 
 /// Dispatches menu actions to the active main webview window.
-pub fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEvent) {
+pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
+    if id == "quit" || id == "menu-quit" || id == "menu-exit" {
+        crate::commands::diagnostics::quit_app(app.clone());
+        return;
+    }
     if let Some(window) = app
         .get_webview_window("main")
         .or_else(|| app.webview_windows().into_values().next())

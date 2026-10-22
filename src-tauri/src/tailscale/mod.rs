@@ -736,6 +736,10 @@ pub fn shutdown_state(state: &Arc<TsState>) {
                 let _ = child.kill();
             }
         }
+        #[cfg(windows)]
+        {
+            let _ = child.kill();
+        }
         let _ = child.wait();
     } else {
         // Adopted-daemon teardown: same hard-kill semantics as the child

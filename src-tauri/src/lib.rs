@@ -6,6 +6,7 @@ pub mod engine;
 pub mod models;
 pub mod player;
 pub mod tailscale;
+pub mod taskbar_windows;
 pub mod thumbs;
 pub mod updater;
 pub mod utils;
@@ -22,6 +23,12 @@ use utils::paths::AppPaths;
 pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> = std::sync::OnceLock::new();
 
 pub fn run() {
+    taskbar_windows::init_taskbar_app_id();
+
+    if std::env::args().any(|a| a == "--quit" || a == "-q" || a == "--exit") {
+        std::process::exit(0);
+    }
+
     // Portable BD-J: point libbluray (inside the bundled VLC plugins) at the
     // JRE shipped in resources/jre BEFORE any player library is loaded.
     if let Ok(exe) = std::env::current_exe() {
@@ -335,6 +342,12 @@ pub fn run() {
         // instance. Registered FIRST per the plugin's requirement.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             use tauri::{Emitter, Manager};
+            for arg in argv.iter().skip(1) {
+                if arg == "--quit" || arg == "-q" || arg == "--exit" {
+                    crate::commands::diagnostics::quit_app(app.clone());
+                    return;
+                }
+            }
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
                 let _ = win.unminimize();
@@ -446,6 +459,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 let db_handle = db.clone();
                 updater::spawn_silent_background_updater(&handle, db_handle);
+                taskbar_windows::update_taskbar_jump_list();
             }
 
             let show_i =
@@ -500,15 +514,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        if let Some(player_state) = app.try_state::<crate::player::PlayerState>() {
-                            crate::commands::media::stop_session(app, &player_state);
-                        }
-                        let engine = app.state::<SharedEngine>();
-                        engine.shutdown();
-                        tailscale::shutdown();
-                        updater::apply_staged_update_if_present(app);
-                        app.exit(0);
-                        std::process::exit(0);
+                        crate::commands::diagnostics::quit_app(app.clone());
                     }
                     "show" => {
                         if let Some(window) = app
@@ -634,13 +640,7 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        if let Some(engine) = app.try_state::<SharedEngine>() {
-                            engine.shutdown();
-                        }
-                        tailscale::shutdown();
-                        updater::apply_staged_update_if_present(app);
-                        app.exit(0);
-                        std::process::exit(0);
+                        crate::commands::diagnostics::quit_app(app.clone());
                     }
                 }
             }
