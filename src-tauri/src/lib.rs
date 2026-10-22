@@ -25,10 +25,6 @@ pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> = std::sync::O
 pub fn run() {
     taskbar_windows::init_taskbar_app_id();
 
-    if std::env::args().any(|a| a == "--quit" || a == "-q" || a == "--exit") {
-        std::process::exit(0);
-    }
-
     // Portable BD-J: point libbluray (inside the bundled VLC plugins) at the
     // JRE shipped in resources/jre BEFORE any player library is loaded.
     if let Ok(exe) = std::env::current_exe() {
