@@ -39,10 +39,12 @@
  #endif /* include-guard */
 --- a/modules/video_output/opengl/fragment_shaders.c
 +++ b/modules/video_output/opengl/fragment_shaders.c
-@@ -95,6 +95,44 @@
-     return size > 0 ? size * mul : size;
- }
+@@ -93,6 +93,44 @@
  
+     tc->vt->DeleteTextures(1, &texture);
+     return size > 0 ? size * mul : size;
++}
++
 +void opengl_tex_converter_update_yuv_space(opengl_tex_converter_t *tc, video_color_space_t space)
 +{
 +    static const float matrix_bt601_tv2full[12] = {
@@ -79,11 +81,9 @@
 +        for (int j = 0; j < 4; j++)
 +            tc->yuv_coefficients[i*4+j] = j < 3 ? correction * matrix[j*4+i] : 0.f;
 +    }
-+}
-+
+ }
+ 
  static int
- tc_yuv_base_init(opengl_tex_converter_t *tc, GLenum tex_target,
-                  vlc_fourcc_t chroma, const vlc_chroma_description_t *desc,
 @@ -247,48 +285,12 @@
      else
          return VLC_EGENERIC;
@@ -162,7 +162,7 @@
      for (unsigned i = 0; i < tc->tex_count; ++i)
          tc->vt->Uniform1i(tc->uloc.Texture[i], i);
  
-@@ -706,6 +717,51 @@
+@@ -706,6 +717,63 @@
      if (is_yuv)
          ADD("uniform vec4 Coefficients[4];\n");
  
@@ -177,6 +177,15 @@
 +        " float den = max(18.8515625 - 18.6875 * em2, 1e-6);\n"
 +        " return clamp(pow(num / den, 6.2773946) * 10000.0, 0.0, 10000.0);\n"
 +        "}\n"
++        "float vlc_nits_to_pq_scalar(float nits) {\n"
++        " if (nits <= 0.0001) return 0.0;\n"
++        " if (nits >= 10000.0) return 1.0;\n"
++        " float y = nits / 10000.0;\n"
++        " float ym1 = pow(y, 0.1593017578125);\n"
++        " float num = 0.8359375 + 18.8515625 * ym1;\n"
++        " float den = 1.0 + 18.6875 * ym1;\n"
++        " return clamp(pow(num / den, 78.84375), 0.0, 1.0);\n"
++        "}\n"
 +        "vec3 vlc_pq_to_nits(vec3 e) {\n"
 +        " vec3 c = clamp(e, 0.0, 1.0);\n"
 +        " vec3 em2 = pow(max(c, 1e-5), vec3(0.0126833135));\n"
@@ -190,14 +199,17 @@
 +        " if (m <= 0.0) return vec3(0.0);\n"
 +        " vec3 linear_nits = vlc_pq_to_nits(bt2020_pq);\n"
 +        " float inNits = max(max(linear_nits.r, linear_nits.g), max(linear_nits.b, 1e-4));\n"
++        " const float gain = 1.40;\n"
++        " float gained_nits = inNits * gain;\n"
++        " float gained_m = vlc_nits_to_pq_scalar(gained_nits);\n"
 +        " const float eK = 0.479497;\n"
 +        " const float eD = 0.508078;\n"
 +        " const float delta = 0.028581;\n"
 +        " float out_pq;\n"
-+        " if (m <= eK) {\n"
-+        "     out_pq = m;\n"
++        " if (gained_m <= eK) {\n"
++        "     out_pq = gained_m;\n"
 +        " } else {\n"
-+        "     out_pq = eK + delta * (1.0 - exp(-(m - eK) / delta));\n"
++        "     out_pq = eK + delta * (1.0 - exp(-(gained_m - eK) / delta));\n"
 +        " }\n"
 +        " out_pq = clamp(out_pq, 0.0, eD);\n"
 +        " float mapped_nits = vlc_pq_to_nits_scalar(out_pq);\n"
@@ -214,7 +226,7 @@
      ADD("uniform vec4 FillColor;\n"
          "void main(void) {\n"
          " float val;vec4 colors;\n");
-@@ -774,6 +830,9 @@
+@@ -774,6 +842,9 @@
          assert(res->output == PL_SHADER_SIG_COLOR);
          ADDF(" result = %s(result);\n", res->name);
      }

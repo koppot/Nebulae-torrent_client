@@ -1,6 +1,6 @@
 {
-  "staged_at_utc": "2026-10-22T00:09:05Z",
-  "git_rev": "7381366",
+  "staged_at_utc": "2026-10-22T00:17:54Z",
+  "git_rev": "780609b",
   "vlc_version": "3.0.23",
   "sources": {
     "official_app": "/Applications/VLC.app",
@@ -65,7 +65,7 @@
     { "path": "vlc/plugins/libcache_read_plugin.dylib", "sha256": "4e7547ab161074a3007dfa5abcbbdc2233de99df6f42ee6ccb7c25c22ad4c62f", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcaf_plugin.dylib", "sha256": "1a318914e11e318f245016388c485bd9bf34392a06e34d5466c00cad878f1fb7", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcanvas_plugin.dylib", "sha256": "e6c1ee6e3d68ab61267428c7d094e0f82bf5ec90f667ed3ca41ec488fa06aeb0", "source": "official-vlc-app" },
-    { "path": "vlc/plugins/libcaopengllayer_plugin.dylib", "sha256": "f03c2e6e82431b335cc605cf17511af97d66139d2d372a466e57e897fd3b0978", "source": "custom-build" },
+    { "path": "vlc/plugins/libcaopengllayer_plugin.dylib", "sha256": "b03ce8089e9f19e06cd02de7c0222d9c5b709b980f5188cc12bdff7014513b6a", "source": "custom-build" },
     { "path": "vlc/plugins/libcc_plugin.dylib", "sha256": "9742d534c9e8d18275bea46994e1465ad8bd1afcd1d5e639b788e591ca5b3f52", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcdda_plugin.dylib", "sha256": "dd5553bd20486db3adac27d2ddba8d0c957592c037ac561f80912be9cc606fdc", "source": "official-vlc-app" },
     { "path": "vlc/plugins/libcdg_plugin.dylib", "sha256": "2c0dff67e2ab3083c7e5ed8405996f1ec59f22d2d88b9aba8cba708a6ac8978d", "source": "official-vlc-app" },

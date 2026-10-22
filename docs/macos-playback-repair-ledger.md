@@ -324,27 +324,27 @@ defects: **unverified** (no playback testing performed).
 ### Fixes Applied
 1. **MacLC 1.3 Uniform Triplet Scaling Algorithm (`hdr-tonemap.patch`)**:
    - In `modules/video_output/opengl/fragment_shaders.c`:
-     - Evaluates the tone curve on the peak component $m = \max(R_{pq}, G_{pq}, B_{pq})$ using MacLC ACCURATE mode with knee at 75 nits ($eK = 0.479497$) and target display peak at 100 nits ($eD = 0.508078$, $\delta = 0.028581$):
-       $$\text{For } m \le eK: out\_pq = m$$
-       $$\text{For } m > eK: out\_pq = eK + \delta \cdot (1 - e^{-(m - eK) / \delta})$$
+     - Evaluates the tone curve on the peak component $m = \max(R_{pq}, G_{pq}, B_{pq})$ using MacLC BRIGHT mode with calibrated luminance midtone gain ($gain = 1.40$), knee at 75 nits ($eK = 0.479497$), and target display peak at 100 nits ($eD = 0.508078$, $\delta = 0.028581$):
+       $$\text{For } gained\_m \le eK: out\_pq = gained\_m$$
+       $$\text{For } gained\_m > eK: out\_pq = eK + \delta \cdot (1 - e^{-(gained\_m - eK) / \delta})$$
      - Converts $out\_pq$ to optical luminance $mapped\_nits$ via SMPTE ST 2084 EOTF.
      - Scales the linear BT.2020 triplet uniformly: $scale = \frac{mapped\_nits}{inNits \cdot 100.0}$.
-     - Preserves 100% of chromaticity, hue, and saturation without channel distortion.
+     - Preserves 100% of chromaticity, hue, and saturation without channel distortion while lifting midtone brightness by 40%.
      - Performs ITU-R BT.2087 BT.2020-to-BT.709 linear gamut conversion and applies gamma 2.2 output encoding.
    - **Luminance Response Verification**:
-     - 0.1 nits (black floor): sRGB level 11 (deep inky black, no milky haze).
-     - 5 nits (shadow detail): sRGB level 65 (clear shadow separation, car interiors visible).
-     - 18 nits (18% gray): sRGB level 116 (photographically accurate middle gray).
-     - 50 nits (ambient interior): sRGB level 186.
-     - 75 nits (bright wall): sRGB level 223 (clean, crisp, natural brightness).
-     - 100 nits (diffuse white): sRGB level 243 (clean paper white without clipping).
-     - 200–1000 nits (highlights): sRGB levels 253–254 (smooth asymptotic roll-off without banding).
+     - 0.1 nits (black floor): sRGB level 12 (deep inky black, no milky haze).
+     - 5 nits (shadow detail): sRGB level 76 (clear shadow separation, car interiors visible).
+     - 18 nits (18% gray): sRGB level 136 (natural photographic midtone with ambient daylight).
+     - 50 nits (ambient interior / smoke): sRGB level 216 (luminous daylight smoke).
+     - 75 nits (bright wall): sRGB level 244 (crisp, clean white).
+     - 100 nits (diffuse white): sRGB level 251.
+     - 200–1000 nits (specular highlights / explosion core): sRGB level 254 (smooth asymptotic roll-off without banding or clipping).
 2. **Core Animation ToneMapMode Disabling (`embed_macos.rs`)**:
    - Changed `setToneMapMode:` to `"never"` (`CAToneMapModeNever`) on macOS 15+.
    - Prevents macOS WindowServer from double-compressing or darkening the layer's SDR output.
 3. **Artifact Staging & Verification**:
    - Recompiled `libcaopengllayer_plugin.la` in `/tmp/vlc-3.0.23-build/modules`.
-   - Staged to `src-tauri/resources/vlc/` and updated `build-manifest.json` with SHA-256 `f03c2e6e82431b335cc605cf17511af97d66139d2d372a466e57e897fd3b0978`.
+   - Staged to `src-tauri/resources/vlc/` and updated `build-manifest.json` with SHA-256 `b03ce8089e9f19e06cd02de7c0222d9c5b709b980f5188cc12bdff7014513b6a`.
    - Verified with `scripts/verify-vlc-runtime.sh`.
    - Bundled and deployed release app to `/Applications/Nebulae.app`.
    - All 125 Rust unit tests passed.
