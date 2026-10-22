@@ -1301,17 +1301,18 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             let mut width: std::ffi::c_uint = 0;
             let mut height: std::ffi::c_uint = 0;
             let res = unsafe { get_size(mp as *mut c_void, 0, &mut width, &mut height) };
-            if res == 0 && (width >= 3840 || height >= 2160) {
-                if !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst) {
-                    tracing::info!(
-                        "[player] UHD resolution detected: {width}x{height}, latching is_hdr=true"
-                    );
-                    state
-                        .is_hdr
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
-                        force_apply_edr(app);
-                    }
+            if res == 0
+                && (width >= 3840 || height >= 2160)
+                && !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::info!(
+                    "[player] UHD resolution detected: {width}x{height}, latching is_hdr=true"
+                );
+                state
+                    .is_hdr
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+                    force_apply_edr(app);
                 }
             }
         }

@@ -142,7 +142,7 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, _is_hdr: bool) {
 
     // 2. Modern dynamic range preference (macOS 14+)
     if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
-        layer.setPreferredDynamicRange(&CADynamicRangeStandard);
+        layer.setPreferredDynamicRange(CADynamicRangeStandard);
     }
 
     // 3. Headroom configuration (macOS 14+)
@@ -289,7 +289,7 @@ objc2::define_class!(
                 if let Some(win) = app.get_webview_window("main") {
                     if let Ok(raw) = win.ns_window() {
                         let ns_win = raw as *mut NSWindow;
-                        let _ = apply_edr_to_window(&*ns_win);
+                        apply_edr_to_window(&*ns_win);
                     }
                 }
                 // Re-apply EDR to the VLC-owned video layer on screen change
@@ -310,7 +310,7 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
         #[allow(deprecated)]
         layer.setWantsExtendedDynamicRangeContent(true);
         if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
-            layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+            layer.setPreferredDynamicRange(CADynamicRangeHigh);
         }
     }
 }

@@ -122,6 +122,9 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 ///
 /// Title indices are validated defensively: libvlc_media_player_get_title
 /// returns -1 while the demuxer is still starting.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
@@ -143,6 +146,9 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
 }
 
 /// Return true if the disc exposes at least one authored menu title.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
@@ -163,6 +169,9 @@ pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
 }
 
 /// Return true if the currently active title is First Play or a short intro clip (<= 300s).
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
@@ -326,10 +335,10 @@ impl VlcLib {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let dep = entry.path();
-                let is_dep = match dep.extension().and_then(|e| e.to_str()) {
-                    Some("dylib") | Some("so") | Some("dll") => true,
-                    _ => false,
-                };
+                let is_dep = matches!(
+                    dep.extension().and_then(|e| e.to_str()),
+                    Some("dylib") | Some("so") | Some("dll")
+                );
                 let is_libvlc = dep
                     .file_name()
                     .and_then(|n| n.to_str())
