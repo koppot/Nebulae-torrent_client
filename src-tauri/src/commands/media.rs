@@ -701,8 +701,8 @@ fn start_playback_inner(
                                     if let Some(navigate_menu) = lib_clone.libvlc_media_player_navigate_menu {
                                         navigate_menu(mp as *mut c_void);
                                     } else {
-                                        (lib_clone.libvlc_media_player_set_title)(mp as *mut c_void, 0);
-                                        (lib_clone.libvlc_media_player_navigate)(mp as *mut c_void, 0);
+                                        let menu_title = engine::find_menu_title(&lib_clone, mp).unwrap_or(0);
+                                        (lib_clone.libvlc_media_player_set_title)(mp as *mut c_void, menu_title);
                                     }
                                 }
                             };
@@ -1049,10 +1049,10 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
             navigate_menu(mp as *mut std::ffi::c_void);
         }
     } else {
-        tracing::info!("[player] return_to_menu: fallback to set_title(0) and activate");
+        tracing::info!("[player] return_to_menu: fallback to set_title(menu)");
+        let menu_title = unsafe { engine::find_menu_title(&lib, mp) }.unwrap_or(0);
         unsafe {
-            (lib.libvlc_media_player_set_title)(mp as *mut c_void, 0);
-            (lib.libvlc_media_player_navigate)(mp as *mut c_void, 0);
+            (lib.libvlc_media_player_set_title)(mp as *mut c_void, menu_title);
         }
     }
 

@@ -145,27 +145,35 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     is_menu
 }
 
-/// Return true if the disc exposes at least one authored menu title.
+/// Return the 0-based index of the first title marked with INPUT_TITLE_MENU, if any.
 ///
 /// # Safety
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
-pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
+pub unsafe fn find_menu_title(lib: &VlcLib, mp: usize) -> Option<i32> {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
     if n <= 0 || titles.is_null() {
-        return false;
+        return None;
     }
-    let mut found = false;
+    let mut found = None;
     for i in 0..n {
         let t = &**titles.add(i as usize);
         if (t.i_flags & INPUT_TITLE_MENU) != 0 {
-            found = true;
+            found = Some(i as i32);
             break;
         }
     }
     (lib.libvlc_title_descriptions_release)(titles, n);
     found
+}
+
+/// Return true if the disc exposes at least one authored menu title.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
+    find_menu_title(lib, mp).is_some()
 }
 
 /// Return true if the currently active title is First Play or a short intro clip (<= 300s).

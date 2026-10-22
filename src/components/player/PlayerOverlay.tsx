@@ -441,8 +441,6 @@ export default function PlayerOverlay() {
       return;
     }
     let alive = true;
-    const isWin = player.resolvedPath.includes('\\');
-    const sep = isWin ? '\\' : '/';
     const parts = player.resolvedPath.split(/[/\\]/).filter(Boolean);
     const tryDir = async (dir: string) => {
       const set = await invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dir });
@@ -478,9 +476,9 @@ export default function PlayerOverlay() {
       } catch {}
 
       // 2. Probe immediate parent only if not a library root
-      const parentDir = isWin
-        ? parts.slice(0, parts.length - 1).join(sep)
-        : '/' + parts.slice(0, parts.length - 1).join(sep);
+      const parentDir = /^[a-zA-Z]:/.test(player.resolvedPath)
+        ? parts.slice(0, parts.length - 1).join('\\')
+        : (player.resolvedPath.startsWith('/') ? '/' : '') + parts.slice(0, parts.length - 1).join('/');
       if (parentDir && !isLibraryDir(parentDir) && parts.length > 1) {
         try {
           if (await tryDir(parentDir)) return;
@@ -708,9 +706,12 @@ export default function PlayerOverlay() {
   // The current disc by number (owner: "Disc 1", never a filename). Matched
   // against the resolved playback target; resolve_playback may hand back the
   // disc FOLDER while play_target is the ISO inside it, so match either way.
-  const currentDisc = discChoices?.find(
-    (d) => d.path.startsWith(player.resolvedPath) || player.resolvedPath.startsWith(d.path),
-  );
+  const normPath = (p: string) => p.replace(/[\\/]+/g, '/').toLowerCase();
+  const currentDisc = discChoices?.find((d) => {
+    const dp = normPath(d.path);
+    const rp = normPath(player.resolvedPath);
+    return dp === rp || dp.startsWith(rp) || rp.startsWith(dp);
+  });
   const discLabel = player.isDisc ? currentDisc?.label || 'Disc 1' : player.title;
 
   const switchDisc = async (path: string) => {
@@ -915,8 +916,13 @@ export default function PlayerOverlay() {
             type="button"
             onClick={() => {
               if (discChoices && discChoices.length > 1) {
-                const idx = discChoices.findIndex((d) => d === currentDisc);
-                const next = discChoices[(idx + 1 + discChoices.length) % discChoices.length];
+                const rp = normPath(player.resolvedPath);
+                let idx = discChoices.findIndex((d) => {
+                  const dp = normPath(d.path);
+                  return dp === rp || dp.startsWith(rp) || rp.startsWith(dp);
+                });
+                if (idx < 0) idx = 0;
+                const next = discChoices[(idx + 1) % discChoices.length];
                 void switchDisc(next.path);
               }
             }}
