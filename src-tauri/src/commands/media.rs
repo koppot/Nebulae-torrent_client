@@ -433,7 +433,7 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     g.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     // Invalidate every background helper belonging to the outgoing session
     // BEFORE touching the player pointer.
     state
@@ -461,10 +461,9 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
                 media: *poison(&state.media),
                 media_player: mp,
             };
-            // The vout renders into our overlay view; hide it before the
-            // player goes away so no stale frame lingers.
-            let _ = player::set_overlay_hidden(app, true);
+            // Close the player first (detaching Direct3D/HWND on Windows) before hiding the overlay
             session.close(lib);
+            let _ = player::set_overlay_hidden(app, true);
         }
     }
     *poison(&state.instance) = 0;
@@ -596,17 +595,18 @@ fn start_playback_inner(
                         std::sync::atomic::Ordering::SeqCst,
                     );
 
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
                     {
                         state
                             .edr_applied
                             .store(false, std::sync::atomic::Ordering::SeqCst);
                         maybe_apply_edr(app);
 
-                        // EDR retry worker: VLC creates the video layer (VLCCAOpenGLLayer)
-                        // asynchronously ~100-300ms after play(). Poll at a tight 30ms cadence
-                        // for up to 3s so EDR and BT.2100 PQ colorspace are latched immediately
-                        // upon layer creation, preventing washed-out presentation.
+                        // EDR retry worker: the video layer is created asynchronously
+                        // after play() (CAOpenGLLayer on macOS, Direct3D HWND vout on
+                        // Windows). Poll at a tight 30ms cadence for up to 3s so EDR and
+                        // tone-mapping are latched immediately upon layer creation,
+                        // preventing washed-out presentation.
                         let app_edr = app.clone();
                         let edr_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         std::thread::spawn(move || {

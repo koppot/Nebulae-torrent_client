@@ -806,11 +806,15 @@ impl VlcSession {
         unsafe {
             if self.media_player != 0 {
                 (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
-                for _ in 0..20 {
+                for _ in 0..50 {
                     if (lib.libvlc_media_player_is_playing)(self.media_player as *mut c_void) == 0 {
                         break;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    (lib.libvlc_media_player_set_hwnd)(self.media_player as *mut c_void, std::ptr::null_mut());
                 }
                 (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
             }

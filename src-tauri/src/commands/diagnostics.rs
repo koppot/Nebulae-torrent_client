@@ -162,8 +162,17 @@ pub fn export_logs(paths: State<Arc<AppPaths>>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn quit_app(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(player_state) = app.try_state::<crate::player::PlayerState>() {
+        crate::commands::media::stop_session(&app, &player_state);
+    }
+    if let Some(engine) = app.try_state::<crate::SharedEngine>() {
+        engine.shutdown();
+    }
+    crate::tailscale::shutdown();
     crate::updater::apply_staged_update_if_present(&app);
     app.exit(0);
+    std::process::exit(0);
 }
 
 #[cfg(test)]

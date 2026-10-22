@@ -362,7 +362,7 @@ pub fn run() {
             use tauri::Manager;
             // Rounded app corners (owner, Movist-style): apply once at
             // startup — the old call only ran when the player attached.
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 let h: tauri::AppHandle = app.handle().clone();
                 let radius_handle = h.clone();
@@ -500,11 +500,15 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
+                        if let Some(player_state) = app.try_state::<crate::player::PlayerState>() {
+                            crate::commands::media::stop_session(app, &player_state);
+                        }
                         let engine = app.state::<SharedEngine>();
                         engine.shutdown();
                         tailscale::shutdown();
                         updater::apply_staged_update_if_present(app);
                         app.exit(0);
+                        std::process::exit(0);
                     }
                     "show" => {
                         if let Some(window) = app
@@ -621,17 +625,22 @@ pub fn run() {
                         true
                     };
 
+                    let app = window.app_handle();
+                    if let Some(player_state) = app.try_state::<crate::player::PlayerState>() {
+                        crate::commands::media::stop_session(app, &player_state);
+                    }
+
                     if should_close_to_tray {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        let app = window.app_handle();
                         if let Some(engine) = app.try_state::<SharedEngine>() {
                             engine.shutdown();
                         }
                         tailscale::shutdown();
                         updater::apply_staged_update_if_present(app);
                         app.exit(0);
+                        std::process::exit(0);
                     }
                 }
             }
@@ -806,6 +815,9 @@ pub fn run() {
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
             use tauri::Manager;
+            if let Some(player_state) = _app_handle.try_state::<crate::player::PlayerState>() {
+                crate::commands::media::stop_session(_app_handle, &player_state);
+            }
             if let Some(engine) = _app_handle.try_state::<SharedEngine>() {
                 engine.shutdown();
             }
@@ -846,4 +858,5 @@ pub fn run() {
         }
         _ => {}
     });
+    std::process::exit(0);
 }

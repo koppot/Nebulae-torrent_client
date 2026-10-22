@@ -14,12 +14,17 @@ use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, SetWindowPos, ShowWindow, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_KEYDOWN,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE, WNDPROC,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
 /// Set once by `overlay_app_init` during `ensure_overlay`.
@@ -202,6 +207,14 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
             SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
         );
     }
+    // Subclass the overlay HWND so native keyboard input (when the overlay
+    // has focus after a video click) is forwarded to the frontend as
+    // player-native-key events, matching macOS VideoOverlayView::keyDown.
+    unsafe {
+        let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+        let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
+        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as isize);
+    }
     let _ = win.set_focus();
     Ok(hwnd.0 as usize)
 }
@@ -272,13 +285,92 @@ pub fn sync_frame(
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
-/// Rounded corners are macOS-specific (owner, Movist style); no-op here.
-pub fn apply_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
+/// Apply rounded corners to the main window using DwmSetWindowAttribute
+/// (Windows 10 1809+). Best-effort: silently no-ops on older Windows.
+pub fn apply_window_corner_radius(app: &AppHandle, _radius: f64) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    let preference: u32 = DWMWCP_ROUND.0;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &preference as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
     Ok(())
 }
 
-pub fn set_window_corner_radius(_app: &AppHandle, _radius: f64) -> Result<(), String> {
-    Ok(())
+pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), String> {
+    // On Windows the corner preference is set once at startup; per-session
+    // radius changes (player vs media UI) are not applied to avoid
+    // flickering. The value is accepted for API compatibility.
+    let _ = radius;
+    apply_window_corner_radius(app, radius)
+}
+
+/// Stored original window procedure for the overlay HWND subclass.
+static OVERLAY_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
+
+/// Subclass the overlay window procedure to forward native keyboard input
+/// from the video overlay to the frontend as `player-native-key` events.
+///
+/// The overlay STATIC window sits below the webview in Z-order, so the
+/// webview receives keyboard input first. When the user clicks on the video
+/// area and the overlay gains focus, key events land on the overlay instead.
+/// We subclass to intercept WM_KEYDOWN and emit the key name so the
+/// frontend's onKey handler can act on it (mirrors embed_macos.rs
+/// VideoOverlayView::keyDown).
+unsafe extern "system" fn overlay_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_KEYDOWN {
+        let vk = wparam.0 as u32;
+        let key = windows_key_name(vk, lparam);
+        if let Some(app) = overlay_app_handle() {
+            if let Some(key) = key {
+                use tauri::Emitter;
+                let _ = app.emit("player-native-key", key);
+            }
+        }
+    }
+    if let Some(orig) = OVERLAY_WNDPROC.get() {
+        CallWindowProcW(*orig, hwnd, msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+/// Map a Windows virtual-key code to the frontend's key-name vocabulary.
+fn windows_key_name(vk: u32, lparam: LPARAM) -> Option<String> {
+    // Ignore modifier-only keys (Ctrl, Alt, Shift, Win) — the frontend
+    // handles modifier combinations itself.
+    match vk {
+        0x20 => return Some(" ".to_string()),      // VK_SPACE
+        0x0D => return Some("Enter".to_string()),  // VK_RETURN
+        0x1B => return Some("Escape".to_string()), // VK_ESCAPE
+        0x25 => return Some("ArrowLeft".to_string()), // VK_LEFT
+        0x26 => return Some("ArrowUp".to_string()),    // VK_UP
+        0x27 => return Some("ArrowRight".to_string()), // VK_RIGHT
+        0x28 => return Some("ArrowDown".to_string()),  // VK_DOWN
+        _ => {}
+    }
+    // For printable characters, translate the virtual key to a character.
+    let mut buf = [0u16; 8];
+    let scan = (lparam.0 >> 16) & 0xFF;
+    let extended = (lparam.0 >> 24) & 1 != 0;
+    let lparam_for_name = ((scan as i32) << 16) | if extended { 1 << 24 } else { 0 };
+    let len = unsafe { GetKeyNameTextW(lparam_for_name, &mut buf) };
+    if len > 0 {
+        let s = String::from_utf16_lossy(&buf[..len as usize]);
+        if !s.is_empty() && s.len() == 1 {
+            return Some(s);
+        }
+    }
+    None
 }
 
 /// Window drag: start the native caption-drag move loop ourselves.
