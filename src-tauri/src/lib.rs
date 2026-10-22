@@ -438,7 +438,7 @@ pub fn run() {
                 .center();
                 #[cfg(not(target_os = "macos"))]
                 {
-                    builder = builder.background_color(tauri::image::Color(20, 20, 25, 255));
+                    builder = builder.background_color(tauri::window::Color(20, 20, 25, 255));
                 }
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
