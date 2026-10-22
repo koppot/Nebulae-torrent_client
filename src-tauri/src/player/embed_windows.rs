@@ -15,12 +15,10 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, SetWindowPos, ShowWindow, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DISABLED, WS_EX_NOACTIVATE,
-    WS_EX_TRANSPARENT, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
@@ -176,12 +174,10 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     };
     let hwnd = unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TRANSPARENT.0),
+            WS_EX_NOACTIVATE,
             w!("STATIC"),
             w!(""),
-            WINDOW_STYLE(
-                WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0 | WS_DISABLED.0,
-            ),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             x,
             y,
             w,
@@ -196,7 +192,6 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     // Place BELOW the webview sibling so the transparent webview receives all
     // mouse clicks (play, pause, seek, volume, controls, popovers) and keyboard input first.
     unsafe {
-        let _ = EnableWindow(hwnd, false);
         let _ = SetWindowPos(
             hwnd,
             Some(HWND_BOTTOM),
