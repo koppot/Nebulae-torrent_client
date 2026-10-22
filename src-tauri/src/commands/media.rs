@@ -1,6 +1,8 @@
 use crate::player;
 #[cfg(target_os = "macos")]
-use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr};
+use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
+#[cfg(target_os = "windows")]
+use crate::player::embed_windows::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
@@ -474,7 +476,7 @@ fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     // overlay view and the window outlive the session, and re-registration
     // never happens (ensure_overlay reuses the view), so removing it disabled
     // screen-change EDR updates for every later session.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     state
         .edr_applied
         .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1292,10 +1294,10 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
         });
     }
     let lib = loaded_lib(&state)?;
-    // macOS: the EDR flag must reach the vout's CAOpenGLLayer, which is
+    // macOS/Windows: the EDR/HDR flag must reach the video layer, which is
     // created asynchronously after play(). Retry from this existing 1 Hz
     // poll until applied (latched per session); no timers or sleeps.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         if let Some(get_size) = lib.libvlc_video_get_size {
             let mut width: std::ffi::c_uint = 0;
@@ -1311,12 +1313,12 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
                 state
                     .is_hdr
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+                if let Some(app) = overlay_app_handle() {
                     force_apply_edr(app);
                 }
             }
         }
-        if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
+        if let Some(app) = overlay_app_handle() {
             maybe_apply_edr(app);
         }
     }

@@ -8,7 +8,10 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
+use std::ffi::c_void;
 use std::sync::mpsc;
+use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::HWND;
@@ -20,7 +23,120 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT, WS_VISIBLE,
 };
 
+/// Static AppHandle storage for cross-module use (EDR retry, etc.).
+/// Set once by `overlay_app_init` during `ensure_overlay`.
+static OVERLAY_APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// Returns the cached `AppHandle` if `ensure_overlay` has already run.
+pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
+    OVERLAY_APP.get()
+}
+
+/// Called from `ensure_overlay` to cache the `AppHandle` for later use
+/// by the HDR/EDR retry infrastructure.
+pub(crate) fn overlay_app_init(app: AppHandle) {
+    let _ = OVERLAY_APP.set(app);
+}
+
+/// Windows equivalent of macOS `apply_edr_to_video_layer`.
+///
+/// On Windows there is no Core Animation layer to tag with a colorspace.
+/// Instead we use libVLC's `var_SetChecked` to enforce the tone-mapping
+/// variables on the media player object, ensuring the Hable filmic curve
+/// is active for HDR/UHD content even if `set_hwnd` reset any
+/// player-object variables.
+pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> bool {
+    let state = match app.try_state::<crate::player::PlayerState>() {
+        Some(s) => s,
+        None => return false,
+    };
+    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
+    if mp == 0 {
+        return false;
+    }
+    let lib = match state.lib.lock() {
+        Ok(l) => l.clone(),
+        Err(_) => return false,
+    };
+    let Some(lib) = lib else {
+        return false;
+    };
+    let var_set_checked = lib.var_set_checked;
+
+    let mp_ptr = mp as *mut c_void;
+    let cstr = |s: &str| std::ffi::CString::new(s).ok();
+
+    if is_hdr {
+        // tone-mapping = 3 (Hable filmic), VLC_VAR_INTEGER = 2
+        if let Some(name) = cstr("tone-mapping") {
+            let _ = var_set_checked(mp_ptr, name.as_ptr(), 2, 3i64 as usize);
+        }
+        // tone-mapping-param = 1.0, VLC_VAR_FLOAT = 4
+        if let Some(name) = cstr("tone-mapping-param") {
+            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 1.0_f32.to_bits() as usize);
+        }
+        // tone-mapping-desat = 0.5, VLC_VAR_FLOAT = 4
+        if let Some(name) = cstr("tone-mapping-desat") {
+            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 0.5_f32.to_bits() as usize);
+        }
+    }
+    true
+}
+
+/// Poll-driven HDR retry for Windows. Ensures tone-mapping is applied to
+/// the media player when HDR content is playing. Latched per session via
+/// `edr_applied`; no timers or sleeps.
+pub(crate) fn maybe_apply_edr(app: &AppHandle) {
+    let state = match app.try_state::<crate::player::PlayerState>() {
+        Some(s) => s,
+        None => return,
+    };
+    if state.edr_applied.load(Ordering::SeqCst) {
+        return;
+    }
+    if !state.is_hdr.load(Ordering::SeqCst) {
+        return;
+    }
+    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
+    if mp == 0 {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if unsafe { apply_edr_to_video_layer(&app2, true) } {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+/// Force-apply HDR on Windows, resetting the latched state first.
+pub(crate) fn force_apply_edr(app: &AppHandle) {
+    let state = match app.try_state::<crate::player::PlayerState>() {
+        Some(s) => s,
+        None => return,
+    };
+    state.edr_applied.store(false, Ordering::SeqCst);
+    if !state.is_hdr.load(Ordering::SeqCst) {
+        return;
+    }
+    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
+    if mp == 0 {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if unsafe { apply_edr_to_video_layer(&app2, true) } {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
+    overlay_app_init(app.clone());
     let existing = app
         .state::<crate::player::PlayerState>()
         .overlay_view
@@ -317,5 +433,25 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
         Ok(IsZoomed(hwnd).as_bool())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlay_app_handle_returns_none_before_init() {
+        // OVERLAY_APP is a OnceLock; before overlay_app_init is called it must be empty.
+        assert!(overlay_app_handle().is_none());
+    }
+
+    #[test]
+    fn tone_mapping_bits_match_vlc_expectations() {
+        // VLC_VAR_INTEGER = 2, VLC_VAR_FLOAT = 4; tone-mapping values as shipped
+        // in the instance-level VLC args (--tone-mapping=3, -param=1.0, -desat=0.5).
+        assert_eq!(3i64 as usize, 3);
+        assert_eq!(1.0_f32.to_bits() as usize, 0x3F80_0000);
+        assert_eq!(0.5_f32.to_bits() as usize, 0x3F00_0000);
     }
 }

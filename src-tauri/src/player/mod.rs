@@ -41,7 +41,7 @@ pub use embed_linux::{
 pub(crate) mod embed_macos;
 
 #[cfg(target_os = "windows")]
-mod embed_windows;
+pub(crate) mod embed_windows;
 
 #[cfg(target_os = "linux")]
 mod embed_linux;
