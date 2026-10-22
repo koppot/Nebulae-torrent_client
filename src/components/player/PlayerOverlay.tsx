@@ -174,17 +174,20 @@ export default function PlayerOverlay() {
   volumeRef.current = volume;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const isMac = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('mac');
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
-    // The floating control bar must be excluded from the video overlay so
+    // The floating control bar must be excluded from the video overlay on Windows so
     // it stays visible and clickable over the video.
     let barHeight = 0;
-    const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
-    if (bar) barHeight = Math.max(0, window.innerHeight - bar.getBoundingClientRect().top);
+    if (controlsVisible) {
+      const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
+      if (bar) barHeight = Math.max(0, window.innerHeight - bar.getBoundingClientRect().top);
+    }
     invoke('player_sync_viewport', {
       x: r.left,
       y: r.top,
@@ -192,7 +195,7 @@ export default function PlayerOverlay() {
       height: r.height,
       barHeight,
     }).catch(() => {});
-  }, []);
+  }, [controlsVisible]);
 
   useEffect(() => {
     if (!player.open) return;
@@ -585,8 +588,11 @@ export default function PlayerOverlay() {
     };
     bump();
     window.addEventListener('mousemove', bump);
+    let unlistenMove: (() => void) | undefined;
+    listen('player://mouse-move', bump).then((u) => { unlistenMove = u; }).catch(() => {});
     return () => {
       window.removeEventListener('mousemove', bump);
+      unlistenMove?.();
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     };
   }, [player.open]);
@@ -896,7 +902,7 @@ export default function PlayerOverlay() {
         data-player-bar
         className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+        } ${!isMac ? 'bg-black/95' : ''}`}
         // Black glow so the bar stays readable over bright video (the bar
         // itself is background-less and floats over the native video).
         style={{
@@ -1320,45 +1326,42 @@ export default function PlayerOverlay() {
         </div>
       </div>
 
-      {/* Now playing (owner): current title and release year in the top-left corner, fading
-          with the controls. */}
+      {/* Top title and close bar */}
       <div
-        className={`absolute top-3 left-4 z-20 max-w-[60%] truncate text-sm text-white font-medium transition ${
+        className={`absolute inset-x-0 top-0 h-10 z-20 flex items-center justify-between px-4 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+        } ${!isMac ? 'bg-black/95' : ''}`}
         style={{
           filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
         }}
-        title={`${displayTitleInfo.title}${displayTitleInfo.year ? ` (${displayTitleInfo.year})` : ''}`}
       >
-        <span>{displayTitleInfo.title}</span>
-        {displayTitleInfo.year ? (
-          <span className="text-[#a3a3a3] font-normal"> ({displayTitleInfo.year})</span>
-        ) : null}
-      </div>
+        <div
+          className="max-w-[70%] truncate text-sm text-white font-medium"
+          title={`${displayTitleInfo.title}${displayTitleInfo.year ? ` (${displayTitleInfo.year})` : ''}`}
+        >
+          <span>{displayTitleInfo.title}</span>
+          {displayTitleInfo.year ? (
+            <span className="text-[#a3a3a3] font-normal"> ({displayTitleInfo.year})</span>
+          ) : null}
+        </div>
 
-      {/* Close (owner): white X, pinned to the top-right corner of the
-          player window, above the control bar's auto-hide. The native
-          traffic lights stay hidden (dead on this borderless window). */}
-      <button
-        type="button"
-        onClick={() => {
-          // Persist the final position no matter the throttle/pause state:
-          // quitting mid-feature must always leave a resume point.
-          const p = pollRef.current;
-          if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
-            savePositionMs(player.resolvedPath, p.time_ms);
-          }
-          void closePlayer();
-        }}
-        className={`absolute top-3 right-4 z-20 p-1.5 rounded-md text-white hover:bg-white/15 transition ${
-          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
-        title="Stop and close"
-      >
-        <X className="w-5 h-5" />
-      </button>
+        <button
+          type="button"
+          onClick={() => {
+            // Persist the final position no matter the throttle/pause state:
+            // quitting mid-feature must always leave a resume point.
+            const p = pollRef.current;
+            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+              savePositionMs(player.resolvedPath, p.time_ms);
+            }
+            void closePlayer();
+          }}
+          className="p-1.5 rounded-md text-white hover:bg-white/15 transition"
+          title="Stop and close"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
 
       {/* Playback Error Alert Modal */}
       {errorMessage && (

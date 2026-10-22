@@ -21,9 +21,10 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
+    SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_DISPLAYCHANGE,
-    WM_KEYDOWN, WNDPROC, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WNDPROC, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
@@ -201,12 +202,12 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
         )
     }
     .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
-    // Place BELOW the webview sibling so the transparent webview receives all
-    // mouse clicks (play, pause, seek, volume, controls, popovers) and keyboard input first.
+    // Raise above the webview sibling so Direct3D11 renders directly to the
+    // screen without being bypassed by DirectComposition transparency.
     unsafe {
         let _ = SetWindowPos(
             hwnd,
-            Some(HWND_BOTTOM),
+            Some(HWND_TOP),
             0,
             0,
             0,
@@ -214,9 +215,8 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
             SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
         );
     }
-    // Subclass the overlay HWND so native keyboard input (when the overlay
-    // has focus after a video click) is forwarded to the frontend as
-    // player-native-key events, matching macOS VideoOverlayView::keyDown.
+    // Subclass the overlay HWND so native keyboard and mouse input on the video
+    // surface are forwarded to the frontend, matching macOS VideoOverlayView.
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
@@ -245,7 +245,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         if !hidden {
             let _ = SetWindowPos(
                 HWND(hwnd as _),
-                Some(HWND_BOTTOM),
+                Some(HWND_TOP),
                 0,
                 0,
                 0,
@@ -266,7 +266,7 @@ pub fn sync_frame(
     y: f64,
     w: f64,
     h: f64,
-    _bar_height: f64,
+    bar_height: f64,
 ) -> Result<(), String> {
     let hwnd = app
         .state::<crate::player::PlayerState>()
@@ -281,14 +281,19 @@ pub fn sync_frame(
             .get_webview_window("main")
             .and_then(|w| w.scale_factor().ok())
             .unwrap_or(1.0);
+        // When controls are visible, leave 40px at the top (for title and close button)
+        // and bar_height at the bottom (for player control bar and popovers) exposed.
+        let top_bar = if bar_height > 0.0 { 40.0 } else { 0.0 };
+        let final_y = ((y + top_bar) * scale) as i32;
+        let final_h = (((h - top_bar - bar_height).max(0.0)) * scale) as i32;
         unsafe {
             let _ = SetWindowPos(
                 HWND(hwnd as _),
-                Some(HWND_BOTTOM),
+                Some(HWND_TOP),
                 (x * scale) as i32,
-                (y * scale) as i32,
+                final_y,
                 (w * scale) as i32,
-                (h * scale) as i32,
+                final_h,
                 SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
             );
         }
@@ -323,30 +328,81 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
 /// Stored original window procedure for the overlay HWND subclass.
 static OVERLAY_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
 
-/// Subclass the overlay window procedure to forward native keyboard input
-/// from the video overlay to the frontend as `player-native-key` events.
-///
-/// The overlay STATIC window sits below the webview in Z-order, so the
-/// webview receives keyboard input first. When the user clicks on the video
-/// area and the overlay gains focus, key events land on the overlay instead.
-/// We subclass to intercept WM_KEYDOWN and emit the key name so the
-/// frontend's onKey handler can act on it (mirrors embed_macos.rs
-/// VideoOverlayView::keyDown).
+/// Tracks mouse button down position for click vs drag disambiguation.
+static CLICK_DOWN_POS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Throttles mouse movement notifications sent to the frontend.
+static LAST_MOUSE_MOVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Subclass the overlay window procedure to forward native keyboard and mouse input
+/// from the video overlay to the frontend.
 unsafe extern "system" fn overlay_wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_KEYDOWN {
-        let vk = wparam.0 as u32;
-        let key = windows_key_name(vk, lparam);
-        if let Some(app) = overlay_app_handle() {
-            if let Some(key) = key {
-                use tauri::Emitter;
-                let _ = app.emit("player-native-key", key);
+    match msg {
+        WM_KEYDOWN => {
+            let vk = wparam.0 as u32;
+            let key = windows_key_name(vk, lparam);
+            if let Some(app) = overlay_app_handle() {
+                if let Some(key) = key {
+                    use tauri::Emitter;
+                    let _ = app.emit("player-native-key", key);
+                }
             }
         }
+        WM_MOUSEMOVE => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if now.saturating_sub(LAST_MOUSE_MOVE.load(Ordering::Relaxed)) > 150 {
+                LAST_MOUSE_MOVE.store(now, Ordering::Relaxed);
+                if let Some(app) = overlay_app_handle() {
+                    use tauri::Emitter;
+                    let _ = app.emit("player://mouse-move", true);
+                }
+            }
+            // If dragging with left mouse button held down, trigger native caption drag
+            let down_pos = CLICK_DOWN_POS.load(Ordering::Relaxed);
+            if down_pos != 0 {
+                let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
+                let dy = (((lparam.0 >> 16) as i16) as i32) - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
+                if dx.abs() > 6 || dy.abs() > 6 {
+                    CLICK_DOWN_POS.store(0, Ordering::Relaxed);
+                    if let Some(app) = overlay_app_handle() {
+                        let _ = begin_window_drag(app);
+                    }
+                }
+            }
+        }
+        WM_LBUTTONDBLCLK => {
+            CLICK_DOWN_POS.store(0, Ordering::Relaxed);
+            if let Some(app) = overlay_app_handle() {
+                use tauri::Emitter;
+                let _ = app.emit("player-native-key", "f");
+            }
+            return LRESULT(0);
+        }
+        WM_LBUTTONDOWN => {
+            CLICK_DOWN_POS.store(lparam.0 as u32, Ordering::SeqCst);
+        }
+        WM_LBUTTONUP => {
+            let down_pos = CLICK_DOWN_POS.swap(0, Ordering::SeqCst);
+            if down_pos != 0 {
+                let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
+                let dy = (((lparam.0 >> 16) as i16) as i32) - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
+                if dx.abs() <= 6 && dy.abs() <= 6 {
+                    // Single click on video -> toggle play/pause
+                    if let Some(app) = overlay_app_handle() {
+                        use tauri::Emitter;
+                        let _ = app.emit("player-native-key", " ");
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     if let Some(orig) = OVERLAY_WNDPROC.get() {
         CallWindowProcW(*orig, hwnd, msg, wparam, lparam)
@@ -494,7 +550,7 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
             unsafe {
                 let _ = SetWindowPos(
                     HWND(hwnd as _),
-                    Some(HWND_BOTTOM),
+                    Some(HWND_TOP),
                     0,
                     0,
                     0,
