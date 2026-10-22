@@ -1,5 +1,5 @@
---- a/modules/video_output/caopengllayer.m	2025-12-19 10:55:20
-+++ b/modules/video_output/caopengllayer.m	2026-10-21 19:32:16
+--- a/modules/video_output/caopengllayer.m
++++ b/modules/video_output/caopengllayer.m
 @@ -469,6 +469,13 @@
  
      if (vlc_gl_MakeCurrent(sys->gl) == VLC_SUCCESS)
@@ -14,8 +14,8 @@
          vout_display_opengl_Prepare(sys->vgl, pic, subpicture);
          vlc_gl_ReleaseCurrent(sys->gl);
  
---- a/modules/video_output/opengl/converter.h	2025-12-19 10:55:20
-+++ b/modules/video_output/opengl/converter.h	2026-10-21 19:03:38
+--- a/modules/video_output/opengl/converter.h
++++ b/modules/video_output/opengl/converter.h
 @@ -344,9 +344,13 @@
          GLint TexSize[PICTURE_PLANE_MAX]; /* for GL_TEXTURE_RECTANGLE */
          GLint Coefficients;
@@ -37,8 +37,8 @@
 +void opengl_tex_converter_update_yuv_space(opengl_tex_converter_t *tc, video_color_space_t space);
 +
  #endif /* include-guard */
---- a/modules/video_output/opengl/fragment_shaders.c	2025-12-19 10:55:20
-+++ b/modules/video_output/opengl/fragment_shaders.c	2026-10-21 19:45:39
+--- a/modules/video_output/opengl/fragment_shaders.c
++++ b/modules/video_output/opengl/fragment_shaders.c
 @@ -95,6 +95,44 @@
      return size > 0 ? size * mul : size;
  }
@@ -162,43 +162,59 @@
      for (unsigned i = 0; i < tc->tex_count; ++i)
          tc->vt->Uniform1i(tc->uloc.Texture[i], i);
  
-@@ -706,6 +717,35 @@
+@@ -706,6 +717,51 @@
      if (is_yuv)
          ADD("uniform vec4 Coefficients[4];\n");
  
 +#ifndef HAVE_LIBPLACEBO
 +    ADD("uniform float u_hdr_mode;\n"
++        "float vlc_pq_to_nits_scalar(float e) {\n"
++        " if (e <= 0.0001) return 0.0;\n"
++        " if (e >= 1.0) return 10000.0;\n"
++        " float em2 = pow(e, 0.0126833135);\n"
++        " float num = max(em2 - 0.8359375, 0.0);\n"
++        " if (num <= 0.0) return 0.0;\n"
++        " float den = max(18.8515625 - 18.6875 * em2, 1e-6);\n"
++        " return clamp(pow(num / den, 6.2773946) * 10000.0, 0.0, 10000.0);\n"
++        "}\n"
 +        "vec3 vlc_pq_to_nits(vec3 e) {\n"
 +        " vec3 c = clamp(e, 0.0, 1.0);\n"
-+        " vec3 em2 = pow(c, vec3(0.0126833135));\n"
++        " vec3 em2 = pow(max(c, 1e-5), vec3(0.0126833135));\n"
 +        " vec3 num = max(em2 - 0.8359375, 0.0);\n"
 +        " vec3 den = max(18.8515625 - 18.6875 * em2, 1e-6);\n"
-+        " return pow(num / den, vec3(6.2773946)) * 10000.0;\n"
-+        "}\n"
-+        "vec3 vlc_aces_tonemap(vec3 x) {\n"
-+        " const float a = 2.51;\n"
-+        " const float b = 0.03;\n"
-+        " const float c = 2.43;\n"
-+        " const float d = 0.59;\n"
-+        " const float e = 0.14;\n"
-+        " return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);\n"
++        " vec3 frac = num / den;\n"
++        " return mix(vec3(0.0), pow(max(frac, 1e-6), vec3(6.2773946)) * 10000.0, step(1e-5, num));\n"
 +        "}\n"
 +        "vec3 vlc_hdr_tonemap(vec3 bt2020_pq) {\n"
++        " float m = max(max(bt2020_pq.r, bt2020_pq.g), bt2020_pq.b);\n"
++        " if (m <= 0.0) return vec3(0.0);\n"
 +        " vec3 linear_nits = vlc_pq_to_nits(bt2020_pq);\n"
-+        " vec3 linear_scaled = linear_nits * 0.0055;\n"
++        " float inNits = max(max(linear_nits.r, linear_nits.g), max(linear_nits.b, 1e-4));\n"
++        " const float eK = 0.479497;\n"
++        " const float eD = 0.508078;\n"
++        " const float delta = 0.028581;\n"
++        " float out_pq;\n"
++        " if (m <= eK) {\n"
++        "     out_pq = m;\n"
++        " } else {\n"
++        "     out_pq = eK + delta * (1.0 - exp(-(m - eK) / delta));\n"
++        " }\n"
++        " out_pq = clamp(out_pq, 0.0, eD);\n"
++        " float mapped_nits = vlc_pq_to_nits_scalar(out_pq);\n"
++        " float scale = mapped_nits / (inNits * 100.0);\n"
++        " vec3 linear_sdr_2020 = linear_nits * scale;\n"
 +        " vec3 linear_709;\n"
-+        " linear_709.r =  1.6604910 * linear_scaled.r - 0.5876411 * linear_scaled.g - 0.0728499 * linear_scaled.b;\n"
-+        " linear_709.g = -0.1245505 * linear_scaled.r + 1.1328999 * linear_scaled.g - 0.0083494 * linear_scaled.b;\n"
-+        " linear_709.b = -0.0181508 * linear_scaled.r - 0.1005789 * linear_scaled.g + 1.1187297 * linear_scaled.b;\n"
-+        " vec3 mapped = vlc_aces_tonemap(max(linear_709, vec3(0.0)));\n"
-+        " return pow(mapped, vec3(1.0 / 2.2));\n"
++        " linear_709.r =  1.6604910 * linear_sdr_2020.r - 0.5876411 * linear_sdr_2020.g - 0.0728499 * linear_sdr_2020.b;\n"
++        " linear_709.g = -0.1245505 * linear_sdr_2020.r + 1.1328999 * linear_sdr_2020.g - 0.0083494 * linear_sdr_2020.b;\n"
++        " linear_709.b = -0.0181508 * linear_sdr_2020.r - 0.1005789 * linear_sdr_2020.g + 1.1187297 * linear_sdr_2020.b;\n"
++        " return pow(clamp(linear_709, 0.0, 1.0), vec3(1.0 / 2.2));\n"
 +        "}\n");
 +#endif
 +
      ADD("uniform vec4 FillColor;\n"
          "void main(void) {\n"
          " float val;vec4 colors;\n");
-@@ -774,6 +814,9 @@
+@@ -774,6 +830,9 @@
          assert(res->output == PL_SHADER_SIG_COLOR);
          ADDF(" result = %s(result);\n", res->name);
      }
@@ -208,8 +224,8 @@
  #endif
  
      ADD(" gl_FragColor = result * FillColor;\n"
---- a/modules/video_output/opengl/vout_helper.c	2025-12-19 10:55:20
-+++ b/modules/video_output/opengl/vout_helper.c	2026-10-21 19:45:52
+--- a/modules/video_output/opengl/vout_helper.c
++++ b/modules/video_output/opengl/vout_helper.c
 @@ -1167,6 +1167,24 @@
  
      opengl_tex_converter_t *tc = vgl->prgm->tc;

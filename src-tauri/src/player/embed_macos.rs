@@ -147,8 +147,10 @@ pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, _is_hdr: bool) {
     }
 
     // 4. Tone map mode (macOS 15+)
+    // Disable Core Animation automatic tone mapping so WindowServer does not
+    // double-tonemap or compress our shader-rendered SDR sRGB layer.
     if layer.respondsToSelector(sel!(setToneMapMode:)) {
-        let mode = objc2_foundation::NSString::from_str("automatic");
+        let mode = objc2_foundation::NSString::from_str("never");
         let _: () = objc2::msg_send![layer, setToneMapMode: &*mode];
     }
 
