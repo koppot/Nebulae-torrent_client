@@ -21,8 +21,8 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_KEYDOWN,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE, WNDPROC,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_DISPLAYCHANGE,
+    WM_KEYDOWN, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE, WNDPROC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 
@@ -162,6 +162,13 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     app.state::<crate::player::PlayerState>()
         .overlay_view
         .store(hwnd, std::sync::atomic::Ordering::SeqCst);
+
+    // Register the display-change handler so EDR/tone-mapping is re-applied
+    // when the window moves between displays with different HDR capabilities.
+    if let Err(e) = register_display_change_handler(app) {
+        tracing::warn!("register_display_change_handler: {e}");
+    }
+
     Ok(hwnd)
 }
 
@@ -213,7 +220,7 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
-        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as usize as isize);
+        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as usize as isize);
     }
     let _ = win.set_focus();
     Ok(hwnd.0 as usize)
@@ -342,6 +349,59 @@ unsafe extern "system" fn overlay_wndproc(
     } else {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
+}
+
+/// Stored original window procedure for the main window subclass.
+static MAIN_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
+
+/// Subclass the main window procedure to intercept `WM_DISPLAYCHANGE`
+/// and re-apply EDR/tone-mapping and window corner radius when the window
+/// moves between displays with different HDR capabilities.
+///
+/// Mirrors macOS `EDRScreenObserver` (NSWindowDidChangeScreenNotification).
+unsafe extern "system" fn main_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_DISPLAYCHANGE {
+        // Re-apply EDR/tone-mapping on screen change. If the window moved
+        // to an HDR-capable display, ensure tone-mapping vars are set.
+        if let Some(app) = overlay_app_handle() {
+            use tauri::Emitter;
+            // Reset the latch so the next player_poll / force_apply_edr
+            // re-applies tone-mapping for the new display.
+            if let Some(state) = app.try_state::<crate::player::PlayerState>() {
+                state
+                    .edr_applied
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                // Re-apply corner radius (DWM preference may need refreshing).
+                let _ = set_window_corner_radius(app, 10.0);
+            }
+            let _ = app.emit("player://screen-changed", true);
+        }
+    }
+    if let Some(orig) = MAIN_WNDPROC.get() {
+        CallWindowProcW(*orig, hwnd, msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+/// Register the display-change handler on the main window HWND.
+///
+/// Must be called once after the main window exists (from `ensure_overlay`).
+/// Subclasses the main window so `WM_DISPLAYCHANGE` is intercepted and
+/// EDR/tone-mapping is re-applied when the window moves between displays.
+fn register_display_change_handler(app: &AppHandle) -> Result<(), String> {
+    let hwnd = main_hwnd(app)?;
+    unsafe {
+        let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+        let _ = MAIN_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
+        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_wndproc as *const () as usize as isize);
+    }
+    Ok(())
 }
 
 /// Map a Windows virtual-key code to the frontend's key-name vocabulary.
