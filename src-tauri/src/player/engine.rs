@@ -223,7 +223,7 @@ unsafe impl Sync for VlcLib {}
 /// Percent-encode a filesystem path for use in an MRL: RFC 3986 unreserved
 /// characters and path separators stay literal, everything else is escaped
 /// (spaces as %20, parentheses, commas, etc. as %XX).
-fn encode_mrl_path(path: &str) -> String {
+pub fn encode_mrl_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len() + 8);
     for b in path.bytes() {
         match b {
@@ -237,6 +237,57 @@ fn encode_mrl_path(path: &str) -> String {
         }
     }
     out
+}
+
+/// Normalizes Windows filesystem paths into a libVLC disc MRL (e.g. bluray:///V:/... or dvd:///C:/...).
+/// On Windows, libVLC's disc demuxers (libbluray, dvdread) require:
+/// - Three leading slashes after scheme (`bluray:///`)
+/// - Forward slashes instead of backslashes
+/// - Literal drive letter (e.g. `V:`, not percent-encoded `%3A`)
+/// - Percent-encoded spaces and special characters (`%20`, etc.), preserving `/` and `:`.
+pub fn format_disc_mrl_windows(scheme: &str, path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    let chars: Vec<char> = normalized.chars().collect();
+    let mut out = String::with_capacity(normalized.len() + 16);
+    let mut i = 0;
+    // Preserve literal drive letter if present: e.g. "V:/" or "C:/"
+    if chars.len() >= 2 && chars[0].is_ascii_alphabetic() && chars[1] == ':' {
+        out.push(chars[0]);
+        out.push(':');
+        i = 2;
+        if i < chars.len() && chars[i] == '/' {
+            out.push('/');
+            i += 1;
+        }
+    }
+    for &c in &chars[i..] {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '/' | '-' | '.' | '_' | '~' => {
+                out.push(c);
+            }
+            other => {
+                let mut buf = [0u8; 4];
+                let encoded = other.encode_utf8(&mut buf);
+                for b in encoded.as_bytes() {
+                    use std::fmt::Write;
+                    let _ = write!(out, "%{:02X}", b);
+                }
+            }
+        }
+    }
+    format!("{scheme}:///{out}")
+}
+
+/// Format a disc filesystem path (folder or image) into a platform-correct libVLC disc MRL.
+pub fn format_disc_mrl(scheme: &str, path: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format_disc_mrl_windows(scheme, path)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!("{scheme}://{}", encode_mrl_path(path))
+    }
 }
 
 type VlcLogEmit = extern "C" fn(c_int, *const c_char);
@@ -734,7 +785,7 @@ impl VlcSession {
                 } else {
                     "dvd"
                 };
-                let mrl = format!("{scheme}://{}", encode_mrl_path(path));
+                let mrl = format_disc_mrl(scheme, path);
                 let c_mrl = CString::new(mrl).map_err(|_| "bad path".to_string())?;
                 (lib.libvlc_media_new_location)(instance, c_mrl.as_ptr())
             } else {
@@ -829,5 +880,39 @@ impl VlcSession {
             // races the next session's metadata parsing and aborts the
             // process. Keep it for the app's lifetime.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_disc_mrl_windows_drive_and_spaces() {
+        let mrl =
+            format_disc_mrl_windows("bluray", r"V:\Blu-ray\Fuuka (2017) Funimation\FUUKA_CS_D1");
+        assert_eq!(
+            mrl,
+            "bluray:///V:/Blu-ray/Fuuka%20%282017%29%20Funimation/FUUKA_CS_D1"
+        );
+    }
+
+    #[test]
+    fn test_format_disc_mrl_windows_dvd() {
+        let mrl = format_disc_mrl_windows(
+            "dvd",
+            r"C:\Users\administrator\Downloads\Banner of the Stars III OVA (2005) R2J\DISC1",
+        );
+        assert_eq!(
+            mrl,
+            "dvd:///C:/Users/administrator/Downloads/Banner%20of%20the%20Stars%20III%20OVA%20%282005%29%20R2J/DISC1"
+        );
+    }
+
+    #[test]
+    fn test_encode_mrl_path_unix() {
+        let path = "/Volumes/Media/Fuuka (2017)/FUUKA_CS_D1";
+        let encoded = encode_mrl_path(path);
+        assert_eq!(encoded, "/Volumes/Media/Fuuka%20%282017%29/FUUKA_CS_D1");
     }
 }

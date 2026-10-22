@@ -338,7 +338,7 @@ pub fn run() {
         // instance. Registered FIRST per the plugin's requirement.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             use tauri::{Emitter, Manager};
-            for arg in argv.iter().skip(1) {
+            for arg in &argv {
                 if arg == "--quit" || arg == "-q" || arg == "--exit" {
                     crate::commands::diagnostics::quit_app(app.clone());
                     return;
@@ -434,8 +434,12 @@ pub fn run() {
                 .inner_size(1280., 840.)
                 .min_inner_size(980., 640.)
                 .decorations(false)
-                .transparent(true)
+                .transparent(cfg!(target_os = "macos"))
                 .center();
+                #[cfg(not(target_os = "macos"))]
+                {
+                    builder = builder.background_color(tauri::image::Color(20, 20, 25, 255));
+                }
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
                         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",

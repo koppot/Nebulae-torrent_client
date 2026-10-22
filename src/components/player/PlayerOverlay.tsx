@@ -174,19 +174,19 @@ export default function PlayerOverlay() {
   volumeRef.current = volume;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
-  const isMac = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('mac');
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
-    // The floating control bar must be excluded from the video overlay on Windows so
-    // it stays visible and clickable over the video.
+    // The floating control bar cutout on Windows: keep height stable regardless of
+    // controlsVisible to prevent video jumping/resizing when controls auto-hide.
     let barHeight = 0;
-    if (controlsVisible) {
-      const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
-      if (bar) barHeight = Math.max(0, window.innerHeight - bar.getBoundingClientRect().top);
+    const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
+    if (bar) {
+      const barRect = bar.getBoundingClientRect();
+      barHeight = Math.max(0, window.innerHeight - barRect.top);
     }
     invoke('player_sync_viewport', {
       x: r.left,
@@ -195,7 +195,7 @@ export default function PlayerOverlay() {
       height: r.height,
       barHeight,
     }).catch(() => {});
-  }, [controlsVisible]);
+  }, []);
 
   useEffect(() => {
     if (!player.open) return;
@@ -304,6 +304,7 @@ export default function PlayerOverlay() {
           // 30s back (owner).
           invoke('player_seek', { positionMs: Math.max(t - 30000, 0) }).catch(() => {});
           break;
+        case 'Escape':
         case 'q':
         case 'Q':
           // Close (owner): persist the resume point, then close.
@@ -902,7 +903,7 @@ export default function PlayerOverlay() {
         data-player-bar
         className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        } ${!isMac ? 'bg-black/95' : ''}`}
+        }`}
         // Black glow so the bar stays readable over bright video (the bar
         // itself is background-less and floats over the native video).
         style={{
@@ -1330,7 +1331,7 @@ export default function PlayerOverlay() {
       <div
         className={`absolute inset-x-0 top-0 h-10 z-20 flex items-center justify-between px-4 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        } ${!isMac ? 'bg-black/95' : ''}`}
+        }`}
         style={{
           filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
         }}

@@ -281,11 +281,10 @@ pub fn sync_frame(
             .get_webview_window("main")
             .and_then(|w| w.scale_factor().ok())
             .unwrap_or(1.0);
-        // When controls are visible, leave 40px at the top (for title and close button)
-        // and bar_height at the bottom (for player control bar and popovers) exposed.
-        let top_bar = if bar_height > 0.0 { 40.0 } else { 0.0 };
-        let final_y = ((y + top_bar) * scale) as i32;
-        let final_h = (((h - top_bar - bar_height).max(0.0)) * scale) as i32;
+        // Video overlay begins at the top of the container (y=0) without a top-bar offset,
+        // and reserves bar_height at the bottom so the control bar stays accessible.
+        let final_y = (y * scale) as i32;
+        let final_h = (((h - bar_height).max(0.0)) * scale) as i32;
         unsafe {
             let _ = SetWindowPos(
                 HWND(hwnd as _),
@@ -368,7 +367,8 @@ unsafe extern "system" fn overlay_wndproc(
             let down_pos = CLICK_DOWN_POS.load(Ordering::Relaxed);
             if down_pos != 0 {
                 let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
-                let dy = (((lparam.0 >> 16) as i16) as i32) - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
+                let dy = (((lparam.0 >> 16) as i16) as i32)
+                    - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
                 if dx.abs() > 6 || dy.abs() > 6 {
                     CLICK_DOWN_POS.store(0, Ordering::Relaxed);
                     if let Some(app) = overlay_app_handle() {
@@ -392,7 +392,8 @@ unsafe extern "system" fn overlay_wndproc(
             let down_pos = CLICK_DOWN_POS.swap(0, Ordering::SeqCst);
             if down_pos != 0 {
                 let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
-                let dy = (((lparam.0 >> 16) as i16) as i32) - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
+                let dy = (((lparam.0 >> 16) as i16) as i32)
+                    - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
                 if dx.abs() <= 6 && dy.abs() <= 6 {
                     // Single click on video -> toggle play/pause
                     if let Some(app) = overlay_app_handle() {

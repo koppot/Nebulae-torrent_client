@@ -4,25 +4,25 @@
 // provides a direct option to quit or restore the application.
 
 #[cfg(target_os = "windows")]
-use windows::core::{Interface, w, GUID, PCWSTR};
+use windows::core::{w, Interface, GUID, PCWSTR};
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::PROPERTYKEY;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
 #[cfg(target_os = "windows")]
-use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
-#[cfg(target_os = "windows")]
 use windows::Win32::System::Variant::VARENUM;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::PROPERTYKEY;
-#[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::{
-    DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW,
-    SetCurrentProcessExplicitAppUserModelID, ShellLink, SHStrDupW,
+    DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, SHStrDupW,
+    SetCurrentProcessExplicitAppUserModelID, ShellLink,
 };
 
 #[cfg(target_os = "windows")]
@@ -54,7 +54,9 @@ pub fn update_taskbar_jump_list() {
             if let Err(e) = populate_jump_list_inner() {
                 tracing::warn!("[taskbar] failed to update Jump List: {e}");
             } else {
-                tracing::info!("[taskbar] Windows Taskbar Jump List successfully updated with Quit option");
+                tracing::info!(
+                    "[taskbar] Windows Taskbar Jump List successfully updated with Quit option"
+                );
             }
         });
     }
@@ -64,7 +66,10 @@ pub fn update_taskbar_jump_list() {
 fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
     let current_exe = std::env::current_exe()?;
     let exe_path_str = current_exe.to_string_lossy().to_string();
-    let exe_wide: Vec<u16> = exe_path_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let exe_wide: Vec<u16> = exe_path_str
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let exe_pcwstr = PCWSTR::from_raw(exe_wide.as_ptr());
 
     unsafe {
@@ -82,8 +87,7 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
 
         // 1. Task: "Quit Nebulae" (runs current_exe --quit)
         {
-            let quit_link: IShellLinkW =
-                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let quit_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             quit_link.SetPath(exe_pcwstr)?;
             quit_link.SetArguments(w!("--quit"))?;
             quit_link.SetIconLocation(exe_pcwstr, 0)?;
@@ -103,8 +107,7 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
 
         // 2. Task: "Open Nebulae" (runs current_exe without arguments, focusing the main window)
         {
-            let open_link: IShellLinkW =
-                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let open_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             open_link.SetPath(exe_pcwstr)?;
             open_link.SetArguments(w!(""))?;
             open_link.SetIconLocation(exe_pcwstr, 0)?;
