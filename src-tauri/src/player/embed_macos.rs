@@ -22,7 +22,7 @@
 
 use objc2::rc::Retained;
 use objc2::{class, sel, MainThreadOnly};
-use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
 use objc2_quartz_core::{CALayer, CADynamicRangeHigh, CADynamicRangeStandard};
 use std::sync::atomic::Ordering;
@@ -66,13 +66,14 @@ objc2::define_class!(
 
         #[unsafe(method(keyDown:))]
         unsafe fn key_down(this: &VideoOverlayView, event: &NSEvent) {
-            let _ = this;
             if let Some(app) = overlay_app() {
                 if let Some(key) = native_key_name(event) {
                     use tauri::Emitter;
                     let _ = app.emit("player-native-key", key);
+                    return;
                 }
             }
+            let _: () = objc2::msg_send![super(this), keyDown: event];
         }
 
         #[unsafe(method(acceptsFirstResponder))]
@@ -312,11 +313,23 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
 
 /// Translate a native key event into the frontend's key-name vocabulary.
 fn native_key_name(event: &NSEvent) -> Option<String> {
+    let flags = event.modifierFlags();
+    if flags.intersects(
+        NSEventModifierFlags::Command
+            | NSEventModifierFlags::Control
+            | NSEventModifierFlags::Option,
+    ) {
+        return None;
+    }
     let chars = event.charactersIgnoringModifiers()?.to_string();
     match chars.as_str() {
         " " => Some(" ".to_string()),
         "\r" => Some("Enter".to_string()),
         "\x1b" => Some("Escape".to_string()),
+        "\u{f700}" => Some("ArrowUp".to_string()),
+        "\u{f701}" => Some("ArrowDown".to_string()),
+        "\u{f702}" => Some("ArrowLeft".to_string()),
+        "\u{f703}" => Some("ArrowRight".to_string()),
         other => Some(other.to_string()),
     }
 }
