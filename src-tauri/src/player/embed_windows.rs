@@ -213,7 +213,7 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
-        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as isize);
+        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as usize as isize);
     }
     let _ = win.set_focus();
     Ok(hwnd.0 as usize)
@@ -286,11 +286,11 @@ pub fn sync_frame(
 }
 
 /// Apply rounded corners to the main window using DwmSetWindowAttribute
-/// (Windows 10 1809+). Best-effort: silently no-ops on older Windows.
-pub fn apply_window_corner_radius(app: &AppHandle, _radius: f64) -> Result<(), String> {
-    let hwnd = main_hwnd(app)?;
-    let preference: u32 = DWMWCP_ROUND.0;
-    unsafe {
+/// (Windows 10 1809+). Best-effort: silently no-ops on older Windows
+/// or if the main HWND is not yet available.
+pub unsafe fn apply_window_corner_radius(app: &AppHandle, _radius: f64) {
+    if let Ok(hwnd) = main_hwnd(app) {
+        let preference: u32 = DWMWCP_ROUND.0 as u32;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -298,7 +298,6 @@ pub fn apply_window_corner_radius(app: &AppHandle, _radius: f64) -> Result<(), S
             std::mem::size_of::<u32>() as u32,
         );
     }
-    Ok(())
 }
 
 pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), String> {
@@ -306,7 +305,8 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     // radius changes (player vs media UI) are not applied to avoid
     // flickering. The value is accepted for API compatibility.
     let _ = radius;
-    apply_window_corner_radius(app, radius)
+    unsafe { apply_window_corner_radius(app, radius) };
+    Ok(())
 }
 
 /// Stored original window procedure for the overlay HWND subclass.
@@ -510,7 +510,7 @@ pub fn window_close_native(app: &AppHandle) -> Result<(), String> {
     unsafe {
         use windows::Win32::Foundation::{LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
-        PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
     }
     Ok(())
 }
