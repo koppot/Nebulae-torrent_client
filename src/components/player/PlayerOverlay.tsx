@@ -180,13 +180,20 @@ export default function PlayerOverlay() {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
-    // The floating control bar cutout on Windows: keep height stable regardless of
-    // controlsVisible to prevent video jumping/resizing when controls auto-hide.
     let barHeight = 0;
-    const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
-    if (bar) {
-      const barRect = bar.getBoundingClientRect();
-      barHeight = Math.max(0, window.innerHeight - barRect.top);
+    if (controlsVisible) {
+      const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
+      if (bar) {
+        let minTop = bar.getBoundingClientRect().top;
+        const popovers = document.querySelectorAll('[data-player-bar] .absolute, [data-player-popover]');
+        popovers.forEach((p) => {
+          const pr = p.getBoundingClientRect();
+          if (pr.height > 0 && pr.top < minTop) {
+            minTop = pr.top;
+          }
+        });
+        barHeight = Math.max(0, window.innerHeight - minTop);
+      }
     }
     invoke('player_sync_viewport', {
       x: r.left,
@@ -195,7 +202,7 @@ export default function PlayerOverlay() {
       height: r.height,
       barHeight,
     }).catch(() => {});
-  }, []);
+  }, [controlsVisible]);
 
   useEffect(() => {
     if (!player.open) return;
@@ -693,13 +700,13 @@ export default function PlayerOverlay() {
     let clean = (authoredTitle || player.title || '').trim();
     let year = player.year ? String(player.year) : null;
     if (!year) {
-      const match = clean.match(/\s*\((\d{4})\)$/);
+      const match = clean.match(/[\(\[](\d{4})[\)\]]/);
       if (match) {
         year = match[1];
-        clean = clean.replace(/\s*\(\d{4}\)$/, '').trim();
+        clean = clean.replace(/\s*[\(\[]\d{4}[\)\]]/, '').trim();
       }
     } else {
-      clean = clean.replace(new RegExp(`\\s*\\(${year}\\)$`), '').trim();
+      clean = clean.replace(new RegExp(`\\s*[\\(\\[]${year}[\\)\\]]`), '').trim();
     }
     return { title: clean || player.title, year };
   }, [player.title, player.year, authoredTitle]);
@@ -720,8 +727,8 @@ export default function PlayerOverlay() {
   const switchDisc = async (path: string) => {
     console.log('[player] switchDisc click:', path);
     try {
-      // Keep the feature label when cycling discs of the same release.
-      await openInPlayer(path, { displayTitle: player.title });
+      // Keep the feature label and year when cycling discs of the same release.
+      await openInPlayer(path, { displayTitle: player.title, year: player.year });
     } catch (err) {
       console.error('[player] switchDisc failed:', err);
     }

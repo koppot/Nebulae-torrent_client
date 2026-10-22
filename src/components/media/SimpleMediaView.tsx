@@ -621,10 +621,12 @@ export const SimpleMediaView: React.FC = () => {
   const importExternal = async (p: string) => {
     const known = titleFromName(p);
     if (known) {
-      const ym = known.match(/[\(\[](\d{4})[\)\]]/);
-      const year = ym ? ym[1] : undefined;
-      await openInPlayer(p, { displayTitle: known, year });
-      void refreshExternalMedia();
+      try {
+        await invoke('add_external_media', { path: p, title: known });
+        await refreshExternalMedia();
+      } catch (err: unknown) {
+        setExternalDiscError(errorMessage(err, 'Could not add external media.'));
+      }
     } else {
       const name = p.split(/[/\\]/).filter(Boolean).pop() || '';
       const guess = name.replace(/[._]/g, ' ').replace(/\.[^.]+$/, '').trim();
@@ -834,7 +836,7 @@ export const SimpleMediaView: React.FC = () => {
                 {(() => {
                   const onPrimary = () => {
                     if (resumePath) savePositionMs(resumePath, 0);
-                    handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id));
+                    handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
                   };
                   return (
                     <button
@@ -939,13 +941,11 @@ export const SimpleMediaView: React.FC = () => {
                 const { path } = externalTitlePrompt;
                 setExternalTitlePrompt(null);
                 setExternalTitleInput('');
-                const ym = title.match(/[\(\[](\d{4})[\)\]]/);
-                const year = ym ? ym[1] : undefined;
                 try {
-                  await openInPlayer(path, { displayTitle: title || undefined, year });
-                  void refreshExternalMedia();
+                  await invoke('add_external_media', { path, title });
+                  await refreshExternalMedia();
                 } catch (err) {
-                  setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                  setExternalDiscError(errorMessage(err, 'Could not add external media.'));
                 }
               }}
             />
@@ -962,18 +962,16 @@ export const SimpleMediaView: React.FC = () => {
                   const { path } = externalTitlePrompt;
                   setExternalTitlePrompt(null);
                   setExternalTitleInput('');
-                  const ym = title.match(/[\(\[](\d{4})[\)\]]/);
-                  const year = ym ? ym[1] : undefined;
                   try {
-                    await openInPlayer(path, { displayTitle: title || undefined, year });
-                    void refreshExternalMedia();
+                    await invoke('add_external_media', { path, title });
+                    await refreshExternalMedia();
                   } catch (err) {
-                    setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                    setExternalDiscError(errorMessage(err, 'Could not add external media.'));
                   }
                 }}
                 className="px-3 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#e50914]/90 text-xs font-semibold text-white transition"
               >
-                Play
+                Add
               </button>
             </div>
           </div>

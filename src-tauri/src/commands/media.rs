@@ -2276,6 +2276,28 @@ mod tests {
     }
 
     #[test]
+    fn test_release_root_of_single_and_multi_disc() {
+        assert_eq!(
+            release_root_of(r"V:\UHD\Suzume (2022) UHD"),
+            r"V:\UHD\Suzume (2022) UHD"
+        );
+        assert_eq!(
+            release_root_of(r"V:\UHD\Suzume (2022) UHD\BDMV"),
+            r"V:\UHD\Suzume (2022) UHD"
+        );
+        assert_eq!(
+            release_root_of(r"V:\Blu-ray\Fuuka (2017) Funimation\FUUKA_CS_D1"),
+            r"V:\Blu-ray\Fuuka (2017) Funimation"
+        );
+        assert_eq!(
+            release_root_of(
+                r"C:\Users\administrator\Downloads\Banner of the Stars III OVA (2005) R2J\DISC1"
+            ),
+            r"C:\Users\administrator\Downloads\Banner of the Stars III OVA (2005) R2J"
+        );
+    }
+
+    #[test]
     fn test_resolve_disc_target_deep_iso_beats_episodes() {
         let base = std::env::temp_dir().join(format!("neb-disc-{}", std::process::id()));
         let nested = base.join("Season 1").join("Discs");
@@ -2470,27 +2492,74 @@ fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Resu
 /// (direct BDMV/VIDEO_TS child, or an ISO file) is replaced by its
 /// parent until the directory no longer IS a disc.
 fn release_root_of(path: &str) -> String {
-    fn is_disc_dir(dir: &std::path::Path) -> bool {
-        if dir.file_name().map(|n| {
-            let n = n.to_string_lossy().to_lowercase();
-            n.ends_with(".iso") || n.ends_with(".img")
-        }) == Some(true)
-        {
+    let is_windows_style = path.contains('\\');
+    let sep = if is_windows_style { '\\' } else { '/' };
+    let mut parts: Vec<&str> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    let has_drive = parts.first().map(|p| p.ends_with(':')).unwrap_or(false);
+    let is_absolute_unix = path.starts_with('/');
+
+    fn is_library_dir_name(name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        matches!(
+            lower.as_str(),
+            "blu-ray"
+                | "bluray"
+                | "dvd"
+                | "movies"
+                | "films"
+                | "media"
+                | "cinema"
+                | "downloads"
+                | "torrents"
+                | "uhd"
+                | "4k"
+                | "anime"
+                | "video"
+                | "videos"
+        )
+    }
+
+    fn is_disc_subfolder_name(name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        if lower == "bdmv" || lower == "video_ts" || lower == "certificate" || lower == "audio_ts" {
             return true;
         }
-        dir.join("BDMV").exists() || dir.join("VIDEO_TS").exists()
+        let (disc_num, _) = DiscDetector::parse_disc_numbers(&lower);
+        disc_num.is_some()
     }
-    let mut cur = std::path::PathBuf::from(path);
-    if cur.is_file() {
-        cur = cur.parent().map(|p| p.to_path_buf()).unwrap_or(cur);
-    }
-    while is_disc_dir(&cur) {
-        match cur.parent() {
-            Some(p) => cur = p.to_path_buf(),
-            None => break,
+
+    while parts.len() > 1 {
+        let last = *parts.last().unwrap();
+        // If last segment is a file (e.g. .mkv, .iso, .bdmv), pop it
+        if last.contains('.') && !last.ends_with(".disc") {
+            parts.pop();
+            continue;
+        }
+        if is_disc_subfolder_name(last) {
+            if parts.len() == 2 && has_drive {
+                break;
+            }
+            if parts.len() >= 2 && is_library_dir_name(parts[parts.len() - 2]) {
+                break;
+            }
+            parts.pop();
+        } else {
+            break;
         }
     }
-    cur.to_string_lossy().to_string()
+
+    if has_drive {
+        let drive = parts[0];
+        if parts.len() == 1 {
+            format!("{drive}{sep}")
+        } else {
+            format!("{drive}{sep}{}", parts[1..].join(&sep.to_string()))
+        }
+    } else if is_absolute_unix {
+        format!("/{}", parts.join("/"))
+    } else {
+        parts.join(&sep.to_string())
+    }
 }
 
 #[tauri::command]

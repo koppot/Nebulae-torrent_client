@@ -281,10 +281,12 @@ pub fn sync_frame(
             .get_webview_window("main")
             .and_then(|w| w.scale_factor().ok())
             .unwrap_or(1.0);
-        // Video overlay begins at the top of the container (y=0) without a top-bar offset,
-        // and reserves bar_height at the bottom so the control bar stays accessible.
-        let final_y = (y * scale) as i32;
-        let final_h = (((h - bar_height).max(0.0)) * scale) as i32;
+        // When controls are visible (bar_height > 0), expose 40px at the top
+        // for the title and Close 'X' button, and bar_height at the bottom for controls.
+        // When controls are auto-hidden (bar_height == 0), video fills the full viewport.
+        let top_bar = if bar_height > 0.0 { 40.0 } else { 0.0 };
+        let final_y = ((y + top_bar) * scale) as i32;
+        let final_h = (((h - top_bar - bar_height).max(0.0)) * scale) as i32;
         unsafe {
             let _ = SetWindowPos(
                 HWND(hwnd as _),

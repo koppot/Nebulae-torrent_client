@@ -278,6 +278,15 @@ impl DiscDetector {
         if path.is_file() {
             return Self::inspect(path).into_iter().collect();
         }
+        // Direct disc check: If path contains BDMV or VIDEO_TS directly, it IS a single disc!
+        // Immediately inspect and return it without crawling children or hitting library root checks.
+        if Self::find_subpath(path, "BDMV").is_some()
+            || Self::find_subpath(path, "VIDEO_TS").is_some()
+        {
+            if let Some(info) = Self::inspect(path) {
+                return vec![info];
+            }
+        }
         let mut discs: Vec<DiscStructureInfo> = Vec::new();
         if let Ok(entries) = fs::read_dir(path) {
             let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
@@ -494,7 +503,7 @@ impl DiscDetector {
         let lower = title.to_lowercase();
 
         // Pattern: "disc X" or "cd X" or "bd X" or "dvd X"
-        let markers = ["disc", "disk", "bd", "dvd", "vol", "volume", "part"];
+        let markers = ["disc", "disk", "bd", "dvd", "cd", "vol", "volume", "part"];
         for marker in &markers {
             if let Some(idx) = lower.find(marker) {
                 let remainder = &lower[idx + marker.len()..].trim_start();
@@ -511,6 +520,30 @@ impl DiscDetector {
                     if num > 0 && num <= 99 {
                         return (Some(num), None);
                     }
+                }
+            }
+        }
+
+        // Pattern: "_d1", "-d1", " d1", or standalone "d1"
+        for prefix in ["_d", "-d", " d", ".d"] {
+            if let Some(idx) = lower.find(prefix) {
+                let remainder = &lower[idx + prefix.len()..];
+                let digits: String = remainder
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(num) = digits.parse::<u32>() {
+                    if num > 0 && num <= 99 {
+                        return (Some(num), None);
+                    }
+                }
+            }
+        }
+        if let Some(rest) = lower.strip_prefix('d') {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(num) = digits.parse::<u32>() {
+                if num > 0 && num <= 99 {
+                    return (Some(num), None);
                 }
             }
         }
@@ -605,6 +638,15 @@ mod tests {
         assert_eq!(
             DiscDetector::parse_disc_numbers("A_City_of_Sadness_DVD-9"),
             (None, None) // DVD-9 is layer spec, not disc index
+        );
+        assert_eq!(
+            DiscDetector::parse_disc_numbers("FUUKA_CS_D1"),
+            (Some(1), None)
+        );
+        assert_eq!(DiscDetector::parse_disc_numbers("D2"), (Some(2), None));
+        assert_eq!(
+            DiscDetector::parse_disc_numbers("Soundtrack_CD1"),
+            (Some(1), None)
         );
     }
 }
