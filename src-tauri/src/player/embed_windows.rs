@@ -9,8 +9,8 @@
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
 use std::ffi::c_void;
-use std::sync::mpsc;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
@@ -18,13 +18,13 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_DISPLAYCHANGE,
-    WM_KEYDOWN, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE, WNDPROC,
+    WM_KEYDOWN, WNDPROC, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
 /// Set once by `overlay_app_init` during `ensure_overlay`.
@@ -220,7 +220,11 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
-        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as usize as isize);
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            overlay_wndproc as *const () as usize as isize,
+        );
     }
     let _ = win.set_focus();
     Ok(hwnd.0 as usize)
@@ -399,7 +403,11 @@ fn register_display_change_handler(app: &AppHandle) -> Result<(), String> {
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = MAIN_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
-        let _ = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, main_wndproc as *const () as usize as isize);
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            main_wndproc as *const () as usize as isize,
+        );
     }
     Ok(())
 }
@@ -409,10 +417,10 @@ fn windows_key_name(vk: u32, lparam: LPARAM) -> Option<String> {
     // Ignore modifier-only keys (Ctrl, Alt, Shift, Win) — the frontend
     // handles modifier combinations itself.
     match vk {
-        0x20 => return Some(" ".to_string()),      // VK_SPACE
-        0x0D => return Some("Enter".to_string()),  // VK_RETURN
-        0x1B => return Some("Escape".to_string()), // VK_ESCAPE
-        0x25 => return Some("ArrowLeft".to_string()), // VK_LEFT
+        0x20 => return Some(" ".to_string()),          // VK_SPACE
+        0x0D => return Some("Enter".to_string()),      // VK_RETURN
+        0x1B => return Some("Escape".to_string()),     // VK_ESCAPE
+        0x25 => return Some("ArrowLeft".to_string()),  // VK_LEFT
         0x26 => return Some("ArrowUp".to_string()),    // VK_UP
         0x27 => return Some("ArrowRight".to_string()), // VK_RIGHT
         0x28 => return Some("ArrowDown".to_string()),  // VK_DOWN

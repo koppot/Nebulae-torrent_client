@@ -814,7 +814,10 @@ impl VlcSession {
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    (lib.libvlc_media_player_set_hwnd)(self.media_player as *mut c_void, std::ptr::null_mut());
+                    (lib.libvlc_media_player_set_hwnd)(
+                        self.media_player as *mut c_void,
+                        std::ptr::null_mut(),
+                    );
                 }
                 (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
             }
