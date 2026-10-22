@@ -266,9 +266,9 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     if hwnd == 0 {
         return Ok(());
     }
-    let video_hwnd = HWND(hwnd as _);
     let app2 = app.clone();
     app.run_on_main_thread(move || {
+        let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         if hidden {
             unsafe {
@@ -371,9 +371,9 @@ pub fn sync_frame(
     if hwnd == 0 {
         return Ok(());
     }
-    let video_hwnd = HWND(hwnd as _);
     let app2 = app.clone();
     app.run_on_main_thread(move || {
+        let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         let mut r = RECT::default();
         unsafe {
