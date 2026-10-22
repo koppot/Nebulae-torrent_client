@@ -1,9 +1,11 @@
 # Nebulae Windows — Per-Defect Handoff Report
 
 **Baseline:** commit `51fb31c` on `main` (pushed to `origin/main` as `51fb31c`; format fix `fa849a4` also pushed)
+**Current main tip:** `263863d` "fix(windows): ensure secondary instance delivers --quit through single_instance IPC"
 **Repo:** `koppot/Nebulae-torrent_client`
-**Candidate:** `C:\Users\administrator\Nebulae-Windows-Test\windows-candidate/` (GNU-built, checksums verified)
-**CI verified:** Windows MSVC compile + unit tests PASSED (runs 39813765173, 39813883006)
+**GNU candidate (debugging aid):** `C:\Users\administrator\Nebulae-Windows-Test\windows-candidate/` (GNU-built from `51fb31c`, checksums verified, now superseded by MSVC candidate below)
+**MSVC candidate (release pipeline):** built via `candidate-build.yml` workflow_dispatch run 39827708280 from `main` (`263863d`), unsigned, workflow artifacts only — not published
+**CI verified:** Windows MSVC compile + unit tests PASSED (runs 39813765173, 39813883006); MSVC candidate build PASSED (run 39827708280)
 
 ---
 
@@ -135,6 +137,62 @@
 
 ---
 
+---
+
+## HWND_TOP / HWND_BOTTOM Reconciliation
+
+### Is `0d49e3d` Antigravity's missing-picture solution?
+
+**Cannot be confirmed from commit metadata alone.** All commits in the repository are authored by `koppot`, so there is no commit-level attribution to Antigravity. However, the commit message and content make clear that `0d49e3d` ("fix(windows): raise video overlay to HWND_TOP with bar cutout and native mouse controls") IS a solution to the missing-picture problem:
+
+- **Root cause of missing picture:** With `HWND_BOTTOM` (commit `60193b4` architecture), the video overlay STATIC window sits below the transparent webview in Z-order. Direct3D11 renders into the overlay, but DirectComposition transparency on the webview above bypasses/occludes the Direct3D surface — the video picture never reaches the screen.
+- **`0d49e3d` fixes this:** Changes `SetWindowPos(hwnd, HWND_TOP)` in three places (`attach_main_window_child`, `set_overlay_hidden`, `sync_frame`, `toggle_fullscreen`), so the video window renders directly to screen above the webview.
+- **It supersedes the HWND_BOTTOM architecture:** `HWND_BOTTOM` is completely removed — zero matches remain in the codebase. All `SetWindowPos` calls now use `HWND_TOP`.
+
+**Recommendation:** Confirm with Antigravity whether `0d49e3d` represents their intended direction before building on it. Do not modify the video-output path.
+
+### With video on top: are ALL overlay controls clickable?
+
+**No — only bar-region controls are clickable through the cutout; video-surface controls are intercepted natively.**
+
+The bar cutout in `sync_frame` exposes two regions:
+- **40px at the top** (when `bar_height > 0.0`) — for the title + close button
+- **`bar_height` at the bottom** — for the player control bar and popovers
+
+Controls within these regions (buttons, timeline seek, volume, track menus, popovers, close) are rendered by the webview in the exposed gaps and receive clicks normally.
+
+Controls/actions over the video surface are NOT clickable through the cutout — they are intercepted by `overlay_wndproc`:
+- **Single click on video** → `player-native-key` " " (play/pause toggle)
+- **Double-click on video** → `player-native-key` "f" (fullscreen toggle)
+- **Mouse move over video** → `player://mouse-move` (control bar auto-hide + native window drag initiation)
+
+The frontend (`PlayerOverlay.tsx`) listens for `player://mouse-move` to bump the control-bar visibility timer, and uses `isMac` to apply `bg-black/95` background to the bar on Windows only.
+
+### Do clicks over the video surface reach native handlers correctly?
+
+**Yes.** `overlay_wndproc` handles `WM_LBUTTONDOWN`/`WM_LBUTTONUP` (click-vs-drag disambiguation with 6px threshold), `WM_LBUTTONDBLCLK` (returns `LRESULT(0)` to suppress default handling), and `WM_MOUSEMOVE` (throttled at 150ms). All messages are then chained to the original wndproc via `CallWindowProcW`. Click-vs-drag is disambiguated: small movements (< 6px) are treated as clicks, larger movements initiate native window drag via `begin_window_drag`.
+
+### Does keyboard focus survive fullscreen transitions?
+
+**Partially.** `toggle_fullscreen` calls:
+1. `win.set_fullscreen(!fs)` — Tauri fullscreen toggle
+2. `SetWindowPos(hwnd, HWND_TOP, ...)` — re-raises the overlay above the webview
+3. `win.set_focus()` — returns focus to the webview
+
+Focus is explicitly restored to the webview after the toggle. However, since the overlay is a child window on `HWND_TOP` covering the full client area during fullscreen, focus behavior at the Win32 level (which window actually receives keyboard input) depends on how the webview and child window interact — this has not been runtime-tested (no playback testing authorized).
+
+### Dead code or leftover config from HWND_BOTTOM?
+
+**None.** `HWND_BOTTOM` was removed from the imports and all `SetWindowPos` calls. Zero matches for `HWND_BOTTOM` remain in the codebase. No leftover config, no dead branches, no commented-out `HWND_BOTTOM` calls.
+
+### Open questions for Antigravity
+
+1. Does `0d49e3d` represent Antigravity's intended direction for the missing-picture fix?
+2. Are there any video-output-path assumptions that depend on the overlay being at `HWND_BOTTOM`?
+3. Does keyboard focus survive fullscreen transitions in practice on Windows?
+
+---
+
 ## Summary Table
 
 | # | Defect | Cause → Change | Files | Commit | CI Verified | In Candidate | Tested/Untested |
@@ -143,9 +201,9 @@
 | 2 | No native key forwarding | No WNDPROC subclass → added `overlay_wndproc` + `windows_key_name` | `embed_windows.rs` | 51fb31c | ✅ MSVC test passed | Yes | Unit tested; runtime untested |
 | 3 | No corner radius | No DwmSetWindowAttribute → added corner radius fns | `embed_windows.rs`, `lib.rs`, `Cargo.toml` | 51fb31c + `90da75f` | ✅ MSVC check passed | Yes | Compile tested; runtime untested |
 | 4 | No screen-change observer | No WM_DISPLAYCHANGE → added `main_wndproc` | `embed_windows.rs` | 51fb31c | ✅ MSVC test passed | Yes | Unit tested; runtime untested |
-| 5 | No video picture | WS_EX_TRANSPARENT/WS_DISABLED → removed; HWND_TOP added | `embed_windows.rs`, `PlayerOverlay.tsx` | `60193b4`, `0d49e3d` | ✅ MSVC check passed | `60193b4` yes; `0d49e3d` no (ahead of 51fb31c) | Compile tested; runtime untested (Antigravity) |
+| 5 | No video picture | WS_EX_TRANSPARENT/WS_DISABLED → removed; HWND_TOP added | `embed_windows.rs`, `PlayerOverlay.tsx` | `60193b4`, `0d49e3d` | ✅ MSVC check passed | Yes (both in MSVC candidate from `263863d`) | Compile tested; runtime untested (Antigravity) |
 | 6 | HDR colorspace unproven | VLC vars set but Windows vout consumption unproven | `embed_windows.rs`, `engine.rs` | 51fb31c | N/A | Yes | **Blocked** — do not touch video path |
-| 7 | Native fullscreen partial | Tauri API only; no Win32 borderless | `embed_windows.rs` | 51fb31c + `0d49e3d` | ✅ MSVC check passed | Partial | Compile tested; runtime untested |
+| 7 | Native fullscreen partial | Tauri API only; no Win32 borderless | `embed_windows.rs` | 51fb31c + `0d49e3d` | ✅ MSVC check passed | Yes (in MSVC candidate from `263863d`) | Compile tested; runtime untested |
 
 ---
 
@@ -158,11 +216,14 @@
 | `cargo fmt --check` | Linux (CI `ubuntu-latest`) | PASSED | Run 39813883006 (fa849a4) |
 | `cargo check --target x86_64-pc-windows-gnu` | GNU (local) | PASSED (1 pre-existing warning) | Local Supermicro |
 | `cargo build --release --target x86_64-pc-windows-gnu` | GNU (local) | PASSED | Local Supermicro |
+| `candidate-build.yml` Windows job (MSVC) | MSVC (CI `windows-latest`) | PASSED (full Tauri build + NSIS installer) | Run 39827708280, job 119995296957 |
 | macOS `cargo check` / `cargo clippy` / `cargo test` | macOS | All PASSED (126 tests) | Local macOS |
 
 ---
 
-## Candidate Package Checksums (verified)
+## Candidate Package Checksums
+
+### GNU candidate (debugging aid — superseded, do not use for release)
 
 | File | SHA256 | Match |
 |------|--------|-------|
@@ -171,7 +232,32 @@
 | `WebView2Loader.dll` | `86545b66cdb0603bc26b626fb9ad610cb6e71f28d468f5ea66df23b03dda96d5` | ✅ |
 
 Location: `C:\Users\administrator\Nebulae-Windows-Test\windows-candidate/`
-Built from clean target at commit `51fb31c` (GNU toolchain).
+Built from clean target at commit `51fb31c` (GNU toolchain, x86_64-pc-windows-gnu).
+**Retire as debugging aid only** — not built through the release pipeline, not MSVC.
+
+### MSVC candidate (release pipeline — current, represents release configuration)
+
+| Field | Value |
+|-------|-------|
+| **Workflow** | `candidate-build.yml` (`Candidate Build`) |
+| **CI run** | 39827708280 |
+| **Windows job** | 119995296957 (`windows-latest`, `x86_64-pc-windows-msvc`) |
+| **Source commit** | `263863d88fcd6d91b5196e4b878a56219d831c00` |
+| **Source message** | "fix(windows): ensure secondary instance delivers --quit through single_instance IPC" |
+| **Source date** | 2026-10-22 13:05:36 -0400 |
+| **Branch** | `main` |
+| **Signing** | UNSIGNED (provider: none) |
+| **Published?** | No — workflow artifacts only, not a release, no tags moved |
+| **Tauri updater sig** | Present (`nebulae.exe.sig`, `Nebulae-Setup-x64.exe.sig`) |
+
+| File | SHA256 (CI-generated) |
+|------|----------------------|
+| `nebulae.exe` | `f577b34d3ce32d9ef1f5659d0377a4de783e63ba61fdf32feb5291a98d4e1ebf` |
+| `Nebulae-Setup-x64.exe` | `ca3b660d05e9cbad43d5bb72cf93198ccab727a0e896393e1ff5699bca179b61` |
+
+Artifacts uploaded to CI run 39827708280 as `candidate-39827708280-Nebulae-Setup-x64.exe` (includes `nebulae.exe`, `nebulae.exe.sha256`, `Nebulae-Setup-x64.exe.sha256`, `Nebulae-Setup-x64.exe.sig`, `WINDOWS-SIGNING-STATUS.txt`, `candidate-source.txt`).
+
+**Retire the GNU-built package** as a debugging aid only. The MSVC candidate above is built through the release pipeline toolchain and represents the release configuration.
 
 ---
 
