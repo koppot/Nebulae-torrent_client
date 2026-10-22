@@ -705,6 +705,7 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
+            CString::new("--bluray-menu").unwrap(),
             // Nebulae's UI overlay handles all mouse clicks and keyboard shortcuts:
             // libVLC must never intercept mouse or keyboard events on the video window.
             CString::new("--no-mouse-events").unwrap(),

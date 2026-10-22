@@ -18,8 +18,9 @@ body {
 
 /* While the player is up the webview must paint nothing behind the video
    overlay (video sits BELOW the webview); the opaque shell is unmounted. */
-body.player-active {
-  background-color: transparent;
+body.player-active,
+body.player-active #root {
+  background-color: transparent !important;
 }
 
 /* Netflix Matte Charcoal Surface */

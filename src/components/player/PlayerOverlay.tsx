@@ -180,29 +180,14 @@ export default function PlayerOverlay() {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return;
-    let barHeight = 0;
-    if (controlsVisible) {
-      const bar = document.querySelector('[data-player-bar]') as HTMLElement | null;
-      if (bar) {
-        let minTop = bar.getBoundingClientRect().top;
-        const popovers = document.querySelectorAll('[data-player-bar] .absolute, [data-player-popover]');
-        popovers.forEach((p) => {
-          const pr = p.getBoundingClientRect();
-          if (pr.height > 0 && pr.top < minTop) {
-            minTop = pr.top;
-          }
-        });
-        barHeight = Math.max(0, window.innerHeight - minTop);
-      }
-    }
     invoke('player_sync_viewport', {
       x: r.left,
       y: r.top,
       width: r.width,
       height: r.height,
-      barHeight,
+      barHeight: 0,
     }).catch(() => {});
-  }, [controlsVisible]);
+  }, []);
 
   useEffect(() => {
     if (!player.open) return;
@@ -456,7 +441,9 @@ export default function PlayerOverlay() {
       return;
     }
     let alive = true;
-    const parts = player.resolvedPath.split('/');
+    const isWin = player.resolvedPath.includes('\\');
+    const sep = isWin ? '\\' : '/';
+    const parts = player.resolvedPath.split(/[/\\]/).filter(Boolean);
     const tryDir = async (dir: string) => {
       const set = await invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: dir });
       if (!alive) return;
@@ -464,7 +451,7 @@ export default function PlayerOverlay() {
         setDiscChoices(
           set.map((d, idx) => ({
             label: `Disc ${d.disc_number || idx + 1}`,
-            detail: d.play_target.split('/').pop() || d.play_target,
+            detail: d.play_target.split(/[/\\]/).filter(Boolean).pop() || d.play_target,
             path: d.play_target,
           })),
         );
@@ -482,7 +469,7 @@ export default function PlayerOverlay() {
       ]);
       const isLibraryDir = (p: string) => {
         const seg = p.split(/[/\\]/).filter(Boolean).pop()?.toLowerCase() || '';
-        return libraryNames.has(seg) || p === '/' || p === '';
+        return libraryNames.has(seg) || p === '/' || p === '' || /^[a-zA-Z]:\\?$/.test(p);
       };
 
       // 1. Probe the disc path itself
@@ -491,8 +478,10 @@ export default function PlayerOverlay() {
       } catch {}
 
       // 2. Probe immediate parent only if not a library root
-      const parentDir = parts.slice(0, parts.length - 1).join('/');
-      if (parentDir && !isLibraryDir(parentDir) && parts.length > 2) {
+      const parentDir = isWin
+        ? parts.slice(0, parts.length - 1).join(sep)
+        : '/' + parts.slice(0, parts.length - 1).join(sep);
+      if (parentDir && !isLibraryDir(parentDir) && parts.length > 1) {
         try {
           if (await tryDir(parentDir)) return;
         } catch {}

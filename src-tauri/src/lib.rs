@@ -434,12 +434,8 @@ pub fn run() {
                 .inner_size(1280., 840.)
                 .min_inner_size(980., 640.)
                 .decorations(false)
-                .transparent(cfg!(target_os = "macos"))
+                .transparent(true)
                 .center();
-                #[cfg(not(target_os = "macos"))]
-                {
-                    builder = builder.background_color(tauri::window::Color(20, 20, 25, 255));
-                }
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
                         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",

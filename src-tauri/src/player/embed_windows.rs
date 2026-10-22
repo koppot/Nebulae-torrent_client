@@ -9,27 +9,35 @@
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
 use std::ffi::c_void;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WM_DISPLAYCHANGE,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WNDPROC, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW,
+    GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP,
+    SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPOS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED,
+    WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
 /// Set once by `overlay_app_init` during `ensure_overlay`.
 static OVERLAY_APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// Cached HWND of the video surface window.
+static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Saved pre-player window rect for restoring window size on close.
+static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 
 /// Returns the cached `AppHandle` if `ensure_overlay` has already run.
 pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
@@ -164,8 +172,8 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
         .overlay_view
         .store(hwnd, std::sync::atomic::Ordering::SeqCst);
 
-    // Register the display-change handler so EDR/tone-mapping is re-applied
-    // when the window moves between displays with different HDR capabilities.
+    // Register the display-change and position-change handler so EDR/tone-mapping
+    // is re-applied and video_hwnd rect stays locked to main_hwnd.
     if let Err(e) = register_display_change_handler(app) {
         tracing::warn!("register_display_change_handler: {e}");
     }
@@ -178,35 +186,44 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     let parent = win.hwnd().map_err(|e| format!("no parent HWND: {e}"))?;
-    let parent_hwnd = HWND(parent.0);
-    let (x, y, w, h) = {
-        let size = win
-            .inner_size()
-            .map_err(|e| format!("no window size: {e}"))?;
-        (0, 0, size.width as i32, size.height as i32)
-    };
+    let main_hwnd = HWND(parent.0);
+
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(main_hwnd, &mut rect);
+    }
+    let x = rect.left;
+    let y = rect.top;
+    let w = rect.right - rect.left;
+    let h = rect.bottom - rect.top;
+
+    // Create the video surface as an independent WS_POPUP window with no owner,
+    // positioned directly behind the transparent main window.
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_NOACTIVATE,
+            WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
             w!("STATIC"),
-            w!(""),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+            w!("Nebulae Video Surface"),
+            WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             x,
             y,
             w,
             h,
-            Some(parent_hwnd),
+            None,
             None,
             None,
             None,
         )
     }
     .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
-    // Raise above the webview sibling so Direct3D11 renders directly to the
-    // screen without being bypassed by DirectComposition transparency.
+
+    VIDEO_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
     unsafe {
+        // Place main_hwnd at HWND_TOP so the transparent webview with floating controls
+        // stays on top of the video surface.
         let _ = SetWindowPos(
-            hwnd,
+            main_hwnd,
             Some(HWND_TOP),
             0,
             0,
@@ -214,9 +231,20 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
             0,
             SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
         );
+        // Place the video window immediately behind main_hwnd with matching dimensions.
+        let _ = SetWindowPos(
+            hwnd,
+            Some(main_hwnd),
+            x,
+            y,
+            w,
+            h,
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+        );
     }
-    // Subclass the overlay HWND so native keyboard and mouse input on the video
-    // surface are forwarded to the frontend, matching macOS VideoOverlayView.
+
+    // Subclass the video HWND so any keyboard or mouse input that reaches the video
+    // surface is forwarded to the frontend webview.
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
         let _ = OVERLAY_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
@@ -238,20 +266,88 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     if hwnd == 0 {
         return Ok(());
     }
-    let cmd: SHOW_WINDOW_CMD = if hidden { SW_HIDE } else { SW_SHOW };
+    let video_hwnd = HWND(hwnd as _);
     let app2 = app.clone();
-    app.run_on_main_thread(move || unsafe {
-        let _ = ShowWindow(HWND(hwnd as _), cmd);
-        if !hidden {
-            let _ = SetWindowPos(
-                HWND(hwnd as _),
-                Some(HWND_TOP),
-                0,
-                0,
-                0,
-                0,
-                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-            );
+    app.run_on_main_thread(move || {
+        let Ok(main_h) = main_hwnd(&app2) else { return };
+        if hidden {
+            unsafe {
+                let _ = ShowWindow(video_hwnd, SW_HIDE);
+            }
+            // Restore window rect if previously saved
+            if let Ok(mut saved) = PRE_PLAYER_RECT.lock() {
+                if let Some(r) = saved.take() {
+                    let w = r.right - r.left;
+                    let h = r.bottom - r.top;
+                    unsafe {
+                        let _ = SetWindowPos(
+                            main_h,
+                            None,
+                            r.left,
+                            r.top,
+                            w,
+                            h,
+                            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                        );
+                    }
+                }
+            }
+        } else {
+            // Player opening: save current rect and reshape to 16:9 if not fullscreen
+            let mut r = RECT::default();
+            unsafe {
+                let _ = GetWindowRect(main_h, &mut r);
+            }
+            let is_fs = app2
+                .get_webview_window("main")
+                .and_then(|w| w.is_fullscreen().ok())
+                .unwrap_or(false);
+
+            if !is_fs {
+                if let Ok(mut saved) = PRE_PLAYER_RECT.lock() {
+                    if saved.is_none() {
+                        *saved = Some(r);
+                    }
+                }
+                let w = r.right - r.left;
+                let h_16_9 = ((w as f64) * 9.0 / 16.0).round() as i32;
+                r.bottom = r.top + h_16_9;
+                unsafe {
+                    let _ = SetWindowPos(
+                        main_h,
+                        None,
+                        r.left,
+                        r.top,
+                        w,
+                        h_16_9,
+                        SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                    );
+                }
+            }
+
+            let w = r.right - r.left;
+            let h = r.bottom - r.top;
+            unsafe {
+                let _ = ShowWindow(video_hwnd, SW_SHOW);
+                let _ = SetWindowPos(
+                    main_h,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+                );
+                let _ = SetWindowPos(
+                    video_hwnd,
+                    Some(main_h),
+                    r.left,
+                    r.top,
+                    w,
+                    h,
+                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                );
+            }
             if let Some(win) = app2.get_webview_window("main") {
                 let _ = win.set_focus();
             }
@@ -262,11 +358,11 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 
 pub fn sync_frame(
     app: &AppHandle,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    bar_height: f64,
+    _x: f64,
+    _y: f64,
+    _w: f64,
+    _h: f64,
+    _bar_height: f64,
 ) -> Result<(), String> {
     let hwnd = app
         .state::<crate::player::PlayerState>()
@@ -275,27 +371,33 @@ pub fn sync_frame(
     if hwnd == 0 {
         return Ok(());
     }
+    let video_hwnd = HWND(hwnd as _);
     let app2 = app.clone();
     app.run_on_main_thread(move || {
-        let scale = app2
-            .get_webview_window("main")
-            .and_then(|w| w.scale_factor().ok())
-            .unwrap_or(1.0);
-        // When controls are visible (bar_height > 0), expose 40px at the top
-        // for the title and Close 'X' button, and bar_height at the bottom for controls.
-        // When controls are auto-hidden (bar_height == 0), video fills the full viewport.
-        let top_bar = if bar_height > 0.0 { 40.0 } else { 0.0 };
-        let final_y = ((y + top_bar) * scale) as i32;
-        let final_h = (((h - top_bar - bar_height).max(0.0)) * scale) as i32;
+        let Ok(main_h) = main_hwnd(&app2) else { return };
+        let mut r = RECT::default();
         unsafe {
+            let _ = GetWindowRect(main_h, &mut r);
+            let w = r.right - r.left;
+            let h = r.bottom - r.top;
+            // Video window matches main_hwnd exactly in full-bleed dimensions with zero cutouts.
             let _ = SetWindowPos(
-                HWND(hwnd as _),
-                Some(HWND_TOP),
-                (x * scale) as i32,
-                final_y,
-                (w * scale) as i32,
-                final_h,
+                video_hwnd,
+                Some(main_h),
+                r.left,
+                r.top,
+                w,
+                h,
                 SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+            );
+            let _ = SetWindowPos(
+                main_h,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
             );
         }
     })
@@ -428,7 +530,29 @@ unsafe extern "system" fn main_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_DISPLAYCHANGE {
+    if msg == WM_WINDOWPOSCHANGED {
+        let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+        if v_hwnd_val != 0 {
+            let video_hwnd = HWND(v_hwnd_val as _);
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(video_hwnd, SW_HIDE);
+            } else {
+                let mut r = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut r);
+                let w = r.right - r.left;
+                let h = r.bottom - r.top;
+                let _ = SetWindowPos(
+                    video_hwnd,
+                    Some(hwnd),
+                    r.left,
+                    r.top,
+                    w,
+                    h,
+                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                );
+            }
+        }
+    } else if msg == WM_DISPLAYCHANGE {
         // Re-apply EDR/tone-mapping on screen change. If the window moved
         // to an HDR-capable display, ensure tone-mapping vars are set.
         if let Some(app) = overlay_app_handle() {
@@ -545,20 +669,34 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
         let fs = win.is_fullscreen().unwrap_or(false);
         win.set_fullscreen(!fs)
             .map_err(|e| format!("fullscreen: {e}"))?;
+        let Ok(main_h) = main_hwnd(app) else { return Ok(()) };
         let hwnd = app
             .state::<crate::player::PlayerState>()
             .overlay_view
             .load(std::sync::atomic::Ordering::SeqCst);
         if hwnd != 0 {
             unsafe {
+                let mut r = RECT::default();
+                let _ = GetWindowRect(main_h, &mut r);
+                let w = r.right - r.left;
+                let h = r.bottom - r.top;
                 let _ = SetWindowPos(
-                    HWND(hwnd as _),
+                    main_h,
                     Some(HWND_TOP),
                     0,
                     0,
                     0,
                     0,
                     SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+                );
+                let _ = SetWindowPos(
+                    HWND(hwnd as _),
+                    Some(main_h),
+                    r.left,
+                    r.top,
+                    w,
+                    h,
+                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
                 );
             }
         }

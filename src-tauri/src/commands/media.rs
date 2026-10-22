@@ -695,17 +695,22 @@ fn start_playback_inner(
                                 return;
                             }
 
-                            let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
-                                tracing::warn!("[player] menu watcher: navigate_menu unavailable");
-                                return;
+                            let nav_menu = {
+                                let lib_clone = lib.clone();
+                                move || unsafe {
+                                    if let Some(navigate_menu) = lib_clone.libvlc_media_player_navigate_menu {
+                                        navigate_menu(mp as *mut c_void);
+                                    } else {
+                                        (lib_clone.libvlc_media_player_set_title)(mp as *mut c_void, 0);
+                                        (lib_clone.libvlc_media_player_navigate)(mp as *mut c_void, 0);
+                                    }
+                                }
                             };
 
                             tracing::info!(
                                 "[player] menu watcher: dispatching initial INPUT_NAV_MENU"
                             );
-                            unsafe {
-                                navigate_menu(mp as *mut c_void);
-                            }
+                            nav_menu();
 
                             // Check if navigate_menu succeeded within 200ms (10 * 20ms)
                             let mut menu_reached = false;
@@ -765,9 +770,7 @@ fn start_playback_inner(
                                 }
                                 if i > 0 && i % 10 == 0 {
                                     tracing::info!("[player] menu watcher: retrying INPUT_NAV_MENU at iteration {i}");
-                                    unsafe {
-                                        navigate_menu(mp as *mut c_void);
-                                    }
+                                    nav_menu();
                                 }
                             }
                         });
@@ -1031,13 +1034,6 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
     // button appear dead during First Play (menu_call masked there by
     // authoring).
     //
-    // If the symbol is missing, this runtime predates the extension:
-    // report unsupported rather than falling back to popup or title-0.
-    let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu else {
-        tracing::warn!("[player] return_to_menu: libvlc_media_player_navigate_menu unavailable");
-        return Err("main menu navigation not supported by this runtime".into());
-    };
-
     // VideoToolbox VT-305 buffer drain before returning to menu:
     unsafe {
         (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
@@ -1047,9 +1043,17 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
         (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
     }
 
-    tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
-    unsafe {
-        navigate_menu(mp as *mut std::ffi::c_void);
+    if let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu {
+        tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
+        unsafe {
+            navigate_menu(mp as *mut std::ffi::c_void);
+        }
+    } else {
+        tracing::info!("[player] return_to_menu: fallback to set_title(0) and activate");
+        unsafe {
+            (lib.libvlc_media_player_set_title)(mp as *mut c_void, 0);
+            (lib.libvlc_media_player_navigate)(mp as *mut c_void, 0);
+        }
     }
 
     Ok(())
