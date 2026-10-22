@@ -161,6 +161,7 @@ export interface TorrentItem {
   bandwidthPriority?: number; // 1 = high, 0 = normal, -1 = low
   peerLimit?: number;
   racingMode?: boolean;
+  errorString?: string;
   tags: string[];
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];

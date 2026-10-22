@@ -196,6 +196,7 @@ export default function PlayerOverlay() {
 
   useEffect(() => {
     if (!player.open) return;
+    window.focus();
     setEnded(false);
     setSeeking(null);
     setDiscChoices(null);
@@ -858,12 +859,7 @@ export default function PlayerOverlay() {
       dragArmedRef.current = false;
       return;
     }
-    // Toggles both ways: window → fullscreen, fullscreen → window.
-    const win = getCurrentWindow();
-    win
-      .isFullscreen()
-      .then((fs) => win.setFullscreen(!fs))
-      .catch(() => {});
+    invoke('player_toggle_fullscreen').catch(() => {});
   };
 
   return (

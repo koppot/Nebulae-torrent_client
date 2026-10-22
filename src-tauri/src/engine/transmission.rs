@@ -1893,10 +1893,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
             // 2: Checking -> "Checking"
             // 3: Queued to download, 4: Downloading -> "Downloading"
             // 5: Queued to seed, 6: Seeding -> "Seeding"
-            // Local errors (e.g. missing files on disk) -> "Error"
+            // Local fatal errors (e.g. missing files on disk, permission denied) -> "Error"
+            // Tracker warnings (1) or tracker errors (2) do not override the transfer status.
             let status = if is_ks {
                 "Paused".to_string()
-            } else if error_num == 3 || (!error_string.is_empty() && error_num != 0) {
+            } else if error_num == 3 {
                 "Error".to_string()
             } else {
                 match status_num {
@@ -2028,22 +2029,39 @@ impl TorrentEngine for TransmissionTorrentEngine {
                         .and_then(|v| v.as_i64())
                         .filter(|&s| s > 0);
 
+                    let last_announce_succeeded = tr
+                        .get("lastAnnounceSucceeded")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let has_announced = tr
+                        .get("hasAnnounced")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let tracker_status = if last_announce_succeeded {
+                        "Working".to_string()
+                    } else if !has_announced || last_announce_time.is_none() {
+                        "Waiting for announce...".to_string()
+                    } else {
+                        "Not working".to_string()
+                    };
+
+                    let tracker_message = if !last_announce_res.is_empty() {
+                        last_announce_res
+                    } else if last_announce_succeeded {
+                        "Success".to_string()
+                    } else {
+                        "Waiting for announce...".to_string()
+                    };
+
                     trackers.push(TorrentTrackerItem {
                         tier: tier as u32,
                         url,
-                        status: if !last_announce_res.is_empty() {
-                            "Working".to_string()
-                        } else {
-                            "Not working".to_string()
-                        },
+                        status: tracker_status,
                         seeds: seeder_count,
                         peers: leecher_count,
                         downloaded: 0,
-                        message: if !last_announce_res.is_empty() {
-                            last_announce_res
-                        } else {
-                            "Waiting for announce...".to_string()
-                        },
+                        message: tracker_message,
                         last_announce: last_announce_time,
                         next_announce: next_announce_time,
                     });
@@ -2175,6 +2193,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 bandwidth_priority,
                 peer_limit,
                 racing_mode,
+                error_string: if error_string.is_empty() {
+                    None
+                } else {
+                    Some(error_string.to_string())
+                },
                 media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
                     &name.clone(),
                 )),
@@ -3210,6 +3233,65 @@ mod tests {
         assert_eq!(map_status(4), "Downloading");
         assert_eq!(map_status(5), "Seeding");
         assert_eq!(map_status(6), "Seeding");
+
+        // Error code mapping: only error_num == 3 (local error) overrides status to "Error".
+        // Tracker warnings (1) and tracker errors (2) do not override status.
+        let map_full_status = |is_ks: bool, error_num: i64, status_num: i64| -> String {
+            if is_ks {
+                "Paused".to_string()
+            } else if error_num == 3 {
+                "Error".to_string()
+            } else {
+                match status_num {
+                    0 => "Paused".to_string(),
+                    1 => "Queued for checking".to_string(),
+                    2 => "Checking".to_string(),
+                    3 | 4 => "Downloading".to_string(),
+                    5 | 6 => "Seeding".to_string(),
+                    _ => "Paused".to_string(),
+                }
+            }
+        };
+
+        // Local fatal error -> Error
+        assert_eq!(map_full_status(false, 3, 4), "Error");
+        assert_eq!(map_full_status(false, 3, 6), "Error");
+        // Tracker error (2) while downloading -> stays Downloading
+        assert_eq!(map_full_status(false, 2, 4), "Downloading");
+        // Tracker warning (1) while seeding -> stays Seeding
+        assert_eq!(map_full_status(false, 1, 6), "Seeding");
+        // Kill switch active -> Paused
+        assert_eq!(map_full_status(true, 0, 4), "Paused");
+    }
+
+    #[test]
+    fn test_transmission_tracker_status_mapping() {
+        let map_tracker_status = |last_announce_succeeded: bool,
+                                  has_announced: bool,
+                                  has_last_time: bool|
+         -> &'static str {
+            if last_announce_succeeded {
+                "Working"
+            } else if !has_announced || !has_last_time {
+                "Waiting for announce..."
+            } else {
+                "Not working"
+            }
+        };
+
+        // Successful announce
+        assert_eq!(map_tracker_status(true, true, true), "Working");
+        // Freshly added torrent waiting for announce
+        assert_eq!(
+            map_tracker_status(false, false, false),
+            "Waiting for announce..."
+        );
+        assert_eq!(
+            map_tracker_status(false, true, false),
+            "Waiting for announce..."
+        );
+        // Failed announce after trying
+        assert_eq!(map_tracker_status(false, true, true), "Not working");
     }
 
     #[test]

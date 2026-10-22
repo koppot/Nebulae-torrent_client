@@ -86,8 +86,14 @@ pub struct VlcLib {
     pub libvlc_audio_get_track_description:
         unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_track_description_list_release: unsafe extern "C" fn(*mut VlcTrackDescription),
-    pub libvlc_video_get_size:
-        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int>,
+    pub libvlc_video_get_size: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            std::ffi::c_uint,
+            *mut std::ffi::c_uint,
+            *mut std::ffi::c_uint,
+        ) -> c_int,
+    >,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -174,7 +180,9 @@ pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
     let is_short = dur_s <= 300;
     let is_named_fp = if !t.psz_name.is_null() {
         let cstr = std::ffi::CStr::from_ptr(t.psz_name);
-        cstr.to_string_lossy().to_ascii_lowercase().contains("first play")
+        cstr.to_string_lossy()
+            .to_ascii_lowercase()
+            .contains("first play")
     } else {
         false
     };
@@ -395,12 +403,23 @@ impl VlcLib {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("resources").join("vlc").join("libvlc.dll"));
-                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.dll"));
+                    c.push(
+                        dir.join("resources")
+                            .join("vlc")
+                            .join("lib")
+                            .join("libvlc.dll"),
+                    );
                     c.push(dir.join("vlc").join("libvlc.dll"));
                 }
                 if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
                     c.push(parent.join("resources").join("vlc").join("libvlc.dll"));
-                    c.push(parent.join("resources").join("vlc").join("lib").join("libvlc.dll"));
+                    c.push(
+                        parent
+                            .join("resources")
+                            .join("vlc")
+                            .join("lib")
+                            .join("libvlc.dll"),
+                    );
                 }
             }
             c.push(PathBuf::from("src-tauri/resources/vlc/libvlc.dll"));
@@ -408,8 +427,12 @@ impl VlcLib {
             c.push(PathBuf::from("src-tauri/resources/vlc/lib/libvlc.dll"));
             c.push(PathBuf::from("resources/vlc/lib/libvlc.dll"));
             // Fallbacks if bundled library is damaged or missing
-            c.push(PathBuf::from("C:\\Program Files\\VideoLAN\\VLC\\libvlc.dll"));
-            c.push(PathBuf::from("C:\\Program Files (x86)\\VideoLAN\\VLC\\libvlc.dll"));
+            c.push(PathBuf::from(
+                "C:\\Program Files\\VideoLAN\\VLC\\libvlc.dll",
+            ));
+            c.push(PathBuf::from(
+                "C:\\Program Files (x86)\\VideoLAN\\VLC\\libvlc.dll",
+            ));
         }
         #[cfg(target_os = "linux")]
         {
@@ -501,9 +524,7 @@ impl VlcLib {
         }
         macro_rules! sym_opt {
             ($name:literal : $ty:ty) => {{
-                let s: Option<Symbol<$ty>> = lib
-                    .get::<$ty>(concat!($name, "\0").as_bytes())
-                    .ok();
+                let s: Option<Symbol<$ty>> = lib.get::<$ty>(concat!($name, "\0").as_bytes()).ok();
                 s.map(|s| *s)
             }};
         }
@@ -519,7 +540,8 @@ impl VlcLib {
             // the preloaded dependency libraries. libvlc.5 keeps libvlccore
             // mapped, so the pointer stays valid for the process lifetime.
             var_set_checked: {
-                type VscFn = unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int;
+                type VscFn =
+                    unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int;
                 let mut found: Option<Symbol<VscFn>> = None;
                 for dep in &deps {
                     if let Ok(s) = dep.get::<VscFn>(b"var_SetChecked\0") {

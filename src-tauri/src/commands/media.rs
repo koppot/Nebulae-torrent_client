@@ -1,8 +1,8 @@
 use crate::player;
-use crate::player::engine;
-use crate::player::engine::{is_menu_title, VlcSession};
 #[cfg(target_os = "macos")]
 use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr};
+use crate::player::engine;
+use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -585,11 +585,14 @@ fn start_playback_inner(
                     };
                     let is_hdr_file = {
                         let p_lower = resolved.resolved_path.to_ascii_lowercase();
-                        p_lower.contains("2160p") || p_lower.contains("uhd") || p_lower.contains("hdr")
+                        p_lower.contains("2160p")
+                            || p_lower.contains("uhd")
+                            || p_lower.contains("hdr")
                     };
-                    state
-                        .is_hdr
-                        .store(is_uhd_disc || is_hdr_file, std::sync::atomic::Ordering::SeqCst);
+                    state.is_hdr.store(
+                        is_uhd_disc || is_hdr_file,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
 
                     #[cfg(target_os = "macos")]
                     {
@@ -603,17 +606,14 @@ fn start_playback_inner(
                         // for up to 3s so EDR and BT.2100 PQ colorspace are latched immediately
                         // upon layer creation, preventing washed-out presentation.
                         let app_edr = app.clone();
-                        let edr_gen = state
-                            .session_gen
-                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let edr_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         std::thread::spawn(move || {
                             use tauri::Manager;
                             for _ in 0..100 {
                                 std::thread::sleep(std::time::Duration::from_millis(30));
                                 let state = app_edr.state::<PlayerState>();
-                                let gen_now = state
-                                    .session_gen
-                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                let gen_now =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                 if gen_now != edr_gen || !*poison(&state.started) {
                                     return;
                                 }
@@ -643,9 +643,7 @@ fn start_playback_inner(
                         // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
                         // end of First Play (0.99) so it triggers its authored JumpTitle 0 into Top Menu.
                         let app_menu = app.clone();
-                        let menu_gen = state
-                            .session_gen
-                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let menu_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         let menu_mp = session.media_player;
                         std::thread::spawn(move || {
                             use tauri::Manager;
@@ -654,9 +652,8 @@ fn start_playback_inner(
                             for _ in 0..max_wait_attempts {
                                 std::thread::sleep(std::time::Duration::from_millis(20));
                                 let state = app_menu.state::<PlayerState>();
-                                let gen_now = state
-                                    .session_gen
-                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                let gen_now =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                 if gen_now != menu_gen || !*poison(&state.started) {
                                     return;
                                 }
@@ -701,7 +698,9 @@ fn start_playback_inner(
                                 return;
                             };
 
-                            tracing::info!("[player] menu watcher: dispatching initial INPUT_NAV_MENU");
+                            tracing::info!(
+                                "[player] menu watcher: dispatching initial INPUT_NAV_MENU"
+                            );
                             unsafe {
                                 navigate_menu(mp as *mut c_void);
                             }
@@ -710,9 +709,8 @@ fn start_playback_inner(
                             let mut menu_reached = false;
                             for _ in 0..10 {
                                 std::thread::sleep(std::time::Duration::from_millis(20));
-                                let gen_now = state
-                                    .session_gen
-                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                let gen_now =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                 if gen_now != menu_gen || !*poison(&state.started) {
                                     return;
                                 }
@@ -750,9 +748,8 @@ fn start_playback_inner(
                             // retry periodically every 2s.
                             for i in 0..75 {
                                 std::thread::sleep(std::time::Duration::from_millis(200));
-                                let gen_now = state
-                                    .session_gen
-                                    .load(std::sync::atomic::Ordering::SeqCst);
+                                let gen_now =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                 if gen_now != menu_gen || !*poison(&state.started) {
                                     return;
                                 }
@@ -783,17 +780,14 @@ fn start_playback_inner(
                         // Session-scoped: the probe captures the session generation and
                         // the player pointer at spawn and acts only if both are unchanged.
                         let app3 = app.clone();
-                        let spawn_gen = state
-                            .session_gen
-                            .load(std::sync::atomic::Ordering::SeqCst);
+                        let spawn_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         let spawn_mp = session.media_player;
                         std::thread::spawn(move || {
                             use tauri::{Emitter, Manager};
                             std::thread::sleep(std::time::Duration::from_secs(6));
                             let state = app3.state::<PlayerState>();
-                            let gen_now = state
-                                .session_gen
-                                .load(std::sync::atomic::Ordering::SeqCst);
+                            let gen_now =
+                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                             if gen_now != spawn_gen || !*poison(&state.started) {
                                 return; // session replaced or closed
                             }
@@ -989,9 +983,7 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// navigation may complete asynchronously. The command reports dispatch
 /// acceptance, not menu visibility.
 #[tauri::command]
-pub async fn player_return_to_menu(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
+pub async fn player_return_to_menu(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
     dispatch_main_menu(&state)
 }
 
@@ -1006,9 +998,7 @@ pub async fn player_return_to_menu(
 ///
 /// Returns Err if the runtime does not export libvlc_media_player_navigate_menu.
 #[tauri::command]
-pub fn player_menu_navigate_menu(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
+pub fn player_menu_navigate_menu(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
     dispatch_main_menu(&state)
 }
 
@@ -1127,7 +1117,10 @@ pub async fn player_disc_display_title(
                 rd.filter_map(|e| e.ok())
                     .filter_map(|e| {
                         let name = e.file_name().into_string().ok()?;
-                        let stem = name.strip_prefix("bdmt_")?.strip_suffix(".xml")?.to_string();
+                        let stem = name
+                            .strip_prefix("bdmt_")?
+                            .strip_suffix(".xml")?
+                            .to_string();
                         Some((stem, e.path()))
                     })
                     .collect()
@@ -1310,8 +1303,12 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             let res = unsafe { get_size(mp as *mut c_void, 0, &mut width, &mut height) };
             if res == 0 && (width >= 3840 || height >= 2160) {
                 if !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst) {
-                    tracing::info!("[player] UHD resolution detected: {width}x{height}, latching is_hdr=true");
-                    state.is_hdr.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tracing::info!(
+                        "[player] UHD resolution detected: {width}x{height}, latching is_hdr=true"
+                    );
+                    state
+                        .is_hdr
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     if let Some(app) = crate::player::embed_macos::overlay_app_handle() {
                         force_apply_edr(app);
                     }

@@ -160,6 +160,7 @@ impl MockTorrentEngine {
                 bandwidth_priority: None,
                 peer_limit: None,
                 racing_mode: None,
+                error_string: None,
                 media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
                     "Tokyo Story (1953) [4K Restoration]",
                 )),
@@ -228,6 +229,7 @@ impl MockTorrentEngine {
                 bandwidth_priority: None,
                 peer_limit: None,
                 racing_mode: None,
+                error_string: None,
                 media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
                     "Seven Samurai (1954) [Criterion Remaster]",
                 )),
@@ -409,6 +411,7 @@ impl MockTorrentEngine {
             bandwidth_priority: None,
             peer_limit: None,
             racing_mode: None,
+            error_string: None,
             media_meta,
         });
 
@@ -612,6 +615,7 @@ impl TorrentEngine for MockTorrentEngine {
             bandwidth_priority: None,
             peer_limit: None,
             racing_mode: None,
+            error_string: None,
             media_meta,
         });
         Ok(new_id)

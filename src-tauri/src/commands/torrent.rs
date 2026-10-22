@@ -94,6 +94,9 @@ pub struct TorrentItem {
     /// Explicit Racing Mode state: true only when both bandwidthPriority == 1 AND peerLimit >= 150
     #[serde(default, rename = "racingMode")]
     pub racing_mode: Option<bool>,
+    /// Engine error string when present (e.g. disk full, permission denied, tracker error)
+    #[serde(default, rename = "errorString")]
+    pub error_string: Option<String>,
     #[serde(default)]
     pub media_meta: Option<crate::utils::media_parser::ParsedMediaMetadata>,
 }

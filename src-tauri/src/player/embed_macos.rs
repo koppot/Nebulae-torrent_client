@@ -22,9 +22,12 @@
 
 use objc2::rc::Retained;
 use objc2::{class, sel, MainThreadOnly};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
+use objc2_app_kit::{
+    NSEvent, NSEventModifierFlags, NSView, NSWindow, NSWindowDidChangeScreenNotification,
+    NSWindowOrderingMode,
+};
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
-use objc2_quartz_core::{CALayer, CADynamicRangeHigh, CADynamicRangeStandard};
+use objc2_quartz_core::{CADynamicRangeHigh, CADynamicRangeStandard, CALayer};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
@@ -224,7 +227,9 @@ pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) -> bool {
     }
 
     if gl_layer_found {
-        tracing::info!("[player] EDR/HDR video layer (VLCCAOpenGLLayer) configured: is_hdr={is_hdr}");
+        tracing::info!(
+            "[player] EDR/HDR video layer (VLCCAOpenGLLayer) configured: is_hdr={is_hdr}"
+        );
     }
 
     gl_layer_found
@@ -309,7 +314,6 @@ unsafe fn apply_edr_to_window(win: &NSWindow) {
         }
     }
 }
-
 
 /// Translate a native key event into the frontend's key-name vocabulary.
 fn native_key_name(event: &NSEvent) -> Option<String> {
@@ -804,11 +808,17 @@ mod tests {
     fn test_coregraphics_colorspaces() {
         unsafe {
             let cs_p3 = CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
-            assert!(!cs_p3.is_null(), "kCGColorSpaceDisplayP3 must resolve to a valid CGColorSpaceRef");
+            assert!(
+                !cs_p3.is_null(),
+                "kCGColorSpaceDisplayP3 must resolve to a valid CGColorSpaceRef"
+            );
             CGColorSpaceRelease(cs_p3);
 
             let cs_srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-            assert!(!cs_srgb.is_null(), "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef");
+            assert!(
+                !cs_srgb.is_null(),
+                "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef"
+            );
             CGColorSpaceRelease(cs_srgb);
         }
     }
@@ -823,10 +833,11 @@ mod tests {
 
         // Also test with CAOpenGLLayer if available at runtime
         if let Some(cls) = objc2::runtime::AnyClass::get(c"CAOpenGLLayer") {
-            let gl_layer: Retained<CALayer> = unsafe {
-                objc2::msg_send![cls, new]
-            };
-            assert!(gl_layer.respondsToSelector(sel!(setColorspace:)), "CAOpenGLLayer must respond to setColorspace:");
+            let gl_layer: Retained<CALayer> = unsafe { objc2::msg_send![cls, new] };
+            assert!(
+                gl_layer.respondsToSelector(sel!(setColorspace:)),
+                "CAOpenGLLayer must respond to setColorspace:"
+            );
             unsafe {
                 apply_edr_to_layer(&gl_layer, true);
                 apply_edr_to_layer(&gl_layer, false);

@@ -553,18 +553,38 @@ pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
         let Ok(lib) = open_bluray_lib() else {
             return false;
         };
-        let Ok(bd_open): Result<Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void>, _> =
-            lib.get(b"bd_open") else { return false; };
-        let Ok(bd_get_titles): Result<Symbol<unsafe extern "C" fn(*mut c_void, c_uchar, c_uint) -> c_int>, _> =
-            lib.get(b"bd_get_titles") else { return false; };
-        let Ok(bd_get_title_info): Result<Symbol<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut BdTitleInfo>, _> =
-            lib.get(b"bd_get_title_info") else { return false; };
+        let Ok(bd_open): Result<
+            Symbol<unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void>,
+            _,
+        > = lib.get(b"bd_open") else {
+            return false;
+        };
+        let Ok(bd_get_titles): Result<
+            Symbol<unsafe extern "C" fn(*mut c_void, c_uchar, c_uint) -> c_int>,
+            _,
+        > = lib.get(b"bd_get_titles") else {
+            return false;
+        };
+        let Ok(bd_get_title_info): Result<
+            Symbol<unsafe extern "C" fn(*mut c_void, c_uint, c_uint) -> *mut BdTitleInfo>,
+            _,
+        > = lib.get(b"bd_get_title_info") else {
+            return false;
+        };
         let Ok(bd_free_title_info): Result<Symbol<unsafe extern "C" fn(*mut BdTitleInfo)>, _> =
-            lib.get(b"bd_free_title_info") else { return false; };
+            lib.get(b"bd_free_title_info")
+        else {
+            return false;
+        };
         let Ok(bd_close): Result<Symbol<unsafe extern "C" fn(*mut c_void)>, _> =
-            lib.get(b"bd_close") else { return false; };
+            lib.get(b"bd_close")
+        else {
+            return false;
+        };
 
-        let Ok(cpath) = std::ffi::CString::new(disc_path) else { return false; };
+        let Ok(cpath) = std::ffi::CString::new(disc_path) else {
+            return false;
+        };
         let bd = bd_open(cpath.as_ptr(), std::ptr::null());
         if bd.is_null() {
             return false;
@@ -641,13 +661,20 @@ mod tests {
 
     #[test]
     fn test_is_disc_uhd_or_hdr() {
-        let patlabor = "/Volumes/300TB/UHD/Patlabor 2 the Movie (2002) UHD/PATLABOR2_THE_MOVIE_4K_UHD";
+        let patlabor =
+            "/Volumes/300TB/UHD/Patlabor 2 the Movie (2002) UHD/PATLABOR2_THE_MOVIE_4K_UHD";
         if std::path::Path::new(patlabor).exists() {
-            assert!(is_disc_uhd_or_hdr(patlabor), "Patlabor 2 must be detected as UHD/HDR");
+            assert!(
+                is_disc_uhd_or_hdr(patlabor),
+                "Patlabor 2 must be detected as UHD/HDR"
+            );
         }
         let fuuka = "/Volumes/300TB/Blu-ray/Fuuka (2017) Funimation/FUUKA_CS_D1";
         if std::path::Path::new(fuuka).exists() {
-            assert!(!is_disc_uhd_or_hdr(fuuka), "Fuuka D1 must NOT be detected as UHD/HDR");
+            assert!(
+                !is_disc_uhd_or_hdr(fuuka),
+                "Fuuka D1 must NOT be detected as UHD/HDR"
+            );
         }
     }
 }

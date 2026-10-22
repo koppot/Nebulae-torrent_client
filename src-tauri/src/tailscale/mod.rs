@@ -399,10 +399,7 @@ fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
     #[cfg(not(target_os = "windows"))]
     {
         let marker = daemon_cmdline_marker(paths);
-        match Command::new("ps")
-            .args(["-axo", "pid,command"])
-            .output()
-        {
+        match Command::new("ps").args(["-axo", "pid,command"]).output() {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
                 .lines()
                 .filter_map(|line| {
@@ -918,9 +915,9 @@ pub fn status() -> TsStatus {
                 .and_then(|h| h.as_array())
                 .map(|arr| {
                     arr.iter().any(|item| {
-                        item.as_str()
-                            .unwrap_or("")
-                            .contains("Some peers are advertising routes but --accept-routes is false")
+                        item.as_str().unwrap_or("").contains(
+                            "Some peers are advertising routes but --accept-routes is false",
+                        )
                     })
                 })
                 .unwrap_or(false);
@@ -1337,7 +1334,10 @@ mod tests {
             bin_dir: dir.clone(),
         };
         let pids = find_owned_daemon_pids(&paths);
-        assert!(pids.is_empty(), "fake statedir must have no running daemons");
+        assert!(
+            pids.is_empty(),
+            "fake statedir must have no running daemons"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

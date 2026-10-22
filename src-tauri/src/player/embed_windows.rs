@@ -1,20 +1,21 @@
-//! Windows: native video overlay as a child HWND of the main window.
+//! Windows: native video overlay layered BELOW the webview.
 //!
-//! A plain black child window (STATIC class) is created on top of the
-//! webview sibling; libVLC renders into it via
-//! `libvlc_media_player_set_hwnd`. DVD/Blu-ray menu clicks land on the
-//! child window natively. All work happens on Tauri's main thread; the
-//! frontend drives position/size with `player_sync_viewport` (CSS px,
-//! scaled by the window DPI factor here).
+//! A plain black child window (STATIC class) is created beneath the
+//! webview sibling; libVLC renders into it via `libvlc_media_player_set_hwnd`.
+//! Because the overlay sits BELOW the transparent webview in Z-order,
+//! all mouse events (clicks on player buttons, volume/seek tracks,
+//! popovers, video pause/double-click fullscreen) and keyboard shortcuts
+//! reach the frontend webview first. All work happens on Tauri's main
+//! thread; the frontend drives position/size with `player_sync_viewport`.
 
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, MoveWindow, SetWindowPos, ShowWindow, HWND_TOP, SET_WINDOW_POS_FLAGS,
-    SHOW_WINDOW_CMD, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
-    WS_CLIPCHILDREN, WS_VISIBLE,
+    CreateWindowExW, SetWindowPos, ShowWindow, HWND_BOTTOM, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_STYLE, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_VISIBLE,
 };
 
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
@@ -57,10 +58,10 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     };
     let hwnd = unsafe {
         CreateWindowExW(
-            Default::default(),
+            WS_EX_NOACTIVATE,
             w!("STATIC"),
             w!(""),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             x,
             y,
             w,
@@ -72,18 +73,20 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
         )
     }
     .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
-    // Raise above the webview sibling.
+    // Place BELOW the webview sibling so the transparent webview receives all
+    // mouse clicks (play, pause, seek, volume, controls, popovers) and keyboard input first.
     unsafe {
         let _ = SetWindowPos(
             hwnd,
-            Some(HWND_TOP),
+            Some(HWND_BOTTOM),
             0,
             0,
             0,
             0,
-            SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0),
+            SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
         );
     }
+    let _ = win.set_focus();
     Ok(hwnd.0 as usize)
 }
 
@@ -96,8 +99,23 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         return Ok(());
     }
     let cmd: SHOW_WINDOW_CMD = if hidden { SW_HIDE } else { SW_SHOW };
+    let app2 = app.clone();
     app.run_on_main_thread(move || unsafe {
         let _ = ShowWindow(HWND(hwnd as _), cmd);
+        if !hidden {
+            let _ = SetWindowPos(
+                HWND(hwnd as _),
+                Some(HWND_BOTTOM),
+                0,
+                0,
+                0,
+                0,
+                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+            );
+            if let Some(win) = app2.get_webview_window("main") {
+                let _ = win.set_focus();
+            }
+        }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
@@ -124,13 +142,14 @@ pub fn sync_frame(
             .and_then(|w| w.scale_factor().ok())
             .unwrap_or(1.0);
         unsafe {
-            let _ = MoveWindow(
+            let _ = SetWindowPos(
                 HWND(hwnd as _),
+                Some(HWND_BOTTOM),
                 (x * scale) as i32,
                 (y * scale) as i32,
                 (w * scale) as i32,
                 (h * scale) as i32,
-                true,
+                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
             );
         }
     })
@@ -189,9 +208,12 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
 pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
         let fs = win.is_fullscreen().unwrap_or(false);
-        return win
-            .set_fullscreen(!fs)
-            .map_err(|e| format!("fullscreen: {e}"));
+        win.set_fullscreen(!fs)
+            .map_err(|e| format!("fullscreen: {e}"))?;
+        let _ = win.set_focus();
+        use tauri::Emitter;
+        let _ = app.emit("player://fullscreen-changed", !fs);
+        return Ok(());
     }
     Err("main window not found".into())
 }
