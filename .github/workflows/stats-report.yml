@@ -29,7 +29,25 @@ permissions:
   contents: read
 
 jobs:
+  # One-time owner-authorized announcement, dispatched only from the isolated
+  # ops branch. The default branch's scheduled statistics workflow is unchanged.
+  announce-v023:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.note == 'announce-v0.2.3'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: discord-v023-announcement
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release and send one announcement to nebulae-stats
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEBHOOK_URL: ${{ secrets.DISCORD_STATS_WEBHOOK_URL }}
+        run: python3 .github/scripts/announce-v023.py --send
+
   report:
+    if: github.event.inputs.note != 'announce-v0.2.3'
     runs-on: ubuntu-latest
     steps:
       - name: Collect release download statistics
