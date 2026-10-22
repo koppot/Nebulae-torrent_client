@@ -441,7 +441,8 @@ pub fn apply_autostart(enabled: bool, minimized: bool) -> Result<(), String> {
         if !enabled {
             let _ = std::process::Command::new("reg")
                 .args(["delete", key, "/v", "Nebulae", "/f"])
-                .creation_flags_hidden();
+                .creation_flags_hidden()
+                .status();
             return Ok(());
         }
         let value = if minimized {

@@ -59,7 +59,13 @@ pub fn run() {
             let bin = jre.join("bin");
             if bin.exists() {
                 if let Ok(curr_path) = std::env::var("PATH") {
-                    std::env::set_var("PATH", format!("{}:{}", bin.display(), curr_path));
+                    let mut paths = std::env::split_paths(&curr_path).collect::<Vec<_>>();
+                    if !paths.iter().any(|p| p == &bin) {
+                        paths.insert(0, bin);
+                        if let Ok(new_path) = std::env::join_paths(paths) {
+                            std::env::set_var("PATH", new_path);
+                        }
+                    }
                 }
             }
         }
@@ -619,8 +625,13 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        updater::apply_staged_update_if_present(window.app_handle());
-                        window.app_handle().exit(0);
+                        let app = window.app_handle();
+                        if let Some(engine) = app.try_state::<SharedEngine>() {
+                            engine.shutdown();
+                        }
+                        tailscale::shutdown();
+                        updater::apply_staged_update_if_present(app);
+                        app.exit(0);
                     }
                 }
             }
@@ -793,21 +804,11 @@ pub fn run() {
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
             use tauri::Manager;
-            updater::apply_staged_update_if_present(_app_handle);
             if let Some(engine) = _app_handle.try_state::<SharedEngine>() {
                 engine.shutdown();
             }
-            tailscale::shutdown(); // stop the embedded tailscaled
-                                   // Owner defect (2026-10-20): a tray Quit stopped tailscaled and
-                                   // the keepalive but ORPHANED the transmission-daemon. Shut the
-                                   // engine down too — the flag stops the watchdog's respawn, the
-                                   // daemon is terminated, and torrent state stays on disk.
-            {
-                use tauri::Manager;
-                if let Some(engine) = _app_handle.try_state::<crate::engine::SharedEngine>() {
-                    engine.shutdown();
-                }
-            }
+            tailscale::shutdown();
+            updater::apply_staged_update_if_present(_app_handle);
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         tauri::RunEvent::Opened { urls } => {

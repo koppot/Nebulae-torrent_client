@@ -262,8 +262,22 @@ impl VlcLib {
             if !path.exists() {
                 continue;
             }
+            // Add library directory to PATH so dynamic loaders (especially Windows
+            // LoadLibrary for libvlccore.dll and plugin dependencies) resolve siblings.
+            if let Some(dir) = path.parent() {
+                if let Ok(curr_path) = std::env::var("PATH") {
+                    let mut paths = std::env::split_paths(&curr_path).collect::<Vec<_>>();
+                    if !paths.iter().any(|p| p == dir) {
+                        paths.insert(0, dir.to_path_buf());
+                        if let Ok(new_path) = std::env::join_paths(paths) {
+                            std::env::set_var("PATH", new_path);
+                        }
+                    }
+                }
+            }
             // Preload libvlccore by absolute path: libvlc references it via
-            // @rpath/soname, which does not resolve from a foreign process.
+            // @rpath/soname or PE import table, which does not resolve from a
+            // foreign process without preloading or directory registration.
             let deps = Self::preload_core_deps(path, &mut failures);
             unsafe {
                 match Library::new(path) {
@@ -299,17 +313,21 @@ impl VlcLib {
             return Vec::new();
         };
         let mut out = Vec::new();
-        // All dylibs in the lib dir (skip libvlc itself, loaded separately).
+        // All shared libraries in the lib dir (skip libvlc itself, loaded separately).
+        // Matches .dylib (macOS), .so (Linux), and .dll (Windows).
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let dep = entry.path();
-                let is_dylib = dep.extension().and_then(|e| e.to_str()) == Some("dylib");
+                let is_dep = match dep.extension().and_then(|e| e.to_str()) {
+                    Some("dylib") | Some("so") | Some("dll") => true,
+                    _ => false,
+                };
                 let is_libvlc = dep
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.starts_with("libvlc."))
                     .unwrap_or(false);
-                if is_dylib && !is_libvlc {
+                if is_dep && !is_libvlc {
                     unsafe {
                         match Library::new(&dep) {
                             Ok(l) => out.push(l),
@@ -377,14 +395,21 @@ impl VlcLib {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(dir) = exe.parent() {
                     c.push(dir.join("resources").join("vlc").join("libvlc.dll"));
+                    c.push(dir.join("resources").join("vlc").join("lib").join("libvlc.dll"));
                     c.push(dir.join("vlc").join("libvlc.dll"));
                 }
                 if let Some(parent) = exe.parent().and_then(|d| d.parent()) {
                     c.push(parent.join("resources").join("vlc").join("libvlc.dll"));
+                    c.push(parent.join("resources").join("vlc").join("lib").join("libvlc.dll"));
                 }
             }
             c.push(PathBuf::from("src-tauri/resources/vlc/libvlc.dll"));
             c.push(PathBuf::from("resources/vlc/libvlc.dll"));
+            c.push(PathBuf::from("src-tauri/resources/vlc/lib/libvlc.dll"));
+            c.push(PathBuf::from("resources/vlc/lib/libvlc.dll"));
+            // Fallbacks if bundled library is damaged or missing
+            c.push(PathBuf::from("C:\\Program Files\\VideoLAN\\VLC\\libvlc.dll"));
+            c.push(PathBuf::from("C:\\Program Files (x86)\\VideoLAN\\VLC\\libvlc.dll"));
         }
         #[cfg(target_os = "linux")]
         {

@@ -99,7 +99,14 @@ function Owned([string]$association, [uint32]$flags) {
 } | ConvertTo-Json -Compress
 "#;
     let output = crate::utils::process::create_hidden_command("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
         .env("NEBULAE_ASSOC_EXE", exe)
         .env("NEBULAE_ASSOC_REGISTER", if register { "1" } else { "0" })
         .output()

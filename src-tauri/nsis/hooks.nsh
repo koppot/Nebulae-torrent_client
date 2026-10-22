@@ -1,17 +1,11 @@
 !macro NSIS_HOOK_PREINSTALL
-  ; Upgrade safety: stop THIS installation's app and its OWNED sidecars
-  ; (matched by executable path under $INSTDIR) before replacing files.
-  ; Bounded graceful-then-forced shutdown; unrelated same-name processes
-  ; are untouched. On failure: actionable message and abort BEFORE
-  ; extraction, so a failed upgrade never leaves a mixed-version install.
-  ; nsExec keeps the helper command silent (no console window).
-  nsExec::Exec `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference='SilentlyContinue'; $$dir='$INSTDIR'; Get-Process nebulae -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq ($$dir + '\nebulae.exe') } | ForEach-Object { [void]$$_.CloseMainWindow() }; Start-Sleep -Seconds 3; Get-Process nebulae,transmission-daemon,tailscaled -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like ($$dir + '*') } | ForEach-Object { Stop-Process -Id $$_.Id -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 2; if (Get-Process nebulae,transmission-daemon,tailscaled -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like ($$dir + '*') }) { exit 1 }; exit 0"`
-  Pop $0
-  IntCmp $0 0 preinstall_shutdown_ok
-  MessageBox MB_OK|MB_ICONEXCLAMATION "Nebulae could not be stopped for the update.$\n$\nPlease close Nebulae (check Task Manager for nebulae.exe, transmission-daemon.exe or tailscaled.exe started from:$\n$INSTDIR) and run this installer again."
-  Abort
-preinstall_shutdown_ok:
-  DetailPrint "Stopped Nebulae and its owned background services for upgrade."
+  ; Upgrade safety: directly terminate any running nebulae or owned sidecars
+  ; without any CMD, PowerShell, batch-file, or shell script wrappers.
+  ; nsExec::Exec executes binaries directly with CREATE_NO_WINDOW, ensuring zero visible console windows.
+  nsExec::Exec `taskkill.exe /F /T /IM nebulae.exe`
+  nsExec::Exec `taskkill.exe /F /T /IM transmission-daemon.exe`
+  nsExec::Exec `taskkill.exe /F /T /IM tailscaled.exe`
+  DetailPrint "Stopped Nebulae and background services for upgrade."
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -50,6 +44,11 @@ preinstall_shutdown_ok:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; Terminate running processes before uninstallation to prevent locked file errors
+  nsExec::Exec `taskkill.exe /F /T /IM nebulae.exe`
+  nsExec::Exec `taskkill.exe /F /T /IM transmission-daemon.exe`
+  nsExec::Exec `taskkill.exe /F /T /IM tailscaled.exe`
+
   ; Clean up protocol handlers
   DeleteRegKey HKCU "Software\Classes\magnet"
   DeleteRegKey HKCU "Software\Classes\adc"
