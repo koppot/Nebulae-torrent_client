@@ -210,13 +210,43 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
-          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
+          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.23/macosx/vlc-3.0.23-${VLCARCH}.dmg"
           hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
           mkdir -p src-tauri/resources/vlc
           cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
           cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
           cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
           hdiutil detach /tmp/vlcmnt -quiet || true
+          rm -f src-tauri/resources/vlc/plugins/plugins.dat
+
+          # For native aarch64 runner: build and stage the 4 custom patched artifacts
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            (
+              echo "=== Building custom patched VLC 3.0.23 artifacts for arm64 ==="
+              brew install bison || true
+              export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+              curl -fL -o /tmp/vlc-3.0.23.tar.xz "https://download.videolan.org/pub/videolan/vlc/3.0.23/vlc-3.0.23.tar.xz"
+              cd /tmp && tar xf vlc-3.0.23.tar.xz
+              cd /tmp/vlc-3.0.23
+              patch -p1 < "$GITHUB_WORKSPACE/patches/vlc-3.0.23/vt-305.patch"
+              patch -p1 < "$GITHUB_WORKSPACE/patches/vlc-3.0.23/navigate-menu.patch"
+              patch -p1 < "$GITHUB_WORKSPACE/patches/vlc-3.0.23/hdr-tonemap.patch"
+              mkdir -p /tmp/vlc-3.0.23-build && cd /tmp/vlc-3.0.23-build
+              ../vlc-3.0.23/configure --prefix=/tmp/vlc-3.0.23-install \
+                --disable-qt --disable-lua --disable-python --disable-test \
+                --disable-doc --enable-vlc --enable-plugins \
+                --disable-vdpau --disable-wayland
+              make -j"$(sysctl -n hw.ncpu)" libvlc.la
+              make -j"$(sysctl -n hw.ncpu)" libvideotoolbox_plugin.la
+              make -j"$(sysctl -n hw.ncpu)" -C modules libcaopengllayer_plugin.la libglconv_cvpx_plugin.la
+              cp lib/.libs/libvlc.5.dylib "$GITHUB_WORKSPACE/src-tauri/resources/vlc/lib/libvlc.5.dylib"
+              ln -sf libvlc.5.dylib "$GITHUB_WORKSPACE/src-tauri/resources/vlc/lib/libvlc.dylib"
+              cp modules/.libs/libvideotoolbox_plugin.dylib "$GITHUB_WORKSPACE/src-tauri/resources/vlc/plugins/libvideotoolbox_plugin.dylib"
+              cp modules/.libs/libcaopengllayer_plugin.dylib "$GITHUB_WORKSPACE/src-tauri/resources/vlc/plugins/libcaopengllayer_plugin.dylib"
+              cp modules/.libs/libglconv_cvpx_plugin.dylib "$GITHUB_WORKSPACE/src-tauri/resources/vlc/plugins/libglconv_cvpx_plugin.dylib"
+              echo "Custom patched VLC 3.0.23 artifacts staged successfully."
+            ) || echo "Notice: building custom patched VLC artifacts skipped or failed; using official VLC 3.0.23 binaries."
+          fi
           ls src-tauri/resources/vlc
 
       # Full portability: a private JRE ships inside the app so BD-J / UHD
@@ -339,11 +369,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
+          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.23/win64/vlc-3.0.23-win64.zip'
           Invoke-WebRequest -Uri $url -OutFile vlc.zip
           Expand-Archive -Path vlc.zip -DestinationPath vlcextract
           New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
-          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
+          Get-ChildItem -Path vlcextract/vlc-3.0.23 -Exclude '*.exe','*.txt','*.nsi','*.html' |
             Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
 

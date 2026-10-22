@@ -20,7 +20,7 @@ import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositio
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
-import { formatBytes } from '../../lib/formatters';
+
 
 interface Poll {
   time_ms: number;
@@ -30,6 +30,7 @@ interface Poll {
   title_count: number;
   chapter: number;
   chapter_count: number;
+  at_menu: boolean;
 }
 
 /**
@@ -125,6 +126,7 @@ export default function PlayerOverlay() {
     title_count: 0,
     chapter: 0,
     chapter_count: 0,
+    at_menu: false,
   });
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
@@ -156,6 +158,11 @@ export default function PlayerOverlay() {
   // Chapter marks: real per-chapter time offsets for the current title.
   const [chapterMarks, setChapterMarks] = useState<{ offset_ms: number; duration_ms: number; name: string }[]>([]);
   const [discChoices, setDiscChoices] = useState<DiscChoice[] | null>(null);
+  // Authored disc-library title (BDMV/META/DL/bdmt_*.xml). Probed once per
+  // disc, non-blocking; null while probing or when the disc carries no
+  // usable authored name (the label falls back to library metadata).
+  const [authoredTitle, setAuthoredTitle] = useState<string | null>(null);
+  const discTitleCacheRef = useMemo(() => new Map<string, string | null>(), []);
   const lastSaveRef = useRef(0);
   const dragArmedRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -192,6 +199,7 @@ export default function PlayerOverlay() {
     setEnded(false);
     setSeeking(null);
     setDiscChoices(null);
+    setAuthoredTitle(null);
     setErrorMessage(null);
 
     const apply = (p: Poll) => {
@@ -251,14 +259,14 @@ export default function PlayerOverlay() {
   // captured by the native overlay NSView, which forwards key presses as
   // "player-native-key" events; when the webview itself has focus the same
   // handling runs from the window keydown listener. One handler covers
-  // both: disc-menu navigation while the menu domain is active (title 0),
+  // both: disc-menu navigation while the menu domain is active (poll.at_menu),
   // and standard playback shortcuts otherwise (space pause, arrows
   // seek/volume, F fullscreen, M mute).
   useEffect(() => {
     if (!player.open) return;
     const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
     const handle = (key: string) => {
-      if (player.isDisc && pollRef.current.title === 0) {
+      if (player.isDisc && pollRef.current.at_menu) {
         // In the menu domain, navigation keys route to dvdnav/libbluray.
         // Only intercept these specific keys; all other shortcuts (Q, F, M,
         // volume) must fall through to the standard handler below.
@@ -444,7 +452,7 @@ export default function PlayerOverlay() {
         setDiscChoices(
           set.map((d, idx) => ({
             label: `Disc ${d.disc_number || idx + 1}`,
-            detail: `${d.play_target.split('/').pop() || d.play_target} · ${formatBytes(d.total_bytes)}`,
+            detail: d.play_target.split('/').pop() || d.play_target,
             path: d.play_target,
           })),
         );
@@ -493,16 +501,23 @@ export default function PlayerOverlay() {
       setChapterMarks([]);
       return;
     }
+    // Stale guard: the probes below are async and the title can change
+    // (menu -> feature, chapter jump across titles) while a probe is in
+    // flight. The cleanup flips `alive` for the superseded run so its late
+    // answer can never overwrite the fresh title's marks.
+    let alive = true;
     (async () => {
-      // For discs, the playlist chapters (libbluray) are the source of
-      // truth: VLC's own chapter marks for Blu-ray titles carry offsets
-      // that only cover the head of the timeline. VLC's marks are used
-      // only when the disc probe yields nothing (plain video files).
+      // For Blu-ray discs, the playlist chapters (libbluray) are the source
+      // of truth: VLC's own chapter marks for Blu-ray titles carry offsets
+      // that only cover the head of the timeline. VLC's marks are the
+      // fallback for plain video files AND the primary source for DVDs
+      // (dvdnav exposes chapters; the libbluray probe returns empty there).
       try {
         const disc = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
           'player_disc_chapters',
           { durationMs: Math.round(poll.length_ms) },
         );
+        if (!alive) return;
         if (disc.length > 1) {
           setChapterMarks(disc);
           return;
@@ -514,11 +529,15 @@ export default function PlayerOverlay() {
         const marks = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
           'player_chapter_marks',
         );
+        if (!alive) return;
         setChapterMarks(marks);
       } catch {
         /* ticks are best-effort */
       }
     })();
+    return () => {
+      alive = false;
+    };
   }, [player.open, poll.title, poll.title_count, poll.length_ms]);
 
   // Fullscreen state mirror for the button's icon.
@@ -631,10 +650,39 @@ export default function PlayerOverlay() {
      
   }, [player.open, poll.title]);
 
+  // Authored display-title probe (owner: the upper-left label uses the
+  // movie/disc title from disc metadata when available). Non-blocking and
+  // cached per resolved path, so disc switches re-probe cleanly without
+  // ever touching playback.
+  useEffect(() => {
+    if (!player.open || !player.isDisc) return;
+    const key = player.resolvedPath;
+    if (discTitleCacheRef.has(key)) {
+      setAuthoredTitle(discTitleCacheRef.get(key) ?? null);
+      return;
+    }
+    let alive = true;
+    invoke<{ name: string; lang: string } | null>('player_disc_display_title')
+      .then((r) => {
+        const name = r && r.name ? r.name : null;
+        discTitleCacheRef.set(key, name);
+        if (alive) setAuthoredTitle(name);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [player.open, player.isDisc, player.resolvedPath, discTitleCacheRef]);
+
   // Top-left now playing title & release year (owner instruction):
   // Format: "Title (Year)" when reliable metadata is available; omit if missing.
   const displayTitleInfo = useMemo(() => {
-    let clean = (player.title || '').trim();
+    // Authored disc-library name wins when the disc supplies a meaningful
+    // one (owner: the label uses the movie/disc title from disc metadata).
+    // The filename/library title is the fallback; generic authored entries
+    // like "FUUKA_CS_D1" are rejected by the backend probe. Year still
+    // comes only from reliable metadata (the disc XML carries none).
+    let clean = (authoredTitle || player.title || '').trim();
     let year = player.year ? String(player.year) : null;
     if (!year) {
       const match = clean.match(/\s*\((\d{4})\)$/);
@@ -646,7 +694,7 @@ export default function PlayerOverlay() {
       clean = clean.replace(new RegExp(`\\s*\\(${year}\\)$`), '').trim();
     }
     return { title: clean || player.title, year };
-  }, [player.title, player.year]);
+  }, [player.title, player.year, authoredTitle]);
 
   if (!player.open) return null;
 
@@ -684,12 +732,11 @@ export default function PlayerOverlay() {
     // At the disc menu the button is PLAY (owner: a pause button has no
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
-    if (player.isDisc && pollRef.current.title === 0) {
+    if (player.isDisc && pollRef.current.at_menu) {
       // The menu demuxer idles until an entry is activated (set_title is
       // ignored in the menu domain): activate the highlighted entry (Play
       // All), then seek to the save point if one exists.
       const savedMs = savedPositionMs(player.resolvedPath);
-      invoke('player_cancel_menu_watch').catch(() => {});
       invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       if (savedMs >= 10000) {
         resumeFromMenu(player.resolvedPath, savedMs);
@@ -904,7 +951,7 @@ export default function PlayerOverlay() {
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.
               Enter activates the highlighted entry on the first press. */}
-          {player.isDisc && poll.title === 0 && (
+          {player.isDisc && poll.at_menu && (
             <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
               {([
                 ['◀', 3, 'Menu: left'],

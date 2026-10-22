@@ -204,14 +204,39 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
 
 /// Minimize via the Tauri window API.
 pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    if minimize_to_tray_enabled(app) {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+            return Ok(());
+        }
+        return Err("main window not found".into());
+    }
     if let Some(win) = app.get_webview_window("main") {
         return win.minimize().map_err(|e| format!("minimize: {e}"));
     }
     Err("main window not found".into())
 }
 
+/// Reads the `minimize_to_tray` user setting (defaults to true).
+fn minimize_to_tray_enabled(app: &AppHandle) -> bool {
+    app.try_state::<std::sync::Arc<crate::db::Database>>()
+        .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+        .and_then(|json| {
+            serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+        })
+        .map(|s| s.minimize_to_tray)
+        .unwrap_or(true)
+}
+
 /// Window controls via the Tauri window API (works on Linux).
 pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    if minimize_to_tray_enabled(app) {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+            return Ok(());
+        }
+        return Err("main window not found".into());
+    }
     if let Some(win) = app.get_webview_window("main") {
         return win.minimize().map_err(|e| format!("minimize: {e}"));
     }

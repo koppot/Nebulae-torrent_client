@@ -28,6 +28,12 @@ pub struct VlcLib {
     // MRL-based media (bluray://, dvd://) — folder-based disc images.
     pub libvlc_media_new_location: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     pub libvlc_media_release: unsafe extern "C" fn(*mut c_void),
+    // libvlccore internal, exported by the bundled dylib: sets a variable on
+    // a VLC object directly. Needed because libvlc_media_player_set_nsobject()
+    // resets "vout" (and "avcodec-hw", "window") to empty strings on the
+    // media player object (upstream 3.0.x lib/media_player.c), which shadows
+    // any --vout passed to libvlc_new for every vout under that player.
+    pub var_set_checked: unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int,
     pub libvlc_media_player_new_from_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     pub libvlc_media_player_release: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_set_nsobject: unsafe extern "C" fn(*mut c_void, *mut c_void),
@@ -39,6 +45,7 @@ pub struct VlcLib {
     pub libvlc_media_player_is_playing: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
+    pub libvlc_media_player_set_position: unsafe extern "C" fn(*mut c_void, f32),
     pub libvlc_media_player_get_length: unsafe extern "C" fn(*mut c_void) -> i64,
     // DVD/Blu-ray navigation: titles map to disc features, title 0 is the
     // menu domain on DVD (dvdnav); chapters are per-title.
@@ -56,6 +63,7 @@ pub struct VlcLib {
     // libvlc_media_player_navigate(activate) switched title 0 -> 1 on the
     // first call). This API is therefore the ONLY reliable menu input path.
     pub libvlc_media_player_navigate: unsafe extern "C" fn(*mut c_void, c_int),
+    pub libvlc_media_player_navigate_menu: Option<unsafe extern "C" fn(*mut c_void)>,
     // Full title/chapter descriptions: real chapter time offsets for the
     // seek bar marks, and duration-aware title navigation (features only).
     pub libvlc_media_player_get_full_title_descriptions:
@@ -78,6 +86,8 @@ pub struct VlcLib {
     pub libvlc_audio_get_track_description:
         unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_track_description_list_release: unsafe extern "C" fn(*mut VlcTrackDescription),
+    pub libvlc_video_get_size:
+        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int>,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -86,6 +96,90 @@ pub struct VlcTitleDescription {
     pub i_duration: i64,
     pub psz_name: *mut c_char,
     pub i_flags: u32,
+}
+
+/// Title flags per libvlc: INPUT_TITLE_MENU=0x01, INPUT_TITLE_INTERACTIVE=0x02
+/// From upstream include/vlc_input.h (3.0.x)
+pub const INPUT_TITLE_MENU: u32 = 0x01;
+pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
+
+/// Return true if the current title is the disc's authored TOP MENU.
+///
+/// Only INPUT_TITLE_MENU (0x01) qualifies. INPUT_TITLE_INTERACTIVE (0x02)
+/// must NOT be treated as "at menu": VLC's bluray demux (3.0.23
+/// modules/access/bluray.c, blurayInitTitles) flags EVERY HDMV title that
+/// has a movie object as INTERACTIVE — including First Play, the intro
+/// chain, and feature titles — so a 0x02-based test reports "at menu"
+/// from the first poll on a pure-HDMV disc (observed on Patlabor 2 UHD:
+/// at_menu was true during the studio logos). dvdnav (modules/access/
+/// dvdnav.c) likewise marks only its menu title with INPUT_TITLE_MENU.
+///
+/// Title indices are validated defensively: libvlc_media_player_get_title
+/// returns -1 while the demuxer is still starting.
+pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    // libvlc_media_player_get_full_title_descriptions fills titles pointer
+    // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    let current = (lib.libvlc_media_player_get_title)(m);
+    if current < 0 || current >= n {
+        (lib.libvlc_title_descriptions_release)(titles, n);
+        return false;
+    }
+    let t = &**titles.add(current as usize);
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    is_menu
+}
+
+/// Return true if the disc exposes at least one authored menu title.
+pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    let mut found = false;
+    for i in 0..n {
+        let t = &**titles.add(i as usize);
+        if (t.i_flags & INPUT_TITLE_MENU) != 0 {
+            found = true;
+            break;
+        }
+    }
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    found
+}
+
+/// Return true if the currently active title is First Play or a short intro clip (<= 300s).
+pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
+    let m = mp as *mut c_void;
+    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
+    if n <= 0 || titles.is_null() {
+        return false;
+    }
+    let current = (lib.libvlc_media_player_get_title)(m);
+    if current < 0 || current >= n {
+        (lib.libvlc_title_descriptions_release)(titles, n);
+        return false;
+    }
+    let t = &**titles.add(current as usize);
+    let dur_s = t.i_duration / 1000;
+    let is_short = dur_s <= 300;
+    let is_named_fp = if !t.psz_name.is_null() {
+        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
+        cstr.to_string_lossy().to_ascii_lowercase().contains("first play")
+    } else {
+        false
+    };
+    (lib.libvlc_title_descriptions_release)(titles, n);
+    is_named_fp || is_short
 }
 
 /// Mirror of libvlc_chapter_description_t (C layout, header-verified).
@@ -380,6 +474,14 @@ impl VlcLib {
                 *s
             }};
         }
+        macro_rules! sym_opt {
+            ($name:literal : $ty:ty) => {{
+                let s: Option<Symbol<$ty>> = lib
+                    .get::<$ty>(concat!($name, "\0").as_bytes())
+                    .ok();
+                s.map(|s| *s)
+            }};
+        }
         VlcLib {
             libvlc_new: sym!("libvlc_new": unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void),
             libvlc_release: sym!("libvlc_release": unsafe extern "C" fn(*mut c_void)),
@@ -388,6 +490,20 @@ impl VlcLib {
             libvlc_media_new_path: sym!("libvlc_media_new_path": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_new_location: sym!("libvlc_media_new_location": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_release: sym!("libvlc_media_release": unsafe extern "C" fn(*mut c_void)),
+            // var_SetChecked lives in libvlccore, not libvlc; look it up in
+            // the preloaded dependency libraries. libvlc.5 keeps libvlccore
+            // mapped, so the pointer stays valid for the process lifetime.
+            var_set_checked: {
+                type VscFn = unsafe extern "C" fn(*mut c_void, *const c_char, c_int, usize) -> c_int;
+                let mut found: Option<Symbol<VscFn>> = None;
+                for dep in &deps {
+                    if let Ok(s) = dep.get::<VscFn>(b"var_SetChecked\0") {
+                        found = Some(s);
+                        break;
+                    }
+                }
+                *found.unwrap_or_else(|| panic!("libvlccore symbol var_SetChecked missing"))
+            },
             libvlc_media_player_new_from_media: sym!("libvlc_media_player_new_from_media": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
             libvlc_media_player_release: sym!("libvlc_media_player_release": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_set_nsobject: sym!("libvlc_media_player_set_nsobject": unsafe extern "C" fn(*mut c_void, *mut c_void)),
@@ -399,6 +515,7 @@ impl VlcLib {
             libvlc_media_player_is_playing: sym!("libvlc_media_player_is_playing": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),
+            libvlc_media_player_set_position: sym!("libvlc_media_player_set_position": unsafe extern "C" fn(*mut c_void, f32)),
             libvlc_media_player_get_length: sym!("libvlc_media_player_get_length": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_get_title_count: sym!("libvlc_media_player_get_title_count": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_title: sym!("libvlc_media_player_get_title": unsafe extern "C" fn(*mut c_void) -> c_int),
@@ -409,6 +526,7 @@ impl VlcLib {
             libvlc_audio_set_volume: sym!("libvlc_audio_set_volume": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_video_set_deinterlace: sym!("libvlc_video_set_deinterlace": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_media_player_navigate: sym!("libvlc_media_player_navigate": unsafe extern "C" fn(*mut c_void, c_int)),
+            libvlc_media_player_navigate_menu: sym_opt!("libvlc_media_player_navigate_menu": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_get_full_title_descriptions: sym!("libvlc_media_player_get_full_title_descriptions": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcTitleDescription) -> c_int),
             libvlc_title_descriptions_release: sym!("libvlc_title_descriptions_release": unsafe extern "C" fn(*mut *mut VlcTitleDescription, c_int)),
             libvlc_media_player_get_full_chapter_descriptions: sym!("libvlc_media_player_get_full_chapter_descriptions": unsafe extern "C" fn(*mut c_void, c_int, *mut *mut *mut VlcChapterDescription) -> c_int),
@@ -422,6 +540,7 @@ impl VlcLib {
             libvlc_audio_set_track: sym!("libvlc_audio_set_track": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
+            libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
             lib,
             deps,
         }
@@ -489,11 +608,20 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=3000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // HDR Tone-Mapping:
-            // When playing BT.2020 PQ (ST2084) HDR content, apply Hable filmic tone-mapping
-            // so contrast, saturation, and highlight roll-off render accurately without washed-out colors.
-            // On standard SDR content (BT.709), this setting remains inactive.
-            CString::new("--tone-mapping=3").unwrap(),
+            // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
+            // SDR): handled by the vout's OpenGL tone-mapping shader
+            // pipeline (VLC 3.0.x has no libplacebo; it lives in the
+            // OpenGL vout helper). These variables are inherited by the
+            // vout's GL
+            // helper; they are NOT among the player-object variables that
+            // libvlc_media_player_set_nsobject() resets, so they survive
+            // embedding. A --vout pin is deliberately absent: set_nsobject
+            // resets the player object's "vout" variable anyway (upstream
+            // 3.0.x lib/media_player.c), and the default module probe
+            // already selects caopengllayer for an embedded NSView
+            // (priority 300 > vout_macosx 250, verified in
+            // modules/video_output/caopengllayer.m and macosx.m).
+            CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
         ];
@@ -571,6 +699,19 @@ impl VlcSession {
                 #[cfg(target_os = "macos")]
                 {
                     (lib.libvlc_media_player_set_nsobject)(mp, video_target as *mut c_void);
+                    // NOTE: set_nsobject clears "vout" (and "avcodec-hw",
+                    // "window") on the player (upstream sets them to ""),
+                    // which would shadow a --vout libvlc_new arg for every
+                    // vout created under this player. This is why no --vout
+                    // is passed at all: the default probe selects
+                    // caopengllayer for the embedded NSView, and that module
+                    // carries the OpenGL tone-mapping pipeline (VLC 3.0.x
+                    // has no libplacebo). If a future change ever needs a
+                    // forced display module, it
+                    // must re-set "vout" here AFTER the embedding call via
+                    // var_SetChecked (bound above; VLC_VAR_STRING = 0x0040,
+                    // the vlc_value_t union is 8 bytes so the C string
+                    // pointer travels as usize).
                 }
                 #[cfg(target_os = "windows")]
                 {

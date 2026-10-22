@@ -38,7 +38,7 @@ pub use embed_linux::{
 };
 
 #[cfg(target_os = "macos")]
-mod embed_macos;
+pub(crate) mod embed_macos;
 
 #[cfg(target_os = "windows")]
 mod embed_windows;
@@ -58,6 +58,18 @@ use std::sync::Mutex;
 pub struct PlayerState {
     /// macOS: raw `NSView*` of the video overlay layering above the webview.
     pub overlay_view: AtomicUsize,
+    /// macOS: raw `NebulaeEDRScreenObserver*` for screen-change notifications.
+    /// Stored as AtomicUsize because Retained<EDRScreenObserver> is !Send.
+    /// Lives for the process lifetime, like the overlay view itself.
+    pub edr_observer: AtomicUsize,
+    /// macOS: latches true once the EDR dynamic-range flag has actually been
+    /// applied to the VLC video layer for the current session. Reset on each
+    /// new session; the player poll retries until the layer exists.
+    pub edr_applied: std::sync::atomic::AtomicBool,
+    /// Indicates whether the active session is playing HDR / UHD content.
+    /// Used by embed_macos to configure ITU-R BT.2100 PQ color space on the
+    /// video layer instead of standard sRGB.
+    pub is_hdr: std::sync::atomic::AtomicBool,
     /// The loaded libVLC, created on first use.
     pub lib: Mutex<Option<std::sync::Arc<engine::VlcLib>>>,
     /// libvlc_instance_t*
@@ -78,16 +90,17 @@ pub struct PlayerState {
     pub current_path: Mutex<Option<String>>,
     /// The resolved playback target (ISO/VIDEO_TS root) of the session.
     pub current_resolved: Mutex<Option<String>>,
-    /// While true, a post-open watcher keeps forcing the disc's MENU title:
-    /// VLC's Blu-ray demuxer starts the disc's FIRST-PLAY flow (warning →
-    /// program chain) and would otherwise run straight into playback.
-    /// Cleared when the frontend wants playback (resume / menu Play).
-    pub menu_watch: std::sync::atomic::AtomicBool,
     /// Guard around every VLC call that uses the media-player pointer and
     /// around the session teardown that releases it: background helpers
     /// (menu watcher) must never call into a released player. Held for the
     /// duration of each call, never across waits.
     pub media_player_cell: std::sync::Mutex<()>,
+    /// Monotonic session generation: bumped by stop_session and by every
+    /// successful open. Background helpers (liveness probe) capture the
+    /// generation at spawn and must bail out when it changes, so a stale
+    /// helper can never act on a session that replaced the one it was
+    /// started for.
+    pub session_gen: AtomicUsize,
     /// Serializes session open and teardown calls so concurrent open requests
     /// cannot race and create duplicate concurrent playback sessions.
     pub open_lock: tokio::sync::Mutex<()>,

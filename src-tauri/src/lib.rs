@@ -546,8 +546,25 @@ pub fn run() {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
+                    } => {
+                        // Left-click toggles the main window: hide if visible,
+                        // show/restore if hidden or minimized. Right-click
+                        // (show_menu_on_left_click = false) opens the context menu.
+                        let app = tray.app_handle();
+                        if let Some(window) = app
+                            .get_webview_window("main")
+                            .or_else(|| app.webview_windows().into_values().next())
+                        {
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
                     }
-                    | tauri::tray::TrayIconEvent::DoubleClick { .. } => {
+                    tauri::tray::TrayIconEvent::DoubleClick { .. } => {
                         let app = tray.app_handle();
                         if let Some(window) = app
                             .get_webview_window("main")
@@ -729,6 +746,7 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_disc_chapters,
+            commands::media::player_disc_display_title,
             commands::media::player_set_always_on_top,
             commands::media::player_always_on_top,
             commands::media::add_external_media,
@@ -737,11 +755,11 @@ pub fn run() {
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
             commands::media::player_disc_chapters,
+            commands::media::player_disc_display_title,
             commands::media::player_always_on_top,
             commands::media::player_list_tracks,
             commands::media::player_track_languages,
             commands::media::window_begin_drag,
-            commands::media::player_cancel_menu_watch,
             commands::media::player_engine_playback,
             commands::media::player_set_track,
             commands::media::player_menu_navigate,

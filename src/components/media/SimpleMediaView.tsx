@@ -6,7 +6,7 @@ import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { resolvePoster } from '../../lib/posters';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { openInPlayer, resumeInPlayer, savedPositionMs, savePositionMs } from '../../lib/playerStore';
+import { openInPlayer, resumeInPlayer, savedPositionMs, savePositionMs, usePlayerStore } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -79,9 +79,11 @@ export const folderOf = (t: TorrentItem): string => {
   return /\.[a-z0-9]+$/i.test(p) ? p.split(/[/\\]/).slice(0, -1).join('/') : p;
 };
 
-export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedId } = useTorrentStore();
+export const SimpleMediaView: React.FC = () => {
+  const { torrents, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode, searchQuery } = useUiStore();
   const { fetchSeedTimeRecords } = useTrackerStore();
+  const playerOpen = usePlayerStore().open;
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
   const [discSetMap, setDiscSetMap] = useState<Record<string, DiscStructureInfo[]>>({});
@@ -219,6 +221,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
     Record<string, { overview: string | null; runtime: number | null; year: number | null }>
   >({});
   useEffect(() => {
+    if (playerOpen) return;
     externalMedia.forEach((m) => {
       if (m.path in externalPosterMap) return;
       setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
@@ -246,10 +249,11 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
         });
     });
-  }, [externalMedia, externalPosterMap]);
+  }, [externalMedia, externalPosterMap, playerOpen]);
 
   // Inspect optical disc format for external media items
   useEffect(() => {
+    if (playerOpen) return;
     externalMedia.forEach((m) => {
       if (!(m.path in discSetMap)) {
         invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: m.path })
@@ -265,7 +269,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
           });
       }
     });
-  }, [externalMedia, discSetMap]);
+  }, [externalMedia, discSetMap, playerOpen]);
 
   // Details popup for an external title (owner: same options/details as
   // the library).
@@ -317,6 +321,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
   // (multi-ISO torrents classify every disc by its own size — the badge, the
   // pills and the hover panel all read the set, not just the first image).
   useEffect(() => {
+    if (playerOpen) return;
     torrents.forEach((t) => {
       if (!(t.id in discSetMap)) {
         invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: contentPath(t) })
@@ -337,7 +342,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
         setDiscMetaMap((prev) => ({ ...prev, [t.id]: discSetMap[t.id][0] }));
       }
     });
-  }, [torrents, discSetMap, discMetaMap]);
+  }, [torrents, discSetMap, discMetaMap, playerOpen]);
 
   // Poster resolution (approved chain): 1) ADC poster (the artwork the
   // tracker already shows on torrents.php, matched by name and cached
@@ -1047,11 +1052,7 @@ export const SimpleMediaView: React.FC = () => {  const { torrents, setSelectedI
                         <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
                       ) : null}
                     </h4>
-                    {discInfo?.total_bytes ? (
-                      <p className="text-[10px] font-mono text-[#8c8c8c] text-center mt-0.5">
-                        {formatBytes(discInfo.total_bytes)}
-                      </p>
-                    ) : null}
+
                   </div>
                 </div>
               );

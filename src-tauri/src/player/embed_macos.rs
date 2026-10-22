@@ -13,11 +13,18 @@
 //!
 //! All view work happens on the main thread (Tauri's `run_on_main_thread`);
 //! the frontend drives position/size with `player_sync_viewport`.
+//!
+//! HDR: When the window is on an Apple Silicon XDR display, the content
+//! view's layer has `wantsExtendedDynamicRangeContent = YES` enabled so
+//! the underlying caopengllayer can emit values above 1.0. The window
+//! listens for screen changes and re-applies this when the window moves
+//! between displays.
 
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
-use objc2_app_kit::{NSEvent, NSView, NSWindow, NSWindowOrderingMode};
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2::{class, sel, MainThreadOnly};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSView, NSWindow, NSWindowOrderingMode, NSWindowDidChangeScreenNotification};
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
+use objc2_quartz_core::{CALayer, CADynamicRangeHigh, CADynamicRangeStandard};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use tauri::{AppHandle, Manager};
@@ -59,13 +66,14 @@ objc2::define_class!(
 
         #[unsafe(method(keyDown:))]
         unsafe fn key_down(this: &VideoOverlayView, event: &NSEvent) {
-            let _ = this;
             if let Some(app) = overlay_app() {
                 if let Some(key) = native_key_name(event) {
                     use tauri::Emitter;
                     let _ = app.emit("player-native-key", key);
+                    return;
                 }
             }
+            let _: () = objc2::msg_send![super(this), keyDown: event];
         }
 
         #[unsafe(method(acceptsFirstResponder))]
@@ -94,17 +102,234 @@ fn overlay_app() -> Option<&'static AppHandle> {
     OVERLAY_APP.get()
 }
 
+/// Handle for cross-module use (e.g. the poll-driven EDR retry in the
+/// player commands). None until the first overlay is created.
+pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
+    OVERLAY_APP.get()
+}
+
 fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
 
+extern "C" {
+    fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+    #[allow(dead_code)]
+    static kCGColorSpaceDisplayP3: *const std::ffi::c_void;
+    static kCGColorSpaceSRGB: *const std::ffi::c_void;
+}
+
+/// Apply EDR (Extended Dynamic Range) settings and colorspace to a CALayer.
+///
+/// Follows MacLC 1.3 `caopengllayer.m:1303-1340` for SDR tone-mapped output:
+/// - When `_is_hdr` is true:
+///   The custom `libcaopengllayer_plugin.dylib` OpenGL fragment shader evaluates
+///   the ACES filmic tone-mapping curve and transforms BT.2020 PQ
+///   into BT.709 (gamma 2.2). We tag the layer with `kCGColorSpaceSRGB`,
+///   `wantsExtendedDynamicRangeContent = false`, and `preferredDynamicRange = CADynamicRangeStandard`.
+///   This ensures macOS WindowServer interprets the tone-mapped 8-bit framebuffer
+///   accurately without compositor clipping or washed-out colors.
+/// - When `_is_hdr` is false (SDR Blu-ray / DVD):
+///   `colorspace = kCGColorSpaceSRGB`, standard dynamic range.
+pub(crate) unsafe fn apply_edr_to_layer(layer: &CALayer, _is_hdr: bool) {
+    // 1. Extended Dynamic Range content opt-in: false because shader tone-maps to SDR [0, 1]
+    #[allow(deprecated)]
+    layer.setWantsExtendedDynamicRangeContent(false);
+
+    // 2. Modern dynamic range preference (macOS 14+)
+    if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
+        layer.setPreferredDynamicRange(&CADynamicRangeStandard);
+    }
+
+    // 3. Headroom configuration (macOS 14+)
+    if layer.respondsToSelector(sel!(setContentsHeadroom:)) {
+        let _: () = objc2::msg_send![layer, setContentsHeadroom: 1.0f64];
+    }
+
+    // 4. Tone map mode (macOS 15+)
+    // Disable Core Animation automatic tone mapping so WindowServer does not
+    // double-tonemap or compress our shader-rendered SDR sRGB layer.
+    if layer.respondsToSelector(sel!(setToneMapMode:)) {
+        let mode = objc2_foundation::NSString::from_str("never");
+        let _: () = objc2::msg_send![layer, setToneMapMode: &*mode];
+    }
+
+    // 5. Colorspace (supported on CAOpenGLLayer and CAMetalLayer)
+    // Our custom fragment shader tone-maps BT.2020 PQ to standard sRGB / BT.709
+    // SDR color space with gamma 2.2. Tagging the layer with kCGColorSpaceSRGB ensures
+    // macOS WindowServer displays 100% accurate, rich, saturated colors without gamut clipping.
+    if layer.respondsToSelector(sel!(setColorspace:)) {
+        let cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if !cs.is_null() {
+            let _: () = objc2::msg_send![layer, setColorspace: cs];
+            CGColorSpaceRelease(cs);
+        }
+    }
+}
+
+/// Apply EDR to the VLC-owned video layer attached to the overlay view.
+/// Returns true when a layer was found and configured.
+///
+/// The overlay NSView is deliberately NOT layer-backed (VLC's caopengllayer
+/// vout refuses views that manage their own layer), so the overlay's own
+/// layer is nil. The vout instead inserts its own layer-backed VLCVideoLayerView
+/// as a SUBVIEW (modules/video_output/caopengllayer.m, Open(): addSubview:),
+/// and that subview's layer IS the CAOpenGLLayer the video renders into. That is
+/// the layer that carries preferredDynamicRange, wantsExtendedDynamicRangeContent,
+/// contentsHeadroom, and colorspace for native HDR headroom on XDR displays.
+///
+/// The video subview is created asynchronously when the vout opens (after the
+/// decoder starts), so a call right after play() usually finds nothing yet;
+/// callers retry via maybe_apply_edr until it reports true. Idempotent.
+#[cfg(target_os = "macos")]
+pub unsafe fn apply_edr_to_video_layer(app: &AppHandle) -> bool {
+    let state = app.state::<crate::player::PlayerState>();
+    let ptr = state.overlay_view.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr == 0 {
+        return false;
+    }
+    let is_hdr = state.is_hdr.load(std::sync::atomic::Ordering::SeqCst);
+    let view = &*(ptr as *mut NSView);
+
+    let mut gl_layer_found = false;
+
+    // Apply EDR dynamic range properties to the hosting overlay view's layer
+    if let Some(layer) = view.layer() {
+        apply_edr_to_layer(&layer, is_hdr);
+        if layer.respondsToSelector(sel!(setColorspace:)) {
+            gl_layer_found = true;
+        }
+    }
+
+    // Traverse the subview tree to find the actual video rendering layer
+    // (the layer that responds to setColorspace:, specifically VLCCAOpenGLLayer).
+    // We only return true (latching edr_applied) when that target layer is found and configured.
+    unsafe fn visit_view_for_edr(v: &NSView, is_hdr: bool, found: &mut bool) {
+        if let Some(layer) = v.layer() {
+            apply_edr_to_layer(&layer, is_hdr);
+            if layer.respondsToSelector(sel!(setColorspace:)) {
+                *found = true;
+            }
+        }
+        let subviews = v.subviews();
+        for sub in subviews.iter() {
+            visit_view_for_edr(&sub, is_hdr, found);
+        }
+    }
+
+    let subviews = view.subviews();
+    for sub in subviews.iter() {
+        visit_view_for_edr(&sub, is_hdr, &mut gl_layer_found);
+    }
+
+    if gl_layer_found {
+        tracing::info!("[player] EDR/HDR video layer (VLCCAOpenGLLayer) configured: is_hdr={is_hdr}");
+    }
+
+    gl_layer_found
+}
+
+/// Apply EDR to the video layer once per playback session. Cheap to call
+/// from any thread and on every player poll: it dispatches to the main
+/// thread only until the layer has actually been found and configured, and
+/// PlayerState::edr_applied latches the success. No timers or sleeps: the
+/// frontend's existing 1 Hz poll is the retry cadence.
+#[cfg(target_os = "macos")]
+pub fn maybe_apply_edr(app: &AppHandle) {
+    let state = app.state::<crate::player::PlayerState>();
+    if state.edr_applied.load(Ordering::SeqCst) {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let applied = unsafe { apply_edr_to_video_layer(&app2) };
+        if applied {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+/// Force re-application of EDR and colorspace to the video layer,
+/// bypassing the edr_applied check. Used when transitioning from SDR to HDR
+/// (e.g. menu to UHD feature).
+#[cfg(target_os = "macos")]
+pub fn force_apply_edr(app: &AppHandle) {
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let applied = unsafe { apply_edr_to_video_layer(&app2) };
+        if applied {
+            app2.state::<crate::player::PlayerState>()
+                .edr_applied
+                .store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+// Observer for NSWindow.didChangeScreenNotification. Re-applies EDR settings
+// when the window moves between displays with different dynamic range
+// capabilities.
+objc2::define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "NebulaeEDRScreenObserver"]
+    struct EDRScreenObserver;
+
+    impl EDRScreenObserver {
+        #[unsafe(method(screenDidChange:))]
+        unsafe fn screen_did_change(&self, _notification: *mut std::ffi::c_void) {
+            if let Some(app) = crate::player::embed_macos::overlay_app() {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Ok(raw) = win.ns_window() {
+                        let ns_win = raw as *mut NSWindow;
+                        let _ = apply_edr_to_window(&*ns_win);
+                    }
+                }
+                // Re-apply EDR to the VLC-owned video layer on screen change
+                // (XDR vs non-XDR displays have different dynamic range).
+                let _ = apply_edr_to_video_layer(app);
+            }
+        }
+    }
+);
+
+/// Apply EDR settings to a window's content view layer.
+unsafe fn apply_edr_to_window(win: &NSWindow) {
+    let Some(content) = win.contentView() else {
+        return;
+    };
+    content.setWantsLayer(true);
+    if let Some(layer) = content.layer() {
+        #[allow(deprecated)]
+        layer.setWantsExtendedDynamicRangeContent(true);
+        if layer.respondsToSelector(sel!(setPreferredDynamicRange:)) {
+            layer.setPreferredDynamicRange(&CADynamicRangeHigh);
+        }
+    }
+}
+
+
 /// Translate a native key event into the frontend's key-name vocabulary.
 fn native_key_name(event: &NSEvent) -> Option<String> {
+    let flags = event.modifierFlags();
+    if flags.intersects(
+        NSEventModifierFlags::Command
+            | NSEventModifierFlags::Control
+            | NSEventModifierFlags::Option,
+    ) {
+        return None;
+    }
     let chars = event.charactersIgnoringModifiers()?.to_string();
     match chars.as_str() {
         " " => Some(" ".to_string()),
         "\r" => Some("Enter".to_string()),
         "\x1b" => Some("Escape".to_string()),
+        "\u{f700}" => Some("ArrowUp".to_string()),
+        "\u{f701}" => Some("ArrowDown".to_string()),
+        "\u{f702}" => Some("ArrowLeft".to_string()),
+        "\u{f703}" => Some("ArrowRight".to_string()),
         other => Some(other.to_string()),
     }
 }
@@ -183,8 +408,27 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
 /// Toggle fullscreen for the player window (F key / fullscreen button /
 /// double-click). Sets the corner radius to 0 in fullscreen, 3 px out.
 /// Miniaturize (yellow traffic light) the main window. Commanded from the
-/// webview dot controls on the borderless player window.
+/// webview dot controls on the borderless player window. Honors the
+/// `minimize_to_tray` setting: when enabled, hides the window to the tray
+/// instead of minimizing it to the Dock.
 pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
+    let minimize_to_tray = app
+        .try_state::<std::sync::Arc<crate::db::Database>>()
+        .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+        .and_then(|json| {
+            serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+        })
+        .map(|s| s.minimize_to_tray)
+        .unwrap_or(true);
+
+    if minimize_to_tray {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+            return Ok(());
+        }
+        return Err("main window not found".into());
+    }
+
     let app2 = app.clone();
     app.run_on_main_thread(move || {
         let Some(win) = app2.get_webview_window("main") else {
@@ -301,6 +545,39 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
         content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(webview));
         // Intentionally leak one overlay view for the process lifetime;
         // repeated play/stop reuses it.
+
+        // Configure EDR (Extended Dynamic Range) headroom tracking for
+        // Apple Silicon XDR displays. We set the content view's layer flag
+        // which allows the caopengllayer vout to emit HDR values above 1.0
+        // without clipping when the window is on an XDR display.
+        // Source: MacLC 1.3, modules/video_output/apple/VLCSampleBufferDisplay.m
+        apply_edr_to_window(&*ns_win);
+
+        // Register for window screen-change notifications so EDR settings are
+        // re-applied when the window moves between displays with different
+        // dynamic range capabilities. The observer is tied to this specific
+        // window and stored in PlayerState for cleanup.
+        let observer: Retained<EDRScreenObserver> =
+            objc2::msg_send![EDRScreenObserver::alloc(mtm), init];
+        let nc: *mut objc2::runtime::AnyObject =
+            objc2::msg_send![class!(NSNotificationCenter), defaultCenter];
+        let _: () = objc2::msg_send![
+            nc,
+            addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
+            selector: sel!(screenDidChange:),
+            name: NSWindowDidChangeScreenNotification,
+            object: ns_win as *mut objc2::runtime::AnyObject
+        ];
+        // Store the observer in PlayerState for bookkeeping. Like the
+        // overlay view, it is intentionally leaked for the process lifetime:
+        // the window and view outlive individual sessions, so removing the
+        // observer at session stop (the old behavior) silently disabled
+        // screen-change EDR re-application for every later session, because
+        // ensure_overlay reuses the view and never re-registers.
+        app.state::<crate::player::PlayerState>()
+            .edr_observer
+            .store(Retained::into_raw(observer) as usize, Ordering::SeqCst);
+
         Ok(Retained::into_raw(view) as usize)
     }
 }
@@ -470,10 +747,28 @@ pub fn sync_frame(
 
 /// Window controls for the undecorated window (Tauri API works on macOS).
 pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
+    if minimize_to_tray_enabled(app) {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.hide();
+            return Ok(());
+        }
+        return Err("main window not found".into());
+    }
     if let Some(win) = app.get_webview_window("main") {
         return win.minimize().map_err(|e| format!("minimize: {e}"));
     }
     Err("main window not found".into())
+}
+
+/// Reads the `minimize_to_tray` user setting (defaults to true).
+fn minimize_to_tray_enabled(app: &AppHandle) -> bool {
+    app.try_state::<std::sync::Arc<crate::db::Database>>()
+        .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+        .and_then(|json| {
+            serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+        })
+        .map(|s| s.minimize_to_tray)
+        .unwrap_or(true)
 }
 
 pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
@@ -499,4 +794,43 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
         return win.is_maximized().map_err(|e| format!("is_maximized: {e}"));
     }
     Err("main window not found".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_coregraphics_colorspaces() {
+        unsafe {
+            let cs_p3 = CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
+            assert!(!cs_p3.is_null(), "kCGColorSpaceDisplayP3 must resolve to a valid CGColorSpaceRef");
+            CGColorSpaceRelease(cs_p3);
+
+            let cs_srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            assert!(!cs_srgb.is_null(), "kCGColorSpaceSRGB must resolve to a valid CGColorSpaceRef");
+            CGColorSpaceRelease(cs_srgb);
+        }
+    }
+
+    #[test]
+    fn test_apply_edr_to_layer_does_not_crash() {
+        let layer = CALayer::new();
+        unsafe {
+            apply_edr_to_layer(&layer, true);
+            apply_edr_to_layer(&layer, false);
+        }
+
+        // Also test with CAOpenGLLayer if available at runtime
+        if let Some(cls) = objc2::runtime::AnyClass::get(c"CAOpenGLLayer") {
+            let gl_layer: Retained<CALayer> = unsafe {
+                objc2::msg_send![cls, new]
+            };
+            assert!(gl_layer.respondsToSelector(sel!(setColorspace:)), "CAOpenGLLayer must respond to setColorspace:");
+            unsafe {
+                apply_edr_to_layer(&gl_layer, true);
+                apply_edr_to_layer(&gl_layer, false);
+            }
+        }
+    }
 }

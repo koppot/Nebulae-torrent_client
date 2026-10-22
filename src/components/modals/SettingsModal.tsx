@@ -1359,7 +1359,7 @@ export const SettingsModal: React.FC = () => {
                           <div>
                             <span className="text-xs text-white font-medium block">Nebulae (Native)</span>
                             <span className="text-[11px] text-[#a3a3a3] block">
-                              Native client identification: <code className="text-white">{identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}</code> with prefix <code className="text-white">{identityInfo?.nebulae_peer_id_prefix || '-NE0220-'}</code> (derived dynamically from client version)
+                              Native client identification: <code className="text-white">{identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.3'}`}</code> with prefix <code className="text-white">{identityInfo?.nebulae_peer_id_prefix || '-NE0230-'}</code> (derived dynamically from client version)
                             </span>
                             {identityInfo?.version_encoding_supported === false && identityInfo.version_encoding_limitation && (
                               <span className="text-[10px] text-amber-400 block mt-1">
@@ -1393,19 +1393,19 @@ export const SettingsModal: React.FC = () => {
                                       type="button"
                                       onClick={() =>
                                         saveSettings({
-                                          custom_user_agent: identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`,
-                                          custom_peer_id_prefix: identityInfo?.nebulae_peer_id_prefix || '-NE0220-',
+                                          custom_user_agent: identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.3'}`,
+                                          custom_peer_id_prefix: identityInfo?.nebulae_peer_id_prefix || '-NE0230-',
                                         })
                                       }
                                       className="text-[10px] text-[#e50914] hover:underline"
                                     >
-                                      Use Nebulae v{identityInfo?.nebulae_version || '0.2.2'} values
+                                      Use Nebulae v{identityInfo?.nebulae_version || '0.2.3'} values
                                     </button>
                                   </div>
                                   <input
                                     type="text"
                                     value={settings.custom_user_agent}
-                                    placeholder={identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.2'}`}
+                                    placeholder={identityInfo?.nebulae_user_agent || `Nebulae/${identityInfo?.nebulae_version || '0.2.3'}`}
                                     onChange={(e) => saveSettings({ custom_user_agent: e.target.value })}
                                     className="w-full px-2.5 py-1 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono focus:border-[#e50914] focus:outline-none"
                                   />
