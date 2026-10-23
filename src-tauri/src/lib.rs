@@ -762,6 +762,7 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_disc_chapters,
+            commands::media::player_thumbnail_at,
             commands::media::player_disc_display_title,
             commands::media::player_set_always_on_top,
             commands::media::player_always_on_top,

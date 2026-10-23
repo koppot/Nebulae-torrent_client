@@ -172,6 +172,10 @@ pub struct UserSettings {
     /// Media Mode choice. When false, the prompt is presented on launch.
     #[serde(default)]
     pub media_mode_decision_made: bool,
+    /// When enabled, opening a disc with saved progress resumes playback from
+    /// the last saved position instead of starting at the disc menu.
+    #[serde(default)]
+    pub resume_playback_from_saved_point: bool,
 }
 
 fn default_true() -> bool {
@@ -336,6 +340,7 @@ impl Default for UserSettings {
             // 14. Media Mode
             media_mode_enabled: true,
             media_mode_decision_made: false,
+            resume_playback_from_saved_point: false,
         }
     }
 }
@@ -783,6 +788,25 @@ mod tests {
         let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
         assert!(
             deserialized_true.media_mode_enabled,
+            "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_resume_playback_from_saved_point_default_and_roundtrip() {
+        // Missing field defaults to false
+        let missing_json = r#"{}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            !deserialized.resume_playback_from_saved_point,
+            "resume_playback_from_saved_point must default to false"
+        );
+
+        // Explicit true is parsed
+        let true_json = r#"{"resume_playback_from_saved_point": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.resume_playback_from_saved_point,
             "Explicit true must be preserved"
         );
     }
