@@ -253,6 +253,12 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
     let mut all_subs: Vec<String> = Vec::new();
     let mut is_uhd = is_uhd_header;
 
+    struct PlayItemTiming {
+        tin: u64,
+        cum_start_ticks: u64,
+    }
+    let mut play_items: Vec<PlayItemTiming> = Vec::new();
+
     for _ in 0..nitems {
         if pos + 2 > d.len() {
             break;
@@ -265,6 +271,10 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
         if item_data.len() >= 20 {
             let tin = u32::from_be_bytes([item_data[12], item_data[13], item_data[14], item_data[15]]) as u64;
             let tout = u32::from_be_bytes([item_data[16], item_data[17], item_data[18], item_data[19]]) as u64;
+            play_items.push(PlayItemTiming {
+                tin,
+                cum_start_ticks: total_ticks,
+            });
             if tout > tin {
                 total_ticks += tout - tin;
             }
@@ -367,8 +377,18 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
             }
             let mark_type = d[mp + 1];
             if mark_type == 1 {
+                let pi_ref = u16::from_be_bytes([d[mp + 2], d[mp + 3]]) as usize;
                 let ts = u32::from_be_bytes([d[mp + 4], d[mp + 5], d[mp + 6], d[mp + 7]]) as u64;
-                chapters_ms.push((ts / 45) as i64);
+                if let Some(pi) = play_items.get(pi_ref) {
+                    let offset_ticks = if ts >= pi.tin {
+                        pi.cum_start_ticks + (ts - pi.tin)
+                    } else {
+                        pi.cum_start_ticks + ts
+                    };
+                    chapters_ms.push((offset_ticks / 45) as i64);
+                } else {
+                    chapters_ms.push((ts / 45) as i64);
+                }
             }
             mp += 14;
         }
@@ -1060,6 +1080,70 @@ mod tests {
         assert_eq!(parsed.audio, vec!["English", "Japanese"]);
         assert_eq!(parsed.subs, vec!["English"]);
         assert!(parsed.is_uhd, "format 7 must mark is_uhd=true");
+
+        let _ = std::fs::remove_file(&mpls_path);
+    }
+
+    #[test]
+    fn test_native_mpls_chapters_with_pts_offset() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MPLS0200");
+        let pl_start: u32 = 40;
+        let mk_start: u32 = 120;
+        data.extend_from_slice(&pl_start.to_be_bytes());
+        data.extend_from_slice(&mk_start.to_be_bytes());
+        data.extend_from_slice(&[0u8; 24]); // pad to 40 bytes
+
+        // Playlist section:
+        data.extend_from_slice(&[0u8; 4]); // length
+        data.extend_from_slice(&[0u8; 2]); // reserved
+        data.extend_from_slice(&1u16.to_be_bytes()); // nitems = 1
+        data.extend_from_slice(&0u16.to_be_bytes()); // nsubpaths = 0
+
+        // PlayItem with non-zero tin (PTS starts at 1000s = 45,000,000 ticks)
+        let tin = 45_000u32 * 1000;
+        let tout = 45_000u32 * 2000; // duration 1000s
+        let mut item = Vec::new();
+        item.extend_from_slice(b"00001M2TS"); // 0..9
+        item.extend_from_slice(&[0u8; 3]); // 9..12
+        item.extend_from_slice(&tin.to_be_bytes()); // in_time = 1000s
+        item.extend_from_slice(&tout.to_be_bytes()); // out_time = 2000s
+        item.extend_from_slice(&[0u8; 12]); // 20..32
+        data.extend_from_slice(&(item.len() as u16).to_be_bytes());
+        data.extend_from_slice(&item);
+
+        // Pad to mk_start (120)
+        while data.len() < 120 {
+            data.push(0);
+        }
+
+        // Marks section:
+        data.extend_from_slice(&[0u8; 4]); // length
+        data.extend_from_slice(&2u16.to_be_bytes()); // nmarks = 2
+
+        // Mark 1: pi_ref=0, ts=tin (should map to 0ms offset)
+        data.push(0); // reserved
+        data.push(1); // mark_type = entry mark
+        data.extend_from_slice(&0u16.to_be_bytes()); // pi_ref = 0
+        data.extend_from_slice(&tin.to_be_bytes()); // ts = tin
+        data.extend_from_slice(&[0u8; 6]); // reserved
+
+        // Mark 2: pi_ref=0, ts=tin + 120s (should map to 120,000ms offset)
+        let ts2 = tin + 45_000 * 120;
+        data.push(0); // reserved
+        data.push(1); // mark_type = entry mark
+        data.extend_from_slice(&0u16.to_be_bytes()); // pi_ref = 0
+        data.extend_from_slice(&ts2.to_be_bytes()); // ts = tin + 120s
+        data.extend_from_slice(&[0u8; 6]); // reserved
+
+        let temp_dir = std::env::temp_dir().join("test_mpls_ch_pts");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let mpls_path = temp_dir.join("00002.mpls");
+        std::fs::write(&mpls_path, &data).unwrap();
+
+        let parsed = parse_mpls_file(&mpls_path).expect("parse synthetic mpls");
+        assert_eq!(parsed.duration_ms, 1_000_000);
+        assert_eq!(parsed.chapters_ms, vec![0, 120_000]);
 
         let _ = std::fs::remove_file(&mpls_path);
     }
