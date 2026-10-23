@@ -1707,11 +1707,10 @@ fn locate_ffmpeg() -> Option<String> {
 }
 
 /// Take a thumbnail snapshot of the video frame at the given timestamp.
-/// When an active player exists, takes an instant live-player snapshot of
-/// the current frame (no subprocess, no ffmpeg candidate scan, no console
-/// window on Windows). Otherwise falls back to ffmpeg extraction for
-/// precise timeline frames on files without an active player (e.g. disc
-/// menu, player not loaded).
+/// Uses ffmpeg to extract the frame at `position_ms` WITHOUT seeking the
+/// player, so hovering the seek bar never disturbs playback. Falls back to
+/// `libvlc_video_take_snapshot` (current frame only, no seeking) when ffmpeg
+/// is unavailable or fails.
 #[tauri::command]
 pub fn player_thumbnail_at(
     state: tauri::State<'_, PlayerState>,
@@ -1723,72 +1722,7 @@ pub fn player_thumbnail_at(
     let thumb_dir = cache_dir.join("thumbnails");
     fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
 
-    // 1. Active player: instant snapshot of the current frame. No ffmpeg
-    // subprocess, no candidate scan, no console window on Windows.
-    let mp = {
-        let _guard = state
-            .media_player_cell
-            .lock()
-            .map_err(|_| "player state poisoned")?;
-        *poison(&state.media_player)
-    };
-    // 1. Active player: instant snapshot of the current frame. No ffmpeg
-    // subprocess, no candidate scan, no console window on Windows. If the
-    // snapshot fails or produces no frame (e.g. parked at a DVD menu where
-    // take_snapshot cannot capture a usable menu frame), fall through to the
-    // ffmpeg fallback below, which can read the disc's VOB/IFO files directly.
-    let mut snapshot_b64: Option<String> = None;
-    if mp != 0 {
-        if let Ok(lib) = loaded_lib(&state) {
-            if let Some(take_snapshot) = lib.libvlc_video_take_snapshot {
-                let m = mp as *mut c_void;
-                // Remember where playback is so we can put it back: the
-                // thumbnail must show the hovered position, not the current
-                // frame, and the user's playback position must not move.
-                let orig_ms = unsafe { (lib.libvlc_media_player_get_time)(m) };
-                unsafe { (lib.libvlc_media_player_set_time)(m, position_ms.max(0)) };
-                let snap_png = thumb_dir.join(format!(
-                    "nebulae-thumb-{}-{}.png",
-                    std::process::id(),
-                    position_ms
-                ));
-                if let Ok(c_path) = CString::new(snap_png.to_string_lossy().as_bytes()) {
-                    let rc =
-                        unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
-                    if rc == 0 {
-                        // Wait up to 250ms for vout thread to flush frame
-                        for _ in 0..25 {
-                            if snap_png.exists() {
-                                break;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        if snap_png.exists() {
-                            if let Ok(data) = fs::read(&snap_png) {
-                                let _ = fs::remove_file(&snap_png);
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                                snapshot_b64 = Some(format!("data:image/png;base64,{b64}"));
-                            } else {
-                                let _ = fs::remove_file(&snap_png);
-                            }
-                        } else {
-                            let _ = fs::remove_file(&snap_png);
-                        }
-                    } else {
-                        let _ = fs::remove_file(&snap_png);
-                    }
-                }
-                // Restore the original playback position unconditionally.
-                unsafe { (lib.libvlc_media_player_set_time)(m, orig_ms) };
-            }
-        }
-    }
-    if let Some(b64) = snapshot_b64 {
-        return Ok(b64);
-    }
-
-    // 2. No active player (or snapshot unavailable/failed, e.g. DVD menu):
-    // fall back to ffmpeg extraction for precise timeline frames.
+    // 1. ffmpeg extraction at the requested position — never seeks the player.
     let file_path = {
         let p1 = state.current_resolved.lock().ok().and_then(|p| p.clone());
         let p2 = state.current_path.lock().ok().and_then(|p| p.clone());
@@ -1816,6 +1750,55 @@ pub fn player_thumbnail_at(
                     let _ = fs::remove_file(&snap_jpg);
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
                     return Ok(format!("data:image/jpeg;base64,{b64}"));
+                }
+            }
+        }
+    }
+
+    // 2. No active player or ffmpeg failed: fall back to live-player
+    // snapshot of the CURRENT frame (position 0 = no seeking). This shows
+    // the frame currently on screen, not the hovered position, but it's
+    // better than nothing and never disturbs playback.
+    let mp = {
+        let _guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        *poison(&state.media_player)
+    };
+    if mp != 0 {
+        if let Ok(lib) = loaded_lib(&state) {
+            if let Some(take_snapshot) = lib.libvlc_video_take_snapshot {
+                let snap_png = thumb_dir.join(format!(
+                    "nebulae-thumb-{}-{}.png",
+                    std::process::id(),
+                    position_ms
+                ));
+                if let Ok(c_path) = CString::new(snap_png.to_string_lossy().as_bytes()) {
+                    let rc =
+                        unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
+                    if rc == 0 {
+                        // Wait up to 250ms for vout thread to flush frame
+                        for _ in 0..25 {
+                            if snap_png.exists() {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        if snap_png.exists() {
+                            if let Ok(data) = fs::read(&snap_png) {
+                                let _ = fs::remove_file(&snap_png);
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                                return Ok(format!("data:image/png;base64,{b64}"));
+                            } else {
+                                let _ = fs::remove_file(&snap_png);
+                            }
+                        } else {
+                            let _ = fs::remove_file(&snap_png);
+                        }
+                    } else {
+                        let _ = fs::remove_file(&snap_png);
+                    }
                 }
             }
         }

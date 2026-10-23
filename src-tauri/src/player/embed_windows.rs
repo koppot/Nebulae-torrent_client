@@ -25,9 +25,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP,
     SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW,
-    WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
@@ -376,19 +376,26 @@ pub fn sync_frame(
         // to fill instead of being boxed with black bars.
         if w > 0 && h > 0 {
             let state = app2.state::<crate::player::PlayerState>();
-            if let Ok(mp_guard) = state.media_player.lock() {
-                let mp = *mp_guard;
-                if mp != 0 {
-                    if let Ok(lib_guard) = state.lib.lock() {
-                        if let Some(lib) = lib_guard.as_ref() {
-                            let aspect = format!("{:.6}", w as f64 / h as f64);
-                            if let Ok(c_aspect) = CString::new(aspect.as_str()) {
-                                unsafe {
-                                    (lib.libvlc_video_set_aspect_ratio)(
-                                        mp as *mut c_void,
-                                        c_aspect.as_ptr(),
-                                    );
-                                }
+            // Copy the player handle out of its guard first so the guard is
+            // dropped before we borrow `state.lib` below (avoids a "state does
+            // not live long enough" borrow conflict).
+            let mp = {
+                if let Ok(mp_guard) = state.media_player.lock() {
+                    *mp_guard
+                } else {
+                    0
+                }
+            };
+            if mp != 0 {
+                if let Ok(lib_guard) = state.lib.lock() {
+                    if let Some(lib) = lib_guard.as_ref() {
+                        let aspect = format!("{:.6}", w as f64 / h as f64);
+                        if let Ok(c_aspect) = CString::new(aspect.as_str()) {
+                            unsafe {
+                                (lib.libvlc_video_set_aspect_ratio)(
+                                    mp as *mut c_void,
+                                    c_aspect.as_ptr(),
+                                );
                             }
                         }
                     }
