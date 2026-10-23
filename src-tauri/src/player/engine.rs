@@ -879,6 +879,13 @@ impl VlcSession {
                         std::ptr::null_mut(),
                     );
                 }
+                #[cfg(target_os = "macos")]
+                {
+                    (lib.libvlc_media_player_set_nsobject)(
+                        self.media_player as *mut c_void,
+                        std::ptr::null_mut(),
+                    );
+                }
                 (lib.libvlc_media_player_release)(self.media_player as *mut c_void);
             }
             if self.media != 0 {

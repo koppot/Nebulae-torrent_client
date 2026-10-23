@@ -412,6 +412,16 @@ pub fn maybe_autoplay(app: &tauri::AppHandle) {
                     // so the frontend's engine poll can adopt the session.
                     *poison(&state.current_path) = Some(path.clone());
                     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
+
+                    if let Ok(secs_str) = std::env::var("NEBULAE_AUTOCLOSE_SECS") {
+                        if let Ok(secs) = secs_str.parse::<u64>() {
+                            std::thread::sleep(std::time::Duration::from_secs(secs));
+                            tracing::info!("autoplay diag: closing session after {secs}s...");
+                            let t0 = std::time::Instant::now();
+                            stop_session(&app, &state);
+                            tracing::info!("autoplay diag: closed session in {:?}", t0.elapsed());
+                        }
+                    }
                 }
                 Err(e) => tracing::error!("autoplay diag failed: {e}"),
             }
@@ -461,16 +471,20 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
                 media: *poison(&state.media),
                 media_player: mp,
             };
-            // Close the player first (detaching Direct3D/HWND on Windows) before hiding the overlay
+            // Close the player first (detaching Direct3D/HWND on Windows, NSView on macOS)
             session.close(lib);
-            let _ = player::set_overlay_hidden(app, true);
         }
     }
     *poison(&state.instance) = 0;
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
     *poison(&state.started) = false;
+    *poison(&state.current_resolved) = None;
     drop(mp_guard);
+
+    // Hide the overlay after releasing media_player_cell lock, so concurrent
+    // player_poll calls return immediately instead of waiting on the lock.
+    let _ = player::set_overlay_hidden(app, true);
     // The EDR screen-change observer is intentionally NOT removed here: the
     // overlay view and the window outlive the session, and re-registration
     // never happens (ensure_overlay reuses the view), so removing it disabled

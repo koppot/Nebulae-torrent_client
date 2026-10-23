@@ -356,8 +356,8 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
     let view_ptr = rx
-        .recv()
-        .map_err(|_| "main thread callback lost".to_string())??;
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .map_err(|e| format!("main thread callback timeout: {e}"))??;
 
     app.state::<crate::player::PlayerState>()
         .overlay_view
@@ -619,10 +619,10 @@ pub unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
 
 /// Show/hide the overlay without tearing the view down.
 ///
-/// Waits for the main thread to apply the change: callers are the async
-/// VLC lifecycle commands, and the vout must never attach to a view that
-/// is still hidden (a dead black rectangle). Never call from the main
-/// thread itself — the wait would deadlock.
+/// When `hidden` is true (close/teardown), this is dispatched asynchronously to the
+/// main thread without blocking the caller. Synchronously waiting here blocks Tokio
+/// worker threads while WebKit is processing IPC, which deadlocks the application.
+/// When `hidden` is false, it uses a bounded timeout to unhide before vout attaches.
 pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     let view_ptr = app
         .state::<crate::player::PlayerState>()
@@ -632,11 +632,33 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         return Ok(());
     }
     let app2 = app.clone();
+
+    if hidden {
+        // Hiding overlay (player close / stop):
+        // Dispatched asynchronously to the main Cocoa thread without blocking the caller.
+        app.run_on_main_thread(move || unsafe {
+            let view = view_ptr as *mut NSView;
+            if view.is_null() {
+                return;
+            }
+            (*view).setHidden(true);
+            apply_window_corner_radius(&app2, 10.0);
+            if let Some(win) = (*view).window() {
+                if FULLSCREEN_ON.load(Ordering::SeqCst) {
+                    toggle_fullscreen_win(&win);
+                }
+                restore_player_window_frame(&win);
+            }
+        })
+        .map_err(|e| format!("main thread unavailable: {e}"))?;
+        return Ok(());
+    }
+
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     app.run_on_main_thread(move || unsafe {
         let view = view_ptr as *mut NSView;
         if !view.is_null() {
-            (*view).setHidden(hidden);
+            (*view).setHidden(false);
             // Player window: 3 px corners; media/manager UI: 4 px corners.
             apply_window_corner_radius(&app2, 10.0);
             // The video view always covers the whole window; the frontend's
@@ -678,30 +700,28 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 // The player window opens at 16:9 so the video fills it
                 // edge to edge; the manager/media UI restores its frame.
                 if !FULLSCREEN_ON.load(Ordering::SeqCst) {
-                    if hidden {
-                        restore_player_window_frame(&win);
-                    } else {
-                        let f = win.frame();
-                        let ptr = Box::into_raw(Box::new(f));
-                        let old = PLAYER_FRAME_BOX.swap(ptr as usize, Ordering::SeqCst) as *mut NSRect;
-                        if !old.is_null() {
-                            let _ = Box::from_raw(old);
-                        }
-                        let new_h = f.size.width * 9.0 / 16.0;
-                        let new_frame = NSRect::new(
-                            NSPoint::new(f.origin.x, f.origin.y + (f.size.height - new_h)),
-                            NSSize::new(f.size.width, new_h),
-                        );
-                        let _: () = objc2::msg_send![&*win, setFrame: new_frame, display: true];
+                    let f = win.frame();
+                    let ptr = Box::into_raw(Box::new(f));
+                    let old = PLAYER_FRAME_BOX.swap(ptr as usize, Ordering::SeqCst) as *mut NSRect;
+                    if !old.is_null() {
+                        let _ = Box::from_raw(old);
                     }
+                    let new_h = f.size.width * 9.0 / 16.0;
+                    let new_frame = NSRect::new(
+                        NSPoint::new(f.origin.x, f.origin.y + (f.size.height - new_h)),
+                        NSSize::new(f.size.width, new_h),
+                    );
+                    let _: () = objc2::msg_send![&*win, setFrame: new_frame, display: true];
                 }
             }
         }
         let _ = tx.send(());
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
-    rx.recv()
-        .map_err(|_| "main thread callback lost".to_string())
+    if let Err(e) = rx.recv_timeout(std::time::Duration::from_millis(500)) {
+        tracing::warn!("set_overlay_hidden(false): wait timed out ({e}), proceeding anyway");
+    }
+    Ok(())
 }
 
 /// Position the overlay to match a frontend placeholder rect.
