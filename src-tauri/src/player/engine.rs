@@ -6,6 +6,7 @@
 
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::os::raw::c_uint;
 use std::path::{Path, PathBuf};
 
 /// The loaded libVLC and the symbols we use.
@@ -94,6 +95,16 @@ pub struct VlcLib {
             *mut std::ffi::c_uint,
         ) -> c_int,
     >,
+    /// Take a snapshot of the current video frame and save it to a file.
+    /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
+    pub libvlc_video_take_snapshot: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            std::ffi::c_uint,
+            std::ffi::c_uint,
+            *const c_char,
+        ) -> c_uint,
+    >,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -127,6 +138,16 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
+    let count = (lib.libvlc_media_player_get_title_count)(m);
+    if count <= 0 {
+        return false;
+    }
+    let current = (lib.libvlc_media_player_get_title)(m);
+    // On optical discs (DVD, Blu-ray, UHD), title 0 is by definition the authored
+    // menu domain (VMGM on DVD, Top Menu on Blu-ray/UHD). If current == 0, we are at the menu.
+    if current == 0 {
+        return true;
+    }
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
@@ -134,13 +155,18 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     if n <= 0 || titles.is_null() {
         return false;
     }
-    let current = (lib.libvlc_media_player_get_title)(m);
     if current < 0 || current >= n {
         (lib.libvlc_title_descriptions_release)(titles, n);
         return false;
     }
     let t = &**titles.add(current as usize);
-    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+    let is_named_menu = if !t.psz_name.is_null() {
+        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
+        cstr.to_string_lossy().to_ascii_lowercase().contains("menu")
+    } else {
+        false
+    };
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0 || is_named_menu;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
 }
@@ -656,6 +682,7 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
+            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_uint, *const c_char) -> c_uint),
             lib,
             deps,
         }

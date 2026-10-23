@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, playerStore, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -140,6 +140,7 @@ function fmt(ms: number): string {
 export default function PlayerOverlay() {
   const player = usePlayerStore();
   const holderRef = useRef<HTMLDivElement>(null);
+  const seekTrackRef = useRef<HTMLDivElement>(null);
   const [poll, setPoll] = useState<Poll>({
     time_ms: 0,
     length_ms: 0,
@@ -154,6 +155,12 @@ export default function PlayerOverlay() {
   const [volume, setVolume] = useState(80);
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
+  // Hover thumbnail state for the seek bar: position being hovered, the
+  // fetched thumbnail data URL, and whether a fetch is in flight.
+  const [hoverMs, setHoverMs] = useState<number | null>(null);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [thumbnailLoading, setThumbnailLoading] = useState(false);
+  const thumbnailDebounceRef = useRef<number | null>(null);
   // Track popovers (owner): the volume slider and the track lists appear on
   // click on their pill, not permanently in the bar.
   const [showVolume, setShowVolume] = useState(false);
@@ -196,6 +203,8 @@ export default function PlayerOverlay() {
   volumeRef.current = volume;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+
+  const isAtMenu = player.isDisc && (poll.at_menu || poll.title === 0 || (poll.length_ms === 0 && poll.title <= 0));
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -249,6 +258,7 @@ export default function PlayerOverlay() {
     window.addEventListener('resize', syncViewport);
     return () => {
       window.clearInterval(iv);
+      window.clearTimeout(thumbnailDebounceRef.current ?? undefined);
       ro.disconnect();
       window.removeEventListener('resize', syncViewport);
     };
@@ -284,7 +294,9 @@ export default function PlayerOverlay() {
     if (!player.open) return;
     const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
     const handle = (key: string) => {
-      if (player.isDisc && pollRef.current.at_menu) {
+      const p = pollRef.current;
+      const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
+      if (atMenu) {
         // In the menu domain, navigation keys route to dvdnav/libbluray.
         // Only intercept these specific keys; all other shortcuts (Q, F, M,
         // volume) must fall through to the standard handler below.
@@ -296,8 +308,8 @@ export default function PlayerOverlay() {
           case 'ArrowRight': nav(4); return;
         }
       }
-      const t = pollRef.current.time_ms;
-      const len = pollRef.current.length_ms;
+      const t = p.time_ms;
+      const len = p.length_ms;
       switch (key) {
         case ' ':
           invoke('player_toggle_pause').catch(() => {});
@@ -323,8 +335,7 @@ export default function PlayerOverlay() {
         case 'Q':
           // Close (owner): persist the resume point, then close.
           {
-            const p = pollRef.current;
-            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+            if (!atMenu && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms);
             }
             void closePlayer();
@@ -559,6 +570,46 @@ export default function PlayerOverlay() {
     };
   }, [player.open, poll.title, poll.title_count, poll.length_ms]);
 
+  // Hover thumbnail fetch (owner): debounced so rapid mouse movement over
+  // the seek bar doesn't flood the backend with take_snapshot calls. Only
+  // requests when there's a real duration and we're not at the disc menu.
+  useEffect(() => {
+    if (!player.open || poll.length_ms === 0 || isAtMenu || hoverMs === null) {
+      setThumbnailUrl(null);
+      setThumbnailLoading(false);
+      return;
+    }
+    // Don't refetch if we already have this frame cached.
+    const existing = playerStore.getCachedThumbnail(player.resolvedPath, hoverMs);
+    if (existing) {
+      setThumbnailUrl(existing);
+      setThumbnailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
+    thumbnailDebounceRef.current = window.setTimeout(async () => {
+      if (cancelled) return;
+      setThumbnailLoading(true);
+      try {
+        const url = await playerStore.getThumbnail(player.resolvedPath, hoverMs);
+        if (!cancelled) {
+          setThumbnailUrl(url);
+          setThumbnailLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setThumbnailUrl(null);
+          setThumbnailLoading(false);
+        }
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
+    };
+  }, [hoverMs, poll.length_ms, isAtMenu, player.open, player.resolvedPath]);
+
   // Fullscreen state mirror for the button's icon.
   // On macOS the player uses a manual NSWindow frame resize (not the native
   // NSWindowStyleMaskFullScreen), so win.isFullscreen() always returns false.
@@ -599,6 +650,9 @@ export default function PlayerOverlay() {
     const bump = () => {
       setControlsVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      const p = pollRef.current;
+      const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
+      if (popoverOpen || !p.playing || atMenu || ended) return;
       hideTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3000);
     };
     bump();
@@ -610,13 +664,13 @@ export default function PlayerOverlay() {
       unlistenMove?.();
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     };
-  }, [player.open]);
+  }, [player.open, popoverOpen, ended]);
   useEffect(() => {
-    if (popoverOpen || !poll.playing || poll.title === 0 || ended) {
+    if (popoverOpen || !poll.playing || isAtMenu || ended) {
       setControlsVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     }
-  }, [popoverOpen, poll.playing, poll.title, ended]);
+  }, [popoverOpen, poll.playing, isAtMenu, ended]);
 
   // Subtitle track list for the current title: fetched as soon as the
   // feature engages so the bar can hide the Subtitles pill entirely when
@@ -786,7 +840,9 @@ export default function PlayerOverlay() {
     // At the disc menu the button is PLAY (owner: a pause button has no
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
-    if (player.isDisc && pollRef.current.at_menu) {
+    const p = pollRef.current;
+    const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
+    if (atMenu) {
       // The menu demuxer idles until an entry is activated (set_title is
       // ignored in the menu domain): activate the highlighted entry (Play
       // All), then seek to the save point if one exists.
@@ -896,10 +952,13 @@ export default function PlayerOverlay() {
   // Single left click on the video pauses/resumes (owner). A double click
   // also fires click, so the pause toggle waits 250 ms and is cancelled by
   // the double-click handler.
-  const onVideoClick = () => {    if (clickTimerRef.current !== null) return;
+  const onVideoClick = () => {
+    if (clickTimerRef.current !== null) return;
     clickTimerRef.current = window.setTimeout(() => {
       clickTimerRef.current = null;
-      if (player.isDisc && pollRef.current.title === 0) return;
+      const p = pollRef.current;
+      const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
+      if (atMenu) return;
       togglePause();
     }, 250);
   };
@@ -1005,7 +1064,7 @@ export default function PlayerOverlay() {
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.
               Enter activates the highlighted entry on the first press. */}
-          {player.isDisc && poll.at_menu && (
+          {isAtMenu && (
             <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
               {([
                 ['◀', 3, 'Menu: left'],
@@ -1067,14 +1126,14 @@ export default function PlayerOverlay() {
           onClick={togglePause}
           className="p-1.5 rounded hover:bg-[#262626] text-white transition"
           title={
-            player.isDisc && poll.title === 0
+            isAtMenu
               ? 'Play — resume from the last save point, or start the feature from the beginning'
               : poll.playing
                 ? 'Pause'
                 : 'Play'
           }
         >
-          {poll.playing && !(player.isDisc && poll.title === 0) ? (
+          {poll.playing && !isAtMenu ? (
             <Pause className="w-4 h-4" />
           ) : (
             <Play className="w-4 h-4 fill-white" />
@@ -1108,7 +1167,8 @@ export default function PlayerOverlay() {
 
         {/* Seek bar (owner): a thin bar that fills gradually as the title
             progresses, with real chapter offsets drawn as vertical ticks.
-            Click / drag anywhere on the track to seek. */}
+            Click / drag anywhere on the track to seek. Hover shows a
+            thumbnail tooltip of the frame at that position. */}
         <div className="relative flex-1 flex items-center group/bar">
           <div
             className="relative flex-1 flex items-center h-3 cursor-pointer"
@@ -1119,8 +1179,22 @@ export default function PlayerOverlay() {
             onPointerMove={(e) => {
               if (e.buttons & 1) seekFromPointer(e.clientX);
             }}
+            onMouseMove={(e) => {
+              const el = seekTrackRef.current;
+              if (!el || dur === 0) return;
+              const rect = el.getBoundingClientRect();
+              const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              const v = Math.round(frac * dur);
+              setHoverMs(v);
+            }}
+            onMouseLeave={() => {
+              setHoverMs(null);
+              setThumbnailUrl(null);
+              setThumbnailLoading(false);
+            }}
         >
           <div
+            ref={seekTrackRef}
             data-testid="seek-track"
             className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible"
           >
@@ -1154,6 +1228,40 @@ export default function PlayerOverlay() {
           </div>
           </div>
         </div>
+
+        {/* Hover thumbnail tooltip (owner): shows the video frame at the
+            hovered position, positioned directly above the seek bar track.
+            Only visible when hovering over a seekable position with a
+            successful thumbnail fetch. */}
+        {hoverMs !== null && dur > 0 && !poll.at_menu && (
+          <div
+            className="absolute -top-[calc(100%+14px)] left-0 -translate-x-1/2 w-[140px] flex flex-col items-center gap-1.5 pointer-events-none"
+            style={{
+              left: `calc(${hoverMs / dur} * 100%)`,
+            }}
+          >
+            {thumbnailLoading && (
+              <div className="w-[120px] h-[68px] rounded bg-[#1f1f1f] animate-pulse flex items-center justify-center text-[10px] text-[#a3a3a3]">
+                <span>loading…</span>
+              </div>
+            )}
+            {!thumbnailLoading && thumbnailUrl && (
+              <img
+                src={thumbnailUrl}
+                className="w-[120px] h-[68px] rounded-lg object-cover border border-white/20 shadow-2xl"
+                alt="thumbnail"
+              />
+            )}
+            {!thumbnailLoading && !thumbnailUrl && (
+              <div className="w-[120px] h-[68px] rounded bg-[#1f1f1f] flex items-center justify-center text-[10px] text-[#a3a3a3]">
+                <span>—</span>
+              </div>
+            )}
+            <span className="text-[10px] font-mono text-white/80">
+              {fmt(hoverMs)}
+            </span>
+          </div>
+        )}
         <span className="text-[11px] font-mono text-white tabular-nums">
           {fmt(dur)}
         </span>
@@ -1403,7 +1511,8 @@ export default function PlayerOverlay() {
             // Persist the final position no matter the throttle/pause state:
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
-            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+            const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
+            if (!atMenu && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms);
             }
             void closePlayer();
