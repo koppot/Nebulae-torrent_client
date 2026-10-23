@@ -1324,6 +1324,12 @@ pub async fn player_close(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     stop_session(&app, &state);
+    // The player close/quit button must stop the whole application, not merely
+    // end the playback session. Previously it only stopped the VLC session and
+    // let the frontend mark the player closed, so the window and process kept
+    // running in the background. `quit_app` stops the session, shuts down the
+    // engine and tailscale, and exits the process so nothing lingers.
+    crate::commands::diagnostics::quit_app(app);
     Ok(())
 }
 
