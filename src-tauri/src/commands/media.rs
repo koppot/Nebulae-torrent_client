@@ -12,7 +12,11 @@ use base64::Engine;
 use std::ffi::{c_int, c_void, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+/// Cached ffmpeg binary path. Resolved once so the 14 candidate locations
+/// are not probed (and processes spawned) on every thumbnail request.
+static FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 #[tauri::command]
 pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
@@ -1527,6 +1531,60 @@ fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) 
     let s = (position_ms as f64) / 1000.0;
     let time_str = format!("{:.3}", s.max(0.0));
 
+    let Some(cmd) = cached_ffmpeg_path() else {
+        return false;
+    };
+
+    let mut command = std::process::Command::new(&cmd);
+    command
+        .args([
+            "-ss",
+            &time_str,
+            "-i",
+            file_path,
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            "-s",
+            "160x90",
+            "-q:v",
+            "3",
+            "-f",
+            "image2",
+            out_path.to_str().unwrap_or(""),
+            "-y",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let res = command.status();
+
+    if let Ok(status) = res {
+        if status.success() && out_path.exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return the cached ffmpeg binary path, probing the candidate locations
+/// once on first use. This avoids iterating (and spawning processes for) up
+/// to 14 candidates on every thumbnail request.
+fn cached_ffmpeg_path() -> Option<String> {
+    FFMPEG_PATH.get_or_init(locate_ffmpeg).clone()
+}
+
+/// Probe the ffmpeg candidate locations and return the first one that runs.
+/// On Windows every probe is launched with CREATE_NO_WINDOW so no console
+/// window can flash. The result is cached by `cached_ffmpeg_path`.
+fn locate_ffmpeg() -> Option<String> {
     let mut candidates = vec![
         "ffmpeg".to_string(),
         "/opt/homebrew/bin/ffmpeg".to_string(),
@@ -1560,27 +1618,9 @@ fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) 
 
     for cmd in candidates {
         let mut command = std::process::Command::new(&cmd);
-        command
-            .args([
-                "-ss",
-                &time_str,
-                "-i",
-                file_path,
-                "-frames:v",
-                "1",
-                "-update",
-                "1",
-                "-s",
-                "160x90",
-                "-q:v",
-                "3",
-                "-f",
-                "image2",
-                out_path.to_str().unwrap_or(""),
-                "-y",
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+        command.arg("-version");
+        command.stdout(std::process::Stdio::null());
+        command.stderr(std::process::Stdio::null());
 
         #[cfg(target_os = "windows")]
         {
@@ -1588,20 +1628,21 @@ fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) 
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        let res = command.status();
-
-        if let Ok(status) = res {
-            if status.success() && out_path.exists() {
-                return true;
+        if let Ok(status) = command.status() {
+            if status.success() {
+                return Some(cmd);
             }
         }
     }
-    false
+    None
 }
 
 /// Take a thumbnail snapshot of the video frame at the given timestamp.
-/// Uses ffmpeg for precise timeline frames on files without seeking the player;
-/// falls back to zero-seek live player snapshot for active playback.
+/// When an active player exists, takes an instant live-player snapshot of
+/// the current frame (no subprocess, no ffmpeg candidate scan, no console
+/// window on Windows). Otherwise falls back to ffmpeg extraction for
+/// precise timeline frames on files without an active player (e.g. disc
+/// menu, player not loaded).
 #[tauri::command]
 pub fn player_thumbnail_at(
     state: tauri::State<'_, PlayerState>,
@@ -1613,13 +1654,62 @@ pub fn player_thumbnail_at(
     let thumb_dir = cache_dir.join("thumbnails");
     fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
 
+    // 1. Active player: instant snapshot of the current frame. No ffmpeg
+    // subprocess, no candidate scan, no console window on Windows.
+    let mp = {
+        let _guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        *poison(&state.media_player)
+    };
+    if mp != 0 {
+        let lib = loaded_lib(&state)?;
+        let take_snapshot = lib
+            .libvlc_video_take_snapshot
+            .ok_or("libvlc_video_take_snapshot not available in this VLC version")?;
+
+        let snap_png = thumb_dir.join(format!(
+            "nebulae-thumb-{}-{}.png",
+            std::process::id(),
+            position_ms
+        ));
+        let c_path = CString::new(snap_png.to_string_lossy().as_bytes())
+            .map_err(|e| format!("snapshot path: {e}"))?;
+
+        let rc = unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
+        if rc != 0 {
+            let _ = fs::remove_file(&snap_png);
+            return Err(format!("take_snapshot failed with rc={rc}"));
+        }
+
+        // Wait up to 250ms for vout thread to flush frame
+        for _ in 0..25 {
+            if snap_png.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        if !snap_png.exists() {
+            return Err("snapshot file was not created".to_string());
+        }
+
+        let data = fs::read(&snap_png).map_err(|e| format!("read snapshot: {e}"))?;
+        let _ = fs::remove_file(&snap_png);
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        return Ok(format!("data:image/png;base64,{b64}"));
+    }
+
+    // 2. No active player (e.g. disc menu, player not loaded): fall back to
+    // ffmpeg extraction for precise timeline frames.
     let file_path = {
         let p1 = state.current_resolved.lock().ok().and_then(|p| p.clone());
         let p2 = state.current_path.lock().ok().and_then(|p| p.clone());
         p1.or(p2)
     };
 
-    // 1. Try ffmpeg extraction for accurate timeline frames without seeking player
     if let Some(ref fp) = file_path {
         let p = Path::new(fp);
         let target_video_file = if p.is_file() {
@@ -1646,51 +1736,7 @@ pub fn player_thumbnail_at(
         }
     }
 
-    // 2. Fall back to live player snapshot (current frame, zero-seek)
-    let _mp_guard = state
-        .media_player_cell
-        .lock()
-        .map_err(|_| "player state poisoned")?;
-    let mp = *poison(&state.media_player);
-    if mp == 0 {
-        return Err("no active player".to_string());
-    }
-    let lib = loaded_lib(&state)?;
-    let take_snapshot = lib
-        .libvlc_video_take_snapshot
-        .ok_or("libvlc_video_take_snapshot not available in this VLC version")?;
-
-    let snap_png = thumb_dir.join(format!(
-        "nebulae-thumb-{}-{}.png",
-        std::process::id(),
-        position_ms
-    ));
-    let c_path = CString::new(snap_png.to_string_lossy().as_bytes())
-        .map_err(|e| format!("snapshot path: {e}"))?;
-
-    let rc = unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
-    if rc != 0 {
-        let _ = fs::remove_file(&snap_png);
-        return Err(format!("take_snapshot failed with rc={rc}"));
-    }
-
-    // Wait up to 250ms for vout thread to flush frame
-    for _ in 0..25 {
-        if snap_png.exists() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-
-    if !snap_png.exists() {
-        return Err("snapshot file was not created".to_string());
-    }
-
-    let data = fs::read(&snap_png).map_err(|e| format!("read snapshot: {e}"))?;
-    let _ = fs::remove_file(&snap_png);
-
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-    Ok(format!("data:image/png;base64,{b64}"))
+    Err("no active player".to_string())
 }
 
 /// A selectable playback track (subtitle or audio).
