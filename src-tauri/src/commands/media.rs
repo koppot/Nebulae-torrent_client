@@ -1743,6 +1743,12 @@ pub fn player_thumbnail_at(
     if mp != 0 {
         if let Ok(lib) = loaded_lib(&state) {
             if let Some(take_snapshot) = lib.libvlc_video_take_snapshot {
+                let m = mp as *mut c_void;
+                // Remember where playback is so we can put it back: the
+                // thumbnail must show the hovered position, not the current
+                // frame, and the user's playback position must not move.
+                let orig_ms = unsafe { (lib.libvlc_media_player_get_time)(m) };
+                unsafe { (lib.libvlc_media_player_set_time)(m, position_ms.max(0)) };
                 let snap_png = thumb_dir.join(format!(
                     "nebulae-thumb-{}-{}.png",
                     std::process::id(),
@@ -1774,6 +1780,8 @@ pub fn player_thumbnail_at(
                         let _ = fs::remove_file(&snap_png);
                     }
                 }
+                // Restore the original playback position unconditionally.
+                unsafe { (lib.libvlc_media_player_set_time)(m, orig_ms) };
             }
         }
     }
