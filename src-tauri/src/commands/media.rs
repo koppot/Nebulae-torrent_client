@@ -794,20 +794,6 @@ fn start_playback_inner(
                                     tracing::info!("[player] menu watcher: disc reached authored menu at iteration {i}");
                                     return;
                                 }
-                                // Retry seeking to end of intro/First Play if still stuck in intro chain
-                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
-                                let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
-                                if has_menu && is_fp && i % 5 == 0 {
-                                    tracing::info!(
-                                        "[player] menu watcher: in intro/First Play; seeking near end (0.99) at iteration {i}"
-                                    );
-                                    unsafe {
-                                        (lib.libvlc_media_player_set_position)(
-                                            mp as *mut c_void,
-                                            0.99,
-                                        );
-                                    }
-                                }
                                 if i > 0 && i % 10 == 0 {
                                     tracing::info!("[player] menu watcher: retrying INPUT_NAV_MENU at iteration {i}");
                                     nav_menu();
@@ -1073,15 +1059,6 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
     // fired everywhere EXCEPT the authored top menu and made the Menu
     // button appear dead during First Play (menu_call masked there by
     // authoring).
-    //
-    // VideoToolbox VT-305 buffer drain before returning to menu:
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-    }
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-    }
 
     if let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu {
         tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
@@ -1423,20 +1400,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let lib = loaded_lib(&state)?;
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
-
-    if mode == 0 {
-        // VideoToolbox VT-305 format-transition drain:
-        // When activating a menu button that transitions to a feature
-        // (especially 1080p SDR menu -> 4K HEVC HDR feature), draining the
-        // decoder buffer avoids format change stalls on Apple Silicon.
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())

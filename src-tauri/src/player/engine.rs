@@ -142,12 +142,6 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     if count <= 0 {
         return false;
     }
-    let current = (lib.libvlc_media_player_get_title)(m);
-    // On optical discs (DVD, Blu-ray, UHD), title 0 is by definition the authored
-    // menu domain (VMGM on DVD, Top Menu on Blu-ray/UHD). If current == 0, we are at the menu.
-    if current == 0 {
-        return true;
-    }
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
@@ -155,6 +149,7 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     if n <= 0 || titles.is_null() {
         return false;
     }
+    let current = (lib.libvlc_media_player_get_title)(m);
     if current < 0 || current >= n {
         (lib.libvlc_title_descriptions_release)(titles, n);
         return false;
