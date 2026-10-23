@@ -160,7 +160,7 @@ pub unsafe fn find_menu_title(lib: &VlcLib, mp: usize) -> Option<i32> {
     for i in 0..n {
         let t = &**titles.add(i as usize);
         if (t.i_flags & INPUT_TITLE_MENU) != 0 {
-            found = Some(i as i32);
+            found = Some(i);
             break;
         }
     }
