@@ -8,7 +8,6 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -50,138 +49,6 @@ pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
 /// by the HDR/EDR retry infrastructure.
 pub(crate) fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
-}
-
-/// Windows equivalent of macOS `apply_edr_to_video_layer`.
-///
-/// On Windows Direct3D 11 video output, libVLC tone-maps HDR (ST2084 PQ)
-/// content down to Rec.709 using a hardcoded Hable filmic curve assuming
-/// 100-nit peak luminance. This severely crushes diffuse white and lifts
-/// shadows, producing a washed-out milky grey veil.
-///
-/// We counteract this by dynamically applying libVLC's video adjust filter
-/// (`--video-filter=adjust`), tuned to restore true inky blacks and vibrant
-/// Rec.709 contrast/saturation matching macOS caopengllayer:
-/// - Option 0 (libvlc_adjust_Enable): 1
-/// - Option 1 (Contrast): 1.28
-/// - Option 2 (Brightness): 1.02
-/// - Option 4 (Saturation): 1.50
-/// - Option 5 (Gamma): 0.80 (pulls lifted shadows back down to true zero black)
-///
-/// For SDR content (DVD / 1080p Blu-ray), the adjust filter is disabled
-/// (`libvlc_adjust_Enable = 0`) to preserve standard video bit-for-bit.
-pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> bool {
-    let state = match app.try_state::<crate::player::PlayerState>() {
-        Some(s) => s,
-        None => return false,
-    };
-    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
-    if mp == 0 {
-        return false;
-    }
-    let lib = match state.lib.lock() {
-        Ok(l) => l.clone(),
-        Err(_) => return false,
-    };
-    let Some(lib) = lib else {
-        return false;
-    };
-    let set_adjust_int = match lib.libvlc_video_set_adjust_int {
-        Some(f) => f,
-        None => return false,
-    };
-    let set_adjust_float = match lib.libvlc_video_set_adjust_float {
-        Some(f) => f,
-        None => return false,
-    };
-
-    let mp_ptr = mp as *mut c_void;
-
-    if is_hdr {
-        // Option 0: libvlc_adjust_Enable = 1
-        set_adjust_int(mp_ptr, 0, 1);
-        // Option 1: Contrast = 1.28
-        set_adjust_float(mp_ptr, 1, 1.28);
-        // Option 2: Brightness = 1.02
-        set_adjust_float(mp_ptr, 2, 1.02);
-        // Option 4: Saturation = 1.50
-        set_adjust_float(mp_ptr, 4, 1.50);
-        // Option 5: Gamma = 0.80
-        set_adjust_float(mp_ptr, 5, 0.80);
-        tracing::info!(
-            "[player] Windows Direct3D11 calibrated adjust filter applied: contrast=1.28, brightness=1.02, sat=1.50, gamma=0.80"
-        );
-    } else {
-        // Disable adjust filter for SDR content
-        set_adjust_int(mp_ptr, 0, 0);
-        set_adjust_float(mp_ptr, 1, 1.0);
-        set_adjust_float(mp_ptr, 2, 1.0);
-        set_adjust_float(mp_ptr, 4, 1.0);
-        set_adjust_float(mp_ptr, 5, 1.0);
-    }
-    true
-}
-
-/// Poll-driven HDR retry for Windows. Ensures tone-mapping is applied to
-/// the media player when HDR content is playing. Latched per session via
-/// `edr_applied`; no timers or sleeps.
-pub(crate) fn maybe_apply_edr(app: &AppHandle) {
-    let state = match app.try_state::<crate::player::PlayerState>() {
-        Some(s) => s,
-        None => return,
-    };
-    if state.edr_applied.load(Ordering::SeqCst) {
-        return;
-    }
-    let is_hdr = state.is_hdr.load(Ordering::SeqCst);
-    if !is_hdr {
-        return;
-    }
-    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
-    if mp == 0 {
-        return;
-    }
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let is_hdr = app2
-            .state::<crate::player::PlayerState>()
-            .is_hdr
-            .load(Ordering::SeqCst);
-        if unsafe { apply_edr_to_video_layer(&app2, is_hdr) } {
-            app2.state::<crate::player::PlayerState>()
-                .edr_applied
-                .store(true, Ordering::SeqCst);
-        }
-    });
-}
-
-/// Force-apply HDR on Windows, resetting the latched state first.
-pub(crate) fn force_apply_edr(app: &AppHandle) {
-    let state = match app.try_state::<crate::player::PlayerState>() {
-        Some(s) => s,
-        None => return,
-    };
-    state.edr_applied.store(false, Ordering::SeqCst);
-    let is_hdr = state.is_hdr.load(Ordering::SeqCst);
-    if !is_hdr {
-        return;
-    }
-    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
-    if mp == 0 {
-        return;
-    }
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let is_hdr = app2
-            .state::<crate::player::PlayerState>()
-            .is_hdr
-            .load(Ordering::SeqCst);
-        if unsafe { apply_edr_to_video_layer(&app2, is_hdr) } {
-            app2.state::<crate::player::PlayerState>()
-                .edr_applied
-                .store(true, Ordering::SeqCst);
-        }
-    });
 }
 
 pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
@@ -905,14 +772,5 @@ mod tests {
     fn overlay_app_handle_returns_none_before_init() {
         // OVERLAY_APP is a OnceLock; before overlay_app_init is called it must be empty.
         assert!(overlay_app_handle().is_none());
-    }
-
-    #[test]
-    fn tone_mapping_bits_match_vlc_expectations() {
-        // VLC_VAR_INTEGER = 2, VLC_VAR_FLOAT = 4; tone-mapping values as shipped
-        // in the instance-level VLC args (--tone-mapping=3, -param=1.0, -desat=0.5).
-        assert_eq!(3i64 as usize, 3);
-        assert_eq!(1.0_f32.to_bits() as usize, 0x3F80_0000);
-        assert_eq!(0.5_f32.to_bits() as usize, 0x3F00_0000);
     }
 }

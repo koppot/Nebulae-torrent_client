@@ -2,7 +2,7 @@ use crate::player;
 #[cfg(target_os = "macos")]
 use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
 #[cfg(target_os = "windows")]
-use crate::player::embed_windows::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
+use crate::player::embed_windows::overlay_app_handle;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
@@ -619,7 +619,7 @@ fn start_playback_inner(
                         std::sync::atomic::Ordering::SeqCst,
                     );
 
-                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    #[cfg(target_os = "macos")]
                     {
                         state
                             .edr_applied
@@ -627,10 +627,9 @@ fn start_playback_inner(
                         maybe_apply_edr(app);
 
                         // EDR retry worker: the video layer is created asynchronously
-                        // after play() (CAOpenGLLayer on macOS, Direct3D HWND vout on
-                        // Windows). Poll at a tight 30ms cadence for up to 3s so EDR and
-                        // tone-mapping are latched immediately upon layer creation,
-                        // preventing washed-out presentation.
+                        // after play() (CAOpenGLLayer on macOS). Poll at a tight 30ms
+                        // cadence for up to 3s so EDR is latched immediately upon layer
+                        // creation, preventing washed-out presentation.
                         let app_edr = app.clone();
                         let edr_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         std::thread::spawn(move || {
@@ -649,6 +648,13 @@ fn start_playback_inner(
                                 maybe_apply_edr(&app_edr);
                             }
                         });
+                    }
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        state
+                            .edr_applied
+                            .store(false, std::sync::atomic::Ordering::SeqCst);
                     }
 
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
@@ -1322,7 +1328,7 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
     // macOS/Windows: the EDR/HDR flag must reach the video layer, which is
     // created asynchronously after play(). Retry from this existing 1 Hz
     // poll until applied (latched per session); no timers or sleeps.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         if let Some(get_size) = lib.libvlc_video_get_size {
             let mut width: std::ffi::c_uint = 0;
@@ -1345,6 +1351,26 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
         }
         if let Some(app) = overlay_app_handle() {
             maybe_apply_edr(app);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(get_size) = lib.libvlc_video_get_size {
+            let mut width: std::ffi::c_uint = 0;
+            let mut height: std::ffi::c_uint = 0;
+            let res = unsafe { get_size(mp as *mut c_void, 0, &mut width, &mut height) };
+            if res == 0
+                && (width >= 3840 || height >= 2160)
+                && !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::info!(
+                    "[player] UHD resolution detected: {width}x{height}, latching is_hdr=true"
+                );
+                state
+                    .is_hdr
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
         }
     }
     unsafe {
