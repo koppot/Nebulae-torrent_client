@@ -16,7 +16,8 @@ use tauri::{AppHandle, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -241,6 +242,34 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
             h,
             SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
         );
+        // Suppress DWM border and corner rounding on both windows so no visible frame
+        // or rounded corner artifact appears over or around the video.
+        let no_border: u32 = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &no_border as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let do_not_round: u32 = DWMWCP_DONOTROUND.0 as u32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &do_not_round as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            main_hwnd,
+            DWMWA_BORDER_COLOR,
+            &no_border as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            main_hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &do_not_round as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
     }
 
     // Subclass the video HWND so any keyboard or mouse input that reaches the video
@@ -273,6 +302,14 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         if hidden {
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
+                // When player is closed, restore rounded corners on the application window
+                let round: u32 = DWMWCP_ROUND.0 as u32;
+                let _ = DwmSetWindowAttribute(
+                    main_h,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &round as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
             }
             // Restore window rect if previously saved
             if let Ok(mut saved) = PRE_PLAYER_RECT.lock() {
@@ -347,6 +384,33 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
                 );
+                // During video playback, ensure no DWM border or rounded corners appear around the video screen
+                let no_border: u32 = DWMWA_COLOR_NONE;
+                let _ = DwmSetWindowAttribute(
+                    main_h,
+                    DWMWA_BORDER_COLOR,
+                    &no_border as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
+                let _ = DwmSetWindowAttribute(
+                    video_hwnd,
+                    DWMWA_BORDER_COLOR,
+                    &no_border as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
+                let do_not_round: u32 = DWMWCP_DONOTROUND.0 as u32;
+                let _ = DwmSetWindowAttribute(
+                    main_h,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &do_not_round as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
+                let _ = DwmSetWindowAttribute(
+                    video_hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &do_not_round as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
             }
             if let Some(win) = app2.get_webview_window("main") {
                 let _ = win.set_focus();
@@ -414,6 +478,14 @@ pub unsafe fn apply_window_corner_radius(app: &AppHandle, _radius: f64) {
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
             &preference as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        // Suppress 1px DWM system border on the main window so no visible frame appears
+        let no_border: u32 = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &no_border as *const u32 as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
     }
