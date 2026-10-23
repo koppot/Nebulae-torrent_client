@@ -1,5 +1,18 @@
 # Agent coordination notes
 
+## FACTORY AI HANDOVER & PERMANENT DIRECTIVES (2026-10-23, Antigravity — for Factory AI)
+
+- **Detailed Handover Document:** Complete technical documentation, discoveries, root-cause analyses, and reproduction logs are committed at [`docs/FACTORY_AI_HANDOVER.md`](file:///Users/dev/Documents/GitHub/Nebulae-torrent_client/docs/FACTORY_AI_HANDOVER.md).
+- **Permanent Directives:**
+  1. **Strict User Directives:** Every user instruction must be followed without exception or alteration.
+  2. **Release Version Lock:** Strictly keep version `0.2.3` across all manifests (`package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, `release.yml`). Do NOT bump to `0.2.4` or `0.9.0`.
+  3. **macOS Isolation:** `src-tauri/src/player/embed_macos.rs` and all macOS behaviors are frozen and must never be altered when working on Windows or Linux.
+  4. **Subprocess Window Suppression:** All Windows subprocesses (`ffmpeg.exe`, etc.) must pass `creation_flags(0x08000000)` (`CREATE_NO_WINDOW`) to prevent flashing console popups.
+- **Current Issues Handed Over to Factory AI:**
+  1. **Windows UHD HDR Washed-Out Colors:** VLC 3.0's `libdirect3d11_plugin.dll` applies a hardcoded Hable curve that crushes diffuse white and lifts shadow luminance on SDR monitors. `--video-filter=adjust` was tested but proved actively harmful (broke audio pipeline and created border/line artifacts on optical disc menus) and has been removed. Factory AI should investigate shader modifications or alternative vout pipelines.
+  2. **Menu Integrity & Sound:** With `--video-filter=adjust` removed, optical disc menus render cleanly without bounding boxes/lines, and WASAPI audio underruns are resolved.
+  3. **Seek Bar Hover Thumbnails:** Implemented and functional. `CREATE_NO_WINDOW` is applied in `commands/media.rs` to keep thumbnail generation completely silent and invisible.
+
 ## CONSOLIDATION HANDOFF (2026-10-20, Antigravity — for Factory's Test Release)
 
 - **Consolidated Working Tree:** Canonical checkout `/Users/dev/Documents/GitHub/Nebulae-torrent_client` on branch `main`.

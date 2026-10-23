@@ -775,10 +775,7 @@ impl VlcSession {
         // (calibrated contrast, saturation, gamma) when HDR is detected.
         // These args do not exist or are not used on Linux or macOS.
         #[cfg(target_os = "windows")]
-        {
-            args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
-            args.push(CString::new("--video-filter=adjust").unwrap());
-        }
+        args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {

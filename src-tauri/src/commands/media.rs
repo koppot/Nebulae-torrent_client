@@ -1559,7 +1559,8 @@ fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) 
     }
 
     for cmd in candidates {
-        let res = std::process::Command::new(&cmd)
+        let mut command = std::process::Command::new(&cmd);
+        command
             .args([
                 "-ss",
                 &time_str,
@@ -1579,8 +1580,15 @@ fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) 
                 "-y",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+            .stderr(std::process::Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let res = command.status();
 
         if let Ok(status) = res {
             if status.success() && out_path.exists() {
