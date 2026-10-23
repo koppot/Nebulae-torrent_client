@@ -1059,7 +1059,7 @@ export default function PlayerOverlay() {
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.
               Enter activates the highlighted entry on the first press. */}
-          {isAtMenu && (
+          {player.isDisc && (
             <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
               {([
                 ['◀', 3, 'Menu: left'],
