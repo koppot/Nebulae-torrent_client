@@ -1493,7 +1493,7 @@ export default function PlayerOverlay() {
         >
           <span>{displayTitleInfo.title}</span>
           {displayTitleInfo.year ? (
-            <span className="text-[#a3a3a3] font-normal"> ({displayTitleInfo.year})</span>
+            <span className="text-white font-medium"> ({displayTitleInfo.year})</span>
           ) : null}
         </div>
 

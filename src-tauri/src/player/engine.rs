@@ -98,6 +98,10 @@ pub struct VlcLib {
     /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
     pub libvlc_video_take_snapshot:
         Option<unsafe extern "C" fn(*mut c_void, c_uint, *const c_char, c_uint, c_uint) -> c_int>,
+    /// Set the display aspect ratio of the video output (e.g. "16:9" or a
+    /// float such as "1.78"). Matching it to the embedding surface makes VLC
+    /// fill the surface edge-to-edge with no letterbox/pillarbox black bars.
+    pub libvlc_video_set_aspect_ratio: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub libvlc_video_set_adjust_int:
         Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)>,
     pub libvlc_video_set_adjust_float:
@@ -675,6 +679,7 @@ impl VlcLib {
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
             libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
+            libvlc_video_set_aspect_ratio: sym!("libvlc_video_set_aspect_ratio": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_video_set_adjust_int: sym_opt!("libvlc_video_set_adjust_int": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)),
             libvlc_video_set_adjust_float: sym_opt!("libvlc_video_set_adjust_float": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)),
             lib,

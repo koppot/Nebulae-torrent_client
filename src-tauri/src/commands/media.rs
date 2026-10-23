@@ -809,6 +809,45 @@ fn start_playback_inner(
                                     nav_menu();
                                 }
                             }
+
+                            // navigate_menu was rejected (menu_call_mask=1 on UHD, e.g. Patlabor 2)
+                            // and the seek-to-end of First Play did not surface the authored menu.
+                            // As a last resort, jump directly to the menu title index discovered by
+                            // find_menu_title. This works even when libvlc_media_player_navigate_menu
+                            // exists but is ignored by the demux, and it places the player on the
+                            // authored menu title so directional navigation (navigate modes 1-4)
+                            // becomes available at the menu.
+                            if let Some(menu_title) = unsafe { engine::find_menu_title(&lib, mp) } {
+                                tracing::info!(
+                                    "[player] menu watcher: navigate_menu rejected and seek did not reach menu; \
+                                     jumping to menu title {menu_title} via set_title"
+                                );
+                                unsafe {
+                                    (lib.libvlc_media_player_set_title)(
+                                        mp as *mut c_void,
+                                        menu_title,
+                                    );
+                                }
+                                // Give the demux a moment to reclassify the current title as the menu.
+                                for _ in 0..25 {
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    let gen_now =
+                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                    if gen_now != menu_gen || !*poison(&state.started) {
+                                        return;
+                                    }
+                                    let mp = *poison(&state.media_player);
+                                    if mp == 0 || mp != menu_mp {
+                                        return;
+                                    }
+                                    if unsafe { engine::is_menu_title(&lib, mp) } {
+                                        tracing::info!(
+                                            "[player] menu watcher: reached authored menu via set_title fallback"
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
                         });
 
                         // Deferred liveness check: detect silent decryption failure.
@@ -1689,47 +1728,55 @@ pub fn player_thumbnail_at(
             .map_err(|_| "player state poisoned")?;
         *poison(&state.media_player)
     };
+    // 1. Active player: instant snapshot of the current frame. No ffmpeg
+    // subprocess, no candidate scan, no console window on Windows. If the
+    // snapshot fails or produces no frame (e.g. parked at a DVD menu where
+    // take_snapshot cannot capture a usable menu frame), fall through to the
+    // ffmpeg fallback below, which can read the disc's VOB/IFO files directly.
+    let mut snapshot_b64: Option<String> = None;
     if mp != 0 {
-        let lib = loaded_lib(&state)?;
-        let take_snapshot = lib
-            .libvlc_video_take_snapshot
-            .ok_or("libvlc_video_take_snapshot not available in this VLC version")?;
-
-        let snap_png = thumb_dir.join(format!(
-            "nebulae-thumb-{}-{}.png",
-            std::process::id(),
-            position_ms
-        ));
-        let c_path = CString::new(snap_png.to_string_lossy().as_bytes())
-            .map_err(|e| format!("snapshot path: {e}"))?;
-
-        let rc = unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
-        if rc != 0 {
-            let _ = fs::remove_file(&snap_png);
-            return Err(format!("take_snapshot failed with rc={rc}"));
-        }
-
-        // Wait up to 250ms for vout thread to flush frame
-        for _ in 0..25 {
-            if snap_png.exists() {
-                break;
+        if let Ok(lib) = loaded_lib(&state) {
+            if let Some(take_snapshot) = lib.libvlc_video_take_snapshot {
+                let snap_png = thumb_dir.join(format!(
+                    "nebulae-thumb-{}-{}.png",
+                    std::process::id(),
+                    position_ms
+                ));
+                if let Ok(c_path) = CString::new(snap_png.to_string_lossy().as_bytes()) {
+                    let rc =
+                        unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
+                    if rc == 0 {
+                        // Wait up to 250ms for vout thread to flush frame
+                        for _ in 0..25 {
+                            if snap_png.exists() {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        if snap_png.exists() {
+                            if let Ok(data) = fs::read(&snap_png) {
+                                let _ = fs::remove_file(&snap_png);
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                                snapshot_b64 = Some(format!("data:image/png;base64,{b64}"));
+                            } else {
+                                let _ = fs::remove_file(&snap_png);
+                            }
+                        } else {
+                            let _ = fs::remove_file(&snap_png);
+                        }
+                    } else {
+                        let _ = fs::remove_file(&snap_png);
+                    }
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-
-        if !snap_png.exists() {
-            return Err("snapshot file was not created".to_string());
-        }
-
-        let data = fs::read(&snap_png).map_err(|e| format!("read snapshot: {e}"))?;
-        let _ = fs::remove_file(&snap_png);
-
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-        return Ok(format!("data:image/png;base64,{b64}"));
+    }
+    if let Some(b64) = snapshot_b64 {
+        return Ok(b64);
     }
 
-    // 2. No active player (e.g. disc menu, player not loaded): fall back to
-    // ffmpeg extraction for precise timeline frames.
+    // 2. No active player (or snapshot unavailable/failed, e.g. DVD menu):
+    // fall back to ffmpeg extraction for precise timeline frames.
     let file_path = {
         let p1 = state.current_resolved.lock().ok().and_then(|p| p.clone());
         let p2 = state.current_path.lock().ok().and_then(|p| p.clone());
@@ -2260,7 +2307,7 @@ fn find_main_video(dir: &Path) -> Option<PathBuf> {
                     Some(ref ext) if matches!(
                         ext.as_str(),
                         "mkv" | "mp4" | "avi" | "mov" | "m2ts" | "ts" | "wmv" | "flv" | "webm"
-                            | "mpg" | "mpeg" | "m4v"
+                            | "mpg" | "mpeg" | "m4v" | "vob" | "ifo" | "bup"
                     )
                 )
             {

@@ -8,6 +8,7 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
+use std::ffi::CString;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -368,6 +369,32 @@ pub fn sync_frame(
                 0,
                 SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
             );
+        }
+        // Make VLC fill the video surface edge-to-edge so no letterbox /
+        // pillarbox black bars appear. The display aspect ratio is pinned to
+        // the surface's actual aspect: 16:9 SDR content on a 16:9 surface is
+        // a no-op (bit-for-bit identical), while non-16:9 content is stretched
+        // to fill instead of being boxed with black bars.
+        if w > 0 && h > 0 {
+            let state = app2.state::<crate::player::PlayerState>();
+            if let Ok(mp_guard) = state.media_player.lock() {
+                let mp = *mp_guard;
+                if mp != 0 {
+                    if let Ok(lib_guard) = state.lib.lock() {
+                        if let Some(lib) = lib_guard.as_ref() {
+                            let aspect = format!("{:.6}", w as f64 / h as f64);
+                            if let Ok(c_aspect) = CString::new(aspect.as_str()) {
+                                unsafe {
+                                    (lib.libvlc_video_set_aspect_ratio)(
+                                        mp as *mut c_void,
+                                        c_aspect.as_ptr(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
