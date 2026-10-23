@@ -1,8 +1,6 @@
 use crate::player;
 #[cfg(target_os = "macos")]
 use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
-#[cfg(target_os = "windows")]
-use crate::player::embed_windows::overlay_app_handle;
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;

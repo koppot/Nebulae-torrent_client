@@ -8,7 +8,7 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::ffi::CString;
+use std::ffi::{c_void, CString};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -22,10 +22,9 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWLP_WNDPROC, HWND_TOP, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPOS, WINDOW_EX_STYLE, WINDOW_STYLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
+    GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP,
+    SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW,
     WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_WINDOWPOSCHANGED, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
