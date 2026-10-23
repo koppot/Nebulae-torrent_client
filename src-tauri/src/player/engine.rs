@@ -5,8 +5,7 @@
 //! dylib path differs per platform.
 
 use libloading::{Library, Symbol};
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::os::raw::c_uint;
+use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 
 /// The loaded libVLC and the symbols we use.
@@ -97,14 +96,8 @@ pub struct VlcLib {
     >,
     /// Take a snapshot of the current video frame and save it to a file.
     /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
-    pub libvlc_video_take_snapshot: Option<
-        unsafe extern "C" fn(
-            *mut c_void,
-            std::ffi::c_uint,
-            std::ffi::c_uint,
-            *const c_char,
-        ) -> c_uint,
-    >,
+    pub libvlc_video_take_snapshot:
+        Option<unsafe extern "C" fn(*mut c_void, c_uint, *const c_char, c_uint, c_uint) -> c_int>,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -677,7 +670,7 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
-            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_uint, *const c_char) -> c_uint),
+            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
             lib,
             deps,
         }

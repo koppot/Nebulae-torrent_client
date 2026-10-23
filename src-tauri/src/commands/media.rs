@@ -1523,14 +1523,122 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
     }
 }
 
+fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path) -> bool {
+    let s = (position_ms as f64) / 1000.0;
+    let time_str = format!("{:.3}", s.max(0.0));
+
+    let mut candidates = vec![
+        "ffmpeg".to_string(),
+        "/opt/homebrew/bin/ffmpeg".to_string(),
+        "/usr/local/bin/ffmpeg".to_string(),
+        "/usr/bin/ffmpeg".to_string(),
+        "C:\\Program Files\\ShareX\\ffmpeg.exe".to_string(),
+        "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe".to_string(),
+        "C:\\ffmpeg\\bin\\ffmpeg.exe".to_string(),
+        "C:\\tools\\ffmpeg.exe".to_string(),
+        "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe".to_string(),
+    ];
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("ffmpeg.exe").to_string_lossy().to_string());
+            candidates.push(dir.join("ffmpeg").to_string_lossy().to_string());
+            candidates.push(
+                dir.join("resources")
+                    .join("ffmpeg.exe")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            candidates.push(
+                dir.join("resources")
+                    .join("ffmpeg")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+
+    for cmd in candidates {
+        let res = std::process::Command::new(&cmd)
+            .args([
+                "-ss",
+                &time_str,
+                "-i",
+                file_path,
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                "-s",
+                "160x90",
+                "-q:v",
+                "3",
+                "-f",
+                "image2",
+                out_path.to_str().unwrap_or(""),
+                "-y",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if let Ok(status) = res {
+            if status.success() && out_path.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Take a thumbnail snapshot of the video frame at the given timestamp.
-/// Seeks to the position, captures a frame via libvlc_video_take_snapshot,
-/// returns it as a base64 data URL, then restores the original playback position.
+/// Uses ffmpeg for precise timeline frames on files without seeking the player;
+/// falls back to zero-seek live player snapshot for active playback.
 #[tauri::command]
 pub fn player_thumbnail_at(
     state: tauri::State<'_, PlayerState>,
     position_ms: i64,
 ) -> Result<String, String> {
+    let cache_dir = crate::utils::paths::AppPaths::init()
+        .map(|p| p.cache_dir)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let thumb_dir = cache_dir.join("thumbnails");
+    fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
+
+    let file_path = {
+        let p1 = state.current_resolved.lock().ok().and_then(|p| p.clone());
+        let p2 = state.current_path.lock().ok().and_then(|p| p.clone());
+        p1.or(p2)
+    };
+
+    // 1. Try ffmpeg extraction for accurate timeline frames without seeking player
+    if let Some(ref fp) = file_path {
+        let p = Path::new(fp);
+        let target_video_file = if p.is_file() {
+            Some(p.to_path_buf())
+        } else if p.is_dir() {
+            find_main_video(p)
+        } else {
+            None
+        };
+
+        if let Some(ref vpath) = target_video_file {
+            let snap_jpg = thumb_dir.join(format!(
+                "nebulae-thumb-{}-{}.jpg",
+                std::process::id(),
+                position_ms
+            ));
+            if extract_thumbnail_ffmpeg(&vpath.to_string_lossy(), position_ms, &snap_jpg) {
+                if let Ok(data) = fs::read(&snap_jpg) {
+                    let _ = fs::remove_file(&snap_jpg);
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    return Ok(format!("data:image/jpeg;base64,{b64}"));
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to live player snapshot (current frame, zero-seek)
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -1544,38 +1652,34 @@ pub fn player_thumbnail_at(
         .libvlc_video_take_snapshot
         .ok_or("libvlc_video_take_snapshot not available in this VLC version")?;
 
-    // Save current position so we can restore it after the snapshot.
-    let orig_ms = unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) };
-
-    // Seek to the requested position.
-    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0)) };
-
-    // Write the snapshot to a temp file in the cache dir.
-    let cache_dir = crate::utils::paths::AppPaths::init()
-        .map(|p| p.cache_dir)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let thumb_dir = cache_dir.join("thumbnails");
-    fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
-    let snapshot_path = thumb_dir.join(format!("nebulae-thumb-{}.png", std::process::id()));
-    let c_path = CString::new(snapshot_path.to_string_lossy().as_bytes())
+    let snap_png = thumb_dir.join(format!(
+        "nebulae-thumb-{}-{}.png",
+        std::process::id(),
+        position_ms
+    ));
+    let c_path = CString::new(snap_png.to_string_lossy().as_bytes())
         .map_err(|e| format!("snapshot path: {e}"))?;
 
-    let rc = unsafe { take_snapshot(mp as *mut c_void, 0, 0, c_path.as_ptr()) };
-
-    // Restore the original playback position.
-    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, orig_ms.max(0)) };
-
+    let rc = unsafe { take_snapshot(mp as *mut c_void, 0, c_path.as_ptr(), 160, 90) };
     if rc != 0 {
-        let _ = fs::remove_file(&snapshot_path);
+        let _ = fs::remove_file(&snap_png);
         return Err(format!("take_snapshot failed with rc={rc}"));
     }
 
-    if !snapshot_path.exists() {
+    // Wait up to 250ms for vout thread to flush frame
+    for _ in 0..25 {
+        if snap_png.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    if !snap_png.exists() {
         return Err("snapshot file was not created".to_string());
     }
 
-    let data = fs::read(&snapshot_path).map_err(|e| format!("read snapshot: {e}"))?;
-    let _ = fs::remove_file(&snapshot_path);
+    let data = fs::read(&snap_png).map_err(|e| format!("read snapshot: {e}"))?;
+    let _ = fs::remove_file(&snap_png);
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
     Ok(format!("data:image/png;base64,{b64}"))

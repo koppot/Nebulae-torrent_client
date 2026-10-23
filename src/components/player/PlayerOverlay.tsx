@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, playerStore, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -157,6 +157,9 @@ export default function PlayerOverlay() {
   const [seeking, setSeeking] = useState<number | null>(null);
   // Hover time state for the seek bar: position in milliseconds being hovered.
   const [hoverMs, setHoverMs] = useState<number | null>(null);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+  const [thumbnailLoading, setThumbnailLoading] = useState(false);
+  const thumbnailDebounceRef = useRef<number | null>(null);
   // Track popovers (owner): the volume slider and the track lists appear on
   // click on their pill, not permanently in the bar.
   const [showVolume, setShowVolume] = useState(false);
@@ -201,6 +204,42 @@ export default function PlayerOverlay() {
   mutedRef.current = muted;
 
   const isAtMenu = player.isDisc && (poll.at_menu || poll.title === 0 || (poll.length_ms === 0 && poll.title <= 0));
+
+  useEffect(() => {
+    if (!player.open || poll.length_ms === 0 || isAtMenu || hoverMs === null) {
+      setThumbnailUrl(null);
+      setThumbnailLoading(false);
+      return;
+    }
+    const existing = playerStore.getCachedThumbnail(player.resolvedPath, hoverMs);
+    if (existing) {
+      setThumbnailUrl(existing);
+      setThumbnailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
+    thumbnailDebounceRef.current = window.setTimeout(async () => {
+      if (cancelled) return;
+      setThumbnailLoading(true);
+      try {
+        const url = await playerStore.getThumbnail(player.resolvedPath, hoverMs);
+        if (!cancelled) {
+          setThumbnailUrl(url);
+          setThumbnailLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setThumbnailUrl(null);
+          setThumbnailLoading(false);
+        }
+      }
+    }, 120);
+    return () => {
+      cancelled = true;
+      if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
+    };
+  }, [hoverMs, poll.length_ms, isAtMenu, player.open, player.resolvedPath]);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -1145,6 +1184,8 @@ export default function PlayerOverlay() {
             }}
             onMouseLeave={() => {
               setHoverMs(null);
+              setThumbnailUrl(null);
+              setThumbnailLoading(false);
             }}
           >
             <div
@@ -1180,15 +1221,34 @@ export default function PlayerOverlay() {
                 style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
               />
 
-              {/* Hover time tooltip: popping up over current mouse position on the media play bar */}
+              {/* Hover video thumbnail preview & time badge */}
               {hoverMs !== null && dur > 0 && !isAtMenu && (
                 <div
-                  className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl pointer-events-none tabular-nums z-30 whitespace-nowrap"
+                  className="absolute bottom-4 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none z-30"
                   style={{
                     left: `${Math.min(100, Math.max(0, (hoverMs / dur) * 100))}%`,
                   }}
                 >
-                  {fmt(hoverMs)}
+                  <div className="w-[140px] h-[78px] rounded-md overflow-hidden bg-[#181818] border border-white/40 shadow-2xl flex items-center justify-center">
+                    {thumbnailLoading ? (
+                      <div className="w-full h-full animate-pulse bg-[#252525] flex items-center justify-center text-[10px] text-white/50">
+                        loading…
+                      </div>
+                    ) : thumbnailUrl ? (
+                      <img
+                        src={thumbnailUrl}
+                        className="w-full h-full object-cover"
+                        alt="preview"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-[#181818] flex items-center justify-center text-[10px] text-white/40">
+                        —
+                      </div>
+                    )}
+                  </div>
+                  <div className="px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl tabular-nums whitespace-nowrap">
+                    {fmt(hoverMs)}
+                  </div>
                 </div>
               )}
             </div>
