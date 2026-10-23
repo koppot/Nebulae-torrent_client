@@ -76,14 +76,24 @@ All agents, models, and workflows operating on this repository must strictly adh
 - **Action Taken:**
   - `--video-filter=adjust` has been removed from `src-tauri/src/player/engine.rs` to restore clean menu rendering and uncorrupted audio.
 
-### C. Recommended Pathways for Factory AI to Resolve Windows HDR Tone Mapping
+### C. Pathway C — Recompile `libdirect3d11_plugin.dll` with ACES/Mobius Tone-Mapping Curve (ONLY VIABLE PATH)
 
-1. **Custom HLSL Pixel Shader in `libdirect3d11_plugin.dll`:**
-   - Recompile VLC's `libdirect3d11_plugin.dll` with an optimized ACES or Reinhard tone-mapping curve matching macOS `libcaopengllayer_plugin.dylib`, replacing the crushed Hable curve.
-2. **Direct3D 11 Swapchain Color Space Tagging:**
-   - If the Windows display supports HDR, evaluate enabling `DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020` on the video HWND swapchain to let the display handle HDR metadata natively without tone mapping down to SDR.
-3. **OpenGL / libplacebo Video Output on Windows:**
-   - Investigate whether `glwin32` or an ANGLE-backed OpenGL ES vout can be embedded in `video_hwnd` with libplacebo or custom fragment shaders, replicating the macOS OpenGL pipeline on Windows.
+The tone-mapping curve is compiled into `libdirect3d11_plugin.dll`'s HLSL shader. No app-side Rust edit can change it. Pathways A (force OpenGL vout `glwin32`) and B (DXGI swapchain color space tagging) were evaluated and are not viable:
+
+- **Pathway A (OpenGL vout):** No per-media `:vout=` mechanism exists (zero `libvlc_media_add_option*` calls in the codebase). `--vout` is reset by `set_hwnd` (upstream 3.0.x `lib/media_player.c`). Official Windows VLC 3.0.23 is unmodified, and its OpenGL vout lacks libplacebo — `--tone-mapping` variables are ignored there too.
+- **Pathway B (swapchain color space):** In VLC 3.0 the D3D11 swapchain is owned by libVLC's `direct3d11` host; no libvlc 4 callbacks expose it to the embedding app.
+
+**Build plan:**
+
+1. **VLC source tag:** `3.0.23` (matches `release.yml` and `build-manifest.json` `vlc_version`).
+2. **Source URL:** `https://download.videolan.org/pub/videolan/vlc/3.0.23/vlc-3.0.23.tar.xz` (pin by SHA-256 for reproducibility).
+3. **File/function to patch:** `modules/video_output/direct3d11.c` — the Hable tone-mapping HLSL shader (embedded shader strings via `d3d11_shaders.h`). Replace the crushed Hable curve (`LuminanceScale = 0.01`, 100-nit diffuse white on 10,000-nit master) with an ACES or Mobius curve matched to macOS `libcaopengllayer_plugin.dylib` output. Gate to PQ/HLG (transfer == ST2084 or HLG) so SDR (BT.709) passes through unchanged — bit-for-bit identical for DVD/1080p content.
+4. **Toolchain:** MSVC on Windows (or MinGW cross-compile), VLC 3.0.23 build system (`contrib` + `configure` + `make`). Build at minimum the `direct3d11` plugin module.
+5. **Ship:** Replace `libdirect3d11_plugin.dll` in `resources/vlc/plugins/` (Windows bundle). `engine.rs`'s `plugin_dir_for` resolves `resources/vlc/plugins` from the `libvlc.dll` location, so the patched DLL is picked up automatically.
+6. **CI integration:** Add a Windows VLC plugin build step to `release.yml` alongside the existing official-zip download. Stage the patched DLL with a recorded SHA-256. Keep `WINDOWS_SIGN_PROVIDER` provider-neutral. All three OS release legs stay green before retagging.
+7. **Version:** stays `0.2.3` everywhere (no bump).
+
+**SDR behavior:** Provably unchanged — the corrected curve is a pass-through (identity) for BT.709/SDR and activates only for PQ/HLG.
 
 ---
 
@@ -92,9 +102,9 @@ All agents, models, and workflows operating on this repository must strictly adh
 | Issue | Status | Implementation Details |
 |---|---|---|
 | **Release Version 0.2.3** | Verified | Aligned across `package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, `.github/workflows/release.yml`. |
-| **Seek Bar Hover Thumbnails** | Implemented & Fixed | `player_thumbnail_at` in `commands/media.rs` uses `extract_thumbnail_ffmpeg` with `CREATE_NO_WINDOW` flag, preventing console window popups. UI in `PlayerOverlay.tsx` displays thumbnail preview with debounced fetch and timestamp badge. |
+| **Seek Bar Hover Thumbnails** | Implemented & Fixed | `player_thumbnail_at` in `commands/media.rs` prioritizes `libvlc_video_take_snapshot` when a player is active (instant, no subprocess, no console window); falls back to cached-path ffmpeg only when no player exists. ffmpeg path resolved once via `OnceLock`. `CREATE_NO_WINDOW` on Windows. Frontend debounce 120ms in `PlayerOverlay.tsx`. |
 | **Windows 1px Desktop Bleed** | Verified | Resolved via `get_client_rect_in_screen` across all window management events in `embed_windows.rs`. |
 | **NSIS Installer Reinstall Prompt** | Verified | Restored custom uninstaller page (`uninstallBeforeInstalling` vs `dontUninstall`) in `src-tauri/nsis/installer.nsi`. |
 | **Resume Playback from Saved Point** | Verified | Checkbox in Media Preferences; stores positions every 4s and auto-seeks on launch across discs and video files. |
 | **macOS Codebase Isolation** | Verified | `embed_macos.rs` completely untouched; all macOS behaviors preserved. |
-| **Windows UHD Tone Mapping** | **Open for Factory AI** | Needs shader-level / pipeline-level solution in Direct3D 11 without `--video-filter=adjust`. |
+| **Windows UHD Tone Mapping** | **Open — no app-side fix possible** | Tone-mapping curve is hardcoded in `libdirect3d11_plugin.dll` (Hable, LuminanceScale=0.01). No `engine.rs` edit can change it. `--video-filter=adjust` was removed (broke disc menus + audio). Pathway A (OpenGL vout) not viable; Pathway B (swapchain color space) unreachable; Pathway C (recompile DLL with ACES/Mobius curve) is the only technically sound fix. Build plan in §3C. Adjust-filter code removed from `embed_windows.rs` (commit `d76d123`). |
