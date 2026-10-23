@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, playerStore, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -155,12 +155,8 @@ export default function PlayerOverlay() {
   const [volume, setVolume] = useState(80);
   const [ended, setEnded] = useState(false);
   const [seeking, setSeeking] = useState<number | null>(null);
-  // Hover thumbnail state for the seek bar: position being hovered, the
-  // fetched thumbnail data URL, and whether a fetch is in flight.
+  // Hover time state for the seek bar: position in milliseconds being hovered.
   const [hoverMs, setHoverMs] = useState<number | null>(null);
-  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
-  const [thumbnailLoading, setThumbnailLoading] = useState(false);
-  const thumbnailDebounceRef = useRef<number | null>(null);
   // Track popovers (owner): the volume slider and the track lists appear on
   // click on their pill, not permanently in the bar.
   const [showVolume, setShowVolume] = useState(false);
@@ -234,7 +230,7 @@ export default function PlayerOverlay() {
       // Persist the playback position so Resume can skip the disc menu and
       // jump straight back into the feature (throttled; menus/idle excluded).
       const now = Date.now();
-      if (p.playing && p.time_ms > 30_000 && now - lastSaveRef.current > 5000) {
+      if (p.playing && p.time_ms > 5000 && now - lastSaveRef.current > 4000) {
         lastSaveRef.current = now;
         savePositionMs(player.resolvedPath, p.time_ms);
       }
@@ -258,7 +254,6 @@ export default function PlayerOverlay() {
     window.addEventListener('resize', syncViewport);
     return () => {
       window.clearInterval(iv);
-      window.clearTimeout(thumbnailDebounceRef.current ?? undefined);
       ro.disconnect();
       window.removeEventListener('resize', syncViewport);
     };
@@ -335,7 +330,7 @@ export default function PlayerOverlay() {
         case 'Q':
           // Close (owner): persist the resume point, then close.
           {
-            if (!atMenu && p.time_ms > 30_000) {
+            if (!atMenu && p.time_ms > 5000) {
               savePositionMs(player.resolvedPath, p.time_ms);
             }
             void closePlayer();
@@ -570,45 +565,6 @@ export default function PlayerOverlay() {
     };
   }, [player.open, poll.title, poll.title_count, poll.length_ms]);
 
-  // Hover thumbnail fetch (owner): debounced so rapid mouse movement over
-  // the seek bar doesn't flood the backend with take_snapshot calls. Only
-  // requests when there's a real duration and we're not at the disc menu.
-  useEffect(() => {
-    if (!player.open || poll.length_ms === 0 || isAtMenu || hoverMs === null) {
-      setThumbnailUrl(null);
-      setThumbnailLoading(false);
-      return;
-    }
-    // Don't refetch if we already have this frame cached.
-    const existing = playerStore.getCachedThumbnail(player.resolvedPath, hoverMs);
-    if (existing) {
-      setThumbnailUrl(existing);
-      setThumbnailLoading(false);
-      return;
-    }
-    let cancelled = false;
-    if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
-    thumbnailDebounceRef.current = window.setTimeout(async () => {
-      if (cancelled) return;
-      setThumbnailLoading(true);
-      try {
-        const url = await playerStore.getThumbnail(player.resolvedPath, hoverMs);
-        if (!cancelled) {
-          setThumbnailUrl(url);
-          setThumbnailLoading(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setThumbnailUrl(null);
-          setThumbnailLoading(false);
-        }
-      }
-    }, 150);
-    return () => {
-      cancelled = true;
-      if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
-    };
-  }, [hoverMs, poll.length_ms, isAtMenu, player.open, player.resolvedPath]);
 
   // Fullscreen state mirror for the button's icon.
   // On macOS the player uses a manual NSWindow frame resize (not the native
@@ -1189,79 +1145,55 @@ export default function PlayerOverlay() {
             }}
             onMouseLeave={() => {
               setHoverMs(null);
-              setThumbnailUrl(null);
-              setThumbnailLoading(false);
             }}
-        >
-          <div
-            ref={seekTrackRef}
-            data-testid="seek-track"
-            className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible"
           >
-            {/* Gradual fill (owner: grey, not red) */}
             <div
-              className="absolute left-0 top-0 h-full rounded-full bg-white"
-              style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
-            />
-            {/* Chapter marks: vertical ticks at the real chapter offsets.
-                Render dark notches that extend past the track, centered on the offset,
-                with a white ring for contrast over both played fill and unplayed track. */}
-            {dur > 0 &&
-              chapterMarks
-                .filter((mk) => mk.offset_ms > 0 && mk.offset_ms < dur)
-                .map((mk, i) => {
-                  const leftPct = Math.min(100, Math.max(0, (mk.offset_ms / dur) * 100));
-                  return (
-                    <span
-                      key={i}
-                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
-                      style={{ left: `${leftPct}%` }}
-                      title={mk.name}
-                    />
-                  );
-                })}
-            {/* Playhead */}
-            <span
-              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
-              style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
-            />
-          </div>
+              ref={seekTrackRef}
+              data-testid="seek-track"
+              className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible"
+            >
+              {/* Gradual fill (owner: grey, not red) */}
+              <div
+                className="absolute left-0 top-0 h-full rounded-full bg-white"
+                style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+              />
+              {/* Chapter marks: vertical ticks at the real chapter offsets.
+                  Render dark notches that extend past the track, centered on the offset,
+                  with a white ring for contrast over both played fill and unplayed track. */}
+              {dur > 0 &&
+                chapterMarks
+                  .filter((mk) => mk.offset_ms > 0 && mk.offset_ms < dur)
+                  .map((mk, i) => {
+                    const leftPct = Math.min(100, Math.max(0, (mk.offset_ms / dur) * 100));
+                    return (
+                      <span
+                        key={i}
+                        className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
+                        style={{ left: `${leftPct}%` }}
+                        title={mk.name}
+                      />
+                    );
+                  })}
+              {/* Playhead */}
+              <span
+                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
+                style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+              />
+
+              {/* Hover time tooltip: popping up over current mouse position on the media play bar */}
+              {hoverMs !== null && dur > 0 && !isAtMenu && (
+                <div
+                  className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl pointer-events-none tabular-nums z-30 whitespace-nowrap"
+                  style={{
+                    left: `${Math.min(100, Math.max(0, (hoverMs / dur) * 100))}%`,
+                  }}
+                >
+                  {fmt(hoverMs)}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Hover thumbnail tooltip (owner): shows the video frame at the
-            hovered position, positioned directly above the seek bar track.
-            Only visible when hovering over a seekable position with a
-            successful thumbnail fetch. */}
-        {hoverMs !== null && dur > 0 && !poll.at_menu && (
-          <div
-            className="absolute -top-[calc(100%+14px)] left-0 -translate-x-1/2 w-[140px] flex flex-col items-center gap-1.5 pointer-events-none"
-            style={{
-              left: `calc(${hoverMs / dur} * 100%)`,
-            }}
-          >
-            {thumbnailLoading && (
-              <div className="w-[120px] h-[68px] rounded bg-[#1f1f1f] animate-pulse flex items-center justify-center text-[10px] text-[#a3a3a3]">
-                <span>loading…</span>
-              </div>
-            )}
-            {!thumbnailLoading && thumbnailUrl && (
-              <img
-                src={thumbnailUrl}
-                className="w-[120px] h-[68px] rounded-lg object-cover border border-white/20 shadow-2xl"
-                alt="thumbnail"
-              />
-            )}
-            {!thumbnailLoading && !thumbnailUrl && (
-              <div className="w-[120px] h-[68px] rounded bg-[#1f1f1f] flex items-center justify-center text-[10px] text-[#a3a3a3]">
-                <span>—</span>
-              </div>
-            )}
-            <span className="text-[10px] font-mono text-white/80">
-              {fmt(hoverMs)}
-            </span>
-          </div>
-        )}
         <span className="text-[11px] font-mono text-white tabular-nums">
           {fmt(dur)}
         </span>
@@ -1512,7 +1444,7 @@ export default function PlayerOverlay() {
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
             const atMenu = player.isDisc && (p.at_menu || p.title === 0 || (p.length_ms === 0 && p.title <= 0));
-            if (!atMenu && p.time_ms > 30_000) {
+            if (!atMenu && p.time_ms > 5000) {
               savePositionMs(player.resolvedPath, p.time_ms);
             }
             void closePlayer();

@@ -771,6 +771,12 @@ impl VlcSession {
             CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
+            // Windows Direct3D11 HDR tone mapping:
+            // Direct3D11 default is d3d11-hdr-mode=auto, which creates a PQ swapchain
+            // without SDR tone mapping, resulting in washed-out lifted blacks on standard SDR screens.
+            // Setting d3d11-hdr-mode=never forces Direct3D11's shader to apply filmic Hable
+            // tone-mapping down to BT.709 SDR, producing rich blacks and saturated colors matching macOS.
+            CString::new("--d3d11-hdr-mode=never").unwrap(),
         ];
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {

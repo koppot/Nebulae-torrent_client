@@ -204,8 +204,8 @@ export async function openInPlayer(
     } catch {
       /* collection is best-effort */
     }
-    if (info.is_disc && resume && seekTo >= 10000) {
-      void seekWhenFeatureStarts(seekTo);
+    if (resume && seekTo >= 5000) {
+      void seekWhenReady(seekTo, info.is_disc);
     }
   }
   return info;
@@ -223,26 +223,7 @@ export async function resumeFromMenu(
   _filePath: string,
   timeMs: number,
 ): Promise<void> {
-  void (async () => {
-    // The caller (menu Play button) already cancelled the menu watcher and
-    // activated the highlighted menu entry; wait for the feature title to
-    // engage, then seek to the saved position.
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
-      try {
-        const p = await invoke<PlayerPollShape>('player_poll');
-        if (p.length_ms > 300_000 && p.playing) {
-          if (timeMs >= 10000) {
-            await invoke('player_seek', { positionMs: timeMs });
-          }
-          return;
-        }
-      } catch {
-        return; // player closed meanwhile
-      }
-    }
-  })();
+  void seekWhenReady(timeMs, true);
 }
 
 /**
@@ -257,48 +238,84 @@ export async function resumeInPlayer(
   displayTitle?: string,
   year?: number | string | null,
 ): Promise<PlayerOpenInfo> {
-  // Explicit resume: skip the menu entirely (engine flag) and continue the
-  // feature at the saved position.
   return openInPlayer(filePath, { resume: true, seekTo: timeMs, displayTitle, year });
 }
 
 /**
- * Wait for the feature title to engage (a real runtime length is reported —
- * menus never have one), then seek to the given position. Must NOT open
- * anything itself — openInPlayer owns the open; routing back through it
- * caused an open/stop recursion that kept destroying the fresh session.
+ * Wait for media playback to begin, then seek to the given position and verify.
+ * Handles both plain video files (MKV, MP4) and optical disc features.
  */
-async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
+async function seekWhenReady(timeMs: number, isDisc: boolean): Promise<void> {
   const deadline = Date.now() + 60_000;
+  let seekSent = false;
+  let retries = 0;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 600));
     try {
       const p = await invoke<PlayerPollShape>('player_poll');
-      // Feature title engaged: non-trivial length and actually playing.
-      if (p.length_ms > 300_000 && p.playing) {
-        await invoke('player_seek', { positionMs: timeMs });
-        return;
+      const ready = p.playing && p.length_ms > 0 && (!isDisc || !p.at_menu || p.length_ms > 60_000);
+      if (ready) {
+        if (!seekSent) {
+          await invoke('player_seek', { positionMs: timeMs });
+          seekSent = true;
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        if (Math.abs(p.time_ms - timeMs) <= 5000 || p.time_ms >= timeMs) {
+          return;
+        }
+        retries++;
+        if (retries <= 3) {
+          await invoke('player_seek', { positionMs: timeMs });
+        } else {
+          return;
+        }
       }
     } catch {
-      return; // player closed meanwhile
+      return;
     }
   }
 }
 
-/** Saved playback position for a disc (the overlay poller persists it). */
-export function savedPositionMs(discPath: string): number {
+/** Normalize media path so files within BDMV or VIDEO_TS resolve to the release root. */
+export function normalizeMediaPath(p: string): string {
+  if (!p) return '';
+  const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const bdmvIdx = norm.toUpperCase().indexOf('/BDMV');
+  if (bdmvIdx > 0) return norm.substring(0, bdmvIdx);
+  const videoTsIdx = norm.toUpperCase().indexOf('/VIDEO_TS');
+  if (videoTsIdx > 0) return norm.substring(0, videoTsIdx);
+  return norm;
+}
+
+/** Saved playback position for a release (discs and plain files). */
+export function savedPositionMs(filePath: string): number {
   try {
-    return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
+    if (!filePath) return 0;
+    const direct = Number(localStorage.getItem(`nebulae_resume_pos:${filePath}`) || 0);
+    if (direct > 0) return direct;
+    const norm = normalizeMediaPath(filePath);
+    if (norm && norm !== filePath) {
+      const fromNorm = Number(localStorage.getItem(`nebulae_resume_pos:${norm}`) || 0);
+      if (fromNorm > 0) return fromNorm;
+    }
+    return 0;
   } catch {
     return 0;
   }
 }
 
-export function savePositionMs(discPath: string, timeMs: number): void {
+export function savePositionMs(filePath: string, timeMs: number): void {
   try {
-    localStorage.setItem(`nebulae_resume_pos:${discPath}`, String(Math.floor(timeMs)));
+    if (!filePath) return;
+    const val = String(Math.floor(timeMs));
+    localStorage.setItem(`nebulae_resume_pos:${filePath}`, val);
+    const norm = normalizeMediaPath(filePath);
+    if (norm && norm !== filePath) {
+      localStorage.setItem(`nebulae_resume_pos:${norm}`, val);
+    }
   } catch {
-    // Storage unavailable: resume simply falls back to the disc menu.
+    // Storage unavailable
   }
 }
 
