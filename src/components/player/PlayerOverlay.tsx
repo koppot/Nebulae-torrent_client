@@ -39,11 +39,33 @@ interface Poll {
  * language codes").
  */
 const LANG_NAMES: Record<string, string> = {
-  en: 'english', ja: 'japanese', jp: 'japanese', fr: 'french', de: 'german',
-  es: 'spanish', it: 'italian', pt: 'portuguese', ru: 'russian', ko: 'korean',
-  zh: 'chinese', th: 'thai', nl: 'dutch', sv: 'swedish', no: 'norwegian',
-  da: 'danish', fi: 'finnish', pl: 'polish', hi: 'hindi', ar: 'arabic',
+  en: 'english', eng: 'english', english: 'english',
+  ja: 'japanese', jpn: 'japanese', jp: 'japanese', japanese: 'japanese',
+  fr: 'french', fre: 'french', fra: 'french', french: 'french',
+  de: 'german', deu: 'german', ger: 'german', german: 'german',
+  es: 'spanish', spa: 'spanish', spanish: 'spanish',
+  it: 'italian', ita: 'italian', italian: 'italian',
+  pt: 'portuguese', por: 'portuguese', portuguese: 'portuguese',
+  ru: 'russian', rus: 'russian', russian: 'russian',
+  ko: 'korean', kor: 'korean', korean: 'korean',
+  zh: 'chinese', chi: 'chinese', zho: 'chinese', chinese: 'chinese',
+  th: 'thai', tha: 'thai', thai: 'thai',
+  nl: 'dutch', dut: 'dutch', nld: 'dutch', dutch: 'dutch',
+  sv: 'swedish', swe: 'swedish', swedish: 'swedish',
+  no: 'norwegian', nor: 'norwegian', norwegian: 'norwegian',
+  da: 'danish', dan: 'danish', danish: 'danish',
+  fi: 'finnish', fin: 'finnish', finnish: 'finnish',
+  pl: 'polish', pol: 'polish', polish: 'polish',
+  hi: 'hindi', hin: 'hindi', hindi: 'hindi',
+  ar: 'arabic', ara: 'arabic', arabic: 'arabic',
+  el: 'greek', ell: 'greek', gre: 'greek', greek: 'greek',
+  cs: 'czech', ces: 'czech', cze: 'czech', czech: 'czech',
+  hu: 'hungarian', hun: 'hungarian', hungarian: 'hungarian',
+  tr: 'turkish', tur: 'turkish', turkish: 'turkish',
+  he: 'hebrew', heb: 'hebrew', hebrew: 'hebrew',
 };
+
+const normDiscPath = (p: string) => (p || '').replace(/\\/g, '/').toLowerCase();
 
 /** Read the preferences saved by the media screen's preferences modal. */
 function readLanguagePrefs(): { audio: string | null; subs: string | null } {
@@ -382,16 +404,14 @@ export default function PlayerOverlay() {
     subs: [],
   });
   useEffect(() => {
-    // Only probe once playback engages with a known feature title or duration,
-    // avoiding heavy libbluray network I/O during initial disc menu startup.
-    if (!player.open || (player.isDisc && poll.title === 0 && poll.length_ms <= 0)) return;
+    if (!player.open) return;
     // The poll fires every second; only re-probe when the session, title,
     // or duration state (unknown→known) actually changes. The menu→feature
     // transition changes the answer; a duration transition from 0 to a
     // positive value also needs a fresh probe because the title-matching
     // logic uses duration to identify the correct playlist.
     const durKnown = poll.length_ms > 0 ? 'known' : 'unknown';
-    const probeKey = `${player.resolvedPath}:${poll.title}:${durKnown}`;
+    const probeKey = `${normDiscPath(player.resolvedPath)}:${poll.title}:${durKnown}`;
     if (probeKey === lastLangProbeRef.current) return;
     lastLangProbeRef.current = probeKey;
     let alive = true;
@@ -405,7 +425,7 @@ export default function PlayerOverlay() {
           // Only overwrite when the probe actually identified the title;
           // keep the previous (correct) labels otherwise.
           if (a.length > 0 || s.length > 0) {
-            trackLangsCache.set(player.resolvedPath, { audio: a, subs: s });
+            trackLangsCache.set(normDiscPath(player.resolvedPath), { audio: a, subs: s });
             setTrackLangs({ audio: a, subs: s });
           } else if (retriesLeft > 0) {
             window.setTimeout(() => tryFetch(retriesLeft - 1), 2000);
@@ -423,7 +443,7 @@ export default function PlayerOverlay() {
   // the Audio menu doesn't flash wrong VLC names while a fresh probe runs.
   useEffect(() => {
     if (!player.open || !player.isDisc) return;
-    const cached = trackLangsCache.get(player.resolvedPath);
+    const cached = trackLangsCache.get(normDiscPath(player.resolvedPath));
     if (cached) setTrackLangs(cached);
     else setTrackLangs({ audio: [], subs: [] });
   }, [player.open, player.isDisc, player.resolvedPath]);
@@ -629,13 +649,13 @@ export default function PlayerOverlay() {
         try {
           if (prefs.audio) {
             const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'audio' });
-            const langs = trackLangsCache.get(player.resolvedPath)?.audio ?? [];
+            const langs = trackLangsCache.get(normDiscPath(player.resolvedPath))?.audio ?? [];
             const pick = pickTrackFor(tracks, prefs.audio, langs);
             if (pick != null) await invoke('player_set_track', { kind: 'audio', id: pick });
           }
           if (prefs.subs) {
             const tracks = await invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' });
-            const langs = trackLangsCache.get(player.resolvedPath)?.subs ?? [];
+            const langs = trackLangsCache.get(normDiscPath(player.resolvedPath))?.subs ?? [];
             const pick = pickTrackFor(tracks, prefs.subs, langs);
             if (pick != null) await invoke('player_set_track', { kind: 'subtitle', id: pick });
           }
@@ -724,13 +744,42 @@ export default function PlayerOverlay() {
     }
   };
 
+  const cleanTrackName = (name: string): string => {
+    if (!name) return '';
+    const bracket = name.match(/\[([a-zA-Z\s]+)\]/) || name.match(/\(([a-zA-Z\s]+)\)/);
+    if (bracket && bracket[1]) {
+      const k = bracket[1].trim().toLowerCase();
+      const mapped = LANG_NAMES[k];
+      if (mapped) return mapped.charAt(0).toUpperCase() + mapped.slice(1);
+      return bracket[1].trim();
+    }
+    const dash = name.match(/-\s*([a-zA-Z\s]+)$/);
+    if (dash && dash[1]) {
+      const k = dash[1].trim().toLowerCase();
+      const mapped = LANG_NAMES[k];
+      if (mapped) return mapped.charAt(0).toUpperCase() + mapped.slice(1);
+      return dash[1].trim();
+    }
+    const stripped = name.replace(/^(?:track|audio|subtitle|stream)\s*\d+\s*(?:-\s*)?/i, '').trim();
+    if (stripped) {
+      const k = stripped.toLowerCase();
+      const mapped = LANG_NAMES[k];
+      if (mapped) return mapped.charAt(0).toUpperCase() + mapped.slice(1);
+      return stripped;
+    }
+    return '';
+  };
+
   // Track display name: the language read from the disc playlists
-  // (libbluray) — VLC's own label can be wrong on poorly-authored discs.
-  // Just the language (owner): no "Track N" prefix.
+  // (libbluray / MPLS) — VLC's own label can be wrong on poorly-authored discs.
+  // Just the language (owner): no "Track N" prefix or word number.
   const trackLabel = (kind: 'audio' | 'subtitle', index: number, t: { id: number; name: string }) => {
     const langs = kind === 'audio' ? trackLangs.audio : trackLangs.subs;
     const lang = index >= 0 && index < langs.length ? langs[index] : null;
-    return lang || t.name || `Track ${t.id}`;
+    if (lang && lang.trim()) return lang.trim();
+    const clean = cleanTrackName(t.name);
+    if (clean) return clean;
+    return kind === 'audio' ? `Audio ${index + 1}` : `Subtitle ${index + 1}`;
   };
 
   const togglePause = () => {

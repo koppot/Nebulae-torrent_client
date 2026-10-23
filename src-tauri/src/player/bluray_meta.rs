@@ -8,7 +8,7 @@
 
 use libloading::{Library, Symbol};
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // Raw libbluray structures (ABI of libbluray 1.x / dylib version 4). Fields
 // mirror bluray.h; see the ctypes probe that validated this layout.
@@ -172,32 +172,250 @@ unsafe fn open_bluray_lib() -> Result<&'static Library, String> {
         .map_err(|e| e.clone())
 }
 
+fn lang_name_str(s: &str) -> String {
+    let s_clean = s.trim().to_ascii_lowercase();
+    match s_clean.as_str() {
+        "eng" | "en" => "English",
+        "jpn" | "ja" => "Japanese",
+        "und" => "Unknown",
+        "fre" | "fra" | "fr" => "French",
+        "spa" | "es" => "Spanish",
+        "deu" | "ger" | "de" => "German",
+        "ita" | "it" => "Italian",
+        "kor" | "ko" => "Korean",
+        "chi" | "zho" | "zh" => "Chinese",
+        "rus" | "ru" => "Russian",
+        "por" | "pt" => "Portuguese",
+        "dut" | "nld" | "nl" => "Dutch",
+        "swe" | "sv" => "Swedish",
+        "nor" | "no" => "Norwegian",
+        "dan" | "da" => "Danish",
+        "fin" | "fi" => "Finnish",
+        "th" | "tha" => "Thai",
+        "pol" | "pl" => "Polish",
+        "hun" | "hu" => "Hungarian",
+        "ces" | "cze" | "cs" => "Czech",
+        "tur" | "tr" => "Turkish",
+        "heb" | "he" => "Hebrew",
+        "hin" | "hi" => "Hindi",
+        "ara" | "ar" => "Arabic",
+        "ell" | "gre" | "el" => "Greek",
+        _ => return if s.is_empty() { "Unknown".to_string() } else { s.to_string() },
+    }
+    .to_string()
+}
+
 fn lang_name(code: &[c_char]) -> String {
     let s: String = code
         .iter()
         .filter(|c| **c != 0)
         .map(|c| *c as u8 as char)
         .collect();
-    match s.as_str() {
-        "eng" => "English",
-        "jpn" => "Japanese",
-        "und" => "Unknown",
-        "fre" | "fra" => "French",
-        "spa" => "Spanish",
-        "deu" | "ger" => "German",
-        "ita" => "Italian",
-        "kor" => "Korean",
-        "chi" | "zho" => "Chinese",
-        "rus" => "Russian",
-        "por" => "Portuguese",
-        "dut" | "nld" => "Dutch",
-        "swe" => "Swedish",
-        "nor" => "Norwegian",
-        "dan" => "Danish",
-        "fin" => "Finnish",
-        _ => return s,
+    lang_name_str(&s)
+}
+
+#[derive(Debug, Clone)]
+struct NativeMplsInfo {
+    filename: String,
+    duration_ms: i64,
+    audio: Vec<String>,
+    subs: Vec<String>,
+    chapters_ms: Vec<i64>,
+    is_uhd: bool,
+}
+
+fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
+    let d = std::fs::read(path).ok()?;
+    if d.len() < 40 {
+        return None;
     }
-    .to_string()
+    let is_uhd_header = d.starts_with(b"MPLS0300");
+    if !d.starts_with(b"MPLS") && !d.starts_with(b"1000") && !d.starts_with(b"2000") && !d.starts_with(b"3000") {
+        return None;
+    }
+
+    let pl_start = u32::from_be_bytes([d[8], d[9], d[10], d[11]]) as usize;
+    let mk_start = u32::from_be_bytes([d[12], d[13], d[14], d[15]]) as usize;
+
+    if pl_start + 6 > d.len() {
+        return None;
+    }
+
+    let p = pl_start + 6;
+    if p + 4 > d.len() {
+        return None;
+    }
+    let nitems = u16::from_be_bytes([d[p], d[p + 1]]) as usize;
+    let mut pos = p + 4;
+
+    let mut total_ticks: u64 = 0;
+    let mut all_audio: Vec<String> = Vec::new();
+    let mut all_subs: Vec<String> = Vec::new();
+    let mut is_uhd = is_uhd_header;
+
+    for _ in 0..nitems {
+        if pos + 2 > d.len() {
+            break;
+        }
+        let item_len = u16::from_be_bytes([d[pos], d[pos + 1]]) as usize;
+        if pos + 2 + item_len > d.len() {
+            break;
+        }
+        let item_data = &d[pos + 2..pos + 2 + item_len];
+        if item_data.len() >= 20 {
+            let tin = u32::from_be_bytes([item_data[12], item_data[13], item_data[14], item_data[15]]) as u64;
+            let tout = u32::from_be_bytes([item_data[16], item_data[17], item_data[18], item_data[19]]) as u64;
+            if tout > tin {
+                total_ticks += tout - tin;
+            }
+        }
+        if item_data.len() >= 34 {
+            let stn_len = u16::from_be_bytes([item_data[32], item_data[33]]) as usize;
+            if 34 + stn_len <= item_data.len() {
+                let stn = &item_data[34..34 + stn_len];
+                if stn.len() >= 14 {
+                    let num_video = stn[2] as usize;
+                    let num_audio = stn[3] as usize;
+                    let num_pg = stn[4] as usize;
+
+                    let mut sp = 14;
+                    for _ in 0..num_video {
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let elen = stn[sp] as usize;
+                        sp += 1 + elen;
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let alen = stn[sp] as usize;
+                        if sp + 1 + alen <= stn.len() {
+                            let attr = &stn[sp + 1..sp + 1 + alen];
+                            if attr.len() >= 2 {
+                                let fmt = (attr[1] >> 4) & 0x0F;
+                                if fmt == 7 {
+                                    is_uhd = true;
+                                }
+                            }
+                        }
+                        sp += 1 + alen;
+                    }
+
+                    let mut item_audio = Vec::new();
+                    for _ in 0..num_audio {
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let elen = stn[sp] as usize;
+                        sp += 1 + elen;
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let alen = stn[sp] as usize;
+                        if sp + 1 + alen <= stn.len() {
+                            let attr = &stn[sp + 1..sp + 1 + alen];
+                            if attr.len() >= 5 {
+                                if let Ok(lang) = std::str::from_utf8(&attr[2..5]) {
+                                    item_audio.push(lang_name_str(lang));
+                                }
+                            }
+                        }
+                        sp += 1 + alen;
+                    }
+                    if item_audio.len() > all_audio.len() {
+                        all_audio = item_audio;
+                    }
+
+                    let mut item_subs = Vec::new();
+                    for _ in 0..num_pg {
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let elen = stn[sp] as usize;
+                        sp += 1 + elen;
+                        if sp >= stn.len() {
+                            break;
+                        }
+                        let alen = stn[sp] as usize;
+                        if sp + 1 + alen <= stn.len() {
+                            let attr = &stn[sp + 1..sp + 1 + alen];
+                            if attr.len() >= 4 {
+                                if let Ok(lang) = std::str::from_utf8(&attr[1..4]) {
+                                    item_subs.push(lang_name_str(lang));
+                                }
+                            }
+                        }
+                        sp += 1 + alen;
+                    }
+                    if item_subs.len() > all_subs.len() {
+                        all_subs = item_subs;
+                    }
+                }
+            }
+        }
+        pos += 2 + item_len;
+    }
+
+    let duration_ms = (total_ticks / 45) as i64;
+    let mut chapters_ms = Vec::new();
+    if mk_start > 0 && mk_start + 6 <= d.len() {
+        let nmarks = u16::from_be_bytes([d[mk_start + 4], d[mk_start + 5]]) as usize;
+        let mut mp = mk_start + 6;
+        for _ in 0..nmarks {
+            if mp + 14 > d.len() {
+                break;
+            }
+            let mark_type = d[mp + 1];
+            if mark_type == 1 {
+                let ts = u32::from_be_bytes([d[mp + 4], d[mp + 5], d[mp + 6], d[mp + 7]]) as u64;
+                chapters_ms.push((ts / 45) as i64);
+            }
+            mp += 14;
+        }
+    }
+
+    Some(NativeMplsInfo {
+        filename: path.file_name()?.to_string_lossy().into_owned(),
+        duration_ms,
+        audio: all_audio,
+        subs: all_subs,
+        chapters_ms,
+        is_uhd,
+    })
+}
+
+fn parse_disc_playlists(disc_path: &str) -> Vec<NativeMplsInfo> {
+    let root = Path::new(disc_path);
+    let playlist_dir = if root.join("BDMV").join("PLAYLIST").is_dir() {
+        root.join("BDMV").join("PLAYLIST")
+    } else if root.join("PLAYLIST").is_dir() {
+        root.join("PLAYLIST")
+    } else {
+        return Vec::new();
+    };
+
+    let mut list = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(playlist_dir) {
+        let mut paths: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("mpls"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        for p in paths {
+            if let Some(info) = parse_mpls_file(&p) {
+                if !info.audio.is_empty() || !info.subs.is_empty() {
+                    list.push(info);
+                }
+            }
+        }
+    }
+    list
 }
 
 /// Audio and subtitle language names for the title whose duration matches
@@ -207,6 +425,48 @@ pub fn disc_stream_languages(
     disc_path: &str,
     duration_ms: i64,
 ) -> Result<(Vec<String>, Vec<String>), String> {
+    // 1. Pure-Rust native MPLS parsing (instant, zero external C library dependency,
+    // works on all platforms including Windows where libbluray.dll is absent).
+    let playlists = parse_disc_playlists(disc_path);
+    if !playlists.is_empty() {
+        let mut best_match: Option<(i64, &NativeMplsInfo)> = None;
+        let mut most_distinct: Option<((usize, usize, i64), &NativeMplsInfo)> = None;
+
+        for pl in &playlists {
+            let diff = (pl.duration_ms - duration_ms).abs();
+            if best_match.as_ref().map(|(b, _)| diff < *b).unwrap_or(true) {
+                best_match = Some((diff, pl));
+            }
+
+            let mut distinct_set = pl.audio.clone();
+            distinct_set.sort();
+            distinct_set.dedup();
+            let distinct_count = distinct_set.len();
+            let score = (distinct_count, pl.audio.len(), pl.duration_ms);
+            if most_distinct.as_ref().map(|(m, _)| score > *m).unwrap_or(true) {
+                most_distinct = Some((score, pl));
+            }
+        }
+
+        let chosen = if duration_ms > 0 {
+            best_match
+                .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
+                .map(|(_, pl)| pl)
+                .or_else(|| most_distinct.map(|(_, pl)| pl))
+        } else {
+            most_distinct.map(|(_, pl)| pl)
+        };
+
+        if let Some(pl) = chosen {
+            tracing::info!(
+                "[player] native MPLS stream languages for dur {duration_ms} (playlist {}): audio={:?}, subs={:?}",
+                pl.filename, pl.audio, pl.subs
+            );
+            return Ok((pl.audio.clone(), pl.subs.clone()));
+        }
+    }
+
+    // 2. Fall back to C libbluray if native parsing yielded no playlists.
     let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
@@ -361,6 +621,47 @@ unsafe fn bluray_chapter_stride(lib: &Library, chapters_ptr: *const c_void, coun
 /// selection as `disc_stream_languages`. VLC's own chapter API reports nothing for
 /// Blu-ray titles, so the seek bar's chapter ticks come from here.
 pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<(Vec<i64>, i64), String> {
+    // 1. Pure-Rust native MPLS parsing (instant, zero external C library dependency).
+    let playlists = parse_disc_playlists(disc_path);
+    if !playlists.is_empty() {
+        let mut best_match: Option<(i64, &NativeMplsInfo)> = None;
+        let mut longest: Option<(i64, usize, &NativeMplsInfo)> = None;
+        let mut most_distinct: Option<((usize, usize, i64), &NativeMplsInfo)> = None;
+
+        for pl in &playlists {
+            let diff = (pl.duration_ms - duration_ms).abs();
+            if best_match.as_ref().map(|(b, _)| diff < *b).unwrap_or(true) {
+                best_match = Some((diff, pl));
+            }
+            if longest.as_ref().map(|(d, c, _)| pl.duration_ms > *d || (pl.duration_ms == *d && pl.chapters_ms.len() > *c)).unwrap_or(true) {
+                longest = Some((pl.duration_ms, pl.chapters_ms.len(), pl));
+            }
+            let mut distinct_set = pl.audio.clone();
+            distinct_set.sort();
+            distinct_set.dedup();
+            let score = (distinct_set.len(), pl.audio.len(), pl.duration_ms);
+            if most_distinct.as_ref().map(|(m, _)| score > *m).unwrap_or(true) {
+                most_distinct = Some((score, pl));
+            }
+        }
+
+        let chosen = if duration_ms > 0 {
+            best_match
+                .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
+                .map(|(_, pl)| pl)
+                .or_else(|| longest.map(|(_, _, pl)| pl))
+        } else {
+            most_distinct.map(|(_, pl)| pl).or_else(|| longest.map(|(_, _, pl)| pl))
+        };
+
+        if let Some(pl) = chosen {
+            if !pl.chapters_ms.is_empty() {
+                return Ok((pl.chapters_ms.clone(), pl.duration_ms));
+            }
+        }
+    }
+
+    // 2. Fall back to C libbluray if native parsing yielded no chapters.
     let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let lib = open_bluray_lib()?;
@@ -548,6 +849,13 @@ pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
 /// Returns true if any clip has format == 7 (2160p UHD), color_space == 2 (BT.2020),
 /// or dynamic_range_type > 0 (HDR10/Dolby Vision/Philips HDR).
 pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
+    let playlists = parse_disc_playlists(disc_path);
+    for pl in &playlists {
+        if pl.is_uhd {
+            return true;
+        }
+    }
+
     let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let Ok(lib) = open_bluray_lib() else {
@@ -676,5 +984,83 @@ mod tests {
                 "Fuuka D1 must NOT be detected as UHD/HDR"
             );
         }
+    }
+
+    #[test]
+    fn test_lang_name_str() {
+        assert_eq!(lang_name_str("eng"), "English");
+        assert_eq!(lang_name_str("jpn"), "Japanese");
+        assert_eq!(lang_name_str("fre"), "French");
+        assert_eq!(lang_name_str("ger"), "German");
+        assert_eq!(lang_name_str("spa"), "Spanish");
+        assert_eq!(lang_name_str("und"), "Unknown");
+    }
+
+    #[test]
+    fn test_native_mpls_synthetic() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MPLS0200");
+        let pl_start: u32 = 40;
+        let mk_start: u32 = 0;
+        data.extend_from_slice(&pl_start.to_be_bytes());
+        data.extend_from_slice(&mk_start.to_be_bytes());
+        data.extend_from_slice(&[0u8; 24]); // pad to 40 bytes
+
+        // Playlist section:
+        data.extend_from_slice(&[0u8; 4]); // length
+        data.extend_from_slice(&[0u8; 2]); // reserved
+        data.extend_from_slice(&1u16.to_be_bytes()); // nitems = 1
+        data.extend_from_slice(&0u16.to_be_bytes()); // nsubpaths = 0
+
+        // PlayItem:
+        let mut item = Vec::new();
+        item.extend_from_slice(b"00001M2TS"); // 0..9
+        item.extend_from_slice(&[0u8; 3]); // 9..12
+        item.extend_from_slice(&0u32.to_be_bytes()); // in_time = 0
+        item.extend_from_slice(&(45000u32 * 100).to_be_bytes()); // out_time = 100s
+        item.extend_from_slice(&[0u8; 12]); // 20..32
+
+        // STN table:
+        let mut stn = Vec::new();
+        stn.extend_from_slice(&[0u8; 2]); // reserved
+        stn.push(1); // video count
+        stn.push(2); // audio count
+        stn.push(1); // pg count
+        stn.extend_from_slice(&[0u8; 9]); // padding to 14 bytes
+
+        // Video stream
+        stn.push(1); stn.push(0); // elen=1
+        stn.push(2); stn.extend_from_slice(&[0x1b, 0x71]); // alen=2, format 7 = UHD
+
+        // Audio stream 1 (eng)
+        stn.push(1); stn.push(0); // elen=1
+        stn.push(5); stn.extend_from_slice(&[0x81, 0x31, b'e', b'n', b'g']); // alen=5
+
+        // Audio stream 2 (jpn)
+        stn.push(1); stn.push(0); // elen=1
+        stn.push(5); stn.extend_from_slice(&[0x81, 0x31, b'j', b'p', b'n']); // alen=5
+
+        // PG stream 1 (eng)
+        stn.push(1); stn.push(0); // elen=1
+        stn.push(4); stn.extend_from_slice(&[0x90, b'e', b'n', b'g']); // alen=4
+
+        item.extend_from_slice(&(stn.len() as u16).to_be_bytes());
+        item.extend_from_slice(&stn);
+
+        data.extend_from_slice(&(item.len() as u16).to_be_bytes());
+        data.extend_from_slice(&item);
+
+        let temp_dir = std::env::temp_dir().join("test_mpls_synth");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let mpls_path = temp_dir.join("00001.mpls");
+        std::fs::write(&mpls_path, &data).unwrap();
+
+        let parsed = parse_mpls_file(&mpls_path).expect("parse synthetic mpls");
+        assert_eq!(parsed.duration_ms, 100_000);
+        assert_eq!(parsed.audio, vec!["English", "Japanese"]);
+        assert_eq!(parsed.subs, vec!["English"]);
+        assert!(parsed.is_uhd, "format 7 must mark is_uhd=true");
+
+        let _ = std::fs::remove_file(&mpls_path);
     }
 }
