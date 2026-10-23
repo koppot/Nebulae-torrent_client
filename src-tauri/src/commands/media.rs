@@ -702,11 +702,17 @@ fn start_playback_inner(
                             let nav_menu = {
                                 let lib_clone = lib.clone();
                                 move || unsafe {
-                                    if let Some(navigate_menu) = lib_clone.libvlc_media_player_navigate_menu {
+                                    if let Some(navigate_menu) =
+                                        lib_clone.libvlc_media_player_navigate_menu
+                                    {
                                         navigate_menu(mp as *mut c_void);
                                     } else {
-                                        let menu_title = engine::find_menu_title(&lib_clone, mp).unwrap_or(0);
-                                        (lib_clone.libvlc_media_player_set_title)(mp as *mut c_void, menu_title);
+                                        let menu_title =
+                                            engine::find_menu_title(&lib_clone, mp).unwrap_or(0);
+                                        (lib_clone.libvlc_media_player_set_title)(
+                                            mp as *mut c_void,
+                                            menu_title,
+                                        );
                                     }
                                 }
                             };

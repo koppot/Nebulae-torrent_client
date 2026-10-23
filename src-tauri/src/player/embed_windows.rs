@@ -741,7 +741,9 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
         let fs = win.is_fullscreen().unwrap_or(false);
         win.set_fullscreen(!fs)
             .map_err(|e| format!("fullscreen: {e}"))?;
-        let Ok(main_h) = main_hwnd(app) else { return Ok(()) };
+        let Ok(main_h) = main_hwnd(app) else {
+            return Ok(());
+        };
         let hwnd = app
             .state::<crate::player::PlayerState>()
             .overlay_view

@@ -200,7 +200,13 @@ fn lang_name_str(s: &str) -> String {
         "hin" | "hi" => "Hindi",
         "ara" | "ar" => "Arabic",
         "ell" | "gre" | "el" => "Greek",
-        _ => return if s.is_empty() { "Unknown".to_string() } else { s.to_string() },
+        _ => {
+            return if s.is_empty() {
+                "Unknown".to_string()
+            } else {
+                s.to_string()
+            }
+        }
     }
     .to_string()
 }
@@ -230,7 +236,11 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
         return None;
     }
     let is_uhd_header = d.starts_with(b"MPLS0300");
-    if !d.starts_with(b"MPLS") && !d.starts_with(b"1000") && !d.starts_with(b"2000") && !d.starts_with(b"3000") {
+    if !d.starts_with(b"MPLS")
+        && !d.starts_with(b"1000")
+        && !d.starts_with(b"2000")
+        && !d.starts_with(b"3000")
+    {
         return None;
     }
 
@@ -269,8 +279,12 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
         }
         let item_data = &d[pos + 2..pos + 2 + item_len];
         if item_data.len() >= 20 {
-            let tin = u32::from_be_bytes([item_data[12], item_data[13], item_data[14], item_data[15]]) as u64;
-            let tout = u32::from_be_bytes([item_data[16], item_data[17], item_data[18], item_data[19]]) as u64;
+            let tin =
+                u32::from_be_bytes([item_data[12], item_data[13], item_data[14], item_data[15]])
+                    as u64;
+            let tout =
+                u32::from_be_bytes([item_data[16], item_data[17], item_data[18], item_data[19]])
+                    as u64;
             play_items.push(PlayItemTiming {
                 tin,
                 cum_start_ticks: total_ticks,
@@ -463,7 +477,11 @@ pub fn disc_stream_languages(
             distinct_set.dedup();
             let distinct_count = distinct_set.len();
             let score = (distinct_count, pl.audio.len(), pl.duration_ms);
-            if most_distinct.as_ref().map(|(m, _)| score > *m).unwrap_or(true) {
+            if most_distinct
+                .as_ref()
+                .map(|(m, _)| score > *m)
+                .unwrap_or(true)
+            {
                 most_distinct = Some((score, pl));
             }
         }
@@ -653,14 +671,24 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<(Vec<i6
             if best_match.as_ref().map(|(b, _)| diff < *b).unwrap_or(true) {
                 best_match = Some((diff, pl));
             }
-            if longest.as_ref().map(|(d, c, _)| pl.duration_ms > *d || (pl.duration_ms == *d && pl.chapters_ms.len() > *c)).unwrap_or(true) {
+            if longest
+                .as_ref()
+                .map(|(d, c, _)| {
+                    pl.duration_ms > *d || (pl.duration_ms == *d && pl.chapters_ms.len() > *c)
+                })
+                .unwrap_or(true)
+            {
                 longest = Some((pl.duration_ms, pl.chapters_ms.len(), pl));
             }
             let mut distinct_set = pl.audio.clone();
             distinct_set.sort();
             distinct_set.dedup();
             let score = (distinct_set.len(), pl.audio.len(), pl.duration_ms);
-            if most_distinct.as_ref().map(|(m, _)| score > *m).unwrap_or(true) {
+            if most_distinct
+                .as_ref()
+                .map(|(m, _)| score > *m)
+                .unwrap_or(true)
+            {
                 most_distinct = Some((score, pl));
             }
         }
@@ -671,7 +699,9 @@ pub fn disc_chapter_offsets(disc_path: &str, duration_ms: i64) -> Result<(Vec<i6
                 .map(|(_, pl)| pl)
                 .or_else(|| longest.map(|(_, _, pl)| pl))
         } else {
-            most_distinct.map(|(_, pl)| pl).or_else(|| longest.map(|(_, _, pl)| pl))
+            most_distinct
+                .map(|(_, pl)| pl)
+                .or_else(|| longest.map(|(_, _, pl)| pl))
         };
 
         if let Some(pl) = chosen {
@@ -1049,20 +1079,28 @@ mod tests {
         stn.extend_from_slice(&[0u8; 9]); // padding to 14 bytes
 
         // Video stream
-        stn.push(1); stn.push(0); // elen=1
-        stn.push(2); stn.extend_from_slice(&[0x1b, 0x71]); // alen=2, format 7 = UHD
+        stn.push(1);
+        stn.push(0); // elen=1
+        stn.push(2);
+        stn.extend_from_slice(&[0x1b, 0x71]); // alen=2, format 7 = UHD
 
         // Audio stream 1 (eng)
-        stn.push(1); stn.push(0); // elen=1
-        stn.push(5); stn.extend_from_slice(&[0x81, 0x31, b'e', b'n', b'g']); // alen=5
+        stn.push(1);
+        stn.push(0); // elen=1
+        stn.push(5);
+        stn.extend_from_slice(&[0x81, 0x31, b'e', b'n', b'g']); // alen=5
 
         // Audio stream 2 (jpn)
-        stn.push(1); stn.push(0); // elen=1
-        stn.push(5); stn.extend_from_slice(&[0x81, 0x31, b'j', b'p', b'n']); // alen=5
+        stn.push(1);
+        stn.push(0); // elen=1
+        stn.push(5);
+        stn.extend_from_slice(&[0x81, 0x31, b'j', b'p', b'n']); // alen=5
 
         // PG stream 1 (eng)
-        stn.push(1); stn.push(0); // elen=1
-        stn.push(4); stn.extend_from_slice(&[0x90, b'e', b'n', b'g']); // alen=4
+        stn.push(1);
+        stn.push(0); // elen=1
+        stn.push(4);
+        stn.extend_from_slice(&[0x90, b'e', b'n', b'g']); // alen=4
 
         item.extend_from_slice(&(stn.len() as u16).to_be_bytes());
         item.extend_from_slice(&stn);
