@@ -98,6 +98,10 @@ pub struct VlcLib {
     /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
     pub libvlc_video_take_snapshot:
         Option<unsafe extern "C" fn(*mut c_void, c_uint, *const c_char, c_uint, c_uint) -> c_int>,
+    pub libvlc_video_set_adjust_int:
+        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)>,
+    pub libvlc_video_set_adjust_float:
+        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)>,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -671,6 +675,8 @@ impl VlcLib {
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
             libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
+            libvlc_video_set_adjust_int: sym_opt!("libvlc_video_set_adjust_int": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)),
+            libvlc_video_set_adjust_float: sym_opt!("libvlc_video_set_adjust_float": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)),
             lib,
             deps,
         }
@@ -765,10 +771,14 @@ impl VlcSession {
         // tone mapping, resulting in washed-out lifted blacks on SDR displays.
         // Forcing it to "never" makes the D3D11 shader apply filmic Hable down
         // to BT.709, matching macOS caopengllayer output.
-        // This arg does not exist on Linux (X11/Wayland/OpenGL) or macOS and
-        // must not be passed to libvlc_new on those platforms.
+        // Passing --video-filter=adjust enables runtime color adjustments
+        // (calibrated contrast, saturation, gamma) when HDR is detected.
+        // These args do not exist or are not used on Linux or macOS.
         #[cfg(target_os = "windows")]
-        args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
+        {
+            args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
+            args.push(CString::new("--video-filter=adjust").unwrap());
+        }
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {

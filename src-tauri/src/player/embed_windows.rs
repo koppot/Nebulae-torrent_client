@@ -54,11 +54,22 @@ pub(crate) fn overlay_app_init(app: AppHandle) {
 
 /// Windows equivalent of macOS `apply_edr_to_video_layer`.
 ///
-/// On Windows there is no Core Animation layer to tag with a colorspace.
-/// Instead we use libVLC's `var_SetChecked` to enforce the tone-mapping
-/// variables on the media player object, ensuring the Hable filmic curve
-/// is active for HDR/UHD content even if `set_hwnd` reset any
-/// player-object variables.
+/// On Windows Direct3D 11 video output, libVLC tone-maps HDR (ST2084 PQ)
+/// content down to Rec.709 using a hardcoded Hable filmic curve assuming
+/// 100-nit peak luminance. This severely crushes diffuse white and lifts
+/// shadows, producing a washed-out milky grey veil.
+///
+/// We counteract this by dynamically applying libVLC's video adjust filter
+/// (`--video-filter=adjust`), tuned to restore true inky blacks and vibrant
+/// Rec.709 contrast/saturation matching macOS caopengllayer:
+/// - Option 0 (libvlc_adjust_Enable): 1
+/// - Option 1 (Contrast): 1.28
+/// - Option 2 (Brightness): 1.02
+/// - Option 4 (Saturation): 1.50
+/// - Option 5 (Gamma): 0.80 (pulls lifted shadows back down to true zero black)
+///
+/// For SDR content (DVD / 1080p Blu-ray), the adjust filter is disabled
+/// (`libvlc_adjust_Enable = 0`) to preserve standard video bit-for-bit.
 pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> bool {
     let state = match app.try_state::<crate::player::PlayerState>() {
         Some(s) => s,
@@ -75,24 +86,38 @@ pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> 
     let Some(lib) = lib else {
         return false;
     };
-    let var_set_checked = lib.var_set_checked;
+    let set_adjust_int = match lib.libvlc_video_set_adjust_int {
+        Some(f) => f,
+        None => return false,
+    };
+    let set_adjust_float = match lib.libvlc_video_set_adjust_float {
+        Some(f) => f,
+        None => return false,
+    };
 
     let mp_ptr = mp as *mut c_void;
-    let cstr = |s: &str| std::ffi::CString::new(s).ok();
 
     if is_hdr {
-        // tone-mapping = 3 (Hable filmic), VLC_VAR_INTEGER = 2
-        if let Some(name) = cstr("tone-mapping") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 2, 3i64 as usize);
-        }
-        // tone-mapping-param = 1.0, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-param") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 1.0_f32.to_bits() as usize);
-        }
-        // tone-mapping-desat = 0.5, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-desat") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 0.5_f32.to_bits() as usize);
-        }
+        // Option 0: libvlc_adjust_Enable = 1
+        set_adjust_int(mp_ptr, 0, 1);
+        // Option 1: Contrast = 1.28
+        set_adjust_float(mp_ptr, 1, 1.28);
+        // Option 2: Brightness = 1.02
+        set_adjust_float(mp_ptr, 2, 1.02);
+        // Option 4: Saturation = 1.50
+        set_adjust_float(mp_ptr, 4, 1.50);
+        // Option 5: Gamma = 0.80
+        set_adjust_float(mp_ptr, 5, 0.80);
+        tracing::info!(
+            "[player] Windows Direct3D11 calibrated adjust filter applied: contrast=1.28, brightness=1.02, sat=1.50, gamma=0.80"
+        );
+    } else {
+        // Disable adjust filter for SDR content
+        set_adjust_int(mp_ptr, 0, 0);
+        set_adjust_float(mp_ptr, 1, 1.0);
+        set_adjust_float(mp_ptr, 2, 1.0);
+        set_adjust_float(mp_ptr, 4, 1.0);
+        set_adjust_float(mp_ptr, 5, 1.0);
     }
     true
 }
@@ -108,7 +133,8 @@ pub(crate) fn maybe_apply_edr(app: &AppHandle) {
     if state.edr_applied.load(Ordering::SeqCst) {
         return;
     }
-    if !state.is_hdr.load(Ordering::SeqCst) {
+    let is_hdr = state.is_hdr.load(Ordering::SeqCst);
+    if !is_hdr {
         return;
     }
     let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
@@ -117,7 +143,11 @@ pub(crate) fn maybe_apply_edr(app: &AppHandle) {
     }
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if unsafe { apply_edr_to_video_layer(&app2, true) } {
+        let is_hdr = app2
+            .state::<crate::player::PlayerState>()
+            .is_hdr
+            .load(Ordering::SeqCst);
+        if unsafe { apply_edr_to_video_layer(&app2, is_hdr) } {
             app2.state::<crate::player::PlayerState>()
                 .edr_applied
                 .store(true, Ordering::SeqCst);
@@ -132,7 +162,8 @@ pub(crate) fn force_apply_edr(app: &AppHandle) {
         None => return,
     };
     state.edr_applied.store(false, Ordering::SeqCst);
-    if !state.is_hdr.load(Ordering::SeqCst) {
+    let is_hdr = state.is_hdr.load(Ordering::SeqCst);
+    if !is_hdr {
         return;
     }
     let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
@@ -141,7 +172,11 @@ pub(crate) fn force_apply_edr(app: &AppHandle) {
     }
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
-        if unsafe { apply_edr_to_video_layer(&app2, true) } {
+        let is_hdr = app2
+            .state::<crate::player::PlayerState>()
+            .is_hdr
+            .load(Ordering::SeqCst);
+        if unsafe { apply_edr_to_video_layer(&app2, is_hdr) } {
             app2.state::<crate::player::PlayerState>()
                 .edr_applied
                 .store(true, Ordering::SeqCst);
