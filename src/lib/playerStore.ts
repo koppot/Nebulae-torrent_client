@@ -1,11 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useSyncExternalStore } from 'react';
+import { CloseCoordinator } from './playerSessionFence';
 
 export interface PlayerOpenInfo {
   resolved_path: string;
   title: string;
   is_disc: boolean;
   external: boolean;
+  /** Session generation (engine-side). Used to fence stale callbacks that
+   *  outlive a user close; absent only from legacy payloads. */
+  gen?: number | null;
 }
 
 interface PlayerPollShape {
@@ -69,6 +73,27 @@ export function usePlayerStore(): PlayerStoreState {
   return useSyncExternalStore(playerStore.subscribe, playerStore.get);
 }
 
+/**
+ * One coordinator for the app: idempotent close (Q / X / error modal share
+ * it) plus the session-generation fence that keeps stale engine callbacks
+ * (player-opened repeats, in-flight readiness polls) from reopening the
+ * player UI after a close. See playerSessionFence.ts.
+ */
+const closeCoordinator = new CloseCoordinator({
+  invokeClose: () => invoke<number>('player_close'),
+  closeStore: () => playerStore.close(),
+});
+
+/** Record an engine-advertised session generation (App.tsx adoption paths). */
+export function noteEngineGen(gen: number | null | undefined): void {
+  closeCoordinator.noteEngineGen(gen);
+}
+
+/** True when a callback carries a generation at/below the closed one. */
+export function isStaleEngineGen(gen: number | null | undefined): boolean {
+  return closeCoordinator.isStaleEngineGen(gen);
+}
+
 let isOpening = false;
 
 /**
@@ -97,11 +122,24 @@ export async function openInPlayer(
     // menu (engine flag, no race) and seeks once the feature engages.
     const resume = !!opts?.resume;
     const seekTo = opts?.seekTo ?? 0;
+    // A close still in flight must land BEFORE the new session starts:
+    // player_close stops whatever is live and the commands run concurrently
+    // on the backend, so an overlapping close would kill the new session.
+    const openEpoch = await closeCoordinator.beginOpen();
     const info = await invoke<PlayerOpenInfo>('player_open', {
       filePath,
       resume,
     });
+    // Fence anchor: even if no player-opened event or poll has arrived yet,
+    // a close right after this point still fences this session's callbacks.
+    closeCoordinator.noteEngineGen(info.gen);
   if (!info.external) {
+    if (!closeCoordinator.isOpenCurrent(openEpoch)) {
+      // The user closed the player while this open was in flight: tear the
+      // orphaned session down instead of reopening the UI they dismissed.
+      void closeCoordinator.close();
+      return info;
+    }
     playerStore.open(info, opts?.displayTitle, opts?.year);
     // Media collection (owner): every externally-opened item is saved as a
     // persistent title, EXCEPT anything inside a downloaded torrent's
@@ -235,10 +273,13 @@ export function savePositionMs(discPath: string, timeMs: number): void {
   }
 }
 
+/**
+ * THE shared close path for Q, the player X button and the error modal.
+ * Idempotent (concurrent callers share one backend teardown) and trapping-
+ * proof (the store closes before the backend is asked, so a slow or stuck
+ * teardown can never hold the library UI hostage). Stale engine callbacks
+ * are fenced by session generation, so they cannot reopen the player.
+ */
 export async function closePlayer(): Promise<void> {
-  try {
-    await invoke('player_close');
-  } finally {
-    playerStore.close();
-  }
+  return closeCoordinator.close();
 }

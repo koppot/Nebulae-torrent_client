@@ -623,6 +623,12 @@ pub unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
 /// VLC lifecycle commands, and the vout must never attach to a view that
 /// is still hidden (a dead black rectangle). Never call from the main
 /// thread itself — the wait would deadlock.
+///
+/// The wait is BOUNDED (2s): an unbounded wait here hung `player_close`
+/// forever when the main thread stopped servicing callbacks, trapping the
+/// frontend in the dead player UI (its store only closed once the invoke
+/// resolved). On timeout the closure stays queued and applies when the
+/// main thread recovers; the session lifecycle moves on without it.
 pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     let view_ptr = app
         .state::<crate::player::PlayerState>()
@@ -700,8 +706,20 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let _ = tx.send(());
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
-    rx.recv()
-        .map_err(|_| "main thread callback lost".to_string())
+    match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        Ok(()) => Ok(()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // The main thread is wedged; the queued closure still applies
+            // when it recovers. Never hold the session lifecycle hostage.
+            tracing::warn!(
+                "set_overlay_hidden(hidden={hidden}): main thread did not answer within 2s; continuing with the change queued"
+            );
+            Ok(())
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("main thread callback lost".to_string())
+        }
+    }
 }
 
 /// Position the overlay to match a frontend placeholder rect.

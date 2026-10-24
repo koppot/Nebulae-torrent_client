@@ -140,6 +140,19 @@ pub struct ResolvedPlayback {
     pub external: bool,
 }
 
+/// `player_open` return value and `player-opened` event payload: the
+/// resolved playback (flattened, unchanged shape) plus the session
+/// generation it belongs to. The event re-fires at 0/1.5/4/8s to survive
+/// webview-load races; the generation lets the frontend discard repeats
+/// that outlive a user close instead of reopening the player over a dead
+/// session.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerOpenResult {
+    #[serde(flatten)]
+    pub info: ResolvedPlayback,
+    pub gen: u64,
+}
+
 /// Resolve what to play for a save path / file / folder. A disc image or
 /// disc folder ALWAYS wins over loose episode files; a disc-less folder
 /// plays its largest video file (the main feature).
@@ -433,23 +446,33 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     g.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
+/// Stop the live session (if any) and return the NEW session generation.
+///
+/// The generation is strictly monotonic (every open stops first, every close
+/// stops), so callers can use it as a fence: any engine callback carrying a
+/// generation at or below the returned value belongs to a session that has
+/// already been torn down.
+pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     // Invalidate every background helper belonging to the outgoing session
     // BEFORE touching the player pointer.
-    state
+    let gen = state
         .session_gen
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        .wrapping_add(1) as u64;
+    // Stop advertising the session IMMEDIATELY: the frontend's readiness
+    // poll must not be able to capture (and later adopt) the session while
+    // the slow teardown below (VLC stop can take ~1s, the overlay hide
+    // waits on the main thread) is still running.
+    *poison(&state.started) = false;
+    *poison(&state.current_resolved) = None;
     let mp_guard = match state.media_player_cell.lock() {
         Ok(g) => g,
-        Err(_) => return,
+        Err(_) => return gen,
     };
     let mp = *poison(&state.media_player);
     if mp == 0 {
-        // No live player, but clear the liveness flag anyway: a stale
-        // `started` here would let the engine poll adopt a dead session.
-        *poison(&state.started) = false;
-        *poison(&state.current_resolved) = None;
-        return;
+        // No live player; the liveness flags were already cleared above.
+        return gen;
     }
     // mp_guard IS the player-pointer guard for the whole teardown: background
     // helpers (menu watcher) can never call into the player while (or after)
@@ -469,7 +492,6 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     *poison(&state.instance) = 0;
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
-    *poison(&state.started) = false;
     drop(mp_guard);
     // The EDR screen-change observer is intentionally NOT removed here: the
     // overlay view and the window outlive the session, and re-registration
@@ -483,6 +505,7 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) {
     use tauri::Emitter;
     let _ = app.emit("player://closed", ());
     let _ = app.emit("player-closed", ());
+    gen
 }
 
 /// Open playback inside Nebulae. Everything goes through ONE engine: the
@@ -869,7 +892,7 @@ pub async fn player_open(
     state: tauri::State<'_, PlayerState>,
     file_path: String,
     resume: Option<bool>,
-) -> Result<ResolvedPlayback, String> {
+) -> Result<PlayerOpenResult, String> {
     let _open_guard = state.open_lock.lock().await;
     let resume = resume.unwrap_or(false);
     tracing::info!("player_open: entry, path='{file_path}' (resume={resume})");
@@ -923,20 +946,28 @@ pub async fn player_open(
         }
     };
     *poison(&state.current_resolved) = Some(resolved.resolved_path.clone());
+    // The generation identifies THIS session: stop_session bumped it at the
+    // top of this open, and nothing else bumps it until the next stop.
+    let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
+    let result = PlayerOpenResult {
+        info: resolved,
+        gen,
+    };
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
     // webview may still be loading when the open happens, so the event is
-    // repeated a few times; the frontend's playerStore.open is idempotent.
+    // repeated a few times; the frontend's playerStore.open is idempotent,
+    // and the generation fence drops repeats that outlive a later close.
     use tauri::Emitter;
     let emitter = app.clone();
-    let payload = resolved.clone();
+    let payload = result.clone();
     std::thread::spawn(move || {
         for delay in [0, 1500, 4000, 8000] {
             std::thread::sleep(std::time::Duration::from_millis(delay));
             let _ = emitter.emit("player-opened", &payload);
         }
     });
-    Ok(resolved)
+    Ok(result)
 }
 /// What the engine is currently playing (for the frontend's readiness
 /// poll): Some when a session is live, None otherwise. This replaces
@@ -947,10 +978,18 @@ pub struct EnginePlayback {
     pub resolved_path: String,
     pub title: String,
     pub is_disc: bool,
+    /// Session generation this snapshot belongs to: lets the frontend
+    /// discard a response that was captured before/during a user close.
+    pub gen: u64,
 }
 
 #[tauri::command]
 pub fn player_engine_playback(state: tauri::State<PlayerState>) -> Option<EnginePlayback> {
+    // Read the generation BEFORE the liveness flag: stop_session bumps the
+    // generation first and clears `started` right after, so a snapshot that
+    // still reports a live session always carries a generation at or below
+    // the one the close returns - the frontend fence drops it.
+    let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
     let started = *poison(&state.started);
     if !started {
         return None;
@@ -968,6 +1007,7 @@ pub fn player_engine_playback(state: tauri::State<PlayerState>) -> Option<Engine
         resolved_path: resolved,
         title,
         is_disc: true, // only disc sessions are auto-opened engine-side
+        gen,
     })
 }
 
@@ -1262,13 +1302,17 @@ pub async fn player_track_languages(
     .map_err(|e| format!("track languages join error: {e}"))?
 }
 
+/// Close the player. Returns the post-close session generation: the
+/// frontend fences every engine callback (player-opened repeats fire up to
+/// 8s after open; a readiness-poll response can be in flight mid-close) at
+/// or below this generation, so none of them can reopen the player UI over
+/// the session that was just torn down.
 #[tauri::command]
 pub async fn player_close(
     app: tauri::AppHandle,
     state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
-    stop_session(&app, &state);
-    Ok(())
+) -> Result<u64, String> {
+    Ok(stop_session(&app, &state))
 }
 
 /// Position snapshot for the control bar; the frontend polls this.
@@ -2251,6 +2295,44 @@ pub fn fetch_adc_page(url: String) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frontend fences stale callbacks by `gen`; the field must ride
+    /// the exact payload shape the webview already parses (flattened
+    /// ResolvedPlayback + gen), for both the invoke result and the
+    /// repeated `player-opened` event.
+    #[test]
+    fn player_open_result_serializes_flat_with_gen() {
+        let r = PlayerOpenResult {
+            info: ResolvedPlayback {
+                resolved_path: "/Volumes/Media/Disc".to_string(),
+                title: "Disc".to_string(),
+                is_disc: true,
+                external: false,
+            },
+            gen: 7,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["resolved_path"], "/Volumes/Media/Disc");
+        assert_eq!(v["title"], "Disc");
+        assert_eq!(v["is_disc"], true);
+        assert_eq!(v["external"], false);
+        assert_eq!(v["gen"], 7);
+    }
+
+    /// The readiness poll's generation is what fences in-flight responses
+    /// captured before/during a close; it must always serialize.
+    #[test]
+    fn engine_playback_serializes_gen() {
+        let e = EnginePlayback {
+            resolved_path: "/Volumes/Media/Disc".to_string(),
+            title: "Disc".to_string(),
+            is_disc: true,
+            gen: 3,
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["resolved_path"], "/Volumes/Media/Disc");
+        assert_eq!(v["gen"], 3);
+    }
 
     #[test]
     fn test_vlc_description_count_semantics() {

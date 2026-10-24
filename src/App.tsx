@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
-import { usePlayerStore, playerStore, type PlayerOpenInfo } from './lib/playerStore';
+import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore, averageTransferSpeeds, reconcileRecheckState } from './stores/torrentStore';
@@ -65,6 +65,11 @@ export const App: React.FC = () => {
     const un = listen<PlayerOpenInfo>('player-opened', (e) => {
       invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
       if (e.payload.external) return;
+      noteEngineGen(e.payload.gen);
+      // The event repeats at 0/1.5/4/8s after open: a repeat that outlives
+      // a user close belongs to a dead session - never let it reopen the
+      // player UI.
+      if (isStaleEngineGen(e.payload.gen)) return;
       // The event repeats several times per open; an explicit open already
       // set the correct display title for THIS path (e.g. the import
       // prompt's "Name (Year)") - don't overwrite it with a torrent guess.
@@ -84,11 +89,16 @@ export const App: React.FC = () => {
     const iv = window.setInterval(() => {
       const ps = playerStore.get();
       if (ps.open) return;
-      invoke<{ resolved_path: string; title: string; is_disc: boolean } | null>(
+      invoke<{ resolved_path: string; title: string; is_disc: boolean; gen?: number | null } | null>(
         'player_engine_playback',
       )
         .then((s) => {
-          if (s && !playerStore.get().open) {
+          if (!s) return;
+          noteEngineGen(s.gen);
+          // A response captured before/during a close (the poll was in
+          // flight while the session was torn down) must not reopen the UI.
+          if (isStaleEngineGen(s.gen)) return;
+          if (!playerStore.get().open) {
             playerStore.open(
               {
                 resolved_path: s.resolved_path,
