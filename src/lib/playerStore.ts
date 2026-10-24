@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useSyncExternalStore } from 'react';
+import { useSettingsStore } from '../stores/settingsStore';
 
 export interface PlayerOpenInfo {
   resolved_path: string;
@@ -27,6 +28,32 @@ interface PlayerStoreState {
   isDisc: boolean;
 }
 
+/** Per-release thumbnail cache: resolvedPath -> (rounded position_ms -> base64 data URL). */
+const thumbnailCache = new Map<string, Map<number, string>>();
+
+function cacheKey(positionMs: number): number {
+  return Math.round(positionMs / 1000) * 1000; // bucket to nearest second
+}
+
+function getCachedThumbnail(resolvedPath: string, positionMs: number): string | null {
+  const byPos = thumbnailCache.get(resolvedPath);
+  if (!byPos) return null;
+  return byPos.get(cacheKey(positionMs)) ?? null;
+}
+
+function setCachedThumbnail(resolvedPath: string, positionMs: number, dataUrl: string): void {
+  let byPos = thumbnailCache.get(resolvedPath);
+  if (!byPos) {
+    byPos = new Map();
+    thumbnailCache.set(resolvedPath, byPos);
+  }
+  byPos.set(cacheKey(positionMs), dataUrl);
+}
+
+function clearThumbnails(): void {
+  thumbnailCache.clear();
+}
+
 let state: PlayerStoreState = { open: false, title: '', year: null, resolvedPath: '', isDisc: false };
 const listeners = new Set<() => void>();
 
@@ -47,6 +74,7 @@ export const playerStore = {
   },
   close() {
     state = { ...state, open: false };
+    clearThumbnails();
     try {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('player-active');
@@ -62,6 +90,27 @@ export const playerStore = {
   },
   get() {
     return state;
+  },
+
+  /** Read a cached thumbnail for the given playback position (no fetch). */
+  getCachedThumbnail(resolvedPath: string, positionMs: number): string | null {
+    return getCachedThumbnail(resolvedPath, positionMs);
+  },
+
+  /**
+   * Fetch a thumbnail for the given playback position, cached per release.
+   * Returns a base64 data URL or null if the frame could not be captured.
+   */
+  async getThumbnail(resolvedPath: string, positionMs: number): Promise<string | null> {
+    const cached = getCachedThumbnail(resolvedPath, positionMs);
+    if (cached) return cached;
+    try {
+      const dataUrl = await invoke<string>('player_thumbnail_at', { positionMs });
+      setCachedThumbnail(resolvedPath, positionMs, dataUrl);
+      return dataUrl;
+    } catch {
+      return null;
+    }
   },
 };
 
@@ -92,15 +141,33 @@ export async function openInPlayer(
   }
   isOpening = true;
   try {
-    // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
-    // interactive menu and stays there. Only an explicit resume skips the
-    // menu (engine flag, no race) and seeks once the feature engages.
-    const resume = !!opts?.resume;
-    const seekTo = opts?.seekTo ?? 0;
+    // Plain opens are MENU-FIRST by default: the engine's watcher lands the disc
+    // on its interactive menu and stays there. When the user enables the setting
+    // "Resume playback from the last saved point instead of menu", check for a
+    // saved position and skip the menu straight to the feature if available.
+    const resumeSetting = useSettingsStore.getState().settings.resume_playback_from_saved_point;
+    const hasExplicitResume = typeof opts?.resume === 'boolean';
+    let resume = hasExplicitResume ? !!opts?.resume : false;
+    let seekTo = opts?.seekTo ?? 0;
+
+    if (!hasExplicitResume && resumeSetting) {
+      const saved = savedPositionMs(filePath);
+      if (saved > 0) {
+        resume = true;
+        seekTo = saved;
+      }
+    }
+
     const info = await invoke<PlayerOpenInfo>('player_open', {
       filePath,
       resume,
     });
+    if (!hasExplicitResume && resumeSetting && seekTo === 0 && info.resolved_path) {
+      const savedResolved = savedPositionMs(info.resolved_path);
+      if (savedResolved > 0) {
+        seekTo = savedResolved;
+      }
+    }
   if (!info.external) {
     playerStore.open(info, opts?.displayTitle, opts?.year);
     // Media collection (owner): every externally-opened item is saved as a
@@ -137,8 +204,8 @@ export async function openInPlayer(
     } catch {
       /* collection is best-effort */
     }
-    if (info.is_disc && resume && seekTo >= 10000) {
-      void seekWhenFeatureStarts(seekTo);
+    if (resume && seekTo >= 5000) {
+      void seekWhenReady(seekTo, info.is_disc);
     }
   }
   return info;
@@ -156,26 +223,7 @@ export async function resumeFromMenu(
   _filePath: string,
   timeMs: number,
 ): Promise<void> {
-  void (async () => {
-    // The caller (menu Play button) already cancelled the menu watcher and
-    // activated the highlighted menu entry; wait for the feature title to
-    // engage, then seek to the saved position.
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
-      try {
-        const p = await invoke<PlayerPollShape>('player_poll');
-        if (p.length_ms > 300_000 && p.playing) {
-          if (timeMs >= 10000) {
-            await invoke('player_seek', { positionMs: timeMs });
-          }
-          return;
-        }
-      } catch {
-        return; // player closed meanwhile
-      }
-    }
-  })();
+  void seekWhenReady(timeMs, true);
 }
 
 /**
@@ -190,48 +238,84 @@ export async function resumeInPlayer(
   displayTitle?: string,
   year?: number | string | null,
 ): Promise<PlayerOpenInfo> {
-  // Explicit resume: skip the menu entirely (engine flag) and continue the
-  // feature at the saved position.
   return openInPlayer(filePath, { resume: true, seekTo: timeMs, displayTitle, year });
 }
 
 /**
- * Wait for the feature title to engage (a real runtime length is reported —
- * menus never have one), then seek to the given position. Must NOT open
- * anything itself — openInPlayer owns the open; routing back through it
- * caused an open/stop recursion that kept destroying the fresh session.
+ * Wait for media playback to begin, then seek to the given position and verify.
+ * Handles both plain video files (MKV, MP4) and optical disc features.
  */
-async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
+async function seekWhenReady(timeMs: number, isDisc: boolean): Promise<void> {
   const deadline = Date.now() + 60_000;
+  let seekSent = false;
+  let retries = 0;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 600));
     try {
       const p = await invoke<PlayerPollShape>('player_poll');
-      // Feature title engaged: non-trivial length and actually playing.
-      if (p.length_ms > 300_000 && p.playing) {
-        await invoke('player_seek', { positionMs: timeMs });
-        return;
+      const ready = p.playing && p.length_ms > 0 && (!isDisc || !p.at_menu || p.length_ms > 60_000);
+      if (ready) {
+        if (!seekSent) {
+          await invoke('player_seek', { positionMs: timeMs });
+          seekSent = true;
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        if (Math.abs(p.time_ms - timeMs) <= 5000 || p.time_ms >= timeMs) {
+          return;
+        }
+        retries++;
+        if (retries <= 3) {
+          await invoke('player_seek', { positionMs: timeMs });
+        } else {
+          return;
+        }
       }
     } catch {
-      return; // player closed meanwhile
+      return;
     }
   }
 }
 
-/** Saved playback position for a disc (the overlay poller persists it). */
-export function savedPositionMs(discPath: string): number {
+/** Normalize media path so files within BDMV or VIDEO_TS resolve to the release root. */
+export function normalizeMediaPath(p: string): string {
+  if (!p) return '';
+  const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const bdmvIdx = norm.toUpperCase().indexOf('/BDMV');
+  if (bdmvIdx > 0) return norm.substring(0, bdmvIdx);
+  const videoTsIdx = norm.toUpperCase().indexOf('/VIDEO_TS');
+  if (videoTsIdx > 0) return norm.substring(0, videoTsIdx);
+  return norm;
+}
+
+/** Saved playback position for a release (discs and plain files). */
+export function savedPositionMs(filePath: string): number {
   try {
-    return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
+    if (!filePath) return 0;
+    const direct = Number(localStorage.getItem(`nebulae_resume_pos:${filePath}`) || 0);
+    if (direct > 0) return direct;
+    const norm = normalizeMediaPath(filePath);
+    if (norm && norm !== filePath) {
+      const fromNorm = Number(localStorage.getItem(`nebulae_resume_pos:${norm}`) || 0);
+      if (fromNorm > 0) return fromNorm;
+    }
+    return 0;
   } catch {
     return 0;
   }
 }
 
-export function savePositionMs(discPath: string, timeMs: number): void {
+export function savePositionMs(filePath: string, timeMs: number): void {
   try {
-    localStorage.setItem(`nebulae_resume_pos:${discPath}`, String(Math.floor(timeMs)));
+    if (!filePath) return;
+    const val = String(Math.floor(timeMs));
+    localStorage.setItem(`nebulae_resume_pos:${filePath}`, val);
+    const norm = normalizeMediaPath(filePath);
+    if (norm && norm !== filePath) {
+      localStorage.setItem(`nebulae_resume_pos:${norm}`, val);
+    }
   } catch {
-    // Storage unavailable: resume simply falls back to the disc menu.
+    // Storage unavailable
   }
 }
 

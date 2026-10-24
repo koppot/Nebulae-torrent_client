@@ -156,6 +156,7 @@ export const defaultSettings: UserSettings = {
   // 13. Media Mode
   media_mode_enabled: true,
   media_mode_decision_made: false,
+  resume_playback_from_saved_point: false,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

@@ -74,3 +74,5 @@ src-tauri/resources/engine/tailscale/
 src-tauri/resources/geo/*.mmdb
 src-tauri/resources/vlc/
 src-tauri/resources/jre/
+*.dmg.sha256
+SHA256SUMS.txt

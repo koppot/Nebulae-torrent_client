@@ -8,7 +8,9 @@ use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
-use std::ffi::{c_int, c_void};
+use base64::Engine;
+use std::ffi::{c_int, c_void, CString};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -1057,15 +1059,6 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
     // fired everywhere EXCEPT the authored top menu and made the Menu
     // button appear dead during First Play (menu_call masked there by
     // authoring).
-    //
-    // VideoToolbox VT-305 buffer drain before returning to menu:
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-    }
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-    }
 
     if let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu {
         tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
@@ -1422,20 +1415,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
 
-    if mode == 0 {
-        // VideoToolbox VT-305 format-transition drain:
-        // When activating a menu button that transitions to a feature
-        // (especially 1080p SDR menu -> 4K HEVC HDR feature), draining the
-        // decoder buffer avoids format change stalls on Apple Silicon.
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
-
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }
@@ -1556,6 +1535,64 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
         );
         Ok(marks)
     }
+}
+
+/// Take a thumbnail snapshot of the video frame at the given timestamp.
+/// Seeks to the position, captures a frame via libvlc_video_take_snapshot,
+/// returns it as a base64 data URL, then restores the original playback position.
+#[tauri::command]
+pub fn player_thumbnail_at(
+    state: tauri::State<'_, PlayerState>,
+    position_ms: i64,
+) -> Result<String, String> {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let mp = *poison(&state.media_player);
+    if mp == 0 {
+        return Err("no active player".to_string());
+    }
+    let lib = loaded_lib(&state)?;
+    let take_snapshot = lib
+        .libvlc_video_take_snapshot
+        .ok_or("libvlc_video_take_snapshot not available in this VLC version")?;
+
+    // Save current position so we can restore it after the snapshot.
+    let orig_ms = unsafe { (lib.libvlc_media_player_get_time)(mp as *mut c_void) };
+
+    // Seek to the requested position.
+    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0)) };
+
+    // Write the snapshot to a temp file in the cache dir.
+    let cache_dir = crate::utils::paths::AppPaths::init()
+        .map(|p| p.cache_dir)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let thumb_dir = cache_dir.join("thumbnails");
+    fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
+    let snapshot_path = thumb_dir.join(format!("nebulae-thumb-{}.png", std::process::id()));
+    let c_path = CString::new(snapshot_path.to_string_lossy().as_bytes())
+        .map_err(|e| format!("snapshot path: {e}"))?;
+
+    let rc = unsafe { take_snapshot(mp as *mut c_void, 0, 0, c_path.as_ptr()) };
+
+    // Restore the original playback position.
+    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, orig_ms.max(0)) };
+
+    if rc != 0 {
+        let _ = fs::remove_file(&snapshot_path);
+        return Err(format!("take_snapshot failed with rc={rc}"));
+    }
+
+    if !snapshot_path.exists() {
+        return Err("snapshot file was not created".to_string());
+    }
+
+    let data = fs::read(&snapshot_path).map_err(|e| format!("read snapshot: {e}"))?;
+    let _ = fs::remove_file(&snapshot_path);
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:image/png;base64,{b64}"))
 }
 
 /// A selectable playback track (subtitle or audio).

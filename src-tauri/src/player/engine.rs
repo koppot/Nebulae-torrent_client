@@ -6,6 +6,7 @@
 
 use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::os::raw::c_uint;
 use std::path::{Path, PathBuf};
 
 /// The loaded libVLC and the symbols we use.
@@ -94,6 +95,16 @@ pub struct VlcLib {
             *mut std::ffi::c_uint,
         ) -> c_int,
     >,
+    /// Take a snapshot of the current video frame and save it to a file.
+    /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
+    pub libvlc_video_take_snapshot: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            std::ffi::c_uint,
+            std::ffi::c_uint,
+            *const c_char,
+        ) -> c_uint,
+    >,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -127,6 +138,10 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
+    let count = (lib.libvlc_media_player_get_title_count)(m);
+    if count <= 0 {
+        return false;
+    }
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
@@ -140,7 +155,13 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
         return false;
     }
     let t = &**titles.add(current as usize);
-    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+    let is_named_menu = if !t.psz_name.is_null() {
+        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
+        cstr.to_string_lossy().to_ascii_lowercase().contains("menu")
+    } else {
+        false
+    };
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0 || is_named_menu;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
 }
@@ -656,6 +677,7 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
+            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_uint, *const c_char) -> c_uint),
             lib,
             deps,
         }
@@ -745,6 +767,15 @@ impl VlcSession {
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
         ];
+        // Windows-only: Direct3D11 HDR tone mapping.
+        // d3d11-hdr-mode=auto (the default) creates a PQ swapchain without SDR
+        // tone mapping, resulting in washed-out lifted blacks on SDR displays.
+        // Forcing it to "never" makes the D3D11 shader apply filmic Hable down
+        // to BT.709, matching macOS caopengllayer output.
+        // This arg does not exist on Linux (X11/Wayland/OpenGL) or macOS and
+        // must not be passed to libvlc_new on those platforms.
+        #[cfg(target_os = "windows")]
+        args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
