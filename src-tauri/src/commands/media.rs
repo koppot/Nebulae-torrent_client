@@ -804,6 +804,19 @@ fn start_playback_inner(
                                 if i > 0 && i % 10 == 0 {
                                     tracing::info!("[player] menu watcher: retrying INPUT_NAV_MENU at iteration {i}");
                                     nav_menu();
+                                    if let Some(menu_title) =
+                                        unsafe { engine::find_menu_title(&lib, mp) }
+                                    {
+                                        tracing::info!(
+                                            "[player] menu watcher: fallback setting title {menu_title}"
+                                        );
+                                        unsafe {
+                                            (lib.libvlc_media_player_set_title)(
+                                                mp as *mut c_void,
+                                                menu_title,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         });
