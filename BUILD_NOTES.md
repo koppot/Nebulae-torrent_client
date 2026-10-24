@@ -186,15 +186,14 @@ files it pointed at.
 
 | Asset | SHA-256 | Notes |
 |---|---|---|
-| `Nebulae-macOS-arm64.dmg` | `b533c559b4afdee317b846beb1db594b522af50077f54f325f87e6bd2db5841d1` | byte-identical to the reference DMG; app binary `3b54eb98…3d24` (git rev `7d6670d`) |
-| `Nebulae-macOS-arm64.dmg-app.zip` | `dfeee32a8cad95e396cf0c671233a5c52ebd868b6f65ecbf5c78c6d9a4a54eef` | re-packed from the same app bundle as the DMG |
-| `Nebulae-macOS-arm64.dmg-app.tar.gz` | see `SHA256SUMS.txt` | updater bundle, built from the **same** app bundle as the DMG |
+| `Nebulae-macOS-arm64.dmg` | `6806b0b728c717e6488f1bbfbdd6f54a5aa5be32284181ffc605334599ca6ba8` | release build from consolidated main; includes player close repair and menu title fallback |
+| `Nebulae-macOS-arm64.dmg-app.zip` | `72b15c957fa1d420db8cb3f4a7188c23535171bed746c02c8e603b2aaf1d5416` | re-packed from the same app bundle as the DMG |
+| `Nebulae-macOS-arm64.dmg-app.tar.gz` | `4f5801c49086200fb61ba45572ee354244fceb49927b9903223fa333de1fa9c0` | updater bundle, built from the **same** app bundle as the DMG |
 | `Nebulae-macOS-arm64.dmg-app.tar.gz.sig` | — | minisign signature, verifies against the pubkey embedded in `tauri.conf.json` |
 
 All three macOS arm64 artifacts carry the **same** `Nebulae.app`: the DMG,
 the ZIP and the updater tarball each extract to a bundle that is
-byte-identical (`diff -rq` reports no differences) to the installed
-`/Applications/Nebulae.app`. There is no second build hiding in the release.
+byte-identical (`diff -rq` reports no differences). There is no second build hiding in the release.
 
 The x64, Linux and Windows assets are unchanged from the 2026-10-23 CI run.
 Their signatures were re-verified against the published files and
