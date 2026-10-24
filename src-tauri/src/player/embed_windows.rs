@@ -452,11 +452,11 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
 #[cfg(target_os = "windows")]
 pub fn maybe_apply_edr(app: &AppHandle) {
     let app_clone = app.clone();
-    let state = app.state::<crate::player::PlayerState>();
-    if state.edr_applied.load(Ordering::SeqCst) {
-        return;
-    }
     let _ = app_clone.run_on_main_thread(move || {
+        let state = app_clone.state::<crate::player::PlayerState>();
+        if state.edr_applied.load(Ordering::SeqCst) {
+            return;
+        }
         let mp = {
             let Ok(mp_guard) = state.media_player.lock() else {
                 return;
@@ -499,7 +499,7 @@ pub fn maybe_apply_edr(app: &AppHandle) {
 #[cfg(target_os = "windows")]
 pub fn force_apply_edr(app: &AppHandle) {
     let app_clone = app.clone();
-    let _ = app_clone.run_on_main_thread(move || {
+    let _ = app_clone.clone().run_on_main_thread(move || {
         let state = app_clone.state::<crate::player::PlayerState>();
         state.edr_applied.store(false, Ordering::SeqCst);
     });
