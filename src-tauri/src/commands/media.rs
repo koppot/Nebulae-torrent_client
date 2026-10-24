@@ -1532,6 +1532,26 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
         });
     }
     let lib = loaded_lib(&state)?;
+    // Guard: if no media is loaded (length <= 0), skip every libVLC call to
+    // avoid crashing inside libVLC on a stale or uninitialised player pointer.
+    // libvlc_media_tracks_get (used by video_display_geometry) is the most
+    // fragile, but get_time/is_playing/etc. are equally unsafe on a dead mp.
+    let m = mp as *mut c_void;
+    if unsafe { (lib.libvlc_media_player_get_length)(m) } <= 0 {
+        return Ok(PlayerPoll {
+            time_ms: 0,
+            length_ms: 0,
+            playing: false,
+            title: 0,
+            title_count: 0,
+            chapter: 0,
+            chapter_count: 0,
+            at_menu: false,
+            video_w: 0,
+            video_h: 0,
+            video_aspect: 0.0,
+        });
+    }
     // Video geometry: coded size + SAR-corrected display aspect from the
     // parsed track list (DVDs are anamorphic, so coded pixels alone lie).
     // 1 Hz poll cost is negligible; the frontend refits the window only on
@@ -1576,7 +1596,6 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
     }
 
     unsafe {
-        let m = mp as *mut c_void;
         Ok(PlayerPoll {
             time_ms: (lib.libvlc_media_player_get_time)(m),
             length_ms: (lib.libvlc_media_player_get_length)(m),

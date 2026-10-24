@@ -136,8 +136,8 @@ pub struct VlcMediaTrack {
 /// trailing orientation/projection/viewpoint fields are not read here.
 #[repr(C)]
 pub struct VlcVideoTrack {
-    pub i_height: c_uint,
     pub i_width: c_uint,
+    pub i_height: c_uint,
     pub i_sar_num: c_uint,
     pub i_sar_den: c_uint,
     pub i_frame_rate_num: c_uint,
@@ -155,36 +155,42 @@ pub struct VlcVideoTrack {
 /// before returning.
 pub unsafe fn video_display_geometry(lib: &VlcLib, mp: usize) -> Option<(u32, u32, f64)> {
     let m = mp as *mut c_void;
-    if let (Some(get), Some(release)) =
-        (lib.libvlc_media_tracks_get, lib.libvlc_media_tracks_release)
-    {
-        let mut tracks: *mut *mut VlcMediaTrack = std::ptr::null_mut();
-        let n = get(m, &mut tracks);
-        let mut out = None;
-        if n > 0 && !tracks.is_null() {
-            for i in 0..n {
-                let t = *tracks.add(i as usize);
-                if t.is_null() || (*t).i_type != 1 {
-                    continue;
+
+    // libvlc_media_tracks_get dereferences the media player's input state.
+    // Guard against calling it when no media is loaded (length <= 0), which
+    // can crash inside libVLC on a stale or uninitialised player pointer.
+    let media_loaded = (lib.libvlc_media_player_get_length)(m) > 0;
+
+    if media_loaded {
+        if let (Some(get), Some(release)) =
+            (lib.libvlc_media_tracks_get, lib.libvlc_media_tracks_release)
+        {
+            let mut tracks: *mut *mut VlcMediaTrack = std::ptr::null_mut();
+            let n = get(m, &mut tracks);
+            if n > 0 && !tracks.is_null() {
+                for i in 0..n {
+                    let t = *tracks.add(i as usize);
+                    if t.is_null() || (*t).i_type != 1 {
+                        continue;
+                    }
+                    let v = (*t).track as *const VlcVideoTrack;
+                    if !v.is_null() && (*v).i_width > 0 && (*v).i_height > 0 {
+                        let (w, h) = ((*v).i_width, (*v).i_height);
+                        let sar = if (*v).i_sar_num > 0 && (*v).i_sar_den > 0 {
+                            (*v).i_sar_num as f64 / (*v).i_sar_den as f64
+                        } else {
+                            1.0
+                        };
+                        release(&mut tracks, n);
+                        return Some((w, h, w as f64 * sar / h as f64));
+                    }
+                    break;
                 }
-                let v = (*t).track as *const VlcVideoTrack;
-                if !v.is_null() && (*v).i_width > 0 && (*v).i_height > 0 {
-                    let (w, h) = ((*v).i_width, (*v).i_height);
-                    let sar = if (*v).i_sar_num > 0 && (*v).i_sar_den > 0 {
-                        (*v).i_sar_num as f64 / (*v).i_sar_den as f64
-                    } else {
-                        1.0
-                    };
-                    out = Some((w, h, w as f64 * sar / h as f64));
-                }
-                break;
+                release(&mut tracks, n);
             }
-            release(&mut tracks, n);
-        }
-        if out.is_some() {
-            return out;
         }
     }
+    // Fall back to libvlc_video_get_size (square pixels assumed).
     if let Some(get_size) = lib.libvlc_video_get_size {
         let mut w: c_uint = 0;
         let mut h: c_uint = 0;
