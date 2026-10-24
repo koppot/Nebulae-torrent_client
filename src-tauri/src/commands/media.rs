@@ -1672,22 +1672,41 @@ fn locate_ffmpeg() -> Option<String> {
     // Bundled ffmpeg — highest priority, works offline
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            // macOS: resources/ffmpeg/ffmpeg
-            candidates.push(
-                dir.join("resources")
-                    .join("ffmpeg")
-                    .join("ffmpeg")
-                    .to_string_lossy()
-                    .to_string(),
-            );
-            // Windows: resources/ffmpeg/ffmpeg.exe
-            candidates.push(
-                dir.join("resources")
-                    .join("ffmpeg")
-                    .join("ffmpeg.exe")
-                    .to_string_lossy()
-                    .to_string(),
-            );
+            // macOS app bundle: Contents/MacOS/ -> ../Resources/resources/ffmpeg/ffmpeg
+            #[cfg(target_os = "macos")]
+            {
+                candidates.push(
+                    dir.join("..")
+                        .join("Resources")
+                        .join("resources")
+                        .join("ffmpeg")
+                        .join("ffmpeg")
+                        .to_string_lossy()
+                        .to_string(),
+                );
+            }
+            // Windows: resources/ffmpeg/ffmpeg.exe (Tauri copies resources/ to app root)
+            #[cfg(target_os = "windows")]
+            {
+                candidates.push(
+                    dir.join("resources")
+                        .join("ffmpeg")
+                        .join("ffmpeg.exe")
+                        .to_string_lossy()
+                        .to_string(),
+                );
+            }
+            // Linux/other: resources/ffmpeg/ffmpeg (Tauri copies resources/ to app root)
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                candidates.push(
+                    dir.join("resources")
+                        .join("ffmpeg")
+                        .join("ffmpeg")
+                        .to_string_lossy()
+                        .to_string(),
+                );
+            }
         }
     }
 
