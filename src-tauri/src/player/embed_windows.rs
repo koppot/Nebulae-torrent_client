@@ -438,6 +438,74 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     Ok(())
 }
 
+/// Apply EDR/tone-mapping to the VLC video output on Windows.
+///
+/// On Windows, VLC uses Direct3D11 vout. For HDR content (BT.2020 PQ) on
+/// an SDR display, we must tell VLC to tone-map the content. This is done
+/// by setting the "hdr" variable on the media player to "auto" (let VLC
+/// detect display capability and tone-map if needed) or "off" (force SDR
+/// output with tone mapping). We use "auto" so VLC handles the display
+/// capability detection.
+///
+/// This mirrors macOS `apply_edr_to_video_layer` which configures the
+/// caopengllayer for tone-mapped output.
+#[cfg(target_os = "windows")]
+pub fn maybe_apply_edr(app: &AppHandle) {
+    let state = app.state::<crate::player::PlayerState>();
+    if state.edr_applied.load(Ordering::SeqCst) {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let mp = {
+            let Ok(mp_guard) = state.media_player.lock() else {
+                return;
+            };
+            *mp_guard
+        };
+        if mp == 0 {
+            return;
+        }
+        let Ok(lib_guard) = state.lib.lock() else {
+            return;
+        };
+        let Some(lib) = lib_guard.as_ref() else {
+            return;
+        };
+
+        // Set VLC's HDR mode to "auto" so it tone-maps HDR content on SDR displays.
+        // var_set_checked signature: int var_set_checked(obj, name, type, value)
+        // VLC_VAR_STRING = 0x0040, value is const char* passed as usize.
+        let hdr_mode = b"auto\0";
+        let rc = unsafe {
+            (lib.var_set_checked)(
+                mp as *mut c_void,
+                c"hdr".as_ptr(),
+                0x0040, // VLC_VAR_STRING
+                hdr_mode.as_ptr() as usize,
+            )
+        };
+        if rc == 0 {
+            tracing::info!("[player] Windows: set VLC hdr mode to 'auto' for tone mapping");
+            state.edr_applied.store(true, Ordering::SeqCst);
+        } else {
+            tracing::warn!("[player] Windows: failed to set VLC hdr mode (rc={rc})");
+        }
+    });
+}
+
+/// Force re-application of EDR/tone-mapping on Windows, bypassing the latch.
+/// Used when transitioning from SDR to HDR (e.g. menu to UHD feature).
+#[cfg(target_os = "windows")]
+pub fn force_apply_edr(app: &AppHandle) {
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = app2.state::<crate::player::PlayerState>();
+        state.edr_applied.store(false, Ordering::SeqCst);
+    });
+    maybe_apply_edr(app);
+}
+
 /// Stored original window procedure for the overlay HWND subclass.
 static OVERLAY_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
 

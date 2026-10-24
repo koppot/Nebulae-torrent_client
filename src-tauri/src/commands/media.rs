@@ -1,6 +1,8 @@
 use crate::player;
 #[cfg(target_os = "macos")]
 use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
+#[cfg(target_os = "windows")]
+use crate::player::embed_windows::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
@@ -1322,12 +1324,8 @@ pub async fn player_close(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     stop_session(&app, &state);
-    // The player close/quit button must stop the whole application, not merely
-    // end the playback session. Previously it only stopped the VLC session and
-    // let the frontend mark the player closed, so the window and process kept
-    // running in the background. `quit_app` stops the session, shuts down the
-    // engine and tailscale, and exits the process so nothing lingers.
-    crate::commands::diagnostics::quit_app(app);
+    // Hide the overlay and restore window corners for media UI
+    let _ = player::set_overlay_hidden(&app, true);
     Ok(())
 }
 
@@ -1416,6 +1414,19 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             }
         }
     }
+
+    // Windows: apply EDR/tone-mapping for HDR content (mirrors macOS logic)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app) = overlay_app_handle() {
+            if state.is_hdr.load(std::sync::atomic::Ordering::SeqCst) {
+                force_apply_edr(app);
+            } else {
+                maybe_apply_edr(app);
+            }
+        }
+    }
+
     unsafe {
         let m = mp as *mut c_void;
         Ok(PlayerPoll {
@@ -1653,8 +1664,35 @@ fn cached_ffmpeg_path() -> Option<String> {
 /// Probe the ffmpeg candidate locations and return the first one that runs.
 /// On Windows every probe is launched with CREATE_NO_WINDOW so no console
 /// window can flash. The result is cached by `cached_ffmpeg_path`.
+/// Bundled ffmpeg in resources/ffmpeg/ is checked FIRST so the app works
+/// without any system ffmpeg installation.
 fn locate_ffmpeg() -> Option<String> {
-    let mut candidates = vec![
+    let mut candidates = vec![];
+
+    // Bundled ffmpeg — highest priority, works offline
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            // macOS: resources/ffmpeg/ffmpeg
+            candidates.push(
+                dir.join("resources")
+                    .join("ffmpeg")
+                    .join("ffmpeg")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            // Windows: resources/ffmpeg/ffmpeg.exe
+            candidates.push(
+                dir.join("resources")
+                    .join("ffmpeg")
+                    .join("ffmpeg.exe")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+
+    // System fallbacks (kept for compatibility)
+    candidates.extend(vec![
         "ffmpeg".to_string(),
         "/opt/homebrew/bin/ffmpeg".to_string(),
         "/usr/local/bin/ffmpeg".to_string(),
@@ -1664,7 +1702,7 @@ fn locate_ffmpeg() -> Option<String> {
         "C:\\ffmpeg\\bin\\ffmpeg.exe".to_string(),
         "C:\\tools\\ffmpeg.exe".to_string(),
         "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe".to_string(),
-    ];
+    ]);
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
