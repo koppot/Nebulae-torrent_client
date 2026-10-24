@@ -111,6 +111,56 @@ diff <(shasum -a 256 src-tauri/resources/vlc/lib/libvlc.5.dylib | awk '{print $1
 `src-tauri/resources/build-manifest.json` records the exact hashes that were
 staged for each build.
 
+## The reference release DMG (v0.2.3, the last known-good macOS build)
+
+`Nebulae-macOS-arm64.dmg` (repository root) is the **canonical reference
+artifact** for the macOS bundle.
+
+| Property | Value |
+|---|---|
+| SHA-256 | `b533c559b4afdee317b846beb1db594b522af50077f54f325f87e6bd2db5841d1` |
+| Git revision | `7d6670d` |
+| App version | `0.2.3` (`CFBundleShortVersionString` / `CFBundleVersion`) |
+| VLC runtime | 3.0.23 (official core + plugins, 4 patched artifacts) |
+| Runtime staged at | `2026-10-23T13:03:24Z` |
+| App bundle | `Nebulae.app` — `Contents/MacOS/{nebulae,verify-payload-signature}`, `Contents/Resources/{icon.icns,resources/}` |
+
+The checksum is recorded in `SHA256SUMS.txt` and in
+`Nebulae-macOS-arm64.dmg.sha256`; verify before use:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt          # or compare the single file
+```
+
+### Installing from the DMG
+
+```bash
+hdiutil attach Nebulae-macOS-arm64.dmg -nobrowse -readonly
+cp -R "/Volumes/Nebulae 1/Nebulae.app" /Applications/
+hdiutil detach "/Volumes/Nebulae 1"
+open /Applications/Nebulae.app
+```
+
+### Two facts about the produced bundle that are easy to get wrong
+
+1. **The frontend is embedded in the binary.** Tauri's bundler does *not*
+   create `Contents/Resources/app/`, and it is *not* required — the compiled
+   `nebulae` binary carries the `dist/` assets (visible as
+   `/assets/index-<hash>.js` strings inside the executable). Copying a
+   `dist/` tree into `Contents/Resources/app/` is harmless but is not what
+   the release bundle looks like; the reference DMG has no such directory.
+2. **The staged VLC tree has no `Frameworks/`.**
+   `scripts/stage-vlc-runtime.sh` removes `resources/vlc/{lib,plugins,Frameworks}`
+   and re-stages `lib` + `plugins` only. The release workflow copies
+   `VLC.app/Contents/Frameworks` in before the staging script runs, and the
+   staging script then removes it again. The reference DMG therefore ships
+   `resources/vlc/{lib,plugins}` and nothing else — no `plugins.dat`
+   (mtime-keyed cache) and no `Frameworks`.
+
+The repository's `src-tauri/resources/` tree is kept byte-identical to the
+DMG's `Nebulae.app/Contents/Resources/resources/` tree so a local rebuild
+produces the same runtime payload.
+
 ## Where playback-repair details live
 
 Build instructions stop here on purpose. The defect analysis, per-defect

@@ -349,3 +349,59 @@ defects: **unverified** (no playback testing performed).
    - Bundled and deployed release app to `/Applications/Nebulae.app`.
    - All 125 Rust unit tests passed.
 
+## 11. Restoration to the Reference Release DMG (2026-10-24)
+
+The macOS app was restored to the **reference release DMG**, which is the
+last known-good macOS bundle, rather than to a locally rebuilt candidate.
+
+### Reference artifact
+
+| Property | Value |
+|---|---|
+| DMG | `Nebulae-macOS-arm64.dmg` (repository root, 137,572,631 bytes) |
+| SHA-256 | `b533c559b4afdee317b846beb1db594b522af50077f54f325f87e6bd2db5841d1` (matches `SHA256SUMS.txt`) |
+| Built from | git rev `7d6670d` (`fix(clippy): remove unnecessary i32 cast in find_menu_title`) |
+| App version | `0.2.3` |
+| Runtime staged at | `2026-10-23T13:03:24Z` from `/Applications/VLC.app` (VLC 3.0.23) |
+| Patched artifacts | `vt-305.patch`, `navigate-menu.patch`, `hdr-tonemap.patch` (per `build-manifest.json`) |
+
+### Repository state restored
+
+- Source tree restored to `7d6670d` (the exact revision the DMG was built
+  from) — the pre-thumbnail, v0.2.3 code line.
+- `src-tauri/resources/` restored **byte-identically** to the DMG's
+  `Nebulae.app/Contents/Resources/resources/` tree (verified with
+  `diff -rq`): `build-manifest.json`, `engine/`, `geo/`, `jre/`, `player/`,
+  `vlc/lib/`, `vlc/plugins/`.
+- The 66 MB static `resources/ffmpeg/ffmpeg` (added later for seek-bar
+  thumbnail extraction) removed — it is not present at `7d6670d` and not
+  present in the DMG.
+- `resources/vlc/Frameworks/` is **not** staged: `stage-vlc-runtime.sh`
+  removes it and the reference DMG ships `vlc/{lib,plugins}` only.
+
+### Bundle facts that were previously misread
+
+- The Tauri bundler does **not** emit `Contents/Resources/app/`. The
+  frontend is embedded in the `nebulae` binary (`/assets/index-<hash>.js`
+  strings are present inside the executable). Creating that directory by
+  hand is not required and does not match the release bundle.
+- The earlier `EXC_BAD_ACCESS` SIGSEGV in `libvlc_media_tracks_get` came
+  from code that does **not exist** at `7d6670d`: `video_display_geometry`,
+  `VlcVideoTrack` and `libvlc_media_tracks_get` were all introduced later
+  with the seek-bar thumbnail work. The reference build has no such call
+  path, so the crash cannot occur in it.
+- A `player_poll` guard that returns zeros when
+  `libvlc_media_player_get_length <= 0` must **not** be applied at this
+  revision: disc menus report a zero duration, so the guard would blank
+  out `title` / `chapter` / `at_menu` exactly while a DVD/BD menu is shown.
+
+### Installed application
+
+- `/Applications/Nebulae.app` is a byte copy of `Nebulae.app` from the
+  mounted reference DMG (`Contents/MacOS/nebulae`, 30,890,112 bytes,
+  `Contents/MacOS/verify-payload-signature`, `Contents/Resources/icon.icns`,
+  `Contents/Resources/resources/`).
+- Verified: launches via `open`, one visible main window at 1280×840, the
+  webview renders the real UI (not a blank frame), no crash reports
+  generated.
+

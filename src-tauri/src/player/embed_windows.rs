@@ -14,21 +14,20 @@ use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
-use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWLP_WNDPROC, HWND_TOP, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPOS, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_WINDOWPOSCHANGED, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW,
+    GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP,
+    SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPOS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED,
+    WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
@@ -183,19 +182,6 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     Ok(hwnd)
 }
 
-/// Helper: compute the exact screen coordinates and pixel size of the
-/// main window's client area (where WebView2 renders). This eliminates
-/// DWM invisible sizing frames and non-client border gaps on Windows 10 & 11.
-pub(crate) fn get_client_rect_in_screen(hwnd: HWND) -> (i32, i32, i32, i32) {
-    let mut cr = RECT::default();
-    let mut pt = POINT::default();
-    unsafe {
-        let _ = GetClientRect(hwnd, &mut cr);
-        let _ = ClientToScreen(hwnd, &mut pt);
-    }
-    (pt.x, pt.y, cr.right - cr.left, cr.bottom - cr.top)
-}
-
 fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
@@ -203,10 +189,17 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let parent = win.hwnd().map_err(|e| format!("no parent HWND: {e}"))?;
     let main_hwnd = HWND(parent.0);
 
-    let (x, y, w, h) = get_client_rect_in_screen(main_hwnd);
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(main_hwnd, &mut rect);
+    }
+    let x = rect.left;
+    let y = rect.top;
+    let w = rect.right - rect.left;
+    let h = rect.bottom - rect.top;
 
     // Create the video surface as an independent WS_POPUP window with no owner,
-    // positioned directly behind the transparent main window's client area.
+    // positioned directly behind the transparent main window.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
@@ -369,7 +362,8 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
 
-            let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
+            let w = r.right - r.left;
+            let h = r.bottom - r.top;
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
                 let _ = SetWindowPos(
@@ -384,10 +378,10 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 let _ = SetWindowPos(
                     video_hwnd,
                     Some(main_h),
-                    cx,
-                    cy,
-                    cw,
-                    ch,
+                    r.left,
+                    r.top,
+                    w,
+                    h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
                 );
                 // During video playback, ensure no DWM border or rounded corners appear around the video screen
@@ -445,14 +439,17 @@ pub fn sync_frame(
     app.run_on_main_thread(move || {
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
-        let (x, y, w, h) = get_client_rect_in_screen(main_h);
+        let mut r = RECT::default();
         unsafe {
-            // Video window matches main_hwnd client area exactly with zero border offset.
+            let _ = GetWindowRect(main_h, &mut r);
+            let w = r.right - r.left;
+            let h = r.bottom - r.top;
+            // Video window matches main_hwnd exactly in full-bleed dimensions with zero cutouts.
             let _ = SetWindowPos(
                 video_hwnd,
                 Some(main_h),
-                x,
-                y,
+                r.left,
+                r.top,
                 w,
                 h,
                 SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
@@ -612,12 +609,15 @@ unsafe extern "system" fn main_wndproc(
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
             } else {
-                let (x, y, w, h) = get_client_rect_in_screen(hwnd);
+                let mut r = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut r);
+                let w = r.right - r.left;
+                let h = r.bottom - r.top;
                 let _ = SetWindowPos(
                     video_hwnd,
                     Some(hwnd),
-                    x,
-                    y,
+                    r.left,
+                    r.top,
                     w,
                     h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
