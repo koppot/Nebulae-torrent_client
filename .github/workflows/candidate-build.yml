@@ -256,31 +256,6 @@ jobs:
             Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
 
-      - name: Bundle ffmpeg for thumbnail extraction
-        shell: bash
-        run: |
-          mkdir -p src-tauri/resources/ffmpeg
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-              URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
-            else
-              URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/amd64/release/ffmpeg.zip"
-            fi
-            curl -fL -o ffmpeg.zip "$URL"
-            unzip -o -q ffmpeg.zip -d ffmpeg_tmp
-            cp ffmpeg_tmp/ffmpeg src-tauri/resources/ffmpeg/ffmpeg
-            chmod +x src-tauri/resources/ffmpeg/ffmpeg
-            rm -rf ffmpeg.zip ffmpeg_tmp
-          elif [ "$RUNNER_OS" = "Windows" ]; then
-            URL="https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-            curl -fL -o ffmpeg.zip "$URL"
-            7z x -y ffmpeg.zip -o ffmpeg_tmp > /dev/null || powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_tmp -Force"
-            FFEXE=$(find ffmpeg_tmp -name 'ffmpeg.exe' -type f | head -1)
-            cp "$FFEXE" src-tauri/resources/ffmpeg/ffmpeg.exe
-            rm -rf ffmpeg.zip ffmpeg_tmp
-          fi
-          ls -la src-tauri/resources/ffmpeg/
-
       - name: Build Tauri Application
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}

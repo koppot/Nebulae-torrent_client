@@ -228,22 +228,6 @@ struct NativeMplsInfo {
     subs: Vec<String>,
     chapters_ms: Vec<i64>,
     is_uhd: bool,
-    /// PlayItem segments in playlist order: which M2TS clip each plays,
-    /// its in/out times, and where the segment sits on the playlist
-    /// timeline (all 45 kHz ticks). Drives position -> clip mapping for
-    /// hover-thumbnail frame extraction.
-    clips: Vec<NativeClipSegment>,
-}
-
-/// One PlayItem of an MPLS playlist: the clip it plays and the segment's
-/// placement on the title timeline.
-#[derive(Debug, Clone)]
-struct NativeClipSegment {
-    /// Clip_Information_file_name, e.g. "00059" -> STREAM/00059.m2ts.
-    clip_name: String,
-    tin_ticks: u64,
-    tout_ticks: u64,
-    cum_start_ticks: u64,
 }
 
 fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
@@ -284,7 +268,6 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
         cum_start_ticks: u64,
     }
     let mut play_items: Vec<PlayItemTiming> = Vec::new();
-    let mut clips: Vec<NativeClipSegment> = Vec::new();
 
     for _ in 0..nitems {
         if pos + 2 > d.len() {
@@ -306,22 +289,6 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
                 tin,
                 cum_start_ticks: total_ticks,
             });
-            // Clip_Information_file_name: 5 ASCII chars at the start of the
-            // PlayItem body, e.g. "00059" -> BDMV/STREAM/00059.m2ts.
-            if item_data.len() >= 5 {
-                let name = String::from_utf8_lossy(&item_data[0..5])
-                    .chars()
-                    .filter(|c| c.is_ascii_alphanumeric())
-                    .collect::<String>();
-                if name.len() == 5 {
-                    clips.push(NativeClipSegment {
-                        clip_name: name,
-                        tin_ticks: tin,
-                        tout_ticks: tout,
-                        cum_start_ticks: total_ticks,
-                    });
-                }
-            }
             if tout > tin {
                 total_ticks += tout - tin;
             }
@@ -448,7 +415,6 @@ fn parse_mpls_file(path: &Path) -> Option<NativeMplsInfo> {
         subs: all_subs,
         chapters_ms,
         is_uhd,
-        clips,
     })
 }
 
@@ -486,83 +452,6 @@ fn parse_disc_playlists(disc_path: &str) -> Vec<NativeMplsInfo> {
     list
 }
 
-/// Where a position on a Blu-ray title timeline lives in the disc's M2TS
-/// files: the clip file to open, the offset to seek to within it, and
-/// whether the title carries UHD/HDR video (thumbnail tone mapping).
-pub struct BlurayClipTarget {
-    pub path: PathBuf,
-    pub offset_ms: i64,
-    pub is_uhd: bool,
-}
-
-/// Map a position (ms) on the title whose length is `duration_ms` to a clip
-/// file + in-clip offset, using the native MPLS parse. Playlist selection
-/// mirrors the chapter/language probes: closest duration within tolerance,
-/// else the longest playlist. Returns None for non-Blu-ray paths or when no
-/// playlist matches.
-pub fn bluray_clip_at_position(
-    disc_path: &str,
-    duration_ms: i64,
-    position_ms: i64,
-) -> Option<BlurayClipTarget> {
-    let playlists = parse_disc_playlists(disc_path);
-    if playlists.is_empty() {
-        return None;
-    }
-    let mut best_match: Option<(i64, &NativeMplsInfo)> = None;
-    let mut longest: Option<&NativeMplsInfo> = None;
-    for pl in &playlists {
-        let diff = (pl.duration_ms - duration_ms).abs();
-        if best_match.as_ref().map(|(b, _)| diff < *b).unwrap_or(true) {
-            best_match = Some((diff, pl));
-        }
-        if longest
-            .as_ref()
-            .map(|l| pl.duration_ms > l.duration_ms)
-            .unwrap_or(true)
-        {
-            longest = Some(pl);
-        }
-    }
-    let chosen = if duration_ms > 0 {
-        best_match
-            .filter(|(diff, _)| *diff <= 30_000 || *diff <= (duration_ms / 50).max(5000))
-            .map(|(_, pl)| pl)
-            .or(longest)
-    } else {
-        longest
-    }?;
-    if chosen.clips.is_empty() {
-        return None;
-    }
-    let pos_ticks = position_ms.max(0) as u64 * 45;
-    let mut seg = &chosen.clips[chosen.clips.len() - 1];
-    for c in &chosen.clips {
-        let span = c.tout_ticks.saturating_sub(c.tin_ticks);
-        if pos_ticks < c.cum_start_ticks + span {
-            seg = c;
-            break;
-        }
-    }
-    let within = pos_ticks.saturating_sub(seg.cum_start_ticks);
-    let span = seg.tout_ticks.saturating_sub(seg.tin_ticks);
-    let offset_ticks = seg.tin_ticks + within.min(span);
-    let root = Path::new(disc_path);
-    let stream_dir = if root.join("BDMV").join("STREAM").is_dir() {
-        root.join("BDMV").join("STREAM")
-    } else {
-        root.join("STREAM")
-    };
-    let path = stream_dir.join(format!("{}.m2ts", seg.clip_name));
-    if !path.is_file() {
-        return None;
-    }
-    Some(BlurayClipTarget {
-        path,
-        offset_ms: (offset_ticks / 45) as i64,
-        is_uhd: chosen.is_uhd,
-    })
-}
 /// Audio and subtitle language names for the title whose duration matches
 /// `duration_ms` (the current libvlc title). Returns empty vectors when the
 /// library is unavailable or no title matches within tolerance.

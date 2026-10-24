@@ -1,18 +1,5 @@
 # Agent coordination notes
 
-## FACTORY AI HANDOVER & PERMANENT DIRECTIVES (2026-10-23, Antigravity — for Factory AI)
-
-- **Detailed Handover Document:** Complete technical documentation, discoveries, root-cause analyses, and reproduction logs are committed at [`docs/FACTORY_AI_HANDOVER.md`](file:///Users/dev/Documents/GitHub/Nebulae-torrent_client/docs/FACTORY_AI_HANDOVER.md).
-- **Permanent Directives:**
-  1. **Strict User Directives:** Every user instruction must be followed without exception or alteration.
-  2. **Release Version Lock:** Strictly keep version `0.2.3` across all manifests (`package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, `release.yml`). Do NOT bump to `0.2.4` or `0.9.0`.
-  3. **macOS Isolation:** `src-tauri/src/player/embed_macos.rs` and all macOS behaviors are frozen and must never be altered when working on Windows or Linux.
-  4. **Subprocess Window Suppression:** All Windows subprocesses (`ffmpeg.exe`, etc.) must pass `creation_flags(0x08000000)` (`CREATE_NO_WINDOW`) to prevent flashing console popups.
-- **Current Issues Handed Over to Factory AI:**
-  1. **Windows UHD HDR Washed-Out Colors:** VLC 3.0's `libdirect3d11_plugin.dll` applies a hardcoded Hable curve that crushes diffuse white and lifts shadow luminance on SDR monitors. `--video-filter=adjust` was tested but proved actively harmful (broke audio pipeline and created border/line artifacts on optical disc menus) and has been removed. Factory AI should investigate shader modifications or alternative vout pipelines.
-  2. **Menu Integrity & Sound:** With `--video-filter=adjust` removed, optical disc menus render cleanly without bounding boxes/lines, and WASAPI audio underruns are resolved.
-  3. **Seek Bar Hover Thumbnails:** Implemented and functional. `CREATE_NO_WINDOW` is applied in `commands/media.rs` to keep thumbnail generation completely silent and invisible.
-
 ## CONSOLIDATION HANDOFF (2026-10-20, Antigravity — for Factory's Test Release)
 
 - **Consolidated Working Tree:** Canonical checkout `/Users/dev/Documents/GitHub/Nebulae-torrent_client` on branch `main`.
@@ -1885,26 +1872,3 @@ branches are safe to consolidate per your notice. No files to spare.
 
 Next: UHD playback reproduction with fresh logs, then menu/toolbar layout,
 then Manager speed tooltip wiring using your `041d5b8` data contract.
-
-
-## 2026-10-23 — Droid (Factory): thumbnail fix + Windows adjust-filter removal
-
-**Thumbnail-on-hover delay / visible console window on Windows (commit `b6881cb`):**
-- Inverted `player_thumbnail_at` flow in `src-tauri/src/commands/media.rs`: when an active player exists (`mp != 0`), use `libvlc_video_take_snapshot` directly — instant, no subprocess, no console window. Only fall back to ffmpeg when no player is active (disc menu, player not loaded).
-- Cached ffmpeg binary path in a `OnceLock` (`cached_ffmpeg_path()` / `locate_ffmpeg()`), so `extract_thumbnail_ffmpeg` spawns exactly one process per call instead of iterating up to 14 candidates sequentially.
-- `creation_flags(0x08000000)` (CREATE_NO_WINDOW) applied on both the ffmpeg probe and extraction subprocess on Windows.
-- Verified: `cargo check`, `cargo fmt --check`, `cargo clippy` all pass. Touches only `media.rs`.
-
-**Windows video adjust filter removed (commit `d76d123`):**
-- Removed `apply_edr_to_video_layer`, `maybe_apply_edr`, `force_apply_edr`, and test `tone_mapping_bits_match_vlc_expectations` from `src-tauri/src/player/embed_windows.rs`. This code re-introduced `--video-filter=adjust` (contrast=1.28, saturation=1.50, gamma=0.80) which was proven to break optical disc menus, starve CPU on UHD HEVC, and cause WASAPI audio underruns — without fixing washed-out blacks.
-- Split cfg blocks in `media.rs`: macOS keeps full EDR retry worker; Windows keeps only `state.edr_applied.store(false)` and `state.is_hdr.store(true)` (needed by macOS paths), dropping `force_apply_edr`/`maybe_apply_edr` calls.
-- Verified: `cargo check`, `cargo fmt --check`, `cargo clippy` all pass. Touches only `embed_windows.rs` and `media.rs`.
-
-**Windows UHD HDR washed-out colors — status: OPEN, no app-side fix possible**
-- The tone-mapping curve is hardcoded in `libdirect3d11_plugin.dll` (Hable, LuminanceScale=0.01). No `engine.rs` edit can change it.
-- Pathway A (force OpenGL vout `glwin32`): not viable — no per-media `:vout=` mechanism, `--vout` reset by `set_hwnd`, official Windows VLC 3.0.23 is unmodified, and Windows OpenGL vout lacks libplacebo.
-- Pathway B (DXGI swapchain color space tagging): not reachable app-side in VLC 3.0.
-- Pathway C (recompile `libdirect3d11_plugin.dll` with ACES/Mobius curve): the only technically sound fix. Build plan documented in `docs/FACTORY_AI_HANDOVER.md` §3C. Requires VLC 3.0.23 source build on Windows, patching `modules/video_output/direct3d11.c`, shipping the patched DLL in `resources/vlc/plugins/`.
-- Both commits pushed to `origin main`. Tree clean.
-
-— Droid (Factory), 2026-10-23

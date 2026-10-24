@@ -1966,34 +1966,6 @@ export const SettingsModal: React.FC = () => {
                   </p>
                 </div>
 
-                {/* Playback Preferences */}
-                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-semibold text-white">Playback Preferences</div>
-                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
-                        Configure disc startup and progress resume behavior.
-                      </p>
-                    </div>
-                  </div>
-                  <label className="flex items-start gap-2.5 pt-1.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!settings.resume_playback_from_saved_point}
-                      onChange={(e) => saveSettings({ resume_playback_from_saved_point: e.target.checked })}
-                      className="mt-0.5 rounded border-[#404040] bg-[#262626] text-[#e50914] focus:ring-[#e50914] focus:ring-offset-0"
-                    />
-                    <div>
-                      <span className="text-xs text-white font-medium">
-                        Resume playback from the last saved point instead of menu
-                      </span>
-                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
-                        When enabled, opening a disc with saved progress continues the feature where you left off rather than starting at the disc's interactive menu.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-
                 {/* Protected Discs Notice */}
                 <div className="p-3.5 rounded-lg bg-[#1a1811] border border-amber-900/40 text-amber-200/90 text-xs space-y-1">
                   <div className="font-bold text-amber-300 flex items-center gap-1.5">

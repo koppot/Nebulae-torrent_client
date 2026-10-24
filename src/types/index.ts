@@ -314,7 +314,6 @@ export interface UserSettings {
   // 13. Media Mode
   media_mode_enabled: boolean;
   media_mode_decision_made: boolean;
-  resume_playback_from_saved_point: boolean;
 }
 
 export interface EngineIdentityInfo {

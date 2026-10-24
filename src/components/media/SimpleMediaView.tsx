@@ -6,7 +6,7 @@ import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { resolvePoster } from '../../lib/posters';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { openInPlayer, resumeInPlayer, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { openInPlayer, resumeInPlayer, savedPositionMs, savePositionMs, usePlayerStore } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -835,8 +835,8 @@ export const SimpleMediaView: React.FC = () => {
               <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                 {(() => {
                   const onPrimary = () => {
-                    const playPath = resumePath || effDisc.path;
-                    handlePlayDisc(effDisc.torrent, group.id, playPath, featureLabel(group.id), group.year);
+                    if (resumePath) savePositionMs(resumePath, 0);
+                    handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
                   };
                   return (
                     <button

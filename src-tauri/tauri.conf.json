@@ -125,7 +125,6 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
-        "template": "nsis/installer.nsi",
         "installerIcon": "icons/icon.ico",
         "headerImage": null,
         "sidebarImage": null,

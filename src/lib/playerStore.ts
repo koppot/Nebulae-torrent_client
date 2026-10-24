@@ -29,7 +29,6 @@ interface PlayerStoreState {
 
 let state: PlayerStoreState = { open: false, title: '', year: null, resolvedPath: '', isDisc: false };
 const listeners = new Set<() => void>();
-let lastExplicitCloseMs = 0;
 
 function emit() {
   for (const fn of listeners) fn();
@@ -68,18 +67,6 @@ export const playerStore = {
 
 export function usePlayerStore(): PlayerStoreState {
   return useSyncExternalStore(playerStore.subscribe, playerStore.get);
-}
-
-/**
- * True for a short window after the user explicitly closed the player.
- * App.tsx's auto-open paths (the player-opened event listener and the
- * engine-session adoption poll) must not re-open the overlay during it:
- * the backend emits player-opened on a delay schedule after each open, and
- * a close within that window re-opened a dead session (stuck controls over
- * a black window with a 0:00:00 bar).
- */
-export function suppressAutoReopen(): boolean {
-  return Date.now() - lastExplicitCloseMs < 4000;
 }
 
 let isOpening = false;
@@ -252,7 +239,6 @@ export async function closePlayer(): Promise<void> {
   try {
     await invoke('player_close');
   } finally {
-    lastExplicitCloseMs = Date.now();
     playerStore.close();
   }
 }
