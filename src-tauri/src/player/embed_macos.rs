@@ -697,8 +697,11 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                         let _: () = objc2::msg_send![shared, activateIgnoringOtherApps: true];
                     }
                 }
-                // The player window opens at 16:9 so the video fills it
-                // edge to edge; the manager/media UI restores its frame.
+                // Save the pre-player frame so the manager/media UI can be
+                // restored on close. The window is NOT reshaped here: the
+                // frontend's player_fit_window fits it to the video's real
+                // display aspect once the poll reports it, so scope features
+                // and 4:3 DVDs get a hugging window with no letterbox bars.
                 if !FULLSCREEN_ON.load(Ordering::SeqCst) {
                     let f = win.frame();
                     let ptr = Box::into_raw(Box::new(f));
@@ -706,12 +709,6 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     if !old.is_null() {
                         let _ = Box::from_raw(old);
                     }
-                    let new_h = f.size.width * 9.0 / 16.0;
-                    let new_frame = NSRect::new(
-                        NSPoint::new(f.origin.x, f.origin.y + (f.size.height - new_h)),
-                        NSSize::new(f.size.width, new_h),
-                    );
-                    let _: () = objc2::msg_send![&*win, setFrame: new_frame, display: true];
                 }
             }
         }

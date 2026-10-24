@@ -28,24 +28,32 @@ interface PlayerStoreState {
   isDisc: boolean;
 }
 
-/** Per-release thumbnail cache: resolvedPath -> (rounded position_ms -> base64 data URL). */
+/** Per-release, per-title thumbnail cache: "resolvedPath#title" -> (rounded position_ms -> base64 data URL). */
 const thumbnailCache = new Map<string, Map<number, string>>();
+
+function cacheBucket(resolvedPath: string, title: number): string {
+  // Discs switch titles (episodes) under one resolved path; the same
+  // position in two titles is a different frame, so the title is part of
+  // the cache identity.
+  return `${resolvedPath}#${title}`;
+}
 
 function cacheKey(positionMs: number): number {
   return Math.round(positionMs / 1000) * 1000; // bucket to nearest second
 }
 
-function getCachedThumbnail(resolvedPath: string, positionMs: number): string | null {
-  const byPos = thumbnailCache.get(resolvedPath);
+function getCachedThumbnail(resolvedPath: string, positionMs: number, title: number): string | null {
+  const byPos = thumbnailCache.get(cacheBucket(resolvedPath, title));
   if (!byPos) return null;
   return byPos.get(cacheKey(positionMs)) ?? null;
 }
 
-function setCachedThumbnail(resolvedPath: string, positionMs: number, dataUrl: string): void {
-  let byPos = thumbnailCache.get(resolvedPath);
+function setCachedThumbnail(resolvedPath: string, positionMs: number, title: number, dataUrl: string): void {
+  const bucket = cacheBucket(resolvedPath, title);
+  let byPos = thumbnailCache.get(bucket);
   if (!byPos) {
     byPos = new Map();
-    thumbnailCache.set(resolvedPath, byPos);
+    thumbnailCache.set(bucket, byPos);
   }
   byPos.set(cacheKey(positionMs), dataUrl);
 }
@@ -93,20 +101,22 @@ export const playerStore = {
   },
 
   /** Read a cached thumbnail for the given playback position (no fetch). */
-  getCachedThumbnail(resolvedPath: string, positionMs: number): string | null {
-    return getCachedThumbnail(resolvedPath, positionMs);
+  getCachedThumbnail(resolvedPath: string, positionMs: number, title: number): string | null {
+    return getCachedThumbnail(resolvedPath, positionMs, title);
   },
 
   /**
    * Fetch a thumbnail for the given playback position, cached per release.
    * Returns a base64 data URL or null if the frame could not be captured.
+   * The backend needs the current title + length to map disc timelines
+   * (Blu-ray playlist position -> M2TS clip offset, DVD title -> VOB chain).
    */
-  async getThumbnail(resolvedPath: string, positionMs: number): Promise<string | null> {
-    const cached = getCachedThumbnail(resolvedPath, positionMs);
+  async getThumbnail(resolvedPath: string, positionMs: number, title: number, lengthMs: number): Promise<string | null> {
+    const cached = getCachedThumbnail(resolvedPath, positionMs, title);
     if (cached) return cached;
     try {
-      const dataUrl = await invoke<string>('player_thumbnail_at', { positionMs });
-      setCachedThumbnail(resolvedPath, positionMs, dataUrl);
+      const dataUrl = await invoke<string>('player_thumbnail_at', { positionMs, title, lengthMs });
+      setCachedThumbnail(resolvedPath, positionMs, title, dataUrl);
       return dataUrl;
     } catch {
       return null;
@@ -319,10 +329,28 @@ export function savePositionMs(filePath: string, timeMs: number): void {
   }
 }
 
+let lastExplicitCloseMs = 0;
+
+/**
+ * True for a short window after the user explicitly closed the player.
+ * App.tsx's auto-open paths (the player-opened event listener and the
+ * engine-session adoption poll) must not re-open the overlay during it:
+ * the backend emits player-opened on a delay schedule after each open, and
+ * a close within that window re-opened a dead session (stuck controls over
+ * a black window with a 0:00:00 bar).
+ */
+export function suppressAutoReopen(): boolean {
+  return Date.now() - lastExplicitCloseMs < 4000;
+}
+
 export async function closePlayer(): Promise<void> {
+  lastExplicitCloseMs = Date.now();
+  // Hide the UI first: the native teardown can take a moment (BD-J JVM
+  // shutdown), and the controls must disappear the instant the user closes.
+  playerStore.close();
   try {
     await invoke('player_close');
-  } finally {
-    playerStore.close();
+  } catch {
+    // The engine state is already gone or dying; the UI is closed either way.
   }
 }

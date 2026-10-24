@@ -85,6 +85,44 @@ fn find_tt_records(data: &[u8], tt_srpt: usize, nr_titles: usize) -> Option<usiz
     None
 }
 
+/// Map VLC's 1-based title index to the title-set (VTS) that holds it,
+/// reading the same VIDEO_TS.IFO TT_SRPT table as the language probe.
+/// Returns (VIDEO_TS directory, VTS number). None when the path is not a
+/// DVD-Video folder or the table cannot be parsed.
+pub fn dvd_title_vts(disc_path: &str, title: i64) -> Option<(std::path::PathBuf, u8)> {
+    let root = std::path::Path::new(disc_path);
+    let video_ts = if root.join("VIDEO_TS.IFO").is_file() {
+        root.to_path_buf()
+    } else {
+        root.join("VIDEO_TS")
+    };
+    let vmg = std::fs::read(video_ts.join("VIDEO_TS.IFO")).ok()?;
+    if vmg.len() < 0xE0 || &vmg[0..12] != b"DVDVIDEO-VMG" {
+        return None;
+    }
+    // TT_SRPT start sector sits at header offset 0xC4.
+    let tt_sector = u32::from_be_bytes([vmg[0xC4], vmg[0xC5], vmg[0xC6], vmg[0xC7]]) as usize;
+    let tt_off = tt_sector * 2048;
+    if tt_off + 8 > vmg.len() {
+        return None;
+    }
+    let nr_titles = u16::from_be_bytes([vmg[tt_off], vmg[tt_off + 1]]) as usize;
+    if nr_titles == 0 {
+        return None;
+    }
+    let rec_base = find_tt_records(&vmg, tt_off, nr_titles)?;
+    let idx = if title >= 1 {
+        (title as usize).min(nr_titles) - 1
+    } else {
+        0
+    };
+    let rec = rec_base + idx * 12;
+    let vts_nr = vmg[rec + 6];
+    if !(1..=99).contains(&vts_nr) {
+        return None;
+    }
+    Some((video_ts, vts_nr))
+}
 /// Audio and subtitle language names for `title` (1-based, the current
 /// libvlc title number). Returns empty vectors when the path is not a
 /// DVD-Video folder or the tables cannot be parsed.

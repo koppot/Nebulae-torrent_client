@@ -31,6 +31,9 @@ interface Poll {
   chapter: number;
   chapter_count: number;
   at_menu: boolean;
+  video_w: number;
+  video_h: number;
+  video_aspect: number;
 }
 
 /**
@@ -139,8 +142,6 @@ function fmt(ms: number): string {
  */
 export default function PlayerOverlay() {
   const player = usePlayerStore();
-  if (!player.open) return null;
-
   const holderRef = useRef<HTMLDivElement>(null);
   const seekTrackRef = useRef<HTMLDivElement>(null);
   const [poll, setPoll] = useState<Poll>({
@@ -152,6 +153,9 @@ export default function PlayerOverlay() {
     chapter: 0,
     chapter_count: 0,
     at_menu: false,
+    video_w: 0,
+    video_h: 0,
+    video_aspect: 0,
   });
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
@@ -160,7 +164,6 @@ export default function PlayerOverlay() {
   // Hover time state for the seek bar: position in milliseconds being hovered.
   const [hoverMs, setHoverMs] = useState<number | null>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
-  const [thumbnailLoading, setThumbnailLoading] = useState(false);
   const thumbnailDebounceRef = useRef<number | null>(null);
   // Track popovers (owner): the volume slider and the track lists appear on
   // click on their pill, not permanently in the bar.
@@ -178,6 +181,9 @@ export default function PlayerOverlay() {
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    fullscreenRef.current = isFullscreen;
+  }, [isFullscreen]);
   // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
   const [pinnedTop, setPinnedTop] = useState(false);
   // Auto-hide (owner): controls fade out during playback and return on any
@@ -204,36 +210,35 @@ export default function PlayerOverlay() {
   volumeRef.current = volume;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  // Window fit-to-picture: the last aspect ratio the window was fitted to,
+  // and a live fullscreen mirror (the poll closure must not go stale).
+  const lastFitAspectRef = useRef(0);
+  const fullscreenRef = useRef(false);
 
   const isAtMenu = player.isDisc && (poll.at_menu || poll.title === 0 || (poll.length_ms === 0 && poll.title <= 0));
 
   useEffect(() => {
     if (!player.open || poll.length_ms === 0 || isAtMenu || hoverMs === null) {
       setThumbnailUrl(null);
-      setThumbnailLoading(false);
       return;
     }
-    const existing = playerStore.getCachedThumbnail(player.resolvedPath, hoverMs);
+    const existing = playerStore.getCachedThumbnail(player.resolvedPath, hoverMs, poll.title);
     if (existing) {
       setThumbnailUrl(existing);
-      setThumbnailLoading(false);
       return;
     }
     let cancelled = false;
     if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
     thumbnailDebounceRef.current = window.setTimeout(async () => {
       if (cancelled) return;
-      setThumbnailLoading(true);
       try {
-        const url = await playerStore.getThumbnail(player.resolvedPath, hoverMs);
+        const url = await playerStore.getThumbnail(player.resolvedPath, hoverMs, poll.title, poll.length_ms);
         if (!cancelled) {
           setThumbnailUrl(url);
-          setThumbnailLoading(false);
         }
       } catch {
         if (!cancelled) {
           setThumbnailUrl(null);
-          setThumbnailLoading(false);
         }
       }
     }, 120);
@@ -241,7 +246,7 @@ export default function PlayerOverlay() {
       cancelled = true;
       if (thumbnailDebounceRef.current) window.clearTimeout(thumbnailDebounceRef.current);
     };
-  }, [hoverMs, poll.length_ms, isAtMenu, player.open, player.resolvedPath]);
+  }, [hoverMs, poll.length_ms, poll.title, isAtMenu, player.open, player.resolvedPath]);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -265,9 +270,20 @@ export default function PlayerOverlay() {
     setDiscChoices(null);
     setAuthoredTitle(null);
     setErrorMessage(null);
+    lastFitAspectRef.current = 0;
 
     const apply = (p: Poll) => {
       setPoll(p);
+      // Fit the window to the video's display aspect once known (owner: the
+      // window hugs the picture - no letterbox/pillarbox bars). Refit only
+      // when the aspect actually changes (menu -> feature), never in
+      // fullscreen, and only while this session is open.
+      if (p.video_aspect > 0.2 && !fullscreenRef.current) {
+        if (Math.abs(p.video_aspect - lastFitAspectRef.current) > 0.01) {
+          lastFitAspectRef.current = p.video_aspect;
+          invoke('player_fit_window', { aspect: p.video_aspect }).catch(() => {});
+        }
+      }
       // Persist the playback position so Resume can skip the disc menu and
       // jump straight back into the feature (throttled; menus/idle excluded).
       const now = Date.now();
@@ -1061,7 +1077,7 @@ export default function PlayerOverlay() {
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.
               Enter activates the highlighted entry on the first press. */}
-          {player.isDisc && (
+          {isAtMenu && (
             <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
               {([
                 ['◀', 3, 'Menu: left'],
@@ -1107,7 +1123,7 @@ export default function PlayerOverlay() {
               <ChevronLeft className="w-4 h-4" />
             </button>
           )}
-          {isAtMenu && (
+          {player.isDisc && !isAtMenu && (
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: -1 }).catch(() => {})}
@@ -1137,7 +1153,7 @@ export default function PlayerOverlay() {
           )}
         </button>
 
-          {isAtMenu && (
+          {player.isDisc && !isAtMenu && (
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: 1 }).catch(() => {})}
@@ -1189,7 +1205,6 @@ export default function PlayerOverlay() {
             onMouseLeave={() => {
               setHoverMs(null);
               setThumbnailUrl(null);
-              setThumbnailLoading(false);
             }}
           >
             <div className="absolute inset-0 flex items-center w-full pointer-events-none">
@@ -1234,23 +1249,15 @@ export default function PlayerOverlay() {
                   left: `${Math.min(100, Math.max(0, (hoverMs / dur) * 100))}%`,
                 }}
               >
-                <div className="w-[140px] h-[78px] rounded-md overflow-hidden bg-[#181818] border border-white/40 shadow-2xl flex items-center justify-center">
-                  {thumbnailLoading ? (
-                    <div className="w-full h-full animate-pulse bg-[#252525] flex items-center justify-center text-[10px] text-white/50">
-                      loading…
-                    </div>
-                  ) : thumbnailUrl ? (
+                {thumbnailUrl && (
+                  <div className="rounded-md overflow-hidden bg-[#181818] border border-white/40 shadow-2xl">
                     <img
                       src={thumbnailUrl}
-                      className="w-full h-full object-cover"
+                      className="block w-[220px] h-auto"
                       alt="preview"
                     />
-                  ) : (
-                    <div className="w-full h-full bg-[#181818] flex items-center justify-center text-[10px] text-white/40">
-                      —
-                    </div>
-                  )}
-                </div>
+                  </div>
+                )}
                 <div className="px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl tabular-nums whitespace-nowrap">
                   {fmt(hoverMs)}
                 </div>

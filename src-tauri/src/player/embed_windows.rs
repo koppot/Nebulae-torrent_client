@@ -8,7 +8,6 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::ffi::{c_void, CString};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -239,35 +238,18 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
         } else {
-            // Player opening: save current rect and reshape to 16:9 if not fullscreen
+            // Player opening: save the current rect (restored on close).
+            // The window is NOT reshaped here: the frontend's
+            // player_fit_window fits it to the video's real display aspect
+            // once the poll reports it, so 2.39:1 features and 4:3 DVDs get
+            // a hugging window instead of 16:9 letterbox bars.
             let mut r = RECT::default();
             unsafe {
                 let _ = GetWindowRect(main_h, &mut r);
             }
-            let is_fs = app2
-                .get_webview_window("main")
-                .and_then(|w| w.is_fullscreen().ok())
-                .unwrap_or(false);
-
-            if !is_fs {
-                if let Ok(mut saved) = PRE_PLAYER_RECT.lock() {
-                    if saved.is_none() {
-                        *saved = Some(r);
-                    }
-                }
-                let w = r.right - r.left;
-                let h_16_9 = ((w as f64) * 9.0 / 16.0).round() as i32;
-                r.bottom = r.top + h_16_9;
-                unsafe {
-                    let _ = SetWindowPos(
-                        main_h,
-                        None,
-                        r.left,
-                        r.top,
-                        w,
-                        h_16_9,
-                        SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                    );
+            if let Ok(mut saved) = PRE_PLAYER_RECT.lock() {
+                if saved.is_none() {
+                    *saved = Some(r);
                 }
             }
 
@@ -369,39 +351,6 @@ pub fn sync_frame(
                 SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
             );
         }
-        // Make VLC fill the video surface edge-to-edge so no letterbox /
-        // pillarbox black bars appear. The display aspect ratio is pinned to
-        // the surface's actual aspect: 16:9 SDR content on a 16:9 surface is
-        // a no-op (bit-for-bit identical), while non-16:9 content is stretched
-        // to fill instead of being boxed with black bars.
-        if w > 0 && h > 0 {
-            let state = app2.state::<crate::player::PlayerState>();
-            // Copy the player handle out of its guard first so the guard is
-            // dropped before we borrow `state.lib` below (avoids a "state does
-            // not live long enough" borrow conflict).
-            let mp = {
-                if let Ok(mp_guard) = state.media_player.lock() {
-                    *mp_guard
-                } else {
-                    0
-                }
-            };
-            if mp != 0 {
-                if let Ok(lib_guard) = state.lib.lock() {
-                    if let Some(lib) = lib_guard.as_ref() {
-                        let aspect = format!("{:.6}", w as f64 / h as f64);
-                        if let Ok(c_aspect) = CString::new(aspect.as_str()) {
-                            unsafe {
-                                (lib.libvlc_video_set_aspect_ratio)(
-                                    mp as *mut c_void,
-                                    c_aspect.as_ptr(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
@@ -436,74 +385,6 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     let _ = radius;
     unsafe { apply_window_corner_radius(app, radius) };
     Ok(())
-}
-
-/// Apply EDR/tone-mapping to the VLC video output on Windows.
-///
-/// On Windows, VLC uses Direct3D11 vout. For HDR content (BT.2020 PQ) on
-/// an SDR display, we must tell VLC to tone-map the content. This is done
-/// by setting the "hdr" variable on the media player to "auto" (let VLC
-/// detect display capability and tone-map if needed) or "off" (force SDR
-/// output with tone mapping). We use "auto" so VLC handles the display
-/// capability detection.
-///
-/// This mirrors macOS `apply_edr_to_video_layer` which configures the
-/// caopengllayer for tone-mapped output.
-#[cfg(target_os = "windows")]
-pub fn maybe_apply_edr(app: &AppHandle) {
-    let app_clone = app.clone();
-    let _ = app_clone.clone().run_on_main_thread(move || {
-        let state = app_clone.state::<crate::player::PlayerState>();
-        if state.edr_applied.load(Ordering::SeqCst) {
-            return;
-        }
-        let mp = {
-            let Ok(mp_guard) = state.media_player.lock() else {
-                return;
-            };
-            *mp_guard
-        };
-        if mp == 0 {
-            return;
-        }
-        let Ok(lib_guard) = state.lib.lock() else {
-            return;
-        };
-        let Some(lib) = lib_guard.as_ref() else {
-            return;
-        };
-
-        // Set VLC's HDR mode to "auto" so it tone-maps HDR content on SDR displays.
-        // var_set_checked signature: int var_set_checked(obj, name, type, value)
-        // VLC_VAR_STRING = 0x0040, value is const char* passed as usize.
-        let hdr_mode = b"auto\0";
-        let rc = unsafe {
-            (lib.var_set_checked)(
-                mp as *mut c_void,
-                c"hdr".as_ptr(),
-                0x0040, // VLC_VAR_STRING
-                hdr_mode.as_ptr() as usize,
-            )
-        };
-        if rc == 0 {
-            tracing::info!("[player] Windows: set VLC hdr mode to 'auto' for tone mapping");
-            state.edr_applied.store(true, Ordering::SeqCst);
-        } else {
-            tracing::warn!("[player] Windows: failed to set VLC hdr mode (rc={rc})");
-        }
-    });
-}
-
-/// Force re-application of EDR/tone-mapping on Windows, bypassing the latch.
-/// Used when transitioning from SDR to HDR (e.g. menu to UHD feature).
-#[cfg(target_os = "windows")]
-pub fn force_apply_edr(app: &AppHandle) {
-    let app_clone = app.clone();
-    let _ = app_clone.clone().run_on_main_thread(move || {
-        let state = app_clone.state::<crate::player::PlayerState>();
-        state.edr_applied.store(false, Ordering::SeqCst);
-    });
-    maybe_apply_edr(app);
 }
 
 /// Stored original window procedure for the overlay HWND subclass.
