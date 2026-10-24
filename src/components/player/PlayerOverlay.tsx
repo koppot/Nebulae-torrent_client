@@ -1166,6 +1166,8 @@ export default function PlayerOverlay() {
             thumbnail tooltip of the frame at that position. */}
         <div className="relative flex-1 flex items-center group/bar">
           <div
+            ref={seekTrackRef}
+            data-testid="seek-track"
             className="relative flex-1 flex items-center h-3 cursor-pointer"
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -1188,70 +1190,70 @@ export default function PlayerOverlay() {
               setThumbnailLoading(false);
             }}
           >
-            <div
-              ref={seekTrackRef}
-              data-testid="seek-track"
-              className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible"
-            >
-              {/* Gradual fill (owner: grey, not red) */}
-              <div
-                className="absolute left-0 top-0 h-full rounded-full bg-white"
-                style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
-              />
-              {/* Chapter marks: vertical ticks at the real chapter offsets.
-                  Render dark notches that extend past the track, centered on the offset,
-                  with a white ring for contrast over both played fill and unplayed track. */}
-              {dur > 0 &&
-                chapterMarks
-                  .filter((mk) => mk.offset_ms > 0 && mk.offset_ms < dur)
-                  .map((mk, i) => {
-                    const leftPct = Math.min(100, Math.max(0, (mk.offset_ms / dur) * 100));
-                    return (
-                      <span
-                        key={i}
-                        className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
-                        style={{ left: `${leftPct}%` }}
-                        title={mk.name}
-                      />
-                    );
-                  })}
-              {/* Playhead */}
-              <span
-                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
-                style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
-              />
-
-              {/* Hover video thumbnail preview & time badge */}
-              {hoverMs !== null && dur > 0 && !isAtMenu && (
+            <div className="absolute inset-0 flex items-center w-full pointer-events-none">
+              <div className="relative w-full h-[5px] rounded-full bg-white/40 border border-white overflow-visible">
+                {/* Gradual fill (owner: grey, not red) */}
                 <div
-                  className="absolute bottom-4 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none z-30"
-                  style={{
-                    left: `${Math.min(100, Math.max(0, (hoverMs / dur) * 100))}%`,
-                  }}
-                >
-                  <div className="w-[140px] h-[78px] rounded-md overflow-hidden bg-[#181818] border border-white/40 shadow-2xl flex items-center justify-center">
-                    {thumbnailLoading ? (
-                      <div className="w-full h-full animate-pulse bg-[#252525] flex items-center justify-center text-[10px] text-white/50">
-                        loading…
-                      </div>
-                    ) : thumbnailUrl ? (
-                      <img
-                        src={thumbnailUrl}
-                        className="w-full h-full object-cover"
-                        alt="preview"
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-[#181818] flex items-center justify-center text-[10px] text-white/40">
-                        —
-                      </div>
-                    )}
-                  </div>
-                  <div className="px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl tabular-nums whitespace-nowrap">
-                    {fmt(hoverMs)}
-                  </div>
-                </div>
-              )}
+                  className="absolute left-0 top-0 h-full rounded-full bg-white"
+                  style={{ width: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+                />
+                {/* Chapter marks: vertical ticks at the real chapter offsets.
+                    Render dark notches that extend past the track, centered on the offset,
+                    with a white ring for contrast over both played fill and unplayed track. */}
+                {dur > 0 &&
+                  chapterMarks
+                    .filter((mk) => mk.offset_ms > 0 && mk.offset_ms < dur)
+                    .map((mk, i) => {
+                      const leftPct = Math.min(100, Math.max(0, (mk.offset_ms / dur) * 100));
+                      return (
+                        <span
+                          key={i}
+                          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-3 rounded-[1px] bg-[#1f1f1f] ring-1 ring-white/70 pointer-events-none"
+                          style={{ left: `${leftPct}%` }}
+                          title={mk.name}
+                        />
+                      );
+                    })}
+                {/* Playhead */}
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/bar:opacity-100 transition"
+                  style={{ left: `${dur > 0 ? Math.min(100, (pos / dur) * 100) : 0}%` }}
+                />
+              </div>
             </div>
+
+            {/* Hover video thumbnail preview & time badge — positioned relative to
+                the full-width clickable area (not the 5px track) so left:% aligns
+                with the visible progress bar. */}
+            {hoverMs !== null && dur > 0 && !isAtMenu && (
+              <div
+                className="absolute bottom-full mb-2 -translate-x-1/2 flex flex-col items-center gap-1.5 pointer-events-none z-30"
+                style={{
+                  left: `${Math.min(100, Math.max(0, (hoverMs / dur) * 100))}%`,
+                }}
+              >
+                <div className="w-[140px] h-[78px] rounded-md overflow-hidden bg-[#181818] border border-white/40 shadow-2xl flex items-center justify-center">
+                  {thumbnailLoading ? (
+                    <div className="w-full h-full animate-pulse bg-[#252525] flex items-center justify-center text-[10px] text-white/50">
+                      loading…
+                    </div>
+                  ) : thumbnailUrl ? (
+                    <img
+                      src={thumbnailUrl}
+                      className="w-full h-full object-cover"
+                      alt="preview"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-[#181818] flex items-center justify-center text-[10px] text-white/40">
+                      —
+                    </div>
+                  )}
+                </div>
+                <div className="px-2 py-0.5 rounded bg-[#181818]/95 border border-white/30 text-[11px] font-mono text-white shadow-xl tabular-nums whitespace-nowrap">
+                  {fmt(hoverMs)}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <span className="text-[11px] font-mono text-white tabular-nums">
