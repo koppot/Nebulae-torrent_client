@@ -107,7 +107,8 @@ pub struct VlcLib {
     /// anamorphic (720x480 displayed 16:9), so coded pixels alone lie.
     pub libvlc_media_tracks_get:
         Option<unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> c_int>,
-    pub libvlc_media_tracks_release: Option<unsafe extern "C" fn(*mut *mut VlcMediaTrack, c_int)>,
+    pub libvlc_media_tracks_release:
+        Option<unsafe extern "C" fn(*mut *mut *mut VlcMediaTrack, c_int)>,
     pub libvlc_video_set_adjust_int:
         Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)>,
     pub libvlc_video_set_adjust_float:
@@ -178,7 +179,7 @@ pub unsafe fn video_display_geometry(lib: &VlcLib, mp: usize) -> Option<(u32, u3
                 }
                 break;
             }
-            release(tracks, n);
+            release(&mut tracks, n);
         }
         if out.is_some() {
             return out;
@@ -766,7 +767,7 @@ impl VlcLib {
             libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
             libvlc_video_set_aspect_ratio: sym!("libvlc_video_set_aspect_ratio": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_media_tracks_get: sym_opt!("libvlc_media_tracks_get": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> c_int),
-            libvlc_media_tracks_release: sym_opt!("libvlc_media_tracks_release": unsafe extern "C" fn(*mut *mut VlcMediaTrack, c_int)),
+            libvlc_media_tracks_release: sym_opt!("libvlc_media_tracks_release": unsafe extern "C" fn(*mut *mut *mut VlcMediaTrack, c_int)),
             libvlc_video_set_adjust_int: sym_opt!("libvlc_video_set_adjust_int": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)),
             libvlc_video_set_adjust_float: sym_opt!("libvlc_video_set_adjust_float": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)),
             lib,
