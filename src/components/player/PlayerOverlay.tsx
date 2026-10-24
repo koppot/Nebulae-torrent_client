@@ -139,6 +139,8 @@ function fmt(ms: number): string {
  */
 export default function PlayerOverlay() {
   const player = usePlayerStore();
+  if (!player.open) return null;
+
   const holderRef = useRef<HTMLDivElement>(null);
   const seekTrackRef = useRef<HTMLDivElement>(null);
   const [poll, setPoll] = useState<Poll>({
@@ -1105,7 +1107,7 @@ export default function PlayerOverlay() {
               <ChevronLeft className="w-4 h-4" />
             </button>
           )}
-          {player.isDisc && (
+          {isAtMenu && (
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: -1 }).catch(() => {})}
@@ -1135,7 +1137,7 @@ export default function PlayerOverlay() {
           )}
         </button>
 
-          {player.isDisc && (
+          {isAtMenu && (
             <button
               type="button"
               onClick={() => invoke('player_step_title', { dir: 1 }).catch(() => {})}
