@@ -596,9 +596,7 @@ pub fn run() {
 
             let _ = tray_builder.build(app)?;
 
-            // macOS only: on Windows/Linux an in-window menu bar would draw
-            // over the borderless player window during playback.
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             {
                 let native_menu = app_menu::build_app_menu(app.handle())?;
                 let _ = app.set_menu(native_menu);
@@ -764,8 +762,6 @@ pub fn run() {
             commands::media::player_step_title,
             commands::media::player_chapter_marks,
             commands::media::player_disc_chapters,
-            commands::media::player_thumbnail_at,
-            commands::media::player_fit_window,
             commands::media::player_disc_display_title,
             commands::media::player_set_always_on_top,
             commands::media::player_always_on_top,

@@ -5,7 +5,7 @@
 //! dylib path differs per platform.
 
 use libloading::{Library, Symbol};
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 
 /// The loaded libVLC and the symbols we use.
@@ -94,112 +94,8 @@ pub struct VlcLib {
             *mut std::ffi::c_uint,
         ) -> c_int,
     >,
-    /// Take a snapshot of the current video frame and save it to a file.
-    /// If i_width/i_height are 0, uses the video's native size. Returns 0 on success.
-    pub libvlc_video_take_snapshot:
-        Option<unsafe extern "C" fn(*mut c_void, c_uint, *const c_char, c_uint, c_uint) -> c_int>,
-    /// Set the display aspect ratio of the video output (e.g. "16:9" or a
-    /// float such as "1.78"). Matching it to the embedding surface makes VLC
-    /// fill the surface edge-to-edge with no letterbox/pillarbox black bars.
-    pub libvlc_video_set_aspect_ratio: unsafe extern "C" fn(*mut c_void, *const c_char),
-    /// Parsed track metadata (coded size + sample aspect ratio) for the
-    /// active media. Needed to fit the window to the picture: DVD is
-    /// anamorphic (720x480 displayed 16:9), so coded pixels alone lie.
-    pub libvlc_media_tracks_get:
-        Option<unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> c_int>,
-    pub libvlc_media_tracks_release:
-        Option<unsafe extern "C" fn(*mut *mut *mut VlcMediaTrack, c_int)>,
-    pub libvlc_video_set_adjust_int:
-        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)>,
-    pub libvlc_video_set_adjust_float:
-        Option<unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)>,
 }
 
-/// Mirror of libvlc_media_track_t (C layout, header-verified). The codec
-/// union is represented as a single pointer (all members are pointers).
-#[repr(C)]
-pub struct VlcMediaTrack {
-    pub i_codec: u32,
-    pub i_original_fourcc: u32,
-    pub i_id: c_int,
-    /// libvlc_track_type_t: unknown=-1, audio=0, video=1, text=2.
-    pub i_type: c_int,
-    pub i_profile: c_int,
-    pub i_level: c_int,
-    pub track: *mut c_void,
-    pub i_bitrate: c_uint,
-    pub psz_language: *mut c_char,
-    pub psz_description: *mut c_char,
-}
-
-/// Leading fields of libvlc_video_track_t (C layout, header-verified);
-/// trailing orientation/projection/viewpoint fields are not read here.
-#[repr(C)]
-pub struct VlcVideoTrack {
-    pub i_width: c_uint,
-    pub i_height: c_uint,
-    pub i_sar_num: c_uint,
-    pub i_sar_den: c_uint,
-    pub i_frame_rate_num: c_uint,
-    pub i_frame_rate_den: c_uint,
-}
-
-/// Coded size and SAR-corrected display aspect of the active video track:
-/// (width, height, display_aspect). Returns None while no video is playing.
-/// Falls back to libvlc_video_get_size (square pixels assumed) when the
-/// track API is unavailable.
-///
-/// # Safety
-/// `mp` must be a live libvlc_media_player_t pointer (0 is rejected by the
-/// caller); the track array returned by libvlc_media_tracks_get is released
-/// before returning.
-pub unsafe fn video_display_geometry(lib: &VlcLib, mp: usize) -> Option<(u32, u32, f64)> {
-    let m = mp as *mut c_void;
-
-    // libvlc_media_tracks_get dereferences the media player's input state.
-    // Guard against calling it when no media is loaded (length <= 0), which
-    // can crash inside libVLC on a stale or uninitialised player pointer.
-    let media_loaded = (lib.libvlc_media_player_get_length)(m) > 0;
-
-    if media_loaded {
-        if let (Some(get), Some(release)) =
-            (lib.libvlc_media_tracks_get, lib.libvlc_media_tracks_release)
-        {
-            let mut tracks: *mut *mut VlcMediaTrack = std::ptr::null_mut();
-            let n = get(m, &mut tracks);
-            if n > 0 && !tracks.is_null() {
-                for i in 0..n {
-                    let t = *tracks.add(i as usize);
-                    if t.is_null() || (*t).i_type != 1 {
-                        continue;
-                    }
-                    let v = (*t).track as *const VlcVideoTrack;
-                    if !v.is_null() && (*v).i_width > 0 && (*v).i_height > 0 {
-                        let (w, h) = ((*v).i_width, (*v).i_height);
-                        let sar = if (*v).i_sar_num > 0 && (*v).i_sar_den > 0 {
-                            (*v).i_sar_num as f64 / (*v).i_sar_den as f64
-                        } else {
-                            1.0
-                        };
-                        release(&mut tracks, n);
-                        return Some((w, h, w as f64 * sar / h as f64));
-                    }
-                    break;
-                }
-                release(&mut tracks, n);
-            }
-        }
-    }
-    // Fall back to libvlc_video_get_size (square pixels assumed).
-    if let Some(get_size) = lib.libvlc_video_get_size {
-        let mut w: c_uint = 0;
-        let mut h: c_uint = 0;
-        if get_size(m, 0, &mut w, &mut h) == 0 && w > 0 && h > 0 {
-            return Some((w, h, w as f64 / h as f64));
-        }
-    }
-    None
-}
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
 #[repr(C)]
 pub struct VlcTitleDescription {
@@ -231,10 +127,6 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
-    let count = (lib.libvlc_media_player_get_title_count)(m);
-    if count <= 0 {
-        return false;
-    }
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
@@ -248,13 +140,7 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
         return false;
     }
     let t = &**titles.add(current as usize);
-    let is_named_menu = if !t.psz_name.is_null() {
-        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
-        cstr.to_string_lossy().to_ascii_lowercase().contains("menu")
-    } else {
-        false
-    };
-    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0 || is_named_menu;
+    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
 }
@@ -770,12 +656,6 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
-            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
-            libvlc_video_set_aspect_ratio: sym!("libvlc_video_set_aspect_ratio": unsafe extern "C" fn(*mut c_void, *const c_char)),
-            libvlc_media_tracks_get: sym_opt!("libvlc_media_tracks_get": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> c_int),
-            libvlc_media_tracks_release: sym_opt!("libvlc_media_tracks_release": unsafe extern "C" fn(*mut *mut *mut VlcMediaTrack, c_int)),
-            libvlc_video_set_adjust_int: sym_opt!("libvlc_video_set_adjust_int": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_int)),
-            libvlc_video_set_adjust_float: sym_opt!("libvlc_video_set_adjust_float": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, std::ffi::c_float)),
             lib,
             deps,
         }
@@ -833,9 +713,6 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
-            // Thumbnails are rendered by a separate ffmpeg process; a libvlc
-            // snapshot must never flash its PiP preview over the video.
-            CString::new("--no-snapshot-preview").unwrap(),
             CString::new("--bluray-menu").unwrap(),
             // Nebulae's UI overlay handles all mouse clicks and keyboard shortcuts:
             // libVLC must never intercept mouse or keyboard events on the video window.
@@ -868,16 +745,6 @@ impl VlcSession {
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
         ];
-        // Windows-only: Direct3D11 HDR tone mapping.
-        // d3d11-hdr-mode=auto (the default) creates a PQ swapchain without SDR
-        // tone mapping, resulting in washed-out lifted blacks on SDR displays.
-        // Forcing it to "never" makes the D3D11 shader apply filmic Hable down
-        // to BT.709, matching macOS caopengllayer output.
-        // Passing --video-filter=adjust enables runtime color adjustments
-        // (calibrated contrast, saturation, gamma) when HDR is detected.
-        // These args do not exist or are not used on Linux or macOS.
-        #[cfg(target_os = "windows")]
-        args.push(CString::new("--d3d11-hdr-mode=never").unwrap());
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {

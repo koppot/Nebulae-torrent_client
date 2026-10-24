@@ -1,21 +1,16 @@
 use crate::player;
 #[cfg(target_os = "macos")]
 use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
+#[cfg(target_os = "windows")]
+use crate::player::embed_windows::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
-use base64::Engine;
 use std::ffi::{c_int, c_void};
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use tauri::Manager;
-
-/// Cached ffmpeg binary path. Resolved once so the 14 candidate locations
-/// are not probed (and processes spawned) on every thumbnail request.
-static FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
+use std::sync::Mutex;
 
 #[tauri::command]
 pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, String> {
@@ -618,7 +613,7 @@ fn start_playback_inner(
                         std::sync::atomic::Ordering::SeqCst,
                     );
 
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
                     {
                         state
                             .edr_applied
@@ -626,9 +621,10 @@ fn start_playback_inner(
                         maybe_apply_edr(app);
 
                         // EDR retry worker: the video layer is created asynchronously
-                        // after play() (CAOpenGLLayer on macOS). Poll at a tight 30ms
-                        // cadence for up to 3s so EDR is latched immediately upon layer
-                        // creation, preventing washed-out presentation.
+                        // after play() (CAOpenGLLayer on macOS, Direct3D HWND vout on
+                        // Windows). Poll at a tight 30ms cadence for up to 3s so EDR and
+                        // tone-mapping are latched immediately upon layer creation,
+                        // preventing washed-out presentation.
                         let app_edr = app.clone();
                         let edr_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         std::thread::spawn(move || {
@@ -647,13 +643,6 @@ fn start_playback_inner(
                                 maybe_apply_edr(&app_edr);
                             }
                         });
-                    }
-
-                    #[cfg(target_os = "windows")]
-                    {
-                        state
-                            .edr_applied
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
                     }
 
                     // Disc-mode liveness check: bluray:// (and dvd://) MRLs
@@ -808,45 +797,6 @@ fn start_playback_inner(
                                     nav_menu();
                                 }
                             }
-
-                            // navigate_menu was rejected (menu_call_mask=1 on UHD, e.g. Patlabor 2)
-                            // and the seek-to-end of First Play did not surface the authored menu.
-                            // As a last resort, jump directly to the menu title index discovered by
-                            // find_menu_title. This works even when libvlc_media_player_navigate_menu
-                            // exists but is ignored by the demux, and it places the player on the
-                            // authored menu title so directional navigation (navigate modes 1-4)
-                            // becomes available at the menu.
-                            if let Some(menu_title) = unsafe { engine::find_menu_title(&lib, mp) } {
-                                tracing::info!(
-                                    "[player] menu watcher: navigate_menu rejected and seek did not reach menu; \
-                                     jumping to menu title {menu_title} via set_title"
-                                );
-                                unsafe {
-                                    (lib.libvlc_media_player_set_title)(
-                                        mp as *mut c_void,
-                                        menu_title,
-                                    );
-                                }
-                                // Give the demux a moment to reclassify the current title as the menu.
-                                for _ in 0..25 {
-                                    std::thread::sleep(std::time::Duration::from_millis(100));
-                                    let gen_now =
-                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                    if gen_now != menu_gen || !*poison(&state.started) {
-                                        return;
-                                    }
-                                    let mp = *poison(&state.media_player);
-                                    if mp == 0 || mp != menu_mp {
-                                        return;
-                                    }
-                                    if unsafe { engine::is_menu_title(&lib, mp) } {
-                                        tracing::info!(
-                                            "[player] menu watcher: reached authored menu via set_title fallback"
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
                         });
 
                         // Deferred liveness check: detect silent decryption failure.
@@ -994,23 +944,9 @@ pub async fn player_open(
     use tauri::Emitter;
     let emitter = app.clone();
     let payload = resolved.clone();
-    // Stop re-emitting the moment this session dies: a close within the
-    // 8 s emit window otherwise re-opens a dead session, leaving controls
-    // over a black window (the "zombie player" bug).
-    let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || {
         for delay in [0, 1500, 4000, 8000] {
             std::thread::sleep(std::time::Duration::from_millis(delay));
-            let alive = {
-                let st = emitter.state::<PlayerState>();
-                st.session_gen.load(std::sync::atomic::Ordering::SeqCst) == gen
-                    && *poison(&st.started)
-                    && poison(&st.current_resolved).as_deref()
-                        == Some(payload.resolved_path.as_str())
-            };
-            if !alive {
-                break;
-            }
             let _ = emitter.emit("player-opened", &payload);
         }
     });
@@ -1076,11 +1012,8 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// navigation may complete asynchronously. The command reports dispatch
 /// acceptance, not menu visibility.
 #[tauri::command]
-pub async fn player_return_to_menu(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
-    dispatch_main_menu(&app, &state)
+pub async fn player_return_to_menu(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
+    dispatch_main_menu(&state)
 }
 
 /// Send a disc root / main menu request through the libvlc_media_player_navigate_menu()
@@ -1094,18 +1027,12 @@ pub async fn player_return_to_menu(
 ///
 /// Returns Err if the runtime does not export libvlc_media_player_navigate_menu.
 #[tauri::command]
-pub fn player_menu_navigate_menu(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
-    dispatch_main_menu(&app, &state)
+pub fn player_menu_navigate_menu(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
+    dispatch_main_menu(&state)
 }
 
 /// Shared implementation for main-menu dispatch. Both commands delegate here.
-fn dispatch_main_menu(
-    app: &tauri::AppHandle,
-    state: &tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
+fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), String> {
     let (mp, lib) = {
         let _mp_guard = state
             .media_player_cell
@@ -1119,12 +1046,6 @@ fn dispatch_main_menu(
         return Err("no active player session".into());
     }
 
-    // Already at the top menu: nothing to do (and the restart fallback must
-    // not replay First Play over a menu the user is looking at).
-    if unsafe { is_menu_title(&lib, mp) } {
-        return Ok(());
-    }
-
     // Direct main-menu dispatch through the runtime extension, for every
     // disc state. INPUT_NAV_MENU reaches bd_menu_call() (Blu-ray) and
     // dvdnav_menu_call() (DVD); on Blu-ray the demux itself falls back to
@@ -1136,6 +1057,15 @@ fn dispatch_main_menu(
     // fired everywhere EXCEPT the authored top menu and made the Menu
     // button appear dead during First Play (menu_call masked there by
     // authoring).
+    //
+    // VideoToolbox VT-305 buffer drain before returning to menu:
+    unsafe {
+        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    unsafe {
+        (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
+    }
 
     if let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu {
         tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
@@ -1149,72 +1079,6 @@ fn dispatch_main_menu(
             (lib.libvlc_media_player_set_title)(mp as *mut c_void, menu_title);
         }
     }
-
-    // Last-resort fallback: some discs (UHD BD-J in particular) silently
-    // ignore the top-menu call during a feature. If no menu title is active
-    // a few seconds after dispatch, re-open the disc from the top - First
-    // Play always lands on the authored menu chain. The check is gated on
-    // the session generation so a new/closed session is never disturbed.
-    let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        let st = app2.state::<PlayerState>();
-        if st.session_gen.load(std::sync::atomic::Ordering::SeqCst) != gen {
-            return;
-        }
-        let at_menu = {
-            let _g = match st.media_player_cell.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            let mp2 = *poison(&st.media_player);
-            if mp2 == 0 {
-                return;
-            }
-            match loaded_lib(&st) {
-                Ok(l) => unsafe { is_menu_title(&l, mp2) },
-                Err(_) => return,
-            }
-        };
-        if at_menu {
-            return;
-        }
-        let path = poison(&st.current_path).clone();
-        let resolved = poison(&st.current_resolved).clone();
-        let (Some(path), Some(resolved)) = (path, resolved) else {
-            return;
-        };
-        // Only discs have a menu to return to; never restart plain files.
-        let rp = Path::new(&resolved);
-        let is_disc = rp.join("BDMV").is_dir()
-            || rp.join("VIDEO_TS").is_dir()
-            || rp
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("iso"))
-                .unwrap_or(false);
-        if !is_disc {
-            return;
-        }
-        tracing::info!(
-            "[player] return_to_menu: no menu after dispatch - restarting disc from top: {path}"
-        );
-        stop_session(&app2, &st);
-        if let Ok(r) = start_playback(&app2, &st, &path, false) {
-            // Re-open the frontend overlay promptly (stop_session emitted
-            // player-closed, which closed it).
-            use tauri::Emitter;
-            let payload = r.clone();
-            let emitter = app2.clone();
-            std::thread::spawn(move || {
-                for delay in [0u64, 1500] {
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
-                    let _ = emitter.emit("player-opened", &payload);
-                }
-            });
-        }
-    });
 
     Ok(())
 }
@@ -1418,72 +1282,6 @@ pub async fn player_close(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<(), String> {
     stop_session(&app, &state);
-    // Hide the overlay and restore window corners for media UI
-    let _ = player::set_overlay_hidden(&app, true);
-    Ok(())
-}
-
-/// Resize the main window so the (borderless) client area matches the
-/// video's display aspect: the window hugs the picture, so VLC never
-/// letterboxes inside black bars. Width is preserved; when the resulting
-/// height would leave the work area the fit flips to height-driven.
-/// No-op in fullscreen or for implausible aspects.
-#[tauri::command]
-pub fn player_fit_window(app: tauri::AppHandle, aspect: f64) -> Result<(), String> {
-    if !aspect.is_finite() || !(0.2..=8.0).contains(&aspect) {
-        return Ok(());
-    }
-    use tauri::Manager;
-    let Some(win) = app.get_webview_window("main") else {
-        return Ok(());
-    };
-    if win.is_fullscreen().unwrap_or(false) {
-        return Ok(());
-    }
-    let outer = win.outer_size().map_err(|e| format!("outer_size: {e}"))?;
-    if outer.width == 0 {
-        return Ok(());
-    }
-    let mut w = outer.width;
-    let mut h = (w as f64 / aspect).round().max(1.0) as u32;
-    if let Ok(Some(mon)) = win.current_monitor() {
-        let wa = mon.work_area();
-        let max_w = wa.size.width.max(1);
-        let max_h = wa.size.height.max(1);
-        if h > max_h {
-            h = max_h;
-            w = ((h as f64) * aspect).round().max(1.0) as u32;
-        }
-        if w > max_w {
-            w = max_w;
-            h = ((w as f64) / aspect).round().max(1.0) as u32;
-        }
-        if (w, h) != (outer.width, outer.height) {
-            let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(w, h)));
-        }
-        // Keep the resized window fully on screen.
-        if let Ok(pos) = win.outer_position() {
-            let right = wa.position.x + wa.size.width as i32;
-            let bottom = wa.position.y + wa.size.height as i32;
-            let mut x = pos.x;
-            let mut y = pos.y;
-            if x + w as i32 > right {
-                x = right - w as i32;
-            }
-            if y + h as i32 > bottom {
-                y = bottom - h as i32;
-            }
-            x = x.max(wa.position.x);
-            y = y.max(wa.position.y);
-            if (x, y) != (pos.x, pos.y) {
-                let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-                    x, y,
-                )));
-            }
-        }
-    } else if h != outer.height {
-        let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(w, h)));
-    }
     Ok(())
 }
 
@@ -1502,11 +1300,6 @@ pub struct PlayerPoll {
     // Whether the current title is an interactive menu (INPUT_TITLE_MENU flag).
     // Prefer this over checking `title == 0` for menu detection.
     pub at_menu: bool,
-    // Coded video size and SAR-corrected display aspect (0 while unknown).
-    // The frontend fits the window to the picture with these.
-    pub video_w: u32,
-    pub video_h: u32,
-    pub video_aspect: f64,
 }
 
 #[tauri::command]
@@ -1526,16 +1319,11 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             chapter: 0,
             chapter_count: 0,
             at_menu: false,
-            video_w: 0,
-            video_h: 0,
-            video_aspect: 0.0,
         });
     }
     let lib = loaded_lib(&state)?;
     // Guard: if no media is loaded (length <= 0), skip every libVLC call to
     // avoid crashing inside libVLC on a stale or uninitialised player pointer.
-    // libvlc_media_tracks_get (used by video_display_geometry) is the most
-    // fragile, but get_time/is_playing/etc. are equally unsafe on a dead mp.
     let m = mp as *mut c_void;
     if unsafe { (lib.libvlc_media_player_get_length)(m) } <= 0 {
         return Ok(PlayerPoll {
@@ -1547,54 +1335,36 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             chapter: 0,
             chapter_count: 0,
             at_menu: false,
-            video_w: 0,
-            video_h: 0,
-            video_aspect: 0.0,
         });
     }
-    // Video geometry: coded size + SAR-corrected display aspect from the
-    // parsed track list (DVDs are anamorphic, so coded pixels alone lie).
-    // 1 Hz poll cost is negligible; the frontend refits the window only on
-    // aspect changes.
-    let (video_w, video_h, video_aspect) =
-        unsafe { engine::video_display_geometry(&lib, mp) }.unwrap_or((0, 0, 0.0));
-    // macOS: the EDR/HDR flag must reach the video layer, which is
+    // macOS/Windows: the EDR/HDR flag must reach the video layer, which is
     // created asynchronously after play(). Retry from this existing 1 Hz
     // poll until applied (latched per session); no timers or sleeps.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        if (video_w >= 3840 || video_h >= 2160)
-            && !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst)
-        {
-            tracing::info!(
-                "[player] UHD resolution detected: {video_w}x{video_h}, latching is_hdr=true"
-            );
-            state
-                .is_hdr
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            if let Some(app) = overlay_app_handle() {
-                force_apply_edr(app);
+        if let Some(get_size) = lib.libvlc_video_get_size {
+            let mut width: std::ffi::c_uint = 0;
+            let mut height: std::ffi::c_uint = 0;
+            let res = unsafe { get_size(mp as *mut c_void, 0, &mut width, &mut height) };
+            if res == 0
+                && (width >= 3840 || height >= 2160)
+                && !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::info!(
+                    "[player] UHD resolution detected: {width}x{height}, latching is_hdr=true"
+                );
+                state
+                    .is_hdr
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Some(app) = overlay_app_handle() {
+                    force_apply_edr(app);
+                }
             }
         }
         if let Some(app) = overlay_app_handle() {
             maybe_apply_edr(app);
         }
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        if (video_w >= 3840 || video_h >= 2160)
-            && !state.is_hdr.load(std::sync::atomic::Ordering::SeqCst)
-        {
-            tracing::info!(
-                "[player] UHD resolution detected: {video_w}x{video_h}, latching is_hdr=true"
-            );
-            state
-                .is_hdr
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
     unsafe {
         Ok(PlayerPoll {
             time_ms: (lib.libvlc_media_player_get_time)(m),
@@ -1605,9 +1375,6 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             chapter: (lib.libvlc_media_player_get_chapter)(m),
             chapter_count: (lib.libvlc_media_player_get_chapter_count)(m),
             at_menu: is_menu_title(&lib, mp),
-            video_w,
-            video_h,
-            video_aspect,
         })
     }
 }
@@ -1654,6 +1421,20 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let lib = loaded_lib(&state)?;
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
+
+    if mode == 0 {
+        // VideoToolbox VT-305 format-transition drain:
+        // When activating a menu button that transitions to a feature
+        // (especially 1080p SDR menu -> 4K HEVC HDR feature), draining the
+        // decoder buffer avoids format change stalls on Apple Silicon.
+        unsafe {
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        unsafe {
+            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
+        }
+    }
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
@@ -1775,389 +1556,6 @@ pub fn player_chapter_marks(state: tauri::State<PlayerState>) -> Result<Vec<Chap
         );
         Ok(marks)
     }
-}
-
-/// Extract one frame at `position_ms` (relative to the file's own content
-/// timeline - ffmpeg's input seek is start-time normalized) with optional
-/// HDR -> SDR tone mapping. Output width 240 px, aspect preserved.
-fn extract_thumbnail_ffmpeg(file_path: &str, position_ms: i64, out_path: &Path, hdr: bool) -> bool {
-    let s = (position_ms as f64) / 1000.0;
-    let time_str = format!("{:.3}", s.max(0.0));
-
-    let Some(cmd) = cached_ffmpeg_path() else {
-        return false;
-    };
-
-    // PQ/BT.2020 -> BT.709: scale first (cheap at 240 px), then linearize,
-    // Hable tone-map, and re-encode to BT.709. Without this, HDR sources
-    // produce washed-out, green-shifted thumbnails.
-    let vf = if hdr {
-        "scale=240:-2,zscale=transfer=linear:npl=100,format=gbrpf32le,tonemap=hable:desat=0,zscale=transfer=bt709:primaries=bt709:matrix=bt709:range=tv,format=yuv420p"
-    } else {
-        "scale=240:-2"
-    };
-
-    let mut command = std::process::Command::new(&cmd);
-    command
-        .args([
-            "-ss",
-            &time_str,
-            "-i",
-            file_path,
-            "-frames:v",
-            "1",
-            "-update",
-            "1",
-            "-vf",
-            vf,
-            "-q:v",
-            "3",
-            "-f",
-            "image2",
-            out_path.to_str().unwrap_or(""),
-            "-y",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-
-    let res = command.status();
-
-    if let Ok(status) = res {
-        if status.success() && out_path.exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// Probe a media file's container duration via ffmpeg's stderr banner
-/// ("Duration: HH:MM:SS.cc, start: N.NNN"). Used to build DVD VOB chains.
-fn ffmpeg_probe_duration_ms(ffmpeg: &str, path: &Path) -> Option<i64> {
-    let mut command = std::process::Command::new(ffmpeg);
-    command
-        .args(["-hide_banner", "-i", &path.to_string_lossy()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let out = command.output().ok()?;
-    let text = String::from_utf8_lossy(&out.stderr);
-    let di = text.find("Duration: ")? + "Duration: ".len();
-    let frag = &text[di..];
-    let end = frag.find(',')?;
-    let mut parts = frag[..end].trim().split(':');
-    let h: f64 = parts.next()?.parse().ok()?;
-    let m: f64 = parts.next()?.parse().ok()?;
-    let s: f64 = parts.next()?.parse().ok()?;
-    Some(((h * 3600.0 + m * 60.0 + s) * 1000.0) as i64)
-}
-
-/// True when ffmpeg's stream banner marks the video as HDR/BT.2020
-/// (smpte2084 = PQ, arib-std-b67 = HLG). Drives thumbnail tone mapping
-/// for plain files; Blu-ray UHD is detected from the MPLS instead.
-fn ffmpeg_probe_hdr(ffmpeg: &str, path: &Path) -> bool {
-    let key = path.to_string_lossy().into_owned();
-    if let Ok(guard) = HDR_PROBE_CACHE.lock() {
-        if let Some((k, v)) = guard.as_ref() {
-            if *k == key {
-                return *v;
-            }
-        }
-    }
-    let mut command = std::process::Command::new(ffmpeg);
-    command
-        .args(["-hide_banner", "-i", &path.to_string_lossy()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let hdr = match command.output() {
-        Ok(out) => {
-            let text = String::from_utf8_lossy(&out.stderr).to_lowercase();
-            text.contains("smpte2084")
-                || text.contains("bt2020")
-                || text.contains("hdr10")
-                || text.contains("arib-std-b67")
-        }
-        Err(_) => false,
-    };
-    if let Ok(mut guard) = HDR_PROBE_CACHE.lock() {
-        *guard = Some((key, hdr));
-    }
-    hdr
-}
-
-/// Single-entry cache for the HDR probe (hover thumbnails always target the
-/// currently playing file, so one slot is enough).
-static HDR_PROBE_CACHE: Mutex<Option<(String, bool)>> = Mutex::new(None);
-
-/// One VOB of a DVD title-set chain: (file, cumulative start on the title
-/// timeline, duration). ffmpeg seeks relative to each file's content start
-/// (start-time normalized), so the in-file offset is position - cum_start.
-type DvdVobChain = Vec<(PathBuf, i64, i64)>;
-static DVD_CHAIN_CACHE: Mutex<Option<((String, u8), DvdVobChain)>> = Mutex::new(None);
-
-/// Build (or return cached) cumulative timing for a DVD title-set's VOB
-/// chain. VOB timestamps continue across the chain and VLC's title timeline
-/// matches the summed durations (verified against authored episodic DVDs).
-fn dvd_vob_chain(video_ts: &Path, vts_nr: u8) -> DvdVobChain {
-    let key = (video_ts.to_string_lossy().into_owned(), vts_nr);
-    if let Ok(guard) = DVD_CHAIN_CACHE.lock() {
-        if let Some((k, v)) = guard.as_ref() {
-            if *k == key {
-                return v.clone();
-            }
-        }
-    }
-    let Some(ff) = cached_ffmpeg_path() else {
-        return Vec::new();
-    };
-    let mut chain = Vec::new();
-    let mut cum = 0i64;
-    for k in 1..=16u8 {
-        let vob = video_ts.join(format!("VTS_{:02}_{}.VOB", vts_nr, k));
-        if !vob.is_file() {
-            break;
-        }
-        let Some(dur) = ffmpeg_probe_duration_ms(&ff, &vob) else {
-            break;
-        };
-        if dur <= 0 {
-            break;
-        }
-        chain.push((vob, cum, dur));
-        cum += dur;
-    }
-    if let Ok(mut guard) = DVD_CHAIN_CACHE.lock() {
-        *guard = Some((key, chain.clone()));
-    }
-    chain
-}
-
-/// Return the cached ffmpeg binary path, probing the candidate locations
-/// once on first use. This avoids iterating (and spawning processes for) up
-/// to 14 candidates on every thumbnail request.
-fn cached_ffmpeg_path() -> Option<String> {
-    FFMPEG_PATH.get_or_init(locate_ffmpeg).clone()
-}
-
-/// Probe the ffmpeg candidate locations and return the first one that runs.
-/// On Windows every probe is launched with CREATE_NO_WINDOW so no console
-/// window can flash. The result is cached by `cached_ffmpeg_path`.
-/// Bundled ffmpeg in resources/ffmpeg/ is checked FIRST so the app works
-/// without any system ffmpeg installation.
-fn locate_ffmpeg() -> Option<String> {
-    let mut candidates = vec![];
-
-    // Bundled ffmpeg — highest priority, works offline
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // macOS app bundle: Contents/MacOS/ -> ../Resources/resources/ffmpeg/ffmpeg
-            #[cfg(target_os = "macos")]
-            {
-                candidates.push(
-                    dir.join("..")
-                        .join("Resources")
-                        .join("resources")
-                        .join("ffmpeg")
-                        .join("ffmpeg")
-                        .to_string_lossy()
-                        .to_string(),
-                );
-            }
-            // Windows: resources/ffmpeg/ffmpeg.exe (Tauri copies resources/ to app root)
-            #[cfg(target_os = "windows")]
-            {
-                candidates.push(
-                    dir.join("resources")
-                        .join("ffmpeg")
-                        .join("ffmpeg.exe")
-                        .to_string_lossy()
-                        .to_string(),
-                );
-            }
-            // Linux/other: resources/ffmpeg/ffmpeg (Tauri copies resources/ to app root)
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            {
-                candidates.push(
-                    dir.join("resources")
-                        .join("ffmpeg")
-                        .join("ffmpeg")
-                        .to_string_lossy()
-                        .to_string(),
-                );
-            }
-        }
-    }
-
-    // System fallbacks (kept for compatibility)
-    candidates.extend(vec![
-        "ffmpeg".to_string(),
-        "/opt/homebrew/bin/ffmpeg".to_string(),
-        "/usr/local/bin/ffmpeg".to_string(),
-        "/usr/bin/ffmpeg".to_string(),
-        "C:\\Program Files\\ShareX\\ffmpeg.exe".to_string(),
-        "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe".to_string(),
-        "C:\\ffmpeg\\bin\\ffmpeg.exe".to_string(),
-        "C:\\tools\\ffmpeg.exe".to_string(),
-        "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe".to_string(),
-    ]);
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("ffmpeg.exe").to_string_lossy().to_string());
-            candidates.push(dir.join("ffmpeg").to_string_lossy().to_string());
-            candidates.push(
-                dir.join("resources")
-                    .join("ffmpeg.exe")
-                    .to_string_lossy()
-                    .to_string(),
-            );
-            candidates.push(
-                dir.join("resources")
-                    .join("ffmpeg")
-                    .to_string_lossy()
-                    .to_string(),
-            );
-        }
-    }
-
-    for cmd in candidates {
-        let mut command = std::process::Command::new(&cmd);
-        command.arg("-version");
-        command.stdout(std::process::Stdio::null());
-        command.stderr(std::process::Stdio::null());
-
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-
-        if let Ok(status) = command.status() {
-            if status.success() {
-                return Some(cmd);
-            }
-        }
-    }
-    None
-}
-
-/// Take a thumbnail of the video frame at the given timestamp WITHOUT
-/// seeking or snapshotting the player: a separate ffmpeg process decodes
-/// one frame from the source media. Disc timelines are mapped to their
-/// backing files first (Blu-ray playlist position -> M2TS clip + offset via
-/// the native MPLS parse, DVD title -> VOB chain via VIDEO_TS.IFO), and
-/// HDR/BT.2020 sources are tone-mapped to SDR so colors look right.
-/// Returns Err when no frame can be produced (the UI then shows only the
-/// hovered time, no placeholder box).
-#[tauri::command]
-pub fn player_thumbnail_at(
-    state: tauri::State<'_, PlayerState>,
-    position_ms: i64,
-    title: Option<i32>,
-    length_ms: Option<i64>,
-) -> Result<String, String> {
-    let cache_dir = crate::utils::paths::AppPaths::init()
-        .map(|p| p.cache_dir)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let thumb_dir = cache_dir.join("thumbnails");
-    fs::create_dir_all(&thumb_dir).map_err(|e| format!("cache dir: {e}"))?;
-
-    let file_path = {
-        let p1 = state.current_resolved.lock().ok().and_then(|p| p.clone());
-        let p2 = state.current_path.lock().ok().and_then(|p| p.clone());
-        p1.or(p2)
-    };
-    let Some(fp) = file_path else {
-        return Err("no active playback".into());
-    };
-    let p = Path::new(&fp);
-    let title = title.unwrap_or(-1);
-    let length_ms = length_ms.unwrap_or(0);
-
-    // Resolve (source file, in-file offset ms, is_hdr) for the hovered
-    // position on the current title's timeline.
-    let target: Option<(PathBuf, i64, bool)> = if p.is_file() {
-        if p.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("iso"))
-            .unwrap_or(false)
-        {
-            // ffmpeg cannot navigate an ISO image; no thumbnail.
-            None
-        } else {
-            let hdr = cached_ffmpeg_path()
-                .map(|ff| ffmpeg_probe_hdr(&ff, p))
-                .unwrap_or(false);
-            Some((p.to_path_buf(), position_ms, hdr))
-        }
-    } else if p.is_dir() {
-        if p.join("BDMV").is_dir() {
-            crate::player::bluray_meta::bluray_clip_at_position(
-                &p.to_string_lossy(),
-                length_ms,
-                position_ms,
-            )
-            .map(|t| (t.path, t.offset_ms, t.is_uhd))
-        } else if p.join("VIDEO_TS").is_dir() || p.join("VIDEO_TS.IFO").is_file() {
-            crate::player::dvd_meta::dvd_title_vts(&p.to_string_lossy(), title as i64).and_then(
-                |(vts_dir, vts_nr)| {
-                    let chain = dvd_vob_chain(&vts_dir, vts_nr);
-                    let mut sel: Option<&(PathBuf, i64, i64)> = None;
-                    for e in &chain {
-                        if position_ms >= e.1 && position_ms < e.1 + e.2 {
-                            sel = Some(e);
-                            break;
-                        }
-                    }
-                    let e = sel.or(chain.last())?;
-                    let off = (position_ms - e.1).clamp(0, (e.2 - 2000).max(0));
-                    Some((e.0.clone(), off, false))
-                },
-            )
-        } else {
-            find_main_video(p).map(|v| {
-                let hdr = cached_ffmpeg_path()
-                    .map(|ff| ffmpeg_probe_hdr(&ff, &v))
-                    .unwrap_or(false);
-                (v, position_ms, hdr)
-            })
-        }
-    } else {
-        None
-    };
-
-    let Some((vpath, offset_ms, hdr)) = target else {
-        return Err("no thumbnail source for this media".into());
-    };
-    let snap_jpg = thumb_dir.join(format!(
-        "nebulae-thumb-{}-{}-{}.jpg",
-        std::process::id(),
-        title,
-        position_ms
-    ));
-    if extract_thumbnail_ffmpeg(&vpath.to_string_lossy(), offset_ms, &snap_jpg, hdr) {
-        if let Ok(data) = fs::read(&snap_jpg) {
-            let _ = fs::remove_file(&snap_jpg);
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-            return Ok(format!("data:image/jpeg;base64,{b64}"));
-        }
-    }
-    let _ = fs::remove_file(&snap_jpg);
-    Err("thumbnail extraction failed".to_string())
 }
 
 /// A selectable playback track (subtitle or audio).
@@ -2655,7 +2053,7 @@ fn find_main_video(dir: &Path) -> Option<PathBuf> {
                     Some(ref ext) if matches!(
                         ext.as_str(),
                         "mkv" | "mp4" | "avi" | "mov" | "m2ts" | "ts" | "wmv" | "flv" | "webm"
-                            | "mpg" | "mpeg" | "m4v" | "vob" | "ifo" | "bup"
+                            | "mpg" | "mpeg" | "m4v"
                     )
                 )
             {
