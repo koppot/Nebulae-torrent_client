@@ -405,3 +405,79 @@ last known-good macOS bundle, rather than to a locally rebuilt candidate.
   webview renders the real UI (not a blank frame), no crash reports
   generated.
 
+## 12. Release reconciliation — the GitHub release now ships this build (2026-10-24)
+
+The v0.2.3 release on GitHub was **not** publishing the build described
+above, and its updater manifest did not match the files it pointed at.
+
+### What was actually published before
+
+- The `v0.2.3` tag points at `263863d`, but the release assets were never
+  built from that tag. Every run of `.github/workflows/release.yml` was a
+  `workflow_dispatch` from `main`, and `actions/checkout@v4` (no `ref:`)
+  builds whatever branch the run was dispatched from.
+- The assets uploaded on 2026-10-23 21:00–21:24Z therefore came from a
+  `main` HEAD that already contained the seek-bar thumbnail feature — the
+  published binary contains the `player_thumbnail_at` command, which does
+  not exist in the reference build.
+- The 21:00Z run failed on the macOS x64 `bundle_dmg.sh` step. That skips
+  the `aggregate-release` job, so `latest.json` and `SHA256SUMS.txt`
+  (both stamped 18:38Z) still described the *previous* run's binaries.
+  The result was a release whose updater manifest failed signature
+  verification for the arm64, Linux and Windows entries.
+
+### What is published now
+
+| Artifact | Content |
+|---|---|
+| `Nebulae-macOS-arm64.dmg` | the reference DMG, SHA-256 `b533c559…41d1` |
+| `Nebulae-macOS-arm64.dmg-app.zip` | `ditto` of the same `Nebulae.app` |
+| `Nebulae-macOS-arm64.dmg-app.tar.gz` | `tar` of the same `Nebulae.app`, re-signed |
+| `Nebulae-macOS-arm64.dmg-app.tar.gz.sig` | minisign signature for the tarball above |
+| `latest.json` | regenerated from the published `.sig` assets |
+| `SHA256SUMS.txt` | regenerated from the published asset digests |
+
+All three macOS arm64 artifacts extract to a `Nebulae.app` that is
+**byte-identical** to `/Applications/Nebulae.app` — `diff -rq` reports
+zero differences for `Contents/` in every combination (DMG vs ZIP vs
+tarball vs installed), and the binary SHA-256 is
+`3b54eb98f39d62c068a89164af3670857d669ba54ea215d84c69da922ba53d24` in
+all four.
+
+The x64, Linux and Windows assets are unchanged from the 2026-10-23 CI
+run; their signatures were re-verified against the published files and the
+manifest now references the matching `.sig` for each.
+
+### The updater signing key is locally usable
+
+`~/.tauri/nebulae-updater.key` is encrypted with an **empty password** —
+the same convention `scripts/test-consecutive-silent-updates.py` uses for
+its test key. The updater payload can therefore be re-signed without a CI
+run:
+
+```bash
+tar --no-xattrs --no-mac-metadata -czf Nebulae-macOS-arm64.dmg-app.tar.gz \
+    -C <staging-dir> Nebulae.app
+pnpm tauri signer sign -f ~/.tauri/nebulae-updater.key -p "" \
+    --app-version 0.2.3 Nebulae-macOS-arm64.dmg-app.tar.gz
+```
+
+The tarball and its `.sig` must always be replaced together.
+
+### Auto-update (ATA) verified end to end
+
+1. `0.2.2` installed from `nebulae-baseline-dmg/Nebulae_0.2.2_aarch64.dmg`
+   (same pubkey and endpoint).
+2. On launch the app logged
+   `Silent update available: 0.2.3 (current: 0.2.2). Downloading in background...`
+   then `Silent update downloaded and verified (126388753 bytes). Staging...`
+   then `Silent update staged on disk. Will take effect on next launch.`
+3. After relaunch the installed binary was
+   `3b54eb98f39d62c068a89164af3670857d669ba54ea215d84c69da922ba53d24` —
+   the reference build, byte-identical to the published DMG.
+4. Manual playback on the auto-updated build: `player_open: PLAYING`,
+   `videotoolbox` decoder, `caopengllayer` vout, EDR/HDR layer configured,
+   no panics.
+5. `0.2.3` installed directly reports
+   `Nebulae is up to date; no update available.`
+

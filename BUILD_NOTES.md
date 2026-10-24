@@ -161,6 +161,81 @@ The repository's `src-tauri/resources/` tree is kept byte-identical to the
 DMG's `Nebulae.app/Contents/Resources/resources/` tree so a local rebuild
 produces the same runtime payload.
 
+## The v0.2.3 GitHub release (what a download actually gets)
+
+The v0.2.3 release on `koppot/Nebulae-torrent_client` was republished on
+2026-10-24 so that the downloadable macOS arm64 artifact is the same
+application that is installed, and so that the auto-updater manifest is
+internally consistent.
+
+### What was wrong before
+
+The v0.2.3 tag points at `263863d`, but the release assets were never built
+from that tag. Every re-run of `.github/workflows/release.yml` was a
+`workflow_dispatch` from `main`, and `actions/checkout@v4` (no `ref:`)
+builds whatever branch the run was dispatched from. The assets published on
+2026-10-23 therefore came from a `main` HEAD that already contained the
+seek-bar thumbnail feature (`player_thumbnail_at` is present in that
+binary). On top of that, the 2026-10-23 21:00Z run failed on the macOS
+x64 `bundle_dmg.sh` step, which skipped the `aggregate-release` job — so
+`latest.json` and `SHA256SUMS.txt` still described the *previous* run's
+binaries. The result was a release whose updater manifest did not match the
+files it pointed at.
+
+### What is published now
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `Nebulae-macOS-arm64.dmg` | `b533c559b4afdee317b846beb1db594b522af50077f54f325f87e6bd2db5841d1` | byte-identical to the reference DMG; app binary `3b54eb98…3d24` (git rev `7d6670d`) |
+| `Nebulae-macOS-arm64.dmg-app.zip` | `dfeee32a8cad95e396cf0c671233a5c52ebd868b6f65ecbf5c78c6d9a4a54eef` | re-packed from the same app bundle as the DMG |
+| `Nebulae-macOS-arm64.dmg-app.tar.gz` | see `SHA256SUMS.txt` | updater bundle, built from the **same** app bundle as the DMG |
+| `Nebulae-macOS-arm64.dmg-app.tar.gz.sig` | — | minisign signature, verifies against the pubkey embedded in `tauri.conf.json` |
+
+All three macOS arm64 artifacts carry the **same** `Nebulae.app`: the DMG,
+the ZIP and the updater tarball each extract to a bundle that is
+byte-identical (`diff -rq` reports no differences) to the installed
+`/Applications/Nebulae.app`. There is no second build hiding in the release.
+
+The x64, Linux and Windows assets are unchanged from the 2026-10-23 CI run.
+Their signatures were re-verified against the published files and
+`latest.json` was regenerated from the published `.sig` assets, so every
+entry in the manifest now matches the bytes it points at.
+
+### The auto-update (ATA) path
+
+The app reads its updater endpoint and minisign public key from
+`src-tauri/tauri.conf.json`:
+
+- endpoint: `https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json`
+  (GitHub currently resolves `releases/latest` to the **v0.2.3** release)
+- pubkey: `dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1MkNBQThCQkJCQzZGNDEKUldSQmI3eTdpNm9zUmFSM2RQOVlHZllGeFM1dHlpNU5JRitYaytjK3BNMTFwMHYrZjBWcXllNVgK`,
+  which is the same key as `~/.tauri/nebulae-updater.key.pub`
+
+The private key at `~/.tauri/nebulae-updater.key` is encrypted with an
+**empty password** — the same convention `scripts/test-consecutive-silent-updates.py`
+uses for its test key. The updater payload can therefore be re-signed
+locally, without a CI run:
+
+```bash
+tar --no-xattrs --no-mac-metadata -czf Nebulae-macOS-arm64.dmg-app.tar.gz \
+    -C <staging-dir> Nebulae.app
+pnpm tauri signer sign -f ~/.tauri/nebulae-updater.key -p "" \
+    --app-version 0.2.3 Nebulae-macOS-arm64.dmg-app.tar.gz
+```
+
+Always replace the tarball **and** its `.sig` together — a tarball whose
+signature does not match breaks the in-app updater for every platform.
+
+### Verifying a published artifact
+
+```bash
+# download and check the manifest
+curl -sL https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json
+
+# check the DMG against the published checksum
+shasum -a 256 -c SHA256SUMS.txt
+```
+
 ## Where playback-repair details live
 
 Build instructions stop here on purpose. The defect analysis, per-defect
