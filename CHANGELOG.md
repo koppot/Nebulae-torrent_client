@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **macOS Restored to the Reference 0.2.3 Release DMG**: the macOS application is now the reference release build `Nebulae-macOS-arm64.dmg` (SHA-256 `b533c559b4afdee317b846beb1db594b522af50077f54f325f87e6bd2db5841d1`), built from git rev `7d6670d` — the last known-good macOS bundle. `/Applications/Nebulae.app` is a byte copy of `Nebulae.app` from that image (binary SHA-256 `3b54eb98f39d62c068a89164af3670857d669ba54ea215d84c69da922ba53d24`). The repository source is restored to the same revision and `src-tauri/resources/` is byte-identical to the DMG's runtime payload (`build-manifest.json`, `engine/`, `geo/`, `jre/`, `player/`, `vlc/lib/`, `vlc/plugins/`). The 66 MB static `resources/ffmpeg/ffmpeg` added later for seek-bar thumbnail extraction is removed. Verified: one visible main window at 1280×840, real UI rendered, playback starts with VideoToolbox hardware decoding and the `caopengllayer` / `glconv_cvpx` video output, clean session close, no crash reports. See `BUILD_NOTES.md` and `docs/macos-playback-repair-ledger.md`.
+
 ## [0.9.1] - 2026-10-15
 
 ### Fixed
