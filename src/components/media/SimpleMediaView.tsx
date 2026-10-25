@@ -867,7 +867,7 @@ export const SimpleMediaView: React.FC = () => {
               title={group.clean_title}
             >
               {group.clean_title}
-              {group.year ? <span className="text-[#a3a3a3]"> ({group.year})</span> : null}
+              {group.year ? <span className="text-white font-normal"> ({group.year})</span> : null}
             </h4>
             {variant === 'active' && (
               <>
@@ -1056,7 +1056,7 @@ export const SimpleMediaView: React.FC = () => {
                     >
                       {m.title}
                       {(externalMetaMap[m.path]?.year ?? m.year) ? (
-                        <span className="text-[#a3a3a3]"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
+                        <span className="text-white font-normal"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
                       ) : null}
                     </h4>
 
@@ -1292,7 +1292,7 @@ export const SimpleMediaView: React.FC = () => {
                       <div className="flex items-start justify-between gap-2">
                         <h3 className="text-base font-bold text-white leading-tight">
                           {extDetails.title}
-                          {extYear ? <span className="text-[#a3a3a3] font-normal"> ({extYear})</span> : null}
+                          {extYear ? <span className="text-white font-normal"> ({extYear})</span> : null}
                         </h3>
                         <button
                           type="button"
@@ -1713,7 +1713,7 @@ export const SimpleMediaView: React.FC = () => {
                         <h3 className="text-base font-bold text-white leading-tight">
                           {group.clean_title}
                           {group.year ? (
-                            <span className="text-[#a3a3a3] font-normal"> ({group.year})</span>
+                            <span className="text-white font-normal"> ({group.year})</span>
                           ) : null}
                         </h3>
                         <button
