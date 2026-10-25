@@ -492,6 +492,7 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     *poison(&state.instance) = 0;
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
+    poison(&state.framing).reset();
     drop(mp_guard);
     // The EDR screen-change observer is intentionally NOT removed here: the
     // overlay view and the window outlive the session, and re-registration
@@ -602,6 +603,7 @@ fn start_playback_inner(
                     *poison(&state.media) = session.media;
                     *poison(&state.media_player) = session.media_player;
                     *poison(&state.started) = true;
+                    poison(&state.framing).reset();
 
                     // HDR: detect UHD / HDR content from disc metadata or file path,
                     // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
@@ -1345,8 +1347,221 @@ pub struct PlayerPoll {
     pub at_menu: bool,
 }
 
+fn framing_sample_path(gen: usize) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "nebulae-crop-sample-{}-{}.png",
+        std::process::id(),
+        gen
+    ))
+}
+
+fn apply_crop_spec(lib: &engine::VlcLib, mp: usize, spec: &str) {
+    if let Some(set_crop) = lib.libvlc_video_set_crop_geometry {
+        if let Ok(c) = std::ffi::CString::new(spec) {
+            unsafe {
+                set_crop(mp as *mut c_void, c.as_ptr());
+            }
+        }
+    }
+}
+
+fn spawn_framing_sample(app: tauri::AppHandle, gen_spawn: usize, mp_spawn: usize) {
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        let state = app.state::<PlayerState>();
+        let path = framing_sample_path(gen_spawn);
+        let mut observation = None;
+        let mut source = (0u32, 0u32);
+
+        let lib = match loaded_lib(&state) {
+            Ok(l) => l,
+            Err(_) => {
+                poison(&state.framing).sampling = false;
+                return;
+            }
+        };
+
+        let take_snap_res = {
+            let _mp_guard = match state.media_player_cell.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    poison(&state.framing).sampling = false;
+                    return;
+                }
+            };
+
+            let gen_now = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+            if gen_now != gen_spawn || !*poison(&state.started) {
+                poison(&state.framing).sampling = false;
+                return;
+            }
+
+            let mp = *poison(&state.media_player);
+            if mp == 0 || mp != mp_spawn {
+                poison(&state.framing).sampling = false;
+                return;
+            }
+
+            if let Some(get_size) = lib.libvlc_video_get_size {
+                let mut w: std::ffi::c_uint = 0;
+                let mut h: std::ffi::c_uint = 0;
+                if unsafe { get_size(mp as *mut c_void, 0, &mut w, &mut h) } == 0 {
+                    source = (w, h);
+                }
+            }
+
+            if source.0 == 0 || source.1 == 0 {
+                poison(&state.framing).sampling = false;
+                return;
+            }
+
+            let _ = std::fs::remove_file(&path);
+
+            let snap_opt = lib.libvlc_video_take_snapshot;
+            let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok();
+
+            match (snap_opt, c_path) {
+                (Some(take_snap), Some(c)) => unsafe {
+                    take_snap(mp as *mut c_void, 0, c.as_ptr(), 960, 540)
+                },
+                _ => -1,
+            }
+        };
+
+        if take_snap_res == 0 {
+            for _ in 0..12 {
+                if path.exists() {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if meta.len() > 0 {
+                            observation =
+                                player::letterbox::observe_png_file(&path, source.0, source.1);
+                            break;
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
+
+        let mut fs = poison(&state.framing);
+        if let Some(obs) = observation {
+            fs.pending = Some(obs);
+        }
+        fs.source = source;
+        fs.sampling = false;
+    });
+}
+
+fn framing_tick(
+    app: tauri::AppHandle,
+    state: &PlayerState,
+    lib: &engine::VlcLib,
+    mp: usize,
+    title: i32,
+    at_menu: bool,
+    playing: bool,
+) {
+    if !playing || mp == 0 {
+        return;
+    }
+
+    let mut fs = poison(&state.framing);
+
+    // 1. Disc menus must NEVER have black-bar crops applied.
+    if at_menu {
+        if fs.applied.is_some() || fs.settled {
+            tracing::info!("[framing] menu active: clearing crop");
+            apply_crop_spec(lib, mp, "");
+        }
+        fs.forget_measurements();
+        return;
+    }
+
+    // 2. Title change: clear crop from previous title and reset tracker.
+    if fs.title != title {
+        tracing::info!(
+            "[framing] title changed from {} to {}: clearing crop",
+            fs.title,
+            title
+        );
+        if fs.applied.is_some() {
+            apply_crop_spec(lib, mp, "");
+        }
+        fs.title = title;
+        fs.forget_measurements();
+    }
+
+    // 3. Process pending observation from helper thread
+    if let Some(obs) = fs.pending.take() {
+        match fs.tracker.observe(obs) {
+            player::letterbox::CropAction::Set(bars) => {
+                tracing::info!(
+                    "[framing] crop confirmed: {} (active {}x{} in {}x{})",
+                    bars.crop_spec(),
+                    bars.active_width(),
+                    bars.active_height(),
+                    bars.frame_width,
+                    bars.frame_height
+                );
+                fs.applied = Some(bars);
+                fs.stable_samples = 0;
+                fs.settled = false;
+                apply_crop_spec(lib, mp, &bars.crop_spec());
+            }
+            player::letterbox::CropAction::Clear => {
+                tracing::info!("[framing] crop cleared (full frame picture detected)");
+                fs.applied = None;
+                fs.stable_samples = 0;
+                fs.settled = false;
+                apply_crop_spec(lib, mp, "");
+            }
+            player::letterbox::CropAction::Stable => {
+                fs.stable_samples += 1;
+                if fs.stable_samples >= 2 {
+                    fs.settled = true;
+                }
+            }
+            player::letterbox::CropAction::None => {}
+        }
+    }
+
+    // 4. Periodic re-assert of applied crop (every ~15s / 30 polls) to survive vout recreation
+    if let Some(bars) = fs.applied {
+        fs.polls_since_reassert += 1;
+        if fs.polls_since_reassert >= 30 {
+            fs.polls_since_reassert = 0;
+            apply_crop_spec(lib, mp, &bars.crop_spec());
+        }
+    }
+
+    // 5. Sampling cadence (every 2s until settled)
+    if fs.settled || fs.sampling {
+        return;
+    }
+
+    let sample_due = fs
+        .last_sample_at
+        .map(|t| t.elapsed() >= std::time::Duration::from_millis(2000))
+        .unwrap_or(true);
+
+    if !sample_due {
+        return;
+    }
+
+    fs.sampling = true;
+    fs.last_sample_at = Some(std::time::Instant::now());
+
+    let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+    spawn_framing_sample(app, gen, mp);
+}
+
 #[tauri::command]
-pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, String> {
+pub fn player_poll(
+    app: tauri::AppHandle,
+    state: tauri::State<PlayerState>,
+) -> Result<PlayerPoll, String> {
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -1393,19 +1608,32 @@ pub fn player_poll(state: tauri::State<PlayerState>) -> Result<PlayerPoll, Strin
             maybe_apply_edr(app);
         }
     }
-    unsafe {
+    let (time_ms, length_ms, playing, title, title_count, chapter, chapter_count, at_menu) = unsafe {
         let m = mp as *mut c_void;
-        Ok(PlayerPoll {
-            time_ms: (lib.libvlc_media_player_get_time)(m),
-            length_ms: (lib.libvlc_media_player_get_length)(m),
-            playing: (lib.libvlc_media_player_is_playing)(m) != 0,
-            title: (lib.libvlc_media_player_get_title)(m),
-            title_count: (lib.libvlc_media_player_get_title_count)(m),
-            chapter: (lib.libvlc_media_player_get_chapter)(m),
-            chapter_count: (lib.libvlc_media_player_get_chapter_count)(m),
-            at_menu: is_menu_title(&lib, mp),
-        })
-    }
+        (
+            (lib.libvlc_media_player_get_time)(m),
+            (lib.libvlc_media_player_get_length)(m),
+            (lib.libvlc_media_player_is_playing)(m) != 0,
+            (lib.libvlc_media_player_get_title)(m),
+            (lib.libvlc_media_player_get_title_count)(m),
+            (lib.libvlc_media_player_get_chapter)(m),
+            (lib.libvlc_media_player_get_chapter_count)(m),
+            is_menu_title(&lib, mp),
+        )
+    };
+
+    framing_tick(app, &state, &lib, mp, title, at_menu, playing);
+
+    Ok(PlayerPoll {
+        time_ms,
+        length_ms,
+        playing,
+        title,
+        title_count,
+        chapter,
+        chapter_count,
+        at_menu,
+    })
 }
 
 /// Jump to a disc TITLE. Title 0 is the DVD menu domain (dvdnav) — the

@@ -22,6 +22,7 @@ pub use embed_macos::{
 };
 pub mod bluray_meta;
 pub mod dvd_meta;
+pub mod letterbox;
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{
@@ -104,4 +105,62 @@ pub struct PlayerState {
     /// Serializes session open and teardown calls so concurrent open requests
     /// cannot race and create duplicate concurrent playback sessions.
     pub open_lock: tokio::sync::Mutex<()>,
+    /// Encoded black-bar cropping state.
+    pub framing: Mutex<FramingState>,
+}
+
+/// Black-bar measurement and crop tracking state for the active session.
+pub struct FramingState {
+    pub tracker: letterbox::CropTracker,
+    pub title: i32,
+    pub applied: Option<letterbox::Bars>,
+    pub sampling: bool,
+    pub pending: Option<letterbox::BarObservation>,
+    pub last_sample_at: Option<std::time::Instant>,
+    pub source: (u32, u32),
+    pub settled: bool,
+    pub stable_samples: u32,
+    pub polls_since_reassert: u32,
+}
+
+impl FramingState {
+    pub fn reset(&mut self) {
+        self.tracker.reset();
+        self.title = -1;
+        self.applied = None;
+        self.sampling = false;
+        self.pending = None;
+        self.last_sample_at = None;
+        self.source = (0, 0);
+        self.settled = false;
+        self.stable_samples = 0;
+        self.polls_since_reassert = 0;
+    }
+
+    pub fn forget_measurements(&mut self) {
+        self.tracker.reset();
+        self.applied = None;
+        self.pending = None;
+        self.sampling = false;
+        self.settled = false;
+        self.stable_samples = 0;
+        self.polls_since_reassert = 0;
+    }
+}
+
+impl Default for FramingState {
+    fn default() -> Self {
+        Self {
+            tracker: letterbox::CropTracker::new(letterbox::DEFAULT_CONFIRMATIONS),
+            title: -1,
+            applied: None,
+            sampling: false,
+            pending: None,
+            last_sample_at: None,
+            source: (0, 0),
+            settled: false,
+            stable_samples: 0,
+            polls_since_reassert: 0,
+        }
+    }
 }

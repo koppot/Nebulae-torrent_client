@@ -94,6 +94,17 @@ pub struct VlcLib {
             *mut std::ffi::c_uint,
         ) -> c_int,
     >,
+    pub libvlc_video_set_crop_geometry: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+    pub libvlc_video_get_crop_geometry: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_char>,
+    pub libvlc_video_take_snapshot: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            std::ffi::c_uint,
+            *const c_char,
+            std::ffi::c_uint,
+            std::ffi::c_uint,
+        ) -> c_int,
+    >,
 }
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
@@ -656,6 +667,9 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
+            libvlc_video_set_crop_geometry: sym_opt!("libvlc_video_set_crop_geometry": unsafe extern "C" fn(*mut c_void, *const c_char)),
+            libvlc_video_get_crop_geometry: sym_opt!("libvlc_video_get_crop_geometry": unsafe extern "C" fn(*mut c_void) -> *mut c_char),
+            libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
             lib,
             deps,
         }
@@ -713,6 +727,8 @@ impl VlcSession {
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
             CString::new("--no-osd").unwrap(),
+            // Suppress on-screen snapshot thumbnail popup
+            CString::new("--no-snapshot-preview").unwrap(),
             CString::new("--bluray-menu").unwrap(),
             // Nebulae's UI overlay handles all mouse clicks and keyboard shortcuts:
             // libVLC must never intercept mouse or keyboard events on the video window.
