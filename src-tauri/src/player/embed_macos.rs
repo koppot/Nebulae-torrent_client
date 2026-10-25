@@ -617,6 +617,75 @@ pub unsafe fn apply_window_corner_radius(app: &AppHandle, radius: f64) {
     }
 }
 
+/// Reshape the player window to match the confirmed active picture aspect ratio.
+///
+/// Dispatched to the main thread asynchronously. If fullscreen is active, leaves
+/// the window untouched so fullscreen presentation and scaling remain unaffected.
+pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), String> {
+    if !aspect.is_finite() || !(0.5..=4.0).contains(&aspect) {
+        return Err(format!("implausible aspect {aspect}"));
+    }
+    let app2 = app.clone();
+    app.run_on_main_thread(move || unsafe {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        let ns_win = raw as *mut NSWindow;
+        if ns_win.is_null() || FULLSCREEN_ON.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let f = (*ns_win).frame();
+        if f.size.width < 100.0 {
+            return;
+        }
+
+        let new_h = (f.size.width / aspect).round();
+        if (new_h - f.size.height).abs() < 2.0 {
+            return;
+        }
+
+        let mut new_y = f.origin.y + (f.size.height - new_h);
+        let mut new_x = f.origin.x;
+        let mut new_w = f.size.width;
+        let mut final_h = new_h;
+
+        if let Some(screen) = (*ns_win).screen() {
+            let vis = screen.visibleFrame();
+            if final_h > vis.size.height {
+                final_h = vis.size.height;
+                new_w = (final_h * aspect).round();
+                new_x = f.origin.x + (f.size.width - new_w) / 2.0;
+            }
+            if new_y < vis.origin.y {
+                new_y = vis.origin.y;
+            }
+            if new_y + final_h > vis.origin.y + vis.size.height {
+                new_y = vis.origin.y + vis.size.height - final_h;
+            }
+            if new_x < vis.origin.x {
+                new_x = vis.origin.x;
+            }
+            if new_x + new_w > vis.origin.x + vis.size.width {
+                new_x = vis.origin.x + vis.size.width - new_w;
+            }
+        }
+
+        let new_frame = NSRect::new(NSPoint::new(new_x, new_y), NSSize::new(new_w, final_h));
+        let _: () = objc2::msg_send![&*ns_win, setFrame: new_frame, display: true];
+        tracing::info!(
+            "[player] framing: window fitted to aspect {:.3}:1 ({}x{})",
+            aspect,
+            new_w,
+            final_h
+        );
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// Show/hide the overlay without tearing the view down.
 ///
 /// Waits for the main thread to apply the change: callers are the async

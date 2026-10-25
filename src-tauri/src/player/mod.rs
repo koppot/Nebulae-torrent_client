@@ -16,9 +16,10 @@ pub mod engine;
 
 #[cfg(target_os = "macos")]
 pub use embed_macos::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
-    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, fit_player_window_to_aspect,
+    miniaturize, set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 pub mod bluray_meta;
 pub mod dvd_meta;
@@ -26,16 +27,18 @@ pub mod letterbox;
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
-    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, fit_player_window_to_aspect,
+    miniaturize, set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 
 #[cfg(target_os = "linux")]
 pub use embed_linux::{
-    apply_window_corner_radius, begin_window_drag, ensure_overlay, miniaturize, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen, window_close_native,
-    window_is_maximized_native, window_maximize_toggle_native, window_minimize_native,
+    apply_window_corner_radius, begin_window_drag, ensure_overlay, fit_player_window_to_aspect,
+    miniaturize, set_overlay_hidden, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
+    window_minimize_native,
 };
 
 #[cfg(target_os = "macos")]
@@ -118,6 +121,8 @@ pub struct FramingState {
     pub pending: Option<letterbox::BarObservation>,
     pub last_sample_at: Option<std::time::Instant>,
     pub source: (u32, u32),
+    pub sar: f64,
+    pub window_fitted_aspect: Option<f64>,
     pub settled: bool,
     pub stable_samples: u32,
     pub polls_since_reassert: u32,
@@ -132,6 +137,8 @@ impl FramingState {
         self.pending = None;
         self.last_sample_at = None;
         self.source = (0, 0);
+        self.sar = 1.0;
+        self.window_fitted_aspect = None;
         self.settled = false;
         self.stable_samples = 0;
         self.polls_since_reassert = 0;
@@ -146,6 +153,15 @@ impl FramingState {
         self.stable_samples = 0;
         self.polls_since_reassert = 0;
     }
+
+    pub fn source_display_aspect(&self) -> Option<f64> {
+        let (w, h) = self.source;
+        if w == 0 || h == 0 {
+            None
+        } else {
+            Some((w as f64 / h as f64) * self.sar)
+        }
+    }
 }
 
 impl Default for FramingState {
@@ -158,6 +174,8 @@ impl Default for FramingState {
             pending: None,
             last_sample_at: None,
             source: (0, 0),
+            sar: 1.0,
+            window_fitted_aspect: None,
             settled: false,
             stable_samples: 0,
             polls_since_reassert: 0,

@@ -22,7 +22,7 @@ pub const MAX_BAR_FRACTION: f64 = 0.35;
 pub const DEFAULT_CONFIRMATIONS: u32 = 2;
 
 /// Measured black borders around the active picture (in source-video pixels).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bars {
     pub top: u32,
     pub bottom: u32,
@@ -30,6 +30,7 @@ pub struct Bars {
     pub right: u32,
     pub frame_width: u32,
     pub frame_height: u32,
+    pub sar: f64,
 }
 
 impl Bars {
@@ -53,7 +54,7 @@ impl Bars {
         if h == 0 {
             0.0
         } else {
-            w as f64 / h as f64
+            (w as f64 / h as f64) * self.sar
         }
     }
 
@@ -65,11 +66,12 @@ impl Bars {
             && self.bottom.abs_diff(other.bottom) <= 8
             && self.left.abs_diff(other.left) <= 8
             && self.right.abs_diff(other.right) <= 8
+            && (self.sar - other.sar).abs() < 0.01
     }
 }
 
 /// The result of inspecting a sampled frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BarObservation {
     /// Frame has measurable black bars on one or more borders.
     Bars(Bars),
@@ -80,7 +82,7 @@ pub enum BarObservation {
 }
 
 /// Actions produced by the crop state tracker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CropAction {
     /// Apply this new confirmed crop geometry.
     Set(Bars),
@@ -99,11 +101,17 @@ fn rgb_luma(r: u8, g: u8, b: u8) -> u8 {
 }
 
 /// Inspects a decoded RGB image buffer and measures encoded black bars.
-pub fn observe_image(img: &image::RgbImage, frame_width: u32, frame_height: u32) -> BarObservation {
+pub fn observe_image(
+    img: &image::RgbImage,
+    frame_width: u32,
+    frame_height: u32,
+    sar: Option<f64>,
+) -> BarObservation {
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || frame_width == 0 || frame_height == 0 {
         return BarObservation::Unknown;
     }
+    let sar_val = sar.unwrap_or(1.0);
 
     // Skip the outer 5% on each side to avoid edge anti-aliasing / window border artifacts.
     let x_eval_start = (w as f64 * 0.05).round() as u32;
@@ -218,16 +226,16 @@ pub fn observe_image(img: &image::RgbImage, frame_width: u32, frame_height: u32)
 
     let active_w = frame_width.saturating_sub(left + right);
     let active_h = frame_height.saturating_sub(top + bottom);
-    let active_aspect = if active_h > 0 {
-        active_w as f64 / active_h as f64
+    let displayed_aspect = if active_h > 0 {
+        (active_w as f64 / active_h as f64) * sar_val
     } else {
         0.0
     };
 
     // User rule: Preserve the full intended 4:3 picture and its normal side pillarboxing.
-    // If the active picture has an aspect ratio of ~4:3 (1.25 to 1.45),
+    // If the active picture has an intended displayed aspect ratio of ~4:3 (1.25 to 1.45),
     // do NOT crop the vertical left and right bars.
-    if (1.25..=1.45).contains(&active_aspect) {
+    if (1.25..=1.45).contains(&displayed_aspect) {
         left = 0;
         right = 0;
     }
@@ -242,6 +250,7 @@ pub fn observe_image(img: &image::RgbImage, frame_width: u32, frame_height: u32)
             right,
             frame_width,
             frame_height,
+            sar: sar_val,
         })
     }
 }
@@ -251,9 +260,10 @@ pub fn observe_png_file<P: AsRef<Path>>(
     path: P,
     frame_width: u32,
     frame_height: u32,
+    sar: Option<f64>,
 ) -> Option<BarObservation> {
     let img = image::open(path).ok()?.to_rgb8();
-    Some(observe_image(&img, frame_width, frame_height))
+    Some(observe_image(&img, frame_width, frame_height, sar))
 }
 
 /// Tracks observations over time and requires consecutive confirmations

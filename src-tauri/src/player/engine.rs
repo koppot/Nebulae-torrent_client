@@ -94,6 +94,11 @@ pub struct VlcLib {
             *mut std::ffi::c_uint,
         ) -> c_int,
     >,
+    pub libvlc_media_player_get_media: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+    pub libvlc_media_tracks_get:
+        Option<unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> std::ffi::c_uint>,
+    pub libvlc_media_tracks_release:
+        Option<unsafe extern "C" fn(*mut *mut VlcMediaTrack, std::ffi::c_uint)>,
     pub libvlc_video_set_crop_geometry: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
     pub libvlc_video_get_crop_geometry: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_char>,
     pub libvlc_video_take_snapshot: Option<
@@ -232,6 +237,94 @@ pub struct VlcTrackDescription {
     pub i_id: c_int,
     pub psz_name: *mut c_char,
     pub p_next: *mut VlcTrackDescription,
+}
+
+/// Mirror of libvlc_video_track_t (C layout, header-verified).
+#[repr(C)]
+pub struct VlcVideoTrack {
+    pub i_height: std::ffi::c_uint,
+    pub i_width: std::ffi::c_uint,
+    pub i_sar_num: std::ffi::c_uint,
+    pub i_sar_den: std::ffi::c_uint,
+    pub i_frame_rate_num: std::ffi::c_uint,
+    pub i_frame_rate_den: std::ffi::c_uint,
+    pub i_orientation: std::ffi::c_int,
+    pub i_projection: std::ffi::c_int,
+    pub pose_yaw: f32,
+    pub pose_pitch: f32,
+    pub pose_roll: f32,
+    pub pose_fov: f32,
+}
+
+/// Mirror of libvlc_media_track_t (C layout, header-verified).
+#[repr(C)]
+pub struct VlcMediaTrack {
+    pub i_codec: u32,
+    pub i_original_fourcc: u32,
+    pub i_id: c_int,
+    pub i_type: c_int,
+    pub i_profile: c_int,
+    pub i_level: c_int,
+    pub video: *mut VlcVideoTrack,
+    pub i_bitrate: std::ffi::c_uint,
+    pub psz_language: *mut c_char,
+    pub psz_description: *mut c_char,
+}
+
+/// Query the Sample Aspect Ratio (SAR) of the active video track.
+/// Returns 1.0 (square pixels) if unavailable, unparsed, or 1:1.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn video_track_sar(lib: &VlcLib, mp: usize) -> f64 {
+    if mp == 0 {
+        return 1.0;
+    }
+    let get_media = match lib.libvlc_media_player_get_media {
+        Some(f) => f,
+        None => return 1.0,
+    };
+    let tracks_get = match lib.libvlc_media_tracks_get {
+        Some(f) => f,
+        None => return 1.0,
+    };
+    let tracks_rel = match lib.libvlc_media_tracks_release {
+        Some(f) => f,
+        None => return 1.0,
+    };
+
+    let md = get_media(mp as *mut c_void);
+    if md.is_null() {
+        return 1.0;
+    }
+
+    let mut tracks: *mut *mut VlcMediaTrack = std::ptr::null_mut();
+    let n = tracks_get(md, &mut tracks);
+    (lib.libvlc_media_release)(md);
+
+    if n == 0 || tracks.is_null() {
+        return 1.0;
+    }
+
+    let mut sar = 1.0;
+    for i in 0..n {
+        let track_ptr = *tracks.add(i as usize);
+        if track_ptr.is_null() {
+            continue;
+        }
+        let track = &*track_ptr;
+        // libvlc_track_video == 1
+        if track.i_type == 1 && !track.video.is_null() {
+            let vt = &*track.video;
+            if vt.i_sar_num > 0 && vt.i_sar_den > 0 {
+                sar = vt.i_sar_num as f64 / vt.i_sar_den as f64;
+                break;
+            }
+        }
+    }
+
+    tracks_rel(tracks, n);
+    sar
 }
 
 // The library handle is process-global and the symbols are plain functions;
@@ -667,6 +760,9 @@ impl VlcLib {
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
+            libvlc_media_player_get_media: sym_opt!("libvlc_media_player_get_media": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
+            libvlc_media_tracks_get: sym_opt!("libvlc_media_tracks_get": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcMediaTrack) -> std::ffi::c_uint),
+            libvlc_media_tracks_release: sym_opt!("libvlc_media_tracks_release": unsafe extern "C" fn(*mut *mut VlcMediaTrack, std::ffi::c_uint)),
             libvlc_video_set_crop_geometry: sym_opt!("libvlc_video_set_crop_geometry": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_video_get_crop_geometry: sym_opt!("libvlc_video_get_crop_geometry": unsafe extern "C" fn(*mut c_void) -> *mut c_char),
             libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),

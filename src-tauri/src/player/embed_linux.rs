@@ -267,3 +267,7 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
     }
     Err("main window not found".into())
 }
+
+pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(), String> {
+    Ok(())
+}

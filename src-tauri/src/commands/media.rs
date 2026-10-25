@@ -1381,7 +1381,7 @@ fn spawn_framing_sample(app: tauri::AppHandle, gen_spawn: usize, mp_spawn: usize
             }
         };
 
-        let take_snap_res = {
+        let (take_snap_res, sar) = {
             let _mp_guard = match state.media_player_cell.lock() {
                 Ok(g) => g,
                 Err(_) => {
@@ -1415,17 +1415,24 @@ fn spawn_framing_sample(app: tauri::AppHandle, gen_spawn: usize, mp_spawn: usize
                 return;
             }
 
+            let sar = unsafe { engine::video_track_sar(&lib, mp) };
+
             let _ = std::fs::remove_file(&path);
 
             let snap_opt = lib.libvlc_video_take_snapshot;
             let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).ok();
 
-            match (snap_opt, c_path) {
+            // Downscale proportionally from native resolution to avoid distortion (Assumption 1)
+            let snap_w = if source.0 > 960 { 960 } else { source.0 };
+            let snap_h = ((snap_w as f64 / source.0 as f64) * source.1 as f64).round() as u32;
+
+            let res = match (snap_opt, c_path) {
                 (Some(take_snap), Some(c)) => unsafe {
-                    take_snap(mp as *mut c_void, 0, c.as_ptr(), 960, 540)
+                    take_snap(mp as *mut c_void, 0, c.as_ptr(), snap_w, snap_h)
                 },
                 _ => -1,
-            }
+            };
+            (res, sar)
         };
 
         if take_snap_res == 0 {
@@ -1433,8 +1440,12 @@ fn spawn_framing_sample(app: tauri::AppHandle, gen_spawn: usize, mp_spawn: usize
                 if path.exists() {
                     if let Ok(meta) = std::fs::metadata(&path) {
                         if meta.len() > 0 {
-                            observation =
-                                player::letterbox::observe_png_file(&path, source.0, source.1);
+                            observation = player::letterbox::observe_png_file(
+                                &path,
+                                source.0,
+                                source.1,
+                                Some(sar),
+                            );
                             break;
                         }
                     }
@@ -1450,6 +1461,7 @@ fn spawn_framing_sample(app: tauri::AppHandle, gen_spawn: usize, mp_spawn: usize
             fs.pending = Some(obs);
         }
         fs.source = source;
+        fs.sar = sar;
         fs.sampling = false;
     });
 }
@@ -1475,6 +1487,11 @@ fn framing_tick(
             tracing::info!("[framing] menu active: clearing crop");
             apply_crop_spec(lib, mp, "");
         }
+        if fs.window_fitted_aspect.is_some() {
+            let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+            let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+            fs.window_fitted_aspect = None;
+        }
         fs.forget_measurements();
         return;
     }
@@ -1488,6 +1505,11 @@ fn framing_tick(
         );
         if fs.applied.is_some() {
             apply_crop_spec(lib, mp, "");
+        }
+        if fs.window_fitted_aspect.is_some() {
+            let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+            let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+            fs.window_fitted_aspect = None;
         }
         fs.title = title;
         fs.forget_measurements();
@@ -1509,6 +1531,21 @@ fn framing_tick(
                 fs.stable_samples = 0;
                 fs.settled = false;
                 apply_crop_spec(lib, mp, &bars.crop_spec());
+
+                // Fit window to confirmed cropped display aspect ratio (4:3 exception preserved)
+                let active_aspect = bars.active_aspect();
+                if active_aspect > 1.45 {
+                    let should_fit = match fs.window_fitted_aspect {
+                        Some(last) => (last - active_aspect).abs() > 0.02,
+                        None => true,
+                    };
+                    if should_fit {
+                        fs.window_fitted_aspect = Some(active_aspect);
+                        if let Err(e) = player::fit_player_window_to_aspect(&app, active_aspect) {
+                            tracing::warn!("[framing] window fit failed: {e}");
+                        }
+                    }
+                }
             }
             player::letterbox::CropAction::Clear => {
                 tracing::info!("[framing] crop cleared (full frame picture detected)");
@@ -1516,6 +1553,12 @@ fn framing_tick(
                 fs.stable_samples = 0;
                 fs.settled = false;
                 apply_crop_spec(lib, mp, "");
+
+                if fs.window_fitted_aspect.is_some() {
+                    let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+                    let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+                    fs.window_fitted_aspect = None;
+                }
             }
             player::letterbox::CropAction::Stable => {
                 fs.stable_samples += 1;
