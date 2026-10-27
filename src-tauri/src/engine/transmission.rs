@@ -1887,7 +1887,6 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .unwrap_or_default();
         let user_peer_limit = user_settings.max_connections_per_torrent.max(1);
         let global_racing = user_settings.racing_mode_enabled;
-        let global_super_seeding = user_settings.super_seeding_enabled;
 
         let mut items = Vec::new();
 
@@ -2236,10 +2235,6 @@ impl TorrentEngine for TransmissionTorrentEngine {
             let is_racing_applied = is_downloading && racing_now;
             let racing_mode = Some(is_racing_applied);
 
-            // Super seeding applied: actively seeding AND has super seeding active
-            let is_super_seeding_applied = is_seeding
-                && (global_super_seeding || meta.map(|m| m.super_seeding).unwrap_or(false));
-
             items.push(TorrentItem {
                 id,
                 name: meta
@@ -2273,7 +2268,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 total_pieces,
                 sequential_download: meta.map(|m| m.sequential_download).unwrap_or(false),
                 first_last_piece_prio: meta.map(|m| m.first_last_piece_prio).unwrap_or(false),
-                super_seeding: is_super_seeding_applied,
+                // The inspected adapter does not perform an engine operation for
+                // superseeding, so no torrent is reported as superseeding. The
+                // stored flags (global setting and per-torrent column) are
+                // preferences, not engine state: they stay in the database as
+                // saved and are not shown as active behavior.
+                super_seeding: false,
                 tags: Vec::new(),
                 files,
                 trackers,
@@ -2668,37 +2668,16 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn toggle_super_seeding(&self, id: &str) -> Result<bool, String> {
-        let hash = if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-            id.to_string()
-        } else if let Ok(torrents) = self.rpc_client.torrent_get(Some(vec![rpc_id(id)])) {
-            torrents
-                .first()
-                .and_then(|t| t.get("hashString"))
-                .and_then(|h| h.as_str())
-                .unwrap_or(id)
-                .to_string()
-        } else {
-            id.to_string()
-        };
+        const UNSUPPORTED: &str = "Superseeding is not supported by the current engine.";
 
-        let current = self
-            .db
-            .get_torrent_metadata(&hash)
-            .ok()
-            .flatten()
-            .map(|m| m.super_seeding)
-            .unwrap_or(false);
-        let new_state = !current;
-        let _ = self.db.set_torrent_super_seeding(&hash, new_state);
-
-        if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(&hash) {
-                meta.super_seeding = new_state;
-            }
-        }
-
-        info!("[super_seeding] toggled for torrent {id} ({hash}) -> {new_state}");
-        Ok(new_state)
+        // The inspected adapter does not perform an engine operation for
+        // superseeding, and the referenced Transmission RPC documentation
+        // exposes no corresponding control. This used to flip a stored flag
+        // and report the new value, so the UI claimed a mode that was not
+        // running. Refuse instead and leave every stored flag as it is; real
+        // superseeding support is tracked separately (ASI-13).
+        warn!("[super_seeding] request for torrent {id} refused: {UNSUPPORTED}");
+        Err(UNSUPPORTED.to_string())
     }
 
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {

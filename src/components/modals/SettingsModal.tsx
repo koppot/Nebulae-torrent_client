@@ -10,6 +10,7 @@ import {
   EngineIdentityInfo,
 } from '../../types';
 import { errorMessage } from '../../utils/errors';
+import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 import { invoke } from '@tauri-apps/api/core';
 import {
   X,
@@ -62,6 +63,9 @@ export const SettingsModal: React.FC = () => {
   };
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
+  // Superseeding is gated by what the engine can do, never by the stored
+  // preference, and saved values are kept as they are.
+  const superseedingSupported = supportsSuperseeding(engineMode);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
   const [skipSplash, setSkipSplash] = useState(
@@ -1259,18 +1263,29 @@ export const SettingsModal: React.FC = () => {
                       </div>
                     </label>
 
-                    <label className="flex items-start gap-2.5 cursor-pointer">
+                    <label
+                      className={`flex items-start gap-2.5 ${superseedingSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-70'}`}
+                      title={superseedingSupported ? undefined : SUPERSEEDING_UNSUPPORTED_MESSAGE}
+                    >
                       <input
                         type="checkbox"
-                        checked={settings.super_seeding_enabled}
+                        checked={superseedingSupported && settings.super_seeding_enabled}
+                        disabled={!superseedingSupported}
                         onChange={(e) => saveSettings({ super_seeding_enabled: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
                       <div>
                         <span className="text-white font-medium text-xs">Enable super seeding</span>
-                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
-                          Initial seeding mode — forces peers to download and re-upload unique pieces across the swarm before receiving subsequent pieces. Applied to actively seeding torrents to maximize piece dispersion.
-                        </p>
+                        {superseedingSupported ? (
+                          <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                            Initial seeding mode — forces peers to download and re-upload unique pieces across the swarm before receiving subsequent pieces. Applied to actively seeding torrents to maximize piece dispersion.
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-amber-400/90 mt-0.5">
+                            {SUPERSEEDING_UNSUPPORTED_MESSAGE}
+                            {settings.super_seeding_enabled && ' A previously saved "on" value is kept as it is, but it has no effect.'}
+                          </p>
+                        )}
                       </div>
                     </label>
                   </div>
@@ -1609,8 +1624,17 @@ export const SettingsModal: React.FC = () => {
                         <option value="Pause">Pause torrent</option>
                         <option value="Remove">Remove torrent</option>
                         <option value="RemoveAndFiles">Remove torrent and files</option>
-                        <option value="SuperSeeding">Switch to Super-Seeding</option>
+                        <option value="SuperSeeding" disabled={!superseedingSupported}>
+                          {superseedingSupported
+                            ? 'Switch to Super-Seeding'
+                            : 'Switch to Super-Seeding (not supported by the current engine)'}
+                        </option>
                       </select>
+                      {!superseedingSupported && settings.seeding_limit_action === 'SuperSeeding' && (
+                        <p className="text-[10px] text-amber-400/90 mt-1">
+                          {SUPERSEEDING_UNSUPPORTED_MESSAGE} This saved choice is kept as it is, but it cannot take effect.
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-3 font-mono">

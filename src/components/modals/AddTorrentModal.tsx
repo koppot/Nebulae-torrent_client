@@ -4,6 +4,7 @@ import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { InspectTorrentResult, TorrentContentMatch, FileWithPath } from '../../types';
 import { errorMessage as toErrorMessage } from '../../utils/errors';
+import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 import {
   X,
   Plus,
@@ -26,6 +27,7 @@ export const AddTorrentModal: React.FC = () => {
     useUiStore();
   const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
+  const superseedingSupported = supportsSuperseeding(engineMode);
 
   const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
   const [torrentSource, setTorrentSource] = useState('');
@@ -896,7 +898,24 @@ export const AddTorrentModal: React.FC = () => {
                 <span className="text-white">Download in sequential order (media stream preview)</span>
               </label>
             )}
-            {engineMode !== 'rtorrent_server' && !superSeedDialogDismissed && (
+            {engineMode !== 'rtorrent_server' && !superseedingSupported && (
+              <label
+                className="flex items-start gap-2 cursor-not-allowed opacity-70"
+                title={SUPERSEEDING_UNSUPPORTED_MESSAGE}
+              >
+                <input
+                  type="checkbox"
+                  checked={false}
+                  disabled
+                  className="mt-0.5 rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                />
+                <span>
+                  <span className="text-white">Super-seeding mode (initial seeder)</span>
+                  <span className="block text-[11px] text-amber-400/90">{SUPERSEEDING_UNSUPPORTED_MESSAGE}</span>
+                </span>
+              </label>
+            )}
+            {superseedingSupported && !superSeedDialogDismissed && (
               <div className="mt-2 p-3 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2 text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2">
@@ -932,7 +951,7 @@ export const AddTorrentModal: React.FC = () => {
                 </label>
               </div>
             )}
-            {engineMode !== 'rtorrent_server' && superSeedDialogDismissed && (
+            {superseedingSupported && superSeedDialogDismissed && (
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"

@@ -6,6 +6,7 @@ import { useConnectivityStore } from '../../stores/connectivityStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
+import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 
 interface TailscaleStatus {
   connected: boolean;
@@ -28,7 +29,11 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
-  const { settings, saveSettings } = useSettingsStore();
+  const { settings, saveSettings, engineMode } = useSettingsStore();
+  const superseedingSupported = supportsSuperseeding(engineMode);
+  // What the engine is doing, not what is stored: with no superseeding support
+  // a saved "on" preference must not light the indicator.
+  const superseedingActive = superseedingSupported && settings.super_seeding_enabled;
 
   const [isTogglingRacing, setIsTogglingRacing] = useState(false);
   const [isTogglingSuperSeeding, setIsTogglingSuperSeeding] = useState(false);
@@ -46,7 +51,7 @@ export const StatusBar: React.FC = () => {
   };
 
   const handleToggleSuperSeeding = async () => {
-    if (isTogglingSuperSeeding) return;
+    if (!superseedingSupported || isTogglingSuperSeeding) return;
     setIsTogglingSuperSeeding(true);
     try {
       await saveSettings({ super_seeding_enabled: !settings.super_seeding_enabled });
@@ -296,28 +301,34 @@ export const StatusBar: React.FC = () => {
         <button
           type="button"
           onClick={handleToggleSuperSeeding}
-          disabled={isTogglingSuperSeeding}
-          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:opacity-50"
+          disabled={!superseedingSupported || isTogglingSuperSeeding}
+          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           title={
-            settings.super_seeding_enabled
-              ? 'Super seeding enabled (click to disable)'
-              : 'Super seeding disabled (click to enable)'
+            !superseedingSupported
+              ? SUPERSEEDING_UNSUPPORTED_MESSAGE
+              : superseedingActive
+                ? 'Super seeding enabled (click to disable)'
+                : 'Super seeding disabled (click to enable)'
           }
           aria-label={
-            settings.super_seeding_enabled
-              ? 'Disable super seeding'
-              : 'Enable super seeding'
+            !superseedingSupported
+              ? SUPERSEEDING_UNSUPPORTED_MESSAGE
+              : superseedingActive
+                ? 'Disable super seeding'
+                : 'Enable super seeding'
           }
         >
           <span
             className={`w-2 h-2 rounded-full transition-colors ${
-              settings.super_seeding_enabled
-                ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
-                : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+              !superseedingSupported
+                ? 'bg-[#525252]'
+                : superseedingActive
+                  ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                  : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
             }`}
           />
-          <span className={settings.super_seeding_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
-            Super seeding
+          <span className={superseedingActive ? 'text-white' : 'text-[#a3a3a3]'}>
+            Super seeding{superseedingSupported ? '' : ' (unsupported)'}
           </span>
         </button>
       </div>

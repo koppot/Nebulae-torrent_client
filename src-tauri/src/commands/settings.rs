@@ -148,8 +148,10 @@ pub struct UserSettings {
     /// and actively downloading torrents receive high bandwidth priority.
     #[serde(default)]
     pub racing_mode_enabled: bool,
-    /// When enabled, actively seeding torrents operate in initial seeding mode
-    /// (super seeding) to distribute rare pieces across the swarm efficiently.
+    /// Stored preference for superseeding (initial seeding). The inspected
+    /// adapter does not perform an engine operation for superseeding, so this
+    /// value has no effect on seeding torrents. It is kept as saved so
+    /// settings stay intact; real support is tracked separately (ASI-13).
     #[serde(default)]
     pub super_seeding_enabled: bool,
     /// When true, every newly added download (files, magnets, and adds that

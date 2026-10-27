@@ -377,17 +377,20 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   toggleSuperSeeding: async (id: string) => {
-    let result = false;
+    // Mirror only what the engine accepted. A refused request (superseeding is
+    // not supported by the current engine) leaves the torrent as it was
+    // instead of flipping the flag locally.
+    const current = get().torrents.find((t) => t.id === id)?.super_seeding ?? false;
     try {
-      result = await invoke<boolean>('toggle_torrent_super_seeding', { id });
-    } catch {
-      const item = get().torrents.find((t) => t.id === id);
-      result = !item?.super_seeding;
+      const result = await invoke<boolean>('toggle_torrent_super_seeding', { id });
+      set({
+        torrents: get().torrents.map((t) => (t.id === id ? { ...t, super_seeding: result } : t)),
+      });
+      return result;
+    } catch (err) {
+      console.warn('toggle_torrent_super_seeding failed:', err);
+      return current;
     }
-    set({
-      torrents: get().torrents.map((t) => (t.id === id ? { ...t, super_seeding: result } : t)),
-    });
-    return result;
   },
 
   setFilePriority: async (id: string, fileIndex: number, priority: number) => {
