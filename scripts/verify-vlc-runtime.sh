@@ -50,6 +50,14 @@ libvlc_exports="$(dyld_info -exports "$DEST/lib/libvlc.5.dylib" 2>/dev/null || t
 echo "$libvlc_exports" | grep -q "_libvlc_media_player_navigate_menu" \
   || fail "libvlc.5.dylib does not export libvlc_media_player_navigate_menu"
 echo "OK: libvlc.5.dylib exports libvlc_media_player_navigate_menu"
+echo "$libvlc_exports" | grep -q "_libvlc_media_player_get_bluray_playlist_id" \
+  || fail "libvlc.5.dylib does not export libvlc_media_player_get_bluray_playlist_id"
+echo "OK: libvlc.5.dylib exports libvlc_media_player_get_bluray_playlist_id"
+
+# bluray-playlist-id patch: "bluray-playlist-id" must appear in the bluray plugin.
+strings "$DEST/plugins/liblibbluray_plugin.dylib" 2>/dev/null | grep -q "bluray-playlist-id" \
+  || fail "liblibbluray_plugin.dylib missing bluray-playlist-id patch"
+echo "OK: liblibbluray_plugin.dylib contains bluray-playlist-id patch"
 
 # Hygiene: no stale framework copies, no plugin cache (mtime-keyed; bundling
 # rewrites mtimes so a shipped cache is always stale).

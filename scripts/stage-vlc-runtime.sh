@@ -70,10 +70,12 @@ SRC_LIBVLC="$BUILD_DIR/lib/.libs/libvlc.5.dylib"
 SRC_VT="$BUILD_DIR/modules/.libs/libvideotoolbox_plugin.dylib"
 SRC_GL="$BUILD_DIR/modules/.libs/libcaopengllayer_plugin.dylib"
 SRC_CVPX="$BUILD_DIR/modules/.libs/libglconv_cvpx_plugin.dylib"
+SRC_BLURAY="$BUILD_DIR/modules/.libs/liblibbluray_plugin.dylib"
 [ -f "$SRC_LIBVLC" ] || fail "custom libvlc missing: $SRC_LIBVLC (build per BUILD_NOTES.md)"
 [ -f "$SRC_VT" ]     || fail "custom videotoolbox plugin missing: $SRC_VT (build per BUILD_NOTES.md)"
 [ -f "$SRC_GL" ]     || fail "custom caopengllayer plugin missing: $SRC_GL (build per BUILD_NOTES.md)"
 [ -f "$SRC_CVPX" ]   || fail "custom glconv_cvpx plugin missing: $SRC_CVPX (build per BUILD_NOTES.md)"
+[ -f "$SRC_BLURAY" ] || fail "custom bluray plugin missing: $SRC_BLURAY (build per BUILD_NOTES.md)"
 [ -f "$OFFICIAL/lib/libvlccore.9.dylib" ] || fail "official libvlccore.9.dylib missing"
 [ -d "$OFFICIAL/plugins" ] || fail "official plugins dir missing"
 
@@ -89,6 +91,15 @@ libvlc_syms="$(dyld_info -exports "$SRC_LIBVLC" 2>/dev/null || nm -gU "$SRC_LIBV
 echo "$libvlc_syms" | grep -q "_libvlc_media_player_navigate_menu" \
   || fail "custom libvlc lacks the libvlc_media_player_navigate_menu export"
 echo "OK: custom libvlc exports libvlc_media_player_navigate_menu"
+echo "$libvlc_syms" | grep -q "_libvlc_media_player_get_bluray_playlist_id" \
+  || fail "custom libvlc lacks the libvlc_media_player_get_bluray_playlist_id export"
+echo "OK: custom libvlc exports libvlc_media_player_get_bluray_playlist_id"
+
+# Verify the bluray plugin carries the playlist-id patch (the var string "bluray-playlist-id"
+# will be present in the binary from the two var_Create / var_SetInteger calls).
+strings "$SRC_BLURAY" 2>/dev/null | grep -q "bluray-playlist-id" \
+  || fail "custom bluray plugin lacks the bluray-playlist-id patch (string not found)"
+echo "OK: custom bluray plugin contains bluray-playlist-id patch"
 
 # Compatibility version of @rpath/libvlccore.dylib: custom libvlc import vs
 # official core's own id must match exactly.
@@ -124,6 +135,7 @@ rm -f "$DEST/plugins/plugins.dat"   # cache is mtime-keyed; bundling rewrites mt
 cp "$SRC_VT" "$DEST/plugins/libvideotoolbox_plugin.dylib"
 cp "$SRC_GL" "$DEST/plugins/libcaopengllayer_plugin.dylib"
 cp "$SRC_CVPX" "$DEST/plugins/libglconv_cvpx_plugin.dylib"
+cp "$SRC_BLURAY" "$DEST/plugins/liblibbluray_plugin.dylib"
 
 PLUGIN_COUNT=$(find "$DEST/plugins" -type f | wc -l | tr -d ' ')
 [ "$PLUGIN_COUNT" -ge 300 ] || fail "suspiciously few plugins staged: $PLUGIN_COUNT"
@@ -141,14 +153,14 @@ MANIFEST="$REPO_ROOT/src-tauri/resources/build-manifest.json"
   echo "  \"sources\": {"
   echo "    \"official_app\": \"$OFFICIAL_APP\","
   echo "    \"custom_build_dir\": \"$BUILD_DIR\","
-  echo "    \"custom_patches\": [\"patches/vlc-3.0.23/vt-305.patch\", \"patches/vlc-3.0.23/navigate-menu.patch\", \"patches/vlc-3.0.23/hdr-tonemap.patch\"]"
+  echo "    \"custom_patches\": [\"patches/vlc-3.0.23/vt-305.patch\", \"patches/vlc-3.0.23/navigate-menu.patch\", \"patches/vlc-3.0.23/hdr-tonemap.patch\", \"patches/vlc-3.0.23/bluray-playlist-id.patch\"]"
   echo "  },"
   echo "  \"files\": ["
   first=1
   find "$DEST" -type f | sort | while IFS= read -r f; do
     rel="${f#"$DEST"/}"
     case "$rel" in
-      lib/libvlc.5.dylib|plugins/libvideotoolbox_plugin.dylib|plugins/libcaopengllayer_plugin.dylib|plugins/libglconv_cvpx_plugin.dylib) src="custom-build" ;;
+      lib/libvlc.5.dylib|plugins/libvideotoolbox_plugin.dylib|plugins/libcaopengllayer_plugin.dylib|plugins/libglconv_cvpx_plugin.dylib|plugins/liblibbluray_plugin.dylib) src="custom-build" ;;
       *) src="official-vlc-app" ;;
     esac
     sha="$(shasum -a 256 "$f" | awk '{print $1}')"
@@ -163,8 +175,8 @@ MANIFEST="$REPO_ROOT/src-tauri/resources/build-manifest.json"
 echo ""
 echo "=== Staged ==="
 echo "  lib/libvlccore.9.dylib        official ($VLC_VER)"
-echo "  lib/libvlc.5.dylib            custom (navigate-menu.patch)"
-echo "  plugins/ ($PLUGIN_COUNT files) official, except libvideotoolbox_plugin.dylib custom (vt-305.patch) and libcaopengllayer_plugin.dylib custom (hdr-tonemap.patch)"
+echo "  lib/libvlc.5.dylib            custom (navigate-menu.patch + bluray-playlist-id.patch)"
+echo "  plugins/ ($PLUGIN_COUNT files) official, except: libvideotoolbox_plugin.dylib custom (vt-305.patch), libcaopengllayer_plugin.dylib custom (hdr-tonemap.patch), liblibbluray_plugin.dylib custom (bluray-playlist-id.patch)"
 echo "  manifest: $MANIFEST"
 echo ""
 

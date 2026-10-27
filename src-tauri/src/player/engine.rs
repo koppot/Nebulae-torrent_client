@@ -64,6 +64,12 @@ pub struct VlcLib {
     // first call). This API is therefore the ONLY reliable menu input path.
     pub libvlc_media_player_navigate: unsafe extern "C" fn(*mut c_void, c_int),
     pub libvlc_media_player_navigate_menu: Option<unsafe extern "C" fn(*mut c_void)>,
+    // Returns the active Blu-ray MPLS playlist number (0–99999) as reported by
+    // BD_EVENT_PLAYLIST, or -1 when no playlist is active or when the media is
+    // not a Blu-ray disc. Present only in custom-patched libvlc builds
+    // (patches/vlc-3.0.23/bluray-playlist-id.patch).
+    pub libvlc_media_player_get_bluray_playlist_id:
+        Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     // Full title/chapter descriptions: real chapter time offsets for the
     // seek bar marks, and duration-aware title navigation (features only).
     pub libvlc_media_player_get_full_title_descriptions:
@@ -746,6 +752,7 @@ impl VlcLib {
             libvlc_video_set_deinterlace: sym!("libvlc_video_set_deinterlace": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_media_player_navigate: sym!("libvlc_media_player_navigate": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_media_player_navigate_menu: sym_opt!("libvlc_media_player_navigate_menu": unsafe extern "C" fn(*mut c_void)),
+            libvlc_media_player_get_bluray_playlist_id: sym_opt!("libvlc_media_player_get_bluray_playlist_id": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_full_title_descriptions: sym!("libvlc_media_player_get_full_title_descriptions": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcTitleDescription) -> c_int),
             libvlc_title_descriptions_release: sym!("libvlc_title_descriptions_release": unsafe extern "C" fn(*mut *mut VlcTitleDescription, c_int)),
             libvlc_media_player_get_full_chapter_descriptions: sym!("libvlc_media_player_get_full_chapter_descriptions": unsafe extern "C" fn(*mut c_void, c_int, *mut *mut *mut VlcChapterDescription) -> c_int),

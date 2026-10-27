@@ -2,17 +2,18 @@
 
 Nebulae ships a **hybrid** VLC 3.0.23 runtime (assembled by
 `scripts/stage-vlc-runtime.sh`): every library and plugin comes from the
-official VideoLAN VLC 3.0.23 app bundle, except the two artifacts carrying
+official VideoLAN VLC 3.0.23 app bundle, except the artifacts carrying
 the patches in this directory, which are built locally from the VLC 3.0.23
 release tarball.
 
-| Artifact | Source | Patch |
-|----------|--------|-------|
+| Artifact | Source | Patch(es) |
+|----------|--------|----------|
 | `lib/libvlccore.9.dylib` | official `/Applications/VLC.app` | none |
 | `plugins/*` (338 files) | official `/Applications/VLC.app` | none |
-| `lib/libvlc.5.dylib` | local build | `navigate-menu.patch` |
+| `lib/libvlc.5.dylib` | local build | `navigate-menu.patch`, `bluray-playlist-id.patch` |
 | `plugins/libvideotoolbox_plugin.dylib` | local build | `vt-305.patch` |
 | `plugins/libcaopengllayer_plugin.dylib` | local build | `hdr-tonemap.patch` |
+| `plugins/liblibbluray_plugin.dylib` | local build | `bluray-playlist-id.patch` |
 
 ## Source identity
 
@@ -94,15 +95,50 @@ Display P3 color gamut conversion for UHD HDR video:
 
 Status: **compiled** into `plugins/libcaopengllayer_plugin.dylib`.
 
+## bluray-playlist-id.patch — `modules/access/bluray.c` + `lib/media_player.c` + `lib/libvlc.sym`
+
+Exposes the active Blu-ray MPLS playlist number (0–99999) to Nebulae:
+
+1. In `modules/access/bluray.c`, the `Open()` function creates a new integer
+   variable `"bluray-playlist-id"` on the input thread (initialised to -1).
+   Each time `BD_EVENT_PLAYLIST` fires (i.e. a new MPLS playlist begins),
+   `var_SetInteger(p_demux->p_input, "bluray-playlist-id", e->param)` records
+   the MPLS number on the input thread object.
+
+2. In `lib/media_player.c`, a new exported function
+   `libvlc_media_player_get_bluray_playlist_id()` reads this variable via
+   `var_GetInteger(p_input, "bluray-playlist-id")`, returning -1 when no
+   Blu-ray playlist is active.
+
+3. `lib/libvlc.sym` exports the new symbol; the declaration is in
+   `include/vlc/libvlc_media_player.h` (after `libvlc_media_player_navigate`).
+
+Nebulae uses this in `src-tauri/src/commands/media.rs` (warning-skip watcher)
+to identify the exact warning playlist (e.g. Summer Wars `00100.mpls`) without
+relying on duration heuristics. The flag is stored in
+`<app_data_dir>/disc_warns.json`, keyed by SHA-1 of `BDMV/MovieObject.bdmv`
+plus the byte-size of the identified warning MPLS file.
+
+Status: **compiled** into both `lib/libvlc.5.dylib` (new export) and
+`plugins/liblibbluray_plugin.dylib` (the `bluray.c` change).
+
+Note: `liblibbluray_plugin.la` requires `-lintl` during linking (GNU gettext,
+used for `_("Top Menu")` strings in `bluray.c`). When the configure-generated
+`LTLIBINTL` is empty (no system libintl found), build with:
+```
+make -C modules liblibbluray_plugin.la LDFLAGS="-L/opt/homebrew/lib" LIBS="-lintl"
+```
+
 ## Build requirements
 
 - Xcode CLT; Homebrew bison 3.8.2 (system bison 2.3 cannot build webvtt's
-  grammar — only relevant for a full module build, which Nebulae does not
-  need: only `libvlc.la` and `libvideotoolbox_plugin.la` are built locally).
+  grammar); Homebrew gettext for libintl (required by bluray.c in menu mode).
+- Only `libvlc.la`, `libvideotoolbox_plugin.la`, `libcaopengllayer_plugin.la`,
+  `libglconv_cvpx_plugin.la`, and `liblibbluray_plugin.la` are built locally.
 
 ## Historical note
 
 An earlier revision of this README described vt-305.patch as "not compiled
 or tested" and described runtime integration as copying the whole locally
 built plugin set. Both were wrong/stale: the plugin set is now official,
-and only the two patched artifacts above come from the local build.
+and only the patched artifacts listed in the table above come from the local build.
