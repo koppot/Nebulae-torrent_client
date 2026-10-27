@@ -261,12 +261,14 @@ export default function PlayerOverlay() {
       if (isFeature && p.playing && now - lastSaveRef.current > 5000) {
         lastSaveRef.current = now;
         savePositionMs(player.resolvedPath, p.time_ms, p.title);
+        invoke('log_frontend', { message: `[resume-diag] SAVE periodic path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
       } else if (isFeature && !p.playing && wasPlayingRef.current) {
         // Transition from playing to paused: save immediately without
         // waiting for the throttle so that a pause → Menu → Play sequence
         // always has a valid position to restore.
         lastSaveRef.current = now;
         savePositionMs(player.resolvedPath, p.time_ms, p.title);
+        invoke('log_frontend', { message: `[resume-diag] SAVE pause path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
       }
       wasPlayingRef.current = p.playing;
       if (p.length_ms > 0 && !p.playing && p.time_ms >= p.length_ms - 1500) {
@@ -295,16 +297,24 @@ export default function PlayerOverlay() {
       // episode if the user later selects a different title from the menu.
       if (wasAtMenuRef.current && !p.at_menu) {
         justLeftMenuRef.current = true;
+        invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
       if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
         const savedMs = savedPositionMs(player.resolvedPath, p.title);
+        invoke('log_frontend', { message: `[resume-diag] ARM attempt: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} savedMs=${savedMs} path=${player.resolvedPath}` }).catch(() => {});
         if (savedMs >= 10000) {
           pendingResumeRef.current = savedMs;
           pendingResumeTitleRef.current = p.title;
+          invoke('log_frontend', { message: `[resume-diag] ARM armed: pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
+        } else {
+          invoke('log_frontend', { message: `[resume-diag] ARM no-save: savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
         }
         // Arm attempted (whether or not a position was found): stop retrying
         // for this title-start so subsequent poll ticks don't re-check.
         justLeftMenuRef.current = false;
+      } else if (justLeftMenuRef.current && !p.at_menu && p.length_ms <= 300_000 && pendingResumeRef.current === null) {
+        // Log each waiting tick while length_ms is not yet available (DVD async).
+        invoke('log_frontend', { message: `[resume-diag] ARM waiting: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} (need length_ms>300000)` }).catch(() => {});
       }
       // Apply the pending resume: wait until the feature is confirmed playing
       // (VLC may briefly report length before actually playing), then seek
@@ -314,23 +324,30 @@ export default function PlayerOverlay() {
       //   - length_ms > 300_000: still the right kind of title
       //   - title matches: same episode/title we saved for (DVD multi-episode)
       //   - time_ms < target + 5000: user hasn't already sought past the target
-      if (
-        pendingResumeRef.current !== null &&
-        pendingResumeTitleRef.current === p.title &&
-        !p.at_menu &&
-        p.playing &&
-        p.length_ms > 300_000 &&
-        p.time_ms < pendingResumeRef.current + 5000
-      ) {
-        const seekTarget = pendingResumeRef.current;
-        pendingResumeRef.current = null;
-        pendingResumeTitleRef.current = null;
-        invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
+      if (pendingResumeRef.current !== null) {
+        const titleMatch = pendingResumeTitleRef.current === p.title;
+        const guardPlaying = p.playing;
+        const guardLen = p.length_ms > 300_000;
+        const guardTime = p.time_ms < pendingResumeRef.current + 5000;
+        const guardMenu = !p.at_menu;
+        if (titleMatch && guardMenu && guardPlaying && guardLen && guardTime) {
+          const seekTarget = pendingResumeRef.current;
+          pendingResumeRef.current = null;
+          pendingResumeTitleRef.current = null;
+          invoke('log_frontend', { message: `[resume-diag] SEEK dispatching: positionMs=${seekTarget} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+          invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
+        } else {
+          // Log each blocked tick (bounded: clears on seek or at_menu cancel).
+          invoke('log_frontend', { message: `[resume-diag] APPLY blocked: pending=${pendingResumeRef.current} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${guardPlaying} length_ok=${guardLen} time_ok=${guardTime} at_menu=${p.at_menu}` }).catch(() => {});
+        }
       }
       // Cancel pending resume if the user returned to the menu (e.g. pressed
       // Menu again before the feature was confirmed) or if the player opened
       // a different disc (resolvedPath changed → new useEffect instance).
       if (p.at_menu) {
+        if (pendingResumeRef.current !== null) {
+          invoke('log_frontend', { message: `[resume-diag] CANCEL: returned to menu, clearing pendingResume=${pendingResumeRef.current}` }).catch(() => {});
+        }
         pendingResumeRef.current = null;
         pendingResumeTitleRef.current = null;
         justLeftMenuRef.current = false;
@@ -432,6 +449,7 @@ export default function PlayerOverlay() {
             const p = pollRef.current;
             if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
+              invoke('log_frontend', { message: `[resume-diag] SAVE Q/X-close path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
             void closePlayer();
           }
@@ -485,6 +503,7 @@ export default function PlayerOverlay() {
             const p = pollRef.current;
             if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
+              invoke('log_frontend', { message: `[resume-diag] SAVE M-key path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
             invoke('player_return_to_menu').catch(() => {});
           } else {
@@ -1152,6 +1171,7 @@ export default function PlayerOverlay() {
                 const p = pollRef.current;
                 if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
                   savePositionMs(player.resolvedPath, p.time_ms, p.title);
+                  invoke('log_frontend', { message: `[resume-diag] SAVE Menu-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
                 }
                 invoke('player_return_to_menu').catch(() => {});
               }}
@@ -1566,6 +1586,7 @@ export default function PlayerOverlay() {
             const p = pollRef.current;
             if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
+              invoke('log_frontend', { message: `[resume-diag] SAVE X-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
             void closePlayer();
           }}
