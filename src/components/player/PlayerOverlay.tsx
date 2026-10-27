@@ -187,6 +187,13 @@ export default function PlayerOverlay() {
   const discTitleCacheRef = useMemo(() => new Map<string, string | null>(), []);
   const lastSaveRef = useRef(0);
   const dragArmedRef = useRef(false);
+  // Wheel-event throttle: prevents rapid-fire navigation on high-resolution
+  // trackpads. Holds the timeout handle while the cooldown is active.
+  const wheelThrottleRef = useRef<number | null>(null);
+  // Pending disc-menu activation: set when Enter/Play is pressed before the
+  // menu poll reports at_menu=true. Cleared on feature start, source change,
+  // or player close. Null = none pending; true = one activation queued.
+  const pendingActivationRef = useRef<true | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Latest poll/state mirrors for the unified keyboard handler (it must not
   // re-register on every poll tick).
@@ -231,6 +238,18 @@ export default function PlayerOverlay() {
       }
       if (p.length_ms > 0 && !p.playing && p.time_ms >= p.length_ms - 1500) {
         setEnded(true);
+      }
+      // Pending activation: if Enter or Play was pressed before the menu poll
+      // reported at_menu, dispatch one activate command now that the menu is
+      // ready, then clear the flag.
+      if (p.at_menu && pendingActivationRef.current !== null) {
+        pendingActivationRef.current = null;
+        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+      }
+      // Feature has started: any leftover pending activation is no longer
+      // meaningful — it must not fire mid-feature or on the next menu visit.
+      if (!p.at_menu && p.length_ms > 300_000) {
+        pendingActivationRef.current = null;
       }
     };
 
@@ -288,6 +307,7 @@ export default function PlayerOverlay() {
         // In the menu domain, navigation keys route to dvdnav/libbluray.
         // Only intercept these specific keys; all other shortcuts (Q, F, M,
         // volume) must fall through to the standard handler below.
+        // Enter must not fire repeatedly on key-hold (key-repeat guard).
         switch (key) {
           case 'Enter': nav(0); return;
           case 'ArrowUp': nav(1); return;
@@ -369,12 +389,20 @@ export default function PlayerOverlay() {
         }
         case 'm':
         case 'M': {
-          if (mutedRef.current) {
-            setMuted(false);
-            invoke('player_set_volume', { volume: volumeRef.current }).catch(() => {});
+          // During disc playback M returns to the authored menu (same command
+          // as the Menu button). Outside disc playback M toggles mute as
+          // before. Mute during disc sessions is reachable via AudioVolumeMute
+          // (F11/F12 on standard macOS keyboards) and the volume slider.
+          if (player.isDisc) {
+            invoke('player_return_to_menu').catch(() => {});
           } else {
-            setMuted(true);
-            invoke('player_set_volume', { volume: 0 }).catch(() => {});
+            if (mutedRef.current) {
+              setMuted(false);
+              invoke('player_set_volume', { volume: volumeRef.current }).catch(() => {});
+            } else {
+              setMuted(true);
+              invoke('player_set_volume', { volume: 0 }).catch(() => {});
+            }
           }
           break;
         }
@@ -382,6 +410,9 @@ export default function PlayerOverlay() {
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Suppress key-repeat for disc-menu navigation keys to prevent a held
+      // Enter from activating multiple entries in quick succession.
+      if (e.repeat && player.isDisc && pollRef.current.at_menu) return;
       const keys = new Set(['Escape', ' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
@@ -797,6 +828,14 @@ export default function PlayerOverlay() {
       }
       return;
     }
+    // Disc is open but the menu is not yet ready (pre-menu title / transition):
+    // queue one activation so the poll apply path fires it when at_menu
+    // becomes true. One pending activation per disc session; cleared on
+    // feature start, source change, or player close.
+    if (player.isDisc) {
+      pendingActivationRef.current = true;
+      return;
+    }
     invoke('player_toggle_pause').catch(() => {});
   };
 
@@ -895,13 +934,35 @@ export default function PlayerOverlay() {
   };
   // Single left click on the video pauses/resumes (owner). A double click
   // also fires click, so the pause toggle waits 250 ms and is cancelled by
-  // the double-click handler.
-  const onVideoClick = () => {    if (clickTimerRef.current !== null) return;
+  // the double-click handler. During an authored disc menu (at_menu) a left
+  // click activates the currently highlighted menu entry instead.
+  const onVideoClick = () => {
+    if (clickTimerRef.current !== null) return;
     clickTimerRef.current = window.setTimeout(() => {
       clickTimerRef.current = null;
-      if (player.isDisc && pollRef.current.title === 0) return;
+      if (player.isDisc && pollRef.current.at_menu) {
+        // Left click activates the highlighted disc-menu entry; do not also
+        // toggle pause. The native click-through to VLC's authored button
+        // highlight is handled by the native NSView layer.
+        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+        return;
+      }
       togglePause();
     }, 250);
+  };
+  // Mouse wheel during a disc menu: up = previous selection, down = next
+  // selection. Uses the same dvdnav/libbluray navigation modes as the arrow
+  // keys. A 300 ms throttle prevents high-resolution trackpad events from
+  // racing through the selection list in a single gesture.
+  const onVideoWheel = (e: React.WheelEvent) => {
+    if (!player.isDisc || !pollRef.current.at_menu) return;
+    e.preventDefault();
+    if (wheelThrottleRef.current !== null) return;
+    const mode = e.deltaY > 0 ? 2 : 1; // down = next (2), up = prev (1)
+    invoke('player_menu_navigate', { mode }).catch(() => {});
+    wheelThrottleRef.current = window.setTimeout(() => {
+      wheelThrottleRef.current = null;
+    }, 300);
   };
   const onVideoDoubleClick = () => {
     if (clickTimerRef.current !== null) {
@@ -927,6 +988,7 @@ export default function PlayerOverlay() {
         onMouseDown={onVideoPointerDown}
         onClick={onVideoClick}
         onDoubleClick={onVideoDoubleClick}
+        onWheel={onVideoWheel}
       />
 
       {ended && (
@@ -1067,14 +1129,14 @@ export default function PlayerOverlay() {
           onClick={togglePause}
           className="p-1.5 rounded hover:bg-[#262626] text-white transition"
           title={
-            player.isDisc && poll.title === 0
-              ? 'Play — resume from the last save point, or start the feature from the beginning'
+            player.isDisc && poll.at_menu
+              ? 'Select — activate the highlighted menu entry'
               : poll.playing
                 ? 'Pause'
                 : 'Play'
           }
         >
-          {poll.playing && !(player.isDisc && poll.title === 0) ? (
+          {poll.playing && !(player.isDisc && poll.at_menu) ? (
             <Pause className="w-4 h-4" />
           ) : (
             <Play className="w-4 h-4 fill-white" />
