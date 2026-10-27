@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, resumeFromMenu, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, resumeInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -203,6 +203,9 @@ export default function PlayerOverlay() {
   volumeRef.current = volume;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  // Tracks the playing state from the previous poll tick so the apply loop
+  // can detect the playing→paused transition and save position immediately.
+  const wasPlayingRef = useRef(false);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -230,12 +233,22 @@ export default function PlayerOverlay() {
     const apply = (p: Poll) => {
       setPoll(p);
       // Persist the playback position so Resume can skip the disc menu and
-      // jump straight back into the feature (throttled; menus/idle excluded).
+      // jump straight back into the feature (throttled during play;
+      // immediate and unconditional on pause so the position is always
+      // captured before Menu navigation or X teardown).
       const now = Date.now();
-      if (p.playing && p.time_ms > 30_000 && now - lastSaveRef.current > 5000) {
+      const isFeature = !p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000;
+      if (isFeature && p.playing && now - lastSaveRef.current > 5000) {
+        lastSaveRef.current = now;
+        savePositionMs(player.resolvedPath, p.time_ms);
+      } else if (isFeature && !p.playing && wasPlayingRef.current) {
+        // Transition from playing to paused: save immediately without
+        // waiting for the throttle so that a pause → Menu → Play sequence
+        // always has a valid position to restore.
         lastSaveRef.current = now;
         savePositionMs(player.resolvedPath, p.time_ms);
       }
+      wasPlayingRef.current = p.playing;
       if (p.length_ms > 0 && !p.playing && p.time_ms >= p.length_ms - 1500) {
         setEnded(true);
       }
@@ -394,6 +407,12 @@ export default function PlayerOverlay() {
           // before. Mute during disc sessions is reachable via AudioVolumeMute
           // (F11/F12 on standard macOS keyboards) and the volume slider.
           if (player.isDisc) {
+            // Save position before leaving the feature (mirrors the Menu
+            // button onClick — ensures paused state is always captured).
+            const p = pollRef.current;
+            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
+              savePositionMs(player.resolvedPath, p.time_ms);
+            }
             invoke('player_return_to_menu').catch(() => {});
           } else {
             if (mutedRef.current) {
@@ -769,7 +788,13 @@ export default function PlayerOverlay() {
     console.log('[player] switchDisc click:', path);
     try {
       // Keep the feature label and year when cycling discs of the same release.
-      await openInPlayer(path, { displayTitle: player.title, year: player.year });
+      // Resume directly if a saved position exists for this disc.
+      const savedMs = savedPositionMs(path);
+      if (savedMs >= 10000) {
+        await resumeInPlayer(path, savedMs, player.title, player.year);
+      } else {
+        await openInPlayer(path, { displayTitle: player.title, year: player.year });
+      }
     } catch (err) {
       console.error('[player] switchDisc failed:', err);
     }
@@ -818,13 +843,17 @@ export default function PlayerOverlay() {
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
     if (player.isDisc && pollRef.current.at_menu) {
-      // The menu demuxer idles until an entry is activated (set_title is
-      // ignored in the menu domain): activate the highlighted entry (Play
-      // All), then seek to the save point if one exists.
       const savedMs = savedPositionMs(player.resolvedPath);
-      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       if (savedMs >= 10000) {
-        resumeFromMenu(player.resolvedPath, savedMs);
+        // A saved feature position exists: bypass the menu entirely and
+        // resume directly at the saved position. resumeInPlayer reopens
+        // the disc with resume:true (skips the menu at the engine level)
+        // and seeks once the feature title engages.
+        resumeInPlayer(player.resolvedPath, savedMs, player.title, player.year).catch(() => {});
+      } else {
+        // No saved position: activate the highlighted menu entry and let
+        // the feature start from its authored beginning.
+        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       }
       return;
     }
@@ -1056,7 +1085,16 @@ export default function PlayerOverlay() {
           {player.isDisc && (
             <button
               type="button"
-              onClick={() => invoke('player_return_to_menu').catch(() => {})}
+              onClick={() => {
+                // Save position before leaving the feature so a paused
+                // or freshly-playing state is always captured regardless
+                // of the poll throttle.
+                const p = pollRef.current;
+                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
+                  savePositionMs(player.resolvedPath, p.time_ms);
+                }
+                invoke('player_return_to_menu').catch(() => {});
+              }}
               className="shrink-0 text-xs text-white font-medium px-2 py-1 rounded-md border border-white hover:text-white hover:border-white transition text-left"
               title="Return to the disc's interactive menu"
             >

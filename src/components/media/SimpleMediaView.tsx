@@ -449,7 +449,13 @@ export const SimpleMediaView: React.FC = () => {
     const g = groupId ? allGroups.find((x) => x.id === groupId) : undefined;
     const resolvedYear = year ?? g?.year;
     try {
-      const info = await openInPlayer(playPath, { displayTitle, year: resolvedYear });
+      // If a saved feature position exists (≥10 s), skip the disc menu
+      // entirely and resume at that position. The candidate path is used
+      // here; once the open resolves the real path is recorded below.
+      const savedMs = savedPositionMs(playPath);
+      const info = savedMs >= 10000
+        ? await resumeInPlayer(playPath, savedMs, displayTitle, resolvedYear)
+        : await openInPlayer(playPath, { displayTitle, year: resolvedYear });
       if (groupId) {
         // Remember the RESOLVED path (the actual ISO/VIDEO_TS) — the resume
         // position map and the disc pills key off exactly this path.
