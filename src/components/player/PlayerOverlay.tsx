@@ -828,11 +828,12 @@ export default function PlayerOverlay() {
       }
       return;
     }
-    // Disc is open but the menu is not yet ready (pre-menu title / transition):
+    // Disc is in the pre-menu title (title === 0, at_menu not yet true):
     // queue one activation so the poll apply path fires it when at_menu
-    // becomes true. One pending activation per disc session; cleared on
-    // feature start, source change, or player close.
-    if (player.isDisc) {
+    // becomes true. Cleared on feature start, source change, or player close.
+    // title > 0 means the feature is already running — fall through to the
+    // normal pause toggle in that case.
+    if (player.isDisc && pollRef.current.title === 0) {
       pendingActivationRef.current = true;
       return;
     }
