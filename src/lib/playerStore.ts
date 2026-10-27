@@ -256,20 +256,52 @@ async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
   }
 }
 
-/** Saved playback position for a disc (the overlay poller persists it). */
-export function savedPositionMs(discPath: string): number {
+/** Saved playback position for a disc (the overlay poller persists it).
+ *  When `title` is provided, reads the title-scoped key (DVD multi-episode);
+ *  without it, reads the path-only key (library Resume, Blu-ray single-feature). */
+export function savedPositionMs(discPath: string, title?: number): number {
   try {
+    if (title !== undefined && title > 0) {
+      const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
+      if (v !== null) return Number(v) || 0;
+    }
     return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
   } catch {
     return 0;
   }
 }
 
-export function savePositionMs(discPath: string, timeMs: number): void {
+/** Persist a playback position.
+ *  Always writes the path-only key (for the library Resume button).
+ *  When `title` is provided and > 0, also writes a title-scoped key so
+ *  the in-session restore can distinguish episodes on multi-title discs. */
+export function savePositionMs(discPath: string, timeMs: number, title?: number): void {
   try {
-    localStorage.setItem(`nebulae_resume_pos:${discPath}`, String(Math.floor(timeMs)));
+    const v = String(Math.floor(timeMs));
+    localStorage.setItem(`nebulae_resume_pos:${discPath}`, v);
+    if (title !== undefined && title > 0) {
+      localStorage.setItem(`nebulae_resume_pos:${discPath}:title:${title}`, v);
+    }
   } catch {
     // Storage unavailable: resume simply falls back to the disc menu.
+  }
+}
+
+/** Remove the saved position for a disc — path-only key and all title-scoped
+ *  keys stored under the same prefix. Called when the user explicitly starts
+ *  a fresh play so that the next session does not restore a stale position. */
+export function clearPositionMs(discPath: string): void {
+  try {
+    const prefix = `nebulae_resume_pos:${discPath}`;
+    localStorage.removeItem(prefix);
+    const toRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(`${prefix}:title:`)) toRemove.push(k);
+    }
+    for (const k of toRemove) localStorage.removeItem(k);
+  } catch {
+    // Storage unavailable: no-op.
   }
 }
 

@@ -213,6 +213,15 @@ export default function PlayerOverlay() {
   // transition is detected and a saved position exists; cleared after the seek
   // fires, on return to menu, or on session change.
   const pendingResumeRef = useRef<number | null>(null);
+  // The VLC title index that was active when pendingResumeRef was armed.
+  // Used to avoid seeking a different episode to the wrong position on
+  // multi-title DVD discs. Cleared together with pendingResumeRef.
+  const pendingResumeTitleRef = useRef<number | null>(null);
+  // Set on the first poll tick where at_menu transitions true→false; cleared
+  // once pendingResumeRef is armed (length_ms available) or at_menu returns.
+  // Allows the arm to retry across multiple ticks when dvdnav reports
+  // length_ms=0 on the first non-menu tick (common on DVD).
+  const justLeftMenuRef = useRef(false);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -238,6 +247,8 @@ export default function PlayerOverlay() {
     setErrorMessage(null);
     wasAtMenuRef.current = false;
     pendingResumeRef.current = null;
+    pendingResumeTitleRef.current = null;
+    justLeftMenuRef.current = false;
 
     const apply = (p: Poll) => {
       setPoll(p);
@@ -249,13 +260,13 @@ export default function PlayerOverlay() {
       const isFeature = !p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000;
       if (isFeature && p.playing && now - lastSaveRef.current > 5000) {
         lastSaveRef.current = now;
-        savePositionMs(player.resolvedPath, p.time_ms);
+        savePositionMs(player.resolvedPath, p.time_ms, p.title);
       } else if (isFeature && !p.playing && wasPlayingRef.current) {
         // Transition from playing to paused: save immediately without
         // waiting for the throttle so that a pause → Menu → Play sequence
         // always has a valid position to restore.
         lastSaveRef.current = now;
-        savePositionMs(player.resolvedPath, p.time_ms);
+        savePositionMs(player.resolvedPath, p.time_ms, p.title);
       }
       wasPlayingRef.current = p.playing;
       if (p.length_ms > 0 && !p.playing && p.time_ms >= p.length_ms - 1500) {
@@ -275,23 +286,37 @@ export default function PlayerOverlay() {
       }
 
       // ── Resume restore: menu→feature transition ──────────────────────
-      // When the poll transitions from at_menu=true to at_menu=false and the
-      // incoming title looks like the main feature (long duration), arm a
-      // one-time resume seek using the saved position for this disc. This
-      // fires for every menu-activation path (mouse click, Enter, D-pad,
-      // overlay Select/Play) because they all surface as this same transition.
-      if (wasAtMenuRef.current && !p.at_menu && p.length_ms > 300_000) {
-        const savedMs = savedPositionMs(player.resolvedPath);
+      // Arm on the tick where at_menu transitions true→false. On DVD, dvdnav
+      // may report length_ms=0 on that first non-menu tick because the title
+      // duration is read asynchronously. justLeftMenuRef stays true across
+      // subsequent ticks until the arm succeeds (length_ms becomes valid) or
+      // the user returns to the menu. The title index at arm time is recorded
+      // in pendingResumeTitleRef so the seek is not applied to a different
+      // episode if the user later selects a different title from the menu.
+      if (wasAtMenuRef.current && !p.at_menu) {
+        justLeftMenuRef.current = true;
+      }
+      if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
+        const savedMs = savedPositionMs(player.resolvedPath, p.title);
         if (savedMs >= 10000) {
           pendingResumeRef.current = savedMs;
+          pendingResumeTitleRef.current = p.title;
         }
+        // Arm attempted (whether or not a position was found): stop retrying
+        // for this title-start so subsequent poll ticks don't re-check.
+        justLeftMenuRef.current = false;
       }
       // Apply the pending resume: wait until the feature is confirmed playing
       // (VLC may briefly report length before actually playing), then seek
-      // once and clear. Guard: do not apply if at_menu or if position is
-      // already past the target (user may have manually sought ahead).
+      // once and clear. Guards:
+      //   - not at_menu: don't seek a menu
+      //   - playing: feature is confirmed live
+      //   - length_ms > 300_000: still the right kind of title
+      //   - title matches: same episode/title we saved for (DVD multi-episode)
+      //   - time_ms < target + 5000: user hasn't already sought past the target
       if (
         pendingResumeRef.current !== null &&
+        pendingResumeTitleRef.current === p.title &&
         !p.at_menu &&
         p.playing &&
         p.length_ms > 300_000 &&
@@ -299,6 +324,7 @@ export default function PlayerOverlay() {
       ) {
         const seekTarget = pendingResumeRef.current;
         pendingResumeRef.current = null;
+        pendingResumeTitleRef.current = null;
         invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
       }
       // Cancel pending resume if the user returned to the menu (e.g. pressed
@@ -306,6 +332,8 @@ export default function PlayerOverlay() {
       // a different disc (resolvedPath changed → new useEffect instance).
       if (p.at_menu) {
         pendingResumeRef.current = null;
+        pendingResumeTitleRef.current = null;
+        justLeftMenuRef.current = false;
       }
 
       wasAtMenuRef.current = p.at_menu;
@@ -403,7 +431,7 @@ export default function PlayerOverlay() {
           {
             const p = pollRef.current;
             if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
-              savePositionMs(player.resolvedPath, p.time_ms);
+              savePositionMs(player.resolvedPath, p.time_ms, p.title);
             }
             void closePlayer();
           }
@@ -456,7 +484,7 @@ export default function PlayerOverlay() {
             // button onClick — ensures paused state is always captured).
             const p = pollRef.current;
             if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
-              savePositionMs(player.resolvedPath, p.time_ms);
+              savePositionMs(player.resolvedPath, p.time_ms, p.title);
             }
             invoke('player_return_to_menu').catch(() => {});
           } else {
@@ -1123,7 +1151,7 @@ export default function PlayerOverlay() {
                 // of the poll throttle.
                 const p = pollRef.current;
                 if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
-                  savePositionMs(player.resolvedPath, p.time_ms);
+                  savePositionMs(player.resolvedPath, p.time_ms, p.title);
                 }
                 invoke('player_return_to_menu').catch(() => {});
               }}
@@ -1537,7 +1565,7 @@ export default function PlayerOverlay() {
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
             if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
-              savePositionMs(player.resolvedPath, p.time_ms);
+              savePositionMs(player.resolvedPath, p.time_ms, p.title);
             }
             void closePlayer();
           }}
