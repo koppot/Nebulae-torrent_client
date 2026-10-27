@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, resumeInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { closePlayer, openInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -206,6 +206,13 @@ export default function PlayerOverlay() {
   // Tracks the playing state from the previous poll tick so the apply loop
   // can detect the playing→paused transition and save position immediately.
   const wasPlayingRef = useRef(false);
+  // Tracks the at_menu state from the previous poll tick so the apply loop
+  // can detect the menu→feature transition and trigger a one-time resume seek.
+  const wasAtMenuRef = useRef(false);
+  // Saved position to restore after a menu→feature transition. Set when the
+  // transition is detected and a saved position exists; cleared after the seek
+  // fires, on return to menu, or on session change.
+  const pendingResumeRef = useRef<number | null>(null);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -229,6 +236,8 @@ export default function PlayerOverlay() {
     setDiscChoices(null);
     setAuthoredTitle(null);
     setErrorMessage(null);
+    wasAtMenuRef.current = false;
+    pendingResumeRef.current = null;
 
     const apply = (p: Poll) => {
       setPoll(p);
@@ -264,6 +273,42 @@ export default function PlayerOverlay() {
       if (!p.at_menu && p.length_ms > 300_000) {
         pendingActivationRef.current = null;
       }
+
+      // ── Resume restore: menu→feature transition ──────────────────────
+      // When the poll transitions from at_menu=true to at_menu=false and the
+      // incoming title looks like the main feature (long duration), arm a
+      // one-time resume seek using the saved position for this disc. This
+      // fires for every menu-activation path (mouse click, Enter, D-pad,
+      // overlay Select/Play) because they all surface as this same transition.
+      if (wasAtMenuRef.current && !p.at_menu && p.length_ms > 300_000) {
+        const savedMs = savedPositionMs(player.resolvedPath);
+        if (savedMs >= 10000) {
+          pendingResumeRef.current = savedMs;
+        }
+      }
+      // Apply the pending resume: wait until the feature is confirmed playing
+      // (VLC may briefly report length before actually playing), then seek
+      // once and clear. Guard: do not apply if at_menu or if position is
+      // already past the target (user may have manually sought ahead).
+      if (
+        pendingResumeRef.current !== null &&
+        !p.at_menu &&
+        p.playing &&
+        p.length_ms > 300_000 &&
+        p.time_ms < pendingResumeRef.current + 5000
+      ) {
+        const seekTarget = pendingResumeRef.current;
+        pendingResumeRef.current = null;
+        invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
+      }
+      // Cancel pending resume if the user returned to the menu (e.g. pressed
+      // Menu again before the feature was confirmed) or if the player opened
+      // a different disc (resolvedPath changed → new useEffect instance).
+      if (p.at_menu) {
+        pendingResumeRef.current = null;
+      }
+
+      wasAtMenuRef.current = p.at_menu;
     };
 
     invoke<Poll>('player_poll').then(apply).catch(() => {});
@@ -788,13 +833,7 @@ export default function PlayerOverlay() {
     console.log('[player] switchDisc click:', path);
     try {
       // Keep the feature label and year when cycling discs of the same release.
-      // Resume directly if a saved position exists for this disc.
-      const savedMs = savedPositionMs(path);
-      if (savedMs >= 10000) {
-        await resumeInPlayer(path, savedMs, player.title, player.year);
-      } else {
-        await openInPlayer(path, { displayTitle: player.title, year: player.year });
-      }
+      await openInPlayer(path, { displayTitle: player.title, year: player.year });
     } catch (err) {
       console.error('[player] switchDisc failed:', err);
     }
@@ -843,18 +882,11 @@ export default function PlayerOverlay() {
     // meaning on a menu): resume from the last save point when one exists,
     // otherwise start the first feature title from the beginning.
     if (player.isDisc && pollRef.current.at_menu) {
-      const savedMs = savedPositionMs(player.resolvedPath);
-      if (savedMs >= 10000) {
-        // A saved feature position exists: bypass the menu entirely and
-        // resume directly at the saved position. resumeInPlayer reopens
-        // the disc with resume:true (skips the menu at the engine level)
-        // and seeks once the feature title engages.
-        resumeInPlayer(player.resolvedPath, savedMs, player.title, player.year).catch(() => {});
-      } else {
-        // No saved position: activate the highlighted menu entry and let
-        // the feature start from its authored beginning.
-        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
-      }
+      // At the disc menu the button is PLAY: activate the highlighted menu
+      // entry. Position restore (if a saved position exists) is handled by
+      // the poll-based wasAtMenuRef/pendingResumeRef mechanism which fires
+      // for every input path — mouse, Enter, D-pad, and this overlay button.
+      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       return;
     }
     // Disc is in the pre-menu title (title === 0, at_menu not yet true):
