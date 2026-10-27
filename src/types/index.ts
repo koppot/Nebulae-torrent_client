@@ -305,6 +305,8 @@ export interface UserSettings {
   // 11. Racing Mode — maximizes piece acquisition and peer connectivity
   racing_mode_enabled: boolean;
   super_seeding_enabled: boolean;
+  /** Per-torrent racing preset for torrents added from now on; defaults to true. */
+  auto_racing_new_downloads: boolean;
 
   // 12. Engine Identification
   engine_identity_profile: 'transmission' | 'nebulae' | 'custom';
@@ -314,6 +316,7 @@ export interface UserSettings {
   // 13. Media Mode
   media_mode_enabled: boolean;
   media_mode_decision_made: boolean;
+  blackout_other_displays_in_fullscreen?: boolean;
 }
 
 export interface EngineIdentityInfo {

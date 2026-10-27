@@ -191,6 +191,9 @@ pub fn begin_window_drag(app: &AppHandle) -> Result<(), String> {
     Err("main window not found".into())
 }
 
+pub fn leave_fullscreen_if_active(_app: &AppHandle) {}
+pub fn update_blackout_state(_app: &AppHandle) {}
+
 /// Fullscreen via the Tauri window API (works for standard windows).
 pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {

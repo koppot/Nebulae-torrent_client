@@ -147,6 +147,7 @@ export const defaultSettings: UserSettings = {
   // 11. Racing Mode (tuning preset, disabled by default)
   racing_mode_enabled: false,
   super_seeding_enabled: false,
+  auto_racing_new_downloads: true,
 
   // 12. Engine Identification
   engine_identity_profile: 'transmission',
@@ -156,6 +157,7 @@ export const defaultSettings: UserSettings = {
   // 13. Media Mode
   media_mode_enabled: true,
   media_mode_decision_made: false,
+  blackout_other_displays_in_fullscreen: true,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

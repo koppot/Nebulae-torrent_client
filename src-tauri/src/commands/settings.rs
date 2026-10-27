@@ -152,6 +152,16 @@ pub struct UserSettings {
     /// (super seeding) to distribute rare pieces across the swarm efficiently.
     #[serde(default)]
     pub super_seeding_enabled: bool,
+    /// When true, every newly added download (files, magnets, and adds that
+    /// start paused) automatically receives the per-torrent Racing Mode
+    /// preset (peer limit 150, high bandwidth priority) even when the global
+    /// racing_mode_enabled preset is off. Defaults to true so the feature is
+    /// on out of the box; an explicit false is preserved on existing
+    /// installs. Toggling this setting never rewrites torrents that already
+    /// exist, and an explicit per-torrent racing choice (persisted in the
+    /// metadata DB) always wins over both globals.
+    #[serde(default = "default_true")]
+    pub auto_racing_new_downloads: bool,
 
     // 13. Engine Identification
     /// Selected engine identity profile: "transmission" (default) | "nebulae" | "custom"
@@ -172,6 +182,10 @@ pub struct UserSettings {
     /// Media Mode choice. When false, the prompt is presented on launch.
     #[serde(default)]
     pub media_mode_decision_made: bool,
+    /// When true, non-playback displays are blacked out while player is in fullscreen.
+    /// Defaults to true; explicit false is preserved.
+    #[serde(default = "default_true")]
+    pub blackout_other_displays_in_fullscreen: bool,
 }
 
 fn default_true() -> bool {
@@ -325,8 +339,10 @@ impl Default for UserSettings {
 
             // 12. Racing Mode & Super Seeding global presets: false by default to prevent silent
             // activation on existing installs and keep upstream defaults.
+            // auto_racing_new_downloads defaults to true (opt-out is explicit).
             racing_mode_enabled: false,
             super_seeding_enabled: false,
+            auto_racing_new_downloads: true,
 
             // 13. Engine Identification
             engine_identity_profile: "transmission".to_string(),
@@ -336,6 +352,7 @@ impl Default for UserSettings {
             // 14. Media Mode
             media_mode_enabled: true,
             media_mode_decision_made: false,
+            blackout_other_displays_in_fullscreen: true,
         }
     }
 }
@@ -375,6 +392,7 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 
 #[tauri::command]
 pub fn save_user_settings(
+    app: tauri::AppHandle,
     mut settings: UserSettings,
     db: State<Arc<Database>>,
     engine: State<crate::engine::SharedEngine>,
@@ -393,6 +411,9 @@ pub fn save_user_settings(
     // Apply all session settings to the live engine immediately so the user
     // does not have to restart the daemon for changes to take effect.
     let _ = engine.apply_global_settings(&settings);
+
+    #[cfg(target_os = "macos")]
+    crate::player::embed_macos::update_blackout_state(&app);
 
     Ok(())
 }
@@ -783,6 +804,67 @@ mod tests {
         let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
         assert!(
             deserialized_true.media_mode_enabled,
+            "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_auto_racing_new_downloads_defaults_true_and_preserves_false() {
+        // Missing field (settings saved before this option existed) defaults to
+        // true, while the global racing preset stays independent and off.
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            deserialized.auto_racing_new_downloads,
+            "Missing auto_racing_new_downloads must default to true"
+        );
+        assert!(
+            !deserialized.racing_mode_enabled,
+            "The global racing preset must stay independent and default to false"
+        );
+
+        // No stored settings row at all (Default) also means enabled
+        assert!(UserSettings::default().auto_racing_new_downloads);
+
+        // Explicit false is preserved
+        let false_json = r#"{"auto_racing_new_downloads": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.auto_racing_new_downloads,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true is preserved
+        let true_json = r#"{"auto_racing_new_downloads": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.auto_racing_new_downloads,
+            "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_blackout_other_displays_in_fullscreen_defaults_true_and_preserves_false() {
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            deserialized.blackout_other_displays_in_fullscreen,
+            "Missing blackout_other_displays_in_fullscreen must default to true"
+        );
+
+        assert!(UserSettings::default().blackout_other_displays_in_fullscreen);
+
+        let false_json = r#"{"blackout_other_displays_in_fullscreen": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.blackout_other_displays_in_fullscreen,
+            "Explicit false must be preserved"
+        );
+
+        let true_json = r#"{"blackout_other_displays_in_fullscreen": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.blackout_other_displays_in_fullscreen,
             "Explicit true must be preserved"
         );
     }

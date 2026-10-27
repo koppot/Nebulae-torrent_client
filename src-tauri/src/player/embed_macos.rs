@@ -50,12 +50,15 @@ objc2::define_class!(
                 // collection behavior advertises fullscreen support, so use
                 // the manual frame/style-mask toggle.
                 if let Some(win) = this.window() {
-                    toggle_fullscreen_win(&win);
+                    let app_opt = overlay_app();
+                    toggle_fullscreen_win(&win, app_opt);
                     // Notify the frontend — same event emitted by the public
                     // toggle_fullscreen() path (button / F key).
-                    if let Some(app) = overlay_app() {
+                    if let Some(app) = app_opt {
                         use tauri::Emitter;
                         let is_fs = FULLSCREEN_ON.load(Ordering::SeqCst);
+                        let radius = if is_fs { 0.0 } else { 10.0 };
+                        apply_window_corner_radius(app, radius);
                         let _ = app.emit("player://fullscreen-changed", is_fs);
                     }
                 }
@@ -290,6 +293,13 @@ objc2::define_class!(
                     if let Ok(raw) = win.ns_window() {
                         let ns_win = raw as *mut NSWindow;
                         apply_edr_to_window(&*ns_win);
+                        if FULLSCREEN_ON.load(Ordering::SeqCst) {
+                            if let Some(screen) = (*ns_win).screen() {
+                                let f = screen.frame();
+                                let _: () = objc2::msg_send![&*ns_win, setFrame: f, display: true];
+                            }
+                            refresh_blackout_windows(app, &*ns_win);
+                        }
                     }
                 }
                 // Re-apply EDR to the VLC-owned video layer on screen change
@@ -371,6 +381,128 @@ static SAVED_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsiz
 static FULLSCREEN_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Window frame saved while the player reshapes the window to 16:9.
 static PLAYER_FRAME_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Saved presentation options prior to entering fullscreen.
+static SAVED_PRESENTATION_OPTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Pointers to active blackout windows created on non-playback displays.
+static BLACKOUT_WINDOWS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+fn is_blackout_enabled(app: &AppHandle) -> bool {
+    app.try_state::<std::sync::Arc<crate::db::Database>>()
+        .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+        .and_then(|json| {
+            serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+        })
+        .map(|s| s.blackout_other_displays_in_fullscreen)
+        .unwrap_or(true)
+}
+
+unsafe fn apply_fullscreen_presentation() {
+    let app_class = match objc2::runtime::AnyClass::get(c"NSApplication") {
+        Some(c) => c,
+        None => return,
+    };
+    let ns_app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_class, sharedApplication];
+    if ns_app.is_null() {
+        return;
+    }
+    let cur_opts: usize = objc2::msg_send![ns_app, presentationOptions];
+    SAVED_PRESENTATION_OPTIONS.store(cur_opts, Ordering::SeqCst);
+    // NSApplicationPresentationAutoHideDock (1) | NSApplicationPresentationAutoHideMenuBar (4) = 5
+    let fs_opts: usize = 1 | 4;
+    let _: () = objc2::msg_send![ns_app, setPresentationOptions: fs_opts];
+}
+
+unsafe fn restore_fullscreen_presentation() {
+    let app_class = match objc2::runtime::AnyClass::get(c"NSApplication") {
+        Some(c) => c,
+        None => return,
+    };
+    let ns_app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_class, sharedApplication];
+    if ns_app.is_null() {
+        return;
+    }
+    let saved_opts = SAVED_PRESENTATION_OPTIONS.swap(0, Ordering::SeqCst);
+    let _: () = objc2::msg_send![ns_app, setPresentationOptions: saved_opts];
+}
+
+unsafe fn close_blackout_windows() {
+    let mut wins = match BLACKOUT_WINDOWS.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    for ptr in wins.drain(..) {
+        let win = ptr as *mut objc2::runtime::AnyObject;
+        if !win.is_null() {
+            let nil: *mut std::ffi::c_void = std::ptr::null_mut();
+            let _: () = objc2::msg_send![win, orderOut: nil];
+            let _: () = objc2::msg_send![win, close];
+        }
+    }
+}
+
+unsafe fn refresh_blackout_windows(app: &AppHandle, main_win: &NSWindow) {
+    close_blackout_windows();
+    if !FULLSCREEN_ON.load(Ordering::SeqCst) || !is_blackout_enabled(app) {
+        return;
+    }
+    let screen_class = match objc2::runtime::AnyClass::get(c"NSScreen") {
+        Some(c) => c,
+        None => return,
+    };
+    let screens: *mut objc2::runtime::AnyObject = objc2::msg_send![screen_class, screens];
+    if screens.is_null() {
+        return;
+    }
+    let count: usize = objc2::msg_send![screens, count];
+    if count <= 1 {
+        // Single display: no blackout needed
+        return;
+    }
+    let win_screen: *mut objc2::runtime::AnyObject = objc2::msg_send![main_win, screen];
+    let win_class = match objc2::runtime::AnyClass::get(c"NSWindow") {
+        Some(c) => c,
+        None => return,
+    };
+    let color_class = match objc2::runtime::AnyClass::get(c"NSColor") {
+        Some(c) => c,
+        None => return,
+    };
+    let black_color: *mut objc2::runtime::AnyObject = objc2::msg_send![color_class, blackColor];
+
+    let mut new_wins = Vec::new();
+    for idx in 0..count {
+        let sc: *mut objc2::runtime::AnyObject = objc2::msg_send![screens, objectAtIndex: idx];
+        if sc.is_null() || sc == win_screen {
+            continue;
+        }
+        let frame: NSRect = objc2::msg_send![sc, frame];
+        let alloc_win: *mut objc2::runtime::AnyObject = objc2::msg_send![win_class, alloc];
+        let black_win: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            alloc_win,
+            initWithContentRect: frame,
+            styleMask: 0usize, // NSWindowStyleMaskBorderless
+            backing: 2usize,   // NSBackingStoreBuffered
+            defer: false
+        ];
+        if black_win.is_null() {
+            continue;
+        }
+        let _: () = objc2::msg_send![black_win, setBackgroundColor: black_color];
+        let _: () = objc2::msg_send![black_win, setOpaque: true];
+        let _: () = objc2::msg_send![black_win, setHasShadow: false];
+        let _: () = objc2::msg_send![black_win, setIgnoresMouseEvents: false];
+        let _: () = objc2::msg_send![black_win, setHidesOnDeactivate: false];
+        let collection_behavior: usize = 1 | 256; // canJoinAllSpaces | fullScreenAuxiliary
+        let _: () = objc2::msg_send![black_win, setCollectionBehavior: collection_behavior];
+        let _: () = objc2::msg_send![black_win, setLevel: 0usize];
+        let _: () = objc2::msg_send![black_win, orderFrontRegardless];
+        new_wins.push(black_win as usize);
+    }
+    if let Ok(mut g) = BLACKOUT_WINDOWS.lock() {
+        *g = new_wins;
+    }
+}
 
 unsafe fn restore_player_window_frame(win: &NSWindow) {
     let raw = PLAYER_FRAME_BOX.load(Ordering::SeqCst) as *mut NSRect;
@@ -386,9 +518,11 @@ unsafe fn restore_player_window_frame(win: &NSWindow) {
 /// frame only. The native toggleFullScreen: animation ignores borderless
 /// windows, and setting NSWindowStyleMaskFullScreen on one aborts the
 /// process (NSPerformVisuallyAtomicChange) — so never touch the style mask.
-unsafe fn toggle_fullscreen_win(win: &NSWindow) {
+unsafe fn toggle_fullscreen_win(win: &NSWindow, app: Option<&AppHandle>) {
     if FULLSCREEN_ON.load(Ordering::SeqCst) {
         FULLSCREEN_ON.store(false, Ordering::SeqCst);
+        restore_fullscreen_presentation();
+        close_blackout_windows();
         // Leaving fullscreen: restore the saved frame.
         let raw = SAVED_BOX.load(Ordering::SeqCst) as *mut NSRect;
         if !raw.is_null() {
@@ -406,7 +540,59 @@ unsafe fn toggle_fullscreen_win(win: &NSWindow) {
             let _: () = objc2::msg_send![win, setFrame: f, display: true];
         }
         FULLSCREEN_ON.store(true, Ordering::SeqCst);
+        apply_fullscreen_presentation();
+        if let Some(app_handle) = app {
+            refresh_blackout_windows(app_handle, win);
+        }
     }
+}
+
+pub fn leave_fullscreen_if_active(app: &AppHandle) {
+    if !FULLSCREEN_ON.load(Ordering::SeqCst) {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        unsafe {
+            let ns_win = raw as *mut NSWindow;
+            if ns_win.is_null() {
+                return;
+            }
+            if FULLSCREEN_ON.load(Ordering::SeqCst) {
+                toggle_fullscreen_win(&*ns_win, Some(&app2));
+                apply_window_corner_radius(&app2, 10.0);
+                use tauri::Emitter;
+                let _ = app2.emit("player://fullscreen-changed", false);
+            }
+        }
+    });
+}
+
+pub fn update_blackout_state(app: &AppHandle) {
+    if !FULLSCREEN_ON.load(Ordering::SeqCst) {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(win) = app2.get_webview_window("main") else {
+            return;
+        };
+        let Ok(raw) = win.ns_window() else {
+            return;
+        };
+        unsafe {
+            let ns_win = raw as *mut NSWindow;
+            if !ns_win.is_null() {
+                refresh_blackout_windows(&app2, &*ns_win);
+            }
+        }
+    });
 }
 
 /// Toggle fullscreen for the player window (F key / fullscreen button /
@@ -467,7 +653,7 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
             if ns_win.is_null() {
                 return;
             }
-            toggle_fullscreen_win(&*ns_win);
+            toggle_fullscreen_win(&*ns_win, Some(&app2));
             let is_fs = FULLSCREEN_ON.load(Ordering::SeqCst);
             let radius = if is_fs { 0.0 } else { 10.0 };
             apply_window_corner_radius(&app2, radius);
@@ -572,6 +758,20 @@ fn attach_main_window_view(app: &AppHandle) -> Result<usize, String> {
             name: NSWindowDidChangeScreenNotification,
             object: ns_win as *mut objc2::runtime::AnyObject
         ];
+        if let Some(ns_string_class) = objc2::runtime::AnyClass::get(c"NSString") {
+            let param_notif_name: *mut objc2::runtime::AnyObject = objc2::msg_send![
+                ns_string_class,
+                stringWithUTF8String: c"NSApplicationDidChangeScreenParametersNotification".as_ptr()
+            ];
+            let nil_obj: *mut objc2::runtime::AnyObject = std::ptr::null_mut();
+            let _: () = objc2::msg_send![
+                nc,
+                addObserver: &*observer as *const EDRScreenObserver as *mut objc2::runtime::AnyObject,
+                selector: sel!(screenDidChange:),
+                name: param_notif_name,
+                object: nil_obj
+            ];
+        }
         // Store the observer in PlayerState for bookkeeping. Like the
         // overlay view, it is intentionally leaked for the process lifetime:
         // the window and view outlive individual sessions, so removing the

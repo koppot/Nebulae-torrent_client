@@ -453,6 +453,9 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// generation at or below the returned value belongs to a session that has
 /// already been torn down.
 pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
+    // Restore presentation options, geometry, and blackout displays if fullscreen was active
+    player::leave_fullscreen_if_active(app);
+
     // Invalidate every background helper belonging to the outgoing session
     // BEFORE touching the player pointer.
     let gen = state

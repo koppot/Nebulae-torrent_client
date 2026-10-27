@@ -1244,6 +1244,21 @@ export const SettingsModal: React.FC = () => {
                     <label className="flex items-start gap-2.5 cursor-pointer">
                       <input
                         type="checkbox"
+                        checked={settings.auto_racing_new_downloads !== false}
+                        onChange={(e) => saveSettings({ auto_racing_new_downloads: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                      />
+                      <div>
+                        <span className="text-white font-medium text-xs">Automatically enable racing mode for new downloads</span>
+                        <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+                          Applies to torrents you add from now on (files, magnet links, and adds that start paused); existing torrents are never changed by this option. Only the per-torrent preset is applied (peer limit 150, high bandwidth priority). Session-wide tuning (disk cache, global peer limit, unchoke slots) stays controlled by Enable racing mode above. Racing can still be switched on or off for any single torrent from its context menu, and that choice is kept.
+                        </p>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
                         checked={settings.super_seeding_enabled}
                         onChange={(e) => saveSettings({ super_seeding_enabled: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
@@ -1964,6 +1979,29 @@ export const SettingsModal: React.FC = () => {
                       ? `System Java Virtual Machine detected at ${discPlayerStatus.java_home}. Full interactive BD-J menus and extras enabled.`
                       : 'No Java Runtime Environment (JAVA_HOME) detected. Standard playlist and title navigation will operate cleanly; advanced BD-J animated menus are limited.'}
                   </p>
+                </div>
+
+                {/* Fullscreen & Display Settings */}
+                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-white">Display & Fullscreen</span>
+                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                        Display behavior during fullscreen video playback.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-[#2a2a2a]">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.blackout_other_displays_in_fullscreen !== false}
+                        onChange={(e) => saveSettings({ blackout_other_displays_in_fullscreen: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#141414] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white text-xs">Black out other displays during fullscreen</span>
+                    </label>
+                  </div>
                 </div>
 
                 {/* Protected Discs Notice */}
