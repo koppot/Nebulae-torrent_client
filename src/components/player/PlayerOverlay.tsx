@@ -167,6 +167,7 @@ export default function PlayerOverlay() {
   const trackLangsCacheRef = useMemo(() => new Map<string, { audio: string[]; subs: string[] }>(), []);
   const trackLangsCache = trackLangsCacheRef;
   const lastLangProbeRef = useRef('');
+  const lastChapterProbeRef = useRef('');
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -468,7 +469,7 @@ export default function PlayerOverlay() {
           // Close (owner): persist the resume point, then close.
           {
             const p = pollRef.current;
-            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE Q/X-close path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
@@ -678,11 +679,22 @@ export default function PlayerOverlay() {
   // Chapter marks of the current title, refreshed whenever the title
   // changes (each disc feature has its own chapter layout).
   useEffect(() => {
-    if (!player.open) return;
-    if (poll.title === 0) {
+    if (!player.open) {
       setChapterMarks([]);
+      lastChapterProbeRef.current = '';
       return;
     }
+    // Disc menu has no chapters; clear marks while at the menu.
+    // For direct-feature playback (or plain files), title may be 0 while at_menu is false.
+    if (poll.at_menu && player.isDisc) {
+      setChapterMarks([]);
+      lastChapterProbeRef.current = '';
+      return;
+    }
+    const durRound = Math.round(poll.length_ms);
+    const probeKey = `${player.gen}:${player.resolvedPath}:${poll.title}:${durRound > 0 ? durRound : 0}`;
+    if (probeKey === lastChapterProbeRef.current) return;
+
     // Stale guard: the probes below are async and the title can change
     // (menu -> feature, chapter jump across titles) while a probe is in
     // flight. The cleanup flips `alive` for the superseded run so its late
@@ -697,10 +709,11 @@ export default function PlayerOverlay() {
       try {
         const disc = await invoke<{ offset_ms: number; duration_ms: number; name: string }[]>(
           'player_disc_chapters',
-          { durationMs: Math.round(poll.length_ms) },
+          { durationMs: durRound },
         );
         if (!alive) return;
         if (disc.length > 1) {
+          lastChapterProbeRef.current = probeKey;
           setChapterMarks(disc);
           return;
         }
@@ -712,6 +725,7 @@ export default function PlayerOverlay() {
           'player_chapter_marks',
         );
         if (!alive) return;
+        lastChapterProbeRef.current = probeKey;
         setChapterMarks(marks);
       } catch {
         /* ticks are best-effort */
@@ -720,7 +734,7 @@ export default function PlayerOverlay() {
     return () => {
       alive = false;
     };
-  }, [player.open, poll.title, poll.title_count, poll.length_ms]);
+  }, [player.open, player.gen, player.resolvedPath, player.isDisc, poll.title, poll.title_count, poll.length_ms, poll.at_menu]);
 
   // Fullscreen state mirror for the button's icon.
   // On macOS the player uses a manual NSWindow frame resize (not the native
@@ -775,17 +789,17 @@ export default function PlayerOverlay() {
     };
   }, [player.open]);
   useEffect(() => {
-    if (popoverOpen || !poll.playing || poll.title === 0 || ended) {
+    if (popoverOpen || !poll.playing || (poll.at_menu && player.isDisc) || ended) {
       setControlsVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     }
-  }, [popoverOpen, poll.playing, poll.title, ended]);
+  }, [popoverOpen, poll.playing, poll.at_menu, player.isDisc, ended]);
 
   // Subtitle track list for the current title: fetched as soon as the
   // feature engages so the bar can hide the Subtitles pill entirely when
   // the title has no subtitle streams (owner).
   useEffect(() => {
-    if (!player.open || poll.title === 0) return;
+    if (!player.open || (poll.at_menu && player.isDisc)) return;
     let alive = true;
     invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
       .then((tracks) => {
@@ -795,14 +809,14 @@ export default function PlayerOverlay() {
     return () => {
       alive = false;
     };
-  }, [player.open, poll.title]);
+  }, [player.open, poll.title, poll.at_menu, player.isDisc]);
 
   // Preferred audio/subtitle languages (owner, "media player preferences"
   // on the media screen): stored by SimpleMediaView, applied automatically
   // once the feature title engages. Codes like "en,ja"; track names carry
   // either the code or the language name.
   useEffect(() => {
-    if (!player.open || poll.title === 0) return;
+    if (!player.open || (poll.at_menu && player.isDisc)) return;
     const prefs = readLanguagePrefs();
     if (!prefs.audio && !prefs.subs) return;
     let cancelled = false;
@@ -832,8 +846,7 @@ export default function PlayerOverlay() {
     return () => {
       cancelled = true;
     };
-     
-  }, [player.open, poll.title]);
+  }, [player.open, poll.title, poll.at_menu, player.isDisc]);
 
   // Authored display-title probe (owner: the upper-left label uses the
   // movie/disc title from disc metadata when available). Non-blocking and
@@ -957,12 +970,12 @@ export default function PlayerOverlay() {
       invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       return;
     }
-    // Disc is in the pre-menu title (title === 0, at_menu not yet true):
+    // Disc is in the pre-menu title (title === 0 on multi-title disc, at_menu not yet true):
     // queue one activation so the poll apply path fires it when at_menu
     // becomes true. Cleared on feature start, source change, or player close.
-    // title > 0 means the feature is already running — fall through to the
+    // title > 0 or single-title means the feature is already running — fall through to the
     // normal pause toggle in that case.
-    if (player.isDisc && pollRef.current.title === 0) {
+    if (player.isDisc && pollRef.current.title === 0 && pollRef.current.title_count > 1) {
       pendingActivationRef.current = true;
       return;
     }
@@ -1619,7 +1632,7 @@ export default function PlayerOverlay() {
             // Persist the final position no matter the throttle/pause state:
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
-            if (!(player.isDisc && p.title === 0) && p.time_ms > 30_000) {
+            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms > 30_000) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE X-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
