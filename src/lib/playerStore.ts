@@ -266,13 +266,19 @@ async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
 }
 
 /** Saved playback position for a disc (the overlay poller persists it).
- *  When `title` is provided, reads the title-scoped key (DVD multi-episode);
- *  without it, reads the path-only key (library Resume, Blu-ray single-feature). */
+ *  When `title` is provided (> 0), reads the title-scoped key strictly (DVD multi-episode);
+ *  never falls back to other episodes.
+ *  When `title` is 0 or undefined, reads the path-only / title:0 key. */
 export function savedPositionMs(discPath: string, title?: number): number {
   try {
-    if (title !== undefined && title > 0) {
-      const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
-      if (v !== null) return Number(v) || 0;
+    if (title !== undefined) {
+      if (title > 0) {
+        const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
+        return v !== null ? (Number(v) || 0) : 0;
+      }
+      const v0 = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:0`);
+      if (v0 !== null) return Number(v0) || 0;
+      return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
     }
     return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
   } catch {
@@ -281,28 +287,48 @@ export function savedPositionMs(discPath: string, title?: number): number {
 }
 
 /** Persist a playback position.
- *  Always writes the path-only key (for the library Resume button).
- *  When `title` is provided and > 0, also writes a title-scoped key so
- *  the in-session restore can distinguish episodes on multi-title discs. */
+ *  Writes the path-only key and the title-scoped key so in-session restore
+ *  matches the exact title on multi-title discs. */
 export function savePositionMs(discPath: string, timeMs: number, title?: number): void {
   try {
     const v = String(Math.floor(timeMs));
     localStorage.setItem(`nebulae_resume_pos:${discPath}`, v);
-    if (title !== undefined && title > 0) {
+    if (title !== undefined) {
       localStorage.setItem(`nebulae_resume_pos:${discPath}:title:${title}`, v);
+      localStorage.setItem(`nebulae_resume_title:${discPath}`, String(title));
     }
   } catch {
     // Storage unavailable: resume simply falls back to the disc menu.
   }
 }
 
-/** Remove the saved position for a disc — path-only key and all title-scoped
- *  keys stored under the same prefix. Called when the user explicitly starts
- *  a fresh play so that the next session does not restore a stale position. */
+/** Clear the saved resume position for a specific feature title upon natural completion. */
+export function clearFeatureResume(discPath: string, title?: number): void {
+  try {
+    if (title !== undefined && title > 0) {
+      localStorage.removeItem(`nebulae_resume_pos:${discPath}:title:${title}`);
+      const savedTitle = localStorage.getItem(`nebulae_resume_title:${discPath}`);
+      if (savedTitle === String(title)) {
+        localStorage.removeItem(`nebulae_resume_pos:${discPath}`);
+        localStorage.removeItem(`nebulae_resume_title:${discPath}`);
+      }
+    } else {
+      localStorage.removeItem(`nebulae_resume_pos:${discPath}`);
+      localStorage.removeItem(`nebulae_resume_pos:${discPath}:title:0`);
+      localStorage.removeItem(`nebulae_resume_title:${discPath}`);
+    }
+  } catch {
+    // Storage unavailable: no-op.
+  }
+}
+
+/** Remove all saved positions for a disc — path-only key and all title-scoped
+ *  keys stored under the same prefix. */
 export function clearPositionMs(discPath: string): void {
   try {
     const prefix = `nebulae_resume_pos:${discPath}`;
     localStorage.removeItem(prefix);
+    localStorage.removeItem(`nebulae_resume_title:${discPath}`);
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);

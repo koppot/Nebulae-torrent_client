@@ -16,7 +16,7 @@ import {
   X,
   Pin,
 } from 'lucide-react';
-import { closePlayer, openInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { clearFeatureResume, closePlayer, openInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
@@ -223,6 +223,35 @@ export default function PlayerOverlay() {
   // Allows the arm to retry across multiple ticks when dvdnav reports
   // length_ms=0 on the first non-menu tick (common on DVD).
   const justLeftMenuRef = useRef(false);
+  // Tracks titles that have reached natural completion so that subsequent
+  // pause, close, teardown, or periodic saves do not recreate their resume records.
+  const completedTitlesRef = useRef<Set<number>>(new Set());
+  // Tracks active manual seeking so seeking near the end is never falsely
+  // treated as natural completion, and any pending resume seek is cancelled.
+  const manualSeekingRef = useRef(false);
+  const manualSeekingTimerRef = useRef<number | null>(null);
+  // Distinguishes explicit user pause from natural end-of-feature playback stop.
+  const userPausedRef = useRef(false);
+  // Distinguishes explicit Menu button / M key clicks from natural disc-menu return.
+  const userMenuClickedRef = useRef(false);
+  // Authoritative tracking of the previous feature title and its progress.
+  const lastFeatureTitleRef = useRef<number>(0);
+  const lastFeatureTimeRef = useRef<number>(0);
+  const lastFeatureLengthRef = useRef<number>(0);
+
+  const notifyManualSeek = useCallback(() => {
+    manualSeekingRef.current = true;
+    pendingResumeRef.current = null;
+    pendingResumeTitleRef.current = null;
+    justLeftMenuRef.current = false;
+    if (manualSeekingTimerRef.current !== null) {
+      window.clearTimeout(manualSeekingTimerRef.current);
+    }
+    manualSeekingTimerRef.current = window.setTimeout(() => {
+      manualSeekingRef.current = false;
+      manualSeekingTimerRef.current = null;
+    }, 1500);
+  }, []);
 
   const syncViewport = useCallback(() => {
     const el = holderRef.current;
@@ -250,26 +279,99 @@ export default function PlayerOverlay() {
     pendingResumeRef.current = null;
     pendingResumeTitleRef.current = null;
     justLeftMenuRef.current = false;
+    completedTitlesRef.current.clear();
+    manualSeekingRef.current = false;
+    if (manualSeekingTimerRef.current !== null) {
+      window.clearTimeout(manualSeekingTimerRef.current);
+      manualSeekingTimerRef.current = null;
+    }
+    userPausedRef.current = false;
+    userMenuClickedRef.current = false;
+    lastFeatureTitleRef.current = 0;
+    lastFeatureTimeRef.current = 0;
+    lastFeatureLengthRef.current = 0;
 
     const apply = (p: Poll) => {
       setPoll(p);
+      const now = Date.now();
+
+      // Reset user-initiated transient flags once playback or menu state transitions
+      if (p.playing) {
+        userPausedRef.current = false;
+      }
+      if (!p.at_menu) {
+        userMenuClickedRef.current = false;
+      }
+
+      // ── Natural Completion Detection ─────────────────────────────────
+      // Case A: dvdnav/libbluray transitioned away from a near-end feature title unprompted
+      const prevTitle = lastFeatureTitleRef.current;
+      const prevLen = lastFeatureLengthRef.current;
+      const prevTime = lastFeatureTimeRef.current;
+      const wasNearEnd = prevLen > 300_000 && prevTime >= prevLen - 2500;
+      const unpromptedTransition =
+        wasNearEnd &&
+        wasPlayingRef.current &&
+        !manualSeekingRef.current &&
+        !userPausedRef.current &&
+        !userMenuClickedRef.current &&
+        !errorMessage &&
+        (p.at_menu || p.title !== prevTitle || !p.playing);
+
+      if (unpromptedTransition && !completedTitlesRef.current.has(prevTitle)) {
+        completedTitlesRef.current.add(prevTitle);
+        clearFeatureResume(player.resolvedPath, prevTitle);
+        invoke('log_frontend', {
+          message: `[resume-diag] NATURAL COMPLETION (transition): cleared resume for title=${prevTitle} path=${player.resolvedPath}`,
+        }).catch(() => {});
+      }
+
+      // Case B: current title reached the natural completion threshold unprompted
+      const isNearEnd = p.length_ms > 300_000 && p.time_ms >= p.length_ms - 2500;
+      if (
+        isNearEnd &&
+        wasPlayingRef.current &&
+        !manualSeekingRef.current &&
+        !userPausedRef.current &&
+        !userMenuClickedRef.current &&
+        !errorMessage &&
+        (!p.playing || p.at_menu || p.time_ms >= p.length_ms - 1000)
+      ) {
+        if (!completedTitlesRef.current.has(p.title)) {
+          completedTitlesRef.current.add(p.title);
+          clearFeatureResume(player.resolvedPath, p.title);
+          setEnded(true);
+          invoke('log_frontend', {
+            message: `[resume-diag] NATURAL COMPLETION: cleared resume for title=${p.title} path=${player.resolvedPath}`,
+          }).catch(() => {});
+        }
+      }
+
+      // Record authoritative position of active feature
+      if (!p.at_menu && p.length_ms > 300_000) {
+        lastFeatureTitleRef.current = p.title;
+        lastFeatureTimeRef.current = p.time_ms;
+        lastFeatureLengthRef.current = p.length_ms;
+      }
+
       // Persist the playback position so Resume can skip the disc menu and
       // jump straight back into the feature (throttled during play;
       // immediate and unconditional on pause so the position is always
       // captured before Menu navigation or X teardown).
-      const now = Date.now();
-      const isFeature = !p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000;
-      if (isFeature && p.playing && now - lastSaveRef.current > 5000) {
-        lastSaveRef.current = now;
-        savePositionMs(player.resolvedPath, p.time_ms, p.title);
-        invoke('log_frontend', { message: `[resume-diag] SAVE periodic path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
-      } else if (isFeature && !p.playing && wasPlayingRef.current) {
-        // Transition from playing to paused: save immediately without
-        // waiting for the throttle so that a pause → Menu → Play sequence
-        // always has a valid position to restore.
-        lastSaveRef.current = now;
-        savePositionMs(player.resolvedPath, p.time_ms, p.title);
-        invoke('log_frontend', { message: `[resume-diag] SAVE pause path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
+      //
+      // Lowered threshold to >= 10_000 ms to match the arming check.
+      // Guarded by !completedTitlesRef so completed features are never re-saved.
+      const isFeature = !p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000;
+      if (isFeature && !completedTitlesRef.current.has(p.title)) {
+        if (p.playing && now - lastSaveRef.current > 5000) {
+          lastSaveRef.current = now;
+          savePositionMs(player.resolvedPath, p.time_ms, p.title);
+          invoke('log_frontend', { message: `[resume-diag] SAVE periodic path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
+        } else if (!p.playing && wasPlayingRef.current && !userPausedRef.current) {
+          lastSaveRef.current = now;
+          savePositionMs(player.resolvedPath, p.time_ms, p.title);
+          invoke('log_frontend', { message: `[resume-diag] SAVE pause path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms} length_ms=${p.length_ms}` }).catch(() => {});
+        }
       }
       wasPlayingRef.current = p.playing;
       if (p.length_ms > 0 && !p.playing && p.time_ms >= p.length_ms - 1500) {
@@ -301,18 +403,22 @@ export default function PlayerOverlay() {
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
       if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
-        const savedMs = savedPositionMs(player.resolvedPath, p.title);
-        invoke('log_frontend', { message: `[resume-diag] ARM attempt: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} savedMs=${savedMs} path=${player.resolvedPath}` }).catch(() => {});
-        if (savedMs >= 10000) {
-          pendingResumeRef.current = savedMs;
-          pendingResumeTitleRef.current = p.title;
-          invoke('log_frontend', { message: `[resume-diag] ARM armed: gen=${player.gen} pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
+        if (completedTitlesRef.current.has(p.title)) {
+          justLeftMenuRef.current = false;
         } else {
-          invoke('log_frontend', { message: `[resume-diag] ARM no-save: gen=${player.gen} savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
+          const savedMs = savedPositionMs(player.resolvedPath, p.title);
+          invoke('log_frontend', { message: `[resume-diag] ARM attempt: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} savedMs=${savedMs} path=${player.resolvedPath}` }).catch(() => {});
+          if (savedMs >= 10000) {
+            pendingResumeRef.current = savedMs;
+            pendingResumeTitleRef.current = p.title;
+            invoke('log_frontend', { message: `[resume-diag] ARM armed: gen=${player.gen} pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
+          } else {
+            invoke('log_frontend', { message: `[resume-diag] ARM no-save: gen=${player.gen} savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
+          }
+          // Arm attempted (whether or not a position was found): stop retrying
+          // for this title-start so subsequent poll ticks don't re-check.
+          justLeftMenuRef.current = false;
         }
-        // Arm attempted (whether or not a position was found): stop retrying
-        // for this title-start so subsequent poll ticks don't re-check.
-        justLeftMenuRef.current = false;
       } else if (justLeftMenuRef.current && !p.at_menu && p.length_ms <= 300_000 && pendingResumeRef.current === null) {
         // Log each waiting tick while length_ms is not yet available (DVD async).
         invoke('log_frontend', { message: `[resume-diag] ARM waiting: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} (need length_ms>300000)` }).catch(() => {});
@@ -445,22 +551,26 @@ export default function PlayerOverlay() {
       const len = pollRef.current.length_ms;
       switch (key) {
         case ' ':
-          invoke('player_toggle_pause').catch(() => {});
+          togglePause();
           break;
         case 'ArrowLeft':
           // Chapter skip (owner): left arrow = previous chapter.
+          notifyManualSeek();
           jumpChapter(-1);
           break;
         case 'ArrowRight':
           // Chapter skip (owner): right arrow = next chapter.
+          notifyManualSeek();
           jumpChapter(1);
           break;
         case 'ArrowUp':
           // 30s forward (owner).
+          notifyManualSeek();
           invoke('player_seek', { positionMs: len > 0 ? Math.min(t + 30000, len) : t + 30000 }).catch(() => {});
           break;
         case 'ArrowDown':
           // 30s back (owner).
+          notifyManualSeek();
           invoke('player_seek', { positionMs: Math.max(t - 30000, 0) }).catch(() => {});
           break;
         case 'Escape':
@@ -469,7 +579,7 @@ export default function PlayerOverlay() {
           // Close (owner): persist the resume point, then close.
           {
             const p = pollRef.current;
-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms > 30_000) {
+            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE Q/X-close path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
@@ -520,10 +630,11 @@ export default function PlayerOverlay() {
           // before. Mute during disc sessions is reachable via AudioVolumeMute
           // (F11/F12 on standard macOS keyboards) and the volume slider.
           if (player.isDisc) {
+            userMenuClickedRef.current = true;
             // Save position before leaving the feature (mirrors the Menu
             // button onClick — ensures paused state is always captured).
             const p = pollRef.current;
-            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
+            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE M-key path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
@@ -979,6 +1090,16 @@ export default function PlayerOverlay() {
       pendingActivationRef.current = true;
       return;
     }
+    const p = pollRef.current;
+    if (p.playing) {
+      userPausedRef.current = true;
+      if (!(player.isDisc && p.at_menu) && p.length_ms > 300_000 && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
+        savePositionMs(player.resolvedPath, p.time_ms, p.title);
+        invoke('log_frontend', { message: `[resume-diag] SAVE togglePause path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+      }
+    } else {
+      userPausedRef.current = false;
+    }
     invoke('player_toggle_pause').catch(() => {});
   };
 
@@ -1006,6 +1127,7 @@ export default function PlayerOverlay() {
   };
 
   const replay = () => {
+    completedTitlesRef.current.delete(pollRef.current.title);
     setEnded(false);
     invoke('player_seek', { positionMs: 0 }).catch(() => {});
     if (!poll.playing) invoke('player_toggle_pause').catch(() => {});
@@ -1048,6 +1170,7 @@ export default function PlayerOverlay() {
     const rect = el.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const v = Math.round(frac * dur);
+    notifyManualSeek();
     setSeeking(v);
     invoke('player_seek', { positionMs: v }).catch(() => {});
     window.setTimeout(() => setSeeking(null), 400);
@@ -1199,11 +1322,12 @@ export default function PlayerOverlay() {
             <button
               type="button"
               onClick={() => {
+                userMenuClickedRef.current = true;
                 // Save position before leaving the feature so a paused
                 // or freshly-playing state is always captured regardless
                 // of the poll throttle.
                 const p = pollRef.current;
-                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms > 30_000) {
+                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
                   savePositionMs(player.resolvedPath, p.time_ms, p.title);
                   invoke('log_frontend', { message: `[resume-diag] SAVE Menu-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
                 }
@@ -1632,7 +1756,7 @@ export default function PlayerOverlay() {
             // Persist the final position no matter the throttle/pause state:
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms > 30_000) {
+            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE X-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
