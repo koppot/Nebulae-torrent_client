@@ -452,6 +452,58 @@ fn parse_disc_playlists(disc_path: &str) -> Vec<NativeMplsInfo> {
     list
 }
 
+/// Inspect disc playlists and identify the main feature playlist.
+/// Returns Some((playlist_number, duration_ms)), or None if no feature playlist found.
+pub fn find_main_feature_mpls(disc_path: &str) -> Option<(u32, i64)> {
+    let playlists = parse_disc_playlists(disc_path);
+    if playlists.is_empty() {
+        return None;
+    }
+    // Filter candidate feature playlists:
+    // 1. Duration at least 10 minutes (600_000 ms)
+    // 2. Not an obfuscated playlist with excessive chapters (> 60 chapters for standard feature)
+    let mut candidates: Vec<(u32, i64, usize)> = Vec::new();
+    for pl in &playlists {
+        let pl_num: u32 = pl
+            .filename
+            .strip_suffix(".mpls")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        if pl_num == 0 {
+            continue;
+        }
+        let ch_count = pl.chapters_ms.len();
+        if pl.duration_ms >= 600_000 && ch_count <= 60 {
+            candidates.push((pl_num, pl.duration_ms, ch_count));
+        }
+    }
+    if candidates.is_empty() {
+        // Fallback: relax chapter constraint but still require >= 10 minutes
+        for pl in &playlists {
+            let pl_num: u32 = pl
+                .filename
+                .strip_suffix(".mpls")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if pl_num > 0 && pl.duration_ms >= 600_000 {
+                candidates.push((pl_num, pl.duration_ms, pl.chapters_ms.len()));
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // If 00001.mpls is among candidates, it is the standard primary feature playlist.
+    // Otherwise, pick the longest candidate duration.
+    if let Some(&(num, dur, _)) = candidates.iter().find(|(n, _, _)| *n == 1) {
+        Some((num, dur))
+    } else {
+        candidates.sort_by_key(|(_, dur, _)| -*dur);
+        candidates.first().map(|&(num, dur, _)| (num, dur))
+    }
+}
+
 /// Audio and subtitle language names for the title whose duration matches
 /// `duration_ms` (the current libvlc title). Returns empty vectors when the
 /// library is unavailable or no title matches within tolerance.

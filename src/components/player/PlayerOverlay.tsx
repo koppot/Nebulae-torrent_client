@@ -1203,6 +1203,20 @@ export default function PlayerOverlay() {
             </button>
           )}
 
+          {player.isDisc && (
+            <button
+              type="button"
+              onClick={() => {
+                invoke('log_frontend', { message: `[feature-diag] Play Main Feature button clicked path=${player.resolvedPath}` }).catch(() => {});
+                invoke('player_play_main_feature').catch(() => {});
+              }}
+              className="shrink-0 text-xs text-white font-medium px-2 py-1 rounded-md border border-white hover:text-white hover:border-white transition text-left"
+              title="Play the main feature directly"
+            >
+              Play Main Feature
+            </button>
+          )}
+
           {/* Disc-menu D-pad. Mouse clicks on the menu itself are not
               delivered to dvdnav in the embedded vout, so while the menu
               domain is active these buttons (and the keyboard) navigate it.

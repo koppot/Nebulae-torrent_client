@@ -782,6 +782,7 @@ pub fn run() {
             commands::media::player_set_track,
             commands::media::player_menu_navigate,
             commands::media::player_return_to_menu,
+            commands::media::player_play_main_feature,
             commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,

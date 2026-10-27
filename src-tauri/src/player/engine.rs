@@ -41,7 +41,7 @@ pub struct VlcLib {
     pub libvlc_media_player_set_xwindow: unsafe extern "C" fn(*mut c_void, u32),
     pub libvlc_media_player_play: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_stop: unsafe extern "C" fn(*mut c_void),
-    pub libvlc_media_player_pause: unsafe extern "C" fn(*mut c_void, c_int),
+    pub libvlc_media_player_pause: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_is_playing: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
@@ -338,6 +338,45 @@ pub unsafe fn find_main_feature_title(lib: &VlcLib, mp: usize) -> Option<i32> {
     (lib.libvlc_title_descriptions_release)(titles_ptr, n);
 
     feature_candidates.first().copied()
+}
+
+/// Find the main feature title index using disc metadata (BDMV playlists)
+/// when available, falling back to libvlc title descriptions.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn find_main_feature_title_with_disc_meta(
+    lib: &VlcLib,
+    mp: usize,
+    disc_path: Option<&str>,
+) -> Option<i32> {
+    if mp == 0 {
+        return None;
+    }
+    // 1. If disc path is available, try native BDMV playlist inspection first
+    if let Some(path) = disc_path {
+        if let Some((pl_num, dur_ms)) = crate::player::bluray_meta::find_main_feature_mpls(path) {
+            let m = mp as *mut c_void;
+            let title_count = (lib.libvlc_media_player_get_title_count)(m);
+            // On Blu-ray with menu, Title 0 is Top Menu (if menu present).
+            // Title pl_num corresponds to playlist pl_num.
+            let has_menu = find_menu_title(lib, mp).is_some();
+            let target_title = if has_menu {
+                pl_num as i32
+            } else {
+                (pl_num - 1) as i32
+            };
+            if title_count > 0 && target_title < title_count {
+                tracing::info!(
+                    "[feature-meta] identified main feature from BDMV metadata: playlist {pl_num:05}.mpls (dur={dur_ms}ms) -> title {target_title} (has_menu={has_menu}, total_titles={title_count})"
+                );
+                return Some(target_title);
+            }
+        }
+    }
+
+    // 2. Fallback to title descriptions (for DVD, ISO, or where BDMV parse is unavailable)
+    find_main_feature_title(lib, mp)
 }
 
 /// Mirror of libvlc_chapter_description_t (C layout, header-verified).
@@ -847,7 +886,7 @@ impl VlcLib {
             libvlc_media_player_set_xwindow: sym!("libvlc_media_player_set_xwindow": unsafe extern "C" fn(*mut c_void, u32)),
             libvlc_media_player_play: sym!("libvlc_media_player_play": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_stop: sym!("libvlc_media_player_stop": unsafe extern "C" fn(*mut c_void)),
-            libvlc_media_player_pause: sym!("libvlc_media_player_pause": unsafe extern "C" fn(*mut c_void, c_int)),
+            libvlc_media_player_pause: sym!("libvlc_media_player_pause": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_is_playing: sym!("libvlc_media_player_is_playing": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),

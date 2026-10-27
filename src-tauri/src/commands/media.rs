@@ -947,20 +947,20 @@ fn start_playback_inner(
                                 return;
                             }
 
-                            if is_playing {
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): usable playback active on title {cur_title} (length_ms={cur_len}) at 15s exit; preserving playback without interrupting"
-                                );
-                                return;
-                            }
-
                             // Outcome C: Menu startup did not complete and no usable playback is active.
                             // Use safe bounded main-feature fallback if available.
-                            if let Some(feature_title) =
-                                unsafe { engine::find_main_feature_title(&lib, mp) }
-                            {
+                            let disc_path = poison(&state.current_resolved)
+                                .clone()
+                                .or_else(|| poison(&state.current_path).clone());
+                            if let Some(feature_title) = unsafe {
+                                engine::find_main_feature_title_with_disc_meta(
+                                    &lib,
+                                    mp,
+                                    disc_path.as_deref(),
+                                )
+                            } {
                                 tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete and no usable playback; falling back to main feature title {feature_title} [Outcome C]"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete and on static/intro title {cur_title}; falling back to main feature title {feature_title} [Outcome C]"
                                 );
                                 unsafe {
                                     (lib.libvlc_media_player_set_title)(
@@ -969,6 +969,7 @@ fn start_playback_inner(
                                     );
                                     (lib.libvlc_media_player_play)(mp as *mut c_void);
                                 }
+                                select_normal_audio_track(&lib, mp, menu_gen);
                             } else {
                                 tracing::warn!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no safe feature title found [Outcome None]; leaving recoverable player state"
@@ -1606,39 +1607,15 @@ pub fn player_menu_navigate_menu(state: tauri::State<'_, PlayerState>) -> Result
 
 /// Shared implementation for main-menu dispatch. Both commands delegate here.
 fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), String> {
-    let (mp, lib) = {
-        let _mp_guard = state
-            .media_player_cell
-            .lock()
-            .map_err(|_| "player state poisoned")?;
-        let mp = *poison(&state.media_player);
-        let lib = loaded_lib(state)?;
-        (mp, lib)
-    };
-    if mp == 0 {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let mp = *poison(&state.media_player);
+    if mp == 0 || !*poison(&state.started) {
         return Err("no active player session".into());
     }
-
-    // Direct main-menu dispatch through the runtime extension, for every
-    // disc state. INPUT_NAV_MENU reaches bd_menu_call() (Blu-ray) and
-    // dvdnav_menu_call() (DVD); on Blu-ray the demux itself falls back to
-    // the popup-menu keystroke when the top-menu call is rejected
-    // (modules/access/bluray.c DEMUX_NAV_MENU), so no app-level popup
-    // branch is needed. The previous navigate(popup) shortcut for
-    // "interactive" titles was dropped: INPUT_TITLE_INTERACTIVE is set on
-    // every HDMV title (intro chain and features included), so that branch
-    // fired everywhere EXCEPT the authored top menu and made the Menu
-    // button appear dead during First Play (menu_call masked there by
-    // authoring).
-    //
-    // VideoToolbox VT-305 buffer drain before returning to menu:
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-    }
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    unsafe {
-        (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-    }
+    let lib = loaded_lib(state)?;
 
     if let Some(navigate_menu) = lib.libvlc_media_player_navigate_menu {
         tracing::info!("[player] return_to_menu: sending INPUT_NAV_MENU");
@@ -1652,6 +1629,119 @@ fn dispatch_main_menu(state: &tauri::State<'_, PlayerState>) -> Result<(), Strin
             (lib.libvlc_media_player_set_title)(mp as *mut c_void, menu_title);
         }
     }
+
+    Ok(())
+}
+
+/// Ensure a normal feature audio track is selected (avoiding audio-description,
+/// commentary, and descriptive narration tracks).
+fn select_normal_audio_track(lib: &player::engine::VlcLib, mp: usize, session_gen: usize) {
+    if mp == 0 {
+        return;
+    }
+    let m = mp as *mut c_void;
+    // Wait briefly for demuxer to populate audio track descriptions
+    for attempt in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let list = unsafe { (lib.libvlc_audio_get_track_description)(m) };
+        if list.is_null() {
+            continue;
+        }
+        let tracks = unsafe { tracks_from_list(lib, list, -1) };
+        if tracks.is_empty() {
+            continue;
+        }
+        // Filter out disable (id <= 0) and find first normal audio track
+        let normal_track = tracks.iter().find(|t| {
+            if t.id <= 0 {
+                return false;
+            }
+            let name_lower = t.name.to_lowercase();
+            !name_lower.contains("description")
+                && !name_lower.contains("desc")
+                && !name_lower.contains("音声ガイド")
+                && !name_lower.contains("解説")
+                && !name_lower.contains("commentary")
+                && !name_lower.contains("コメンタリー")
+        });
+
+        if let Some(target) = normal_track {
+            unsafe {
+                (lib.libvlc_audio_set_track)(m, target.id);
+            }
+            tracing::info!(
+                "[audio-diag] session_gen={session_gen} selected normal feature audio: id={}, name='{}' (attempt {attempt})",
+                target.id,
+                target.name
+            );
+            return;
+        } else if let Some(first_valid) = tracks.iter().find(|t| t.id > 0) {
+            unsafe {
+                (lib.libvlc_audio_set_track)(m, first_valid.id);
+            }
+            tracing::info!(
+                "[audio-diag] session_gen={session_gen} fallback audio track selected: id={}, name='{}' (attempt {attempt})",
+                first_valid.id,
+                first_valid.name
+            );
+            return;
+        }
+    }
+    tracing::warn!(
+        "[audio-diag] session_gen={session_gen} could not enumerate audio tracks after 1000ms"
+    );
+}
+
+/// Explicit application-level escape route to play the disc's main feature directly.
+/// Bypasses the authored menu / notice screen without invoking failing menu commands,
+/// sets the main feature title from disc metadata, starts playback, and selects normal audio.
+#[tauri::command]
+pub async fn player_play_main_feature(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
+    let (mp, lib, session_gen, disc_path) = {
+        let _mp_guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        let mp = *poison(&state.media_player);
+        if mp == 0 || !*poison(&state.started) {
+            return Err("no active player session".into());
+        }
+        let lib = loaded_lib(&state)?;
+        let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+        let path = poison(&state.current_resolved)
+            .clone()
+            .or_else(|| poison(&state.current_path).clone());
+        (mp, lib, gen, path)
+    };
+
+    let target_title =
+        unsafe { engine::find_main_feature_title_with_disc_meta(&lib, mp, disc_path.as_deref()) }
+            .unwrap_or(1);
+
+    tracing::info!(
+        "[feature-play] player_play_main_feature invoked: switching to title {target_title} (session_gen={session_gen})"
+    );
+
+    {
+        let _mp_guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        let mp_now = *poison(&state.media_player);
+        let gen_now = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+        if mp_now == 0 || mp_now != mp || gen_now != session_gen {
+            return Err("session changed or closed".into());
+        }
+        unsafe {
+            (lib.libvlc_media_player_set_title)(mp as *mut c_void, target_title);
+            (lib.libvlc_media_player_play)(mp as *mut c_void);
+        }
+    }
+
+    let lib_clone = lib.clone();
+    tokio::task::spawn_blocking(move || {
+        select_normal_audio_track(&lib_clone, mp, session_gen);
+    });
 
     Ok(())
 }
@@ -2283,20 +2373,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
 
-    if mode == 0 {
-        // VideoToolbox VT-305 format-transition drain:
-        // When activating a menu button that transitions to a feature
-        // (especially 1080p SDR menu -> 4K HEVC HDR feature), draining the
-        // decoder buffer avoids format change stalls on Apple Silicon.
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 1);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        unsafe {
-            (lib.libvlc_media_player_pause)(mp as *mut c_void, 0);
-        }
-    }
-
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
 }
@@ -2763,8 +2839,7 @@ pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), Strin
     let lib = loaded_lib(&state)?;
     unsafe {
         let m = mp as *mut c_void;
-        let playing = (lib.libvlc_media_player_is_playing)(m) != 0;
-        (lib.libvlc_media_player_pause)(m, if playing { 1 } else { 0 });
+        (lib.libvlc_media_player_pause)(m);
     }
     Ok(())
 }
