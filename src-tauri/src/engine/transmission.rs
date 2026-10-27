@@ -538,16 +538,23 @@ impl TransmissionRpcClient {
     }
 
     pub fn torrent_add(&self, args: Value) -> Result<String, String> {
+        self.torrent_add_ex(args).map(|(hash, _)| hash)
+    }
+
+    /// Like `torrent_add`, but also reports whether Transmission already had
+    /// this torrent (`torrent-duplicate`). Callers that apply new-download
+    /// presets use the flag so re-adding never rewrites an existing torrent.
+    pub fn torrent_add_ex(&self, args: Value) -> Result<(String, bool), String> {
         let res = self.request("torrent-add", Some(args))?;
 
         if let Some(added) = res.get("torrent-added") {
             if let Some(hash) = added.get("hashString").and_then(|h| h.as_str()) {
-                return Ok(hash.to_string());
+                return Ok((hash.to_string(), false));
             }
         }
         if let Some(dup) = res.get("torrent-duplicate") {
             if let Some(hash) = dup.get("hashString").and_then(|h| h.as_str()) {
-                return Ok(hash.to_string());
+                return Ok((hash.to_string(), true));
             }
         }
 
@@ -1727,24 +1734,93 @@ impl TransmissionTorrentEngine {
         let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
     }
 
-    /// Applies per-torrent Racing Mode settings immediately after a torrent is
-    /// added. Reads current user settings from DB to determine whether Racing
-    /// Mode is active and what speed cap is set.
+    /// Stores a torrent's own Racing Mode choice (`Some(true)` pinned on,
+    /// `Some(false)` pinned off, `None` follows the global preset) in the
+    /// database and in the metadata cache that `list_torrents` reads.
+    ///
+    /// Both are written together on purpose: other metadata edits upsert the
+    /// whole cached row, so a cache that lagged behind the database would
+    /// overwrite the stored choice with a stale value.
+    fn set_racing_override(&self, hash: &str, value: Option<bool>) {
+        let hash = hash.to_lowercase();
+        if let Err(e) = self.db.set_torrent_racing_override(&hash, value) {
+            warn!("[racing_mode] could not save the racing choice for {hash}: {e}");
+        }
+        if let Ok(mut cache) = self.metadata_cache.lock() {
+            if let Some(meta) = cache.get_mut(&hash) {
+                meta.racing_override = value;
+            } else if value.is_some() {
+                // Same defaults a freshly inserted database row reads back with.
+                cache.insert(
+                    hash.clone(),
+                    TorrentDbMetadata {
+                        info_hash: hash,
+                        ratio_limit: -1.0,
+                        racing_override: value,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+
+    /// Each torrent's saved Racing Mode choice, keyed by lowercase info hash.
+    fn racing_overrides_snapshot(&self) -> HashMap<String, bool> {
+        self.metadata_cache
+            .lock()
+            .map(|cache| {
+                cache
+                    .iter()
+                    .filter_map(|(h, m)| m.racing_override.map(|v| (h.clone(), v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Lowercase info hash for a session id or an info hash, or `None` when
+    /// the engine does not know the torrent.
+    fn resolve_info_hash(&self, id: &str) -> Option<String> {
+        if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(id.to_lowercase());
+        }
+        self.rpc_client
+            .torrent_get(Some(vec![rpc_id(id)]))
+            .ok()?
+            .first()?
+            .get("hashString")?
+            .as_str()
+            .map(|h| h.to_lowercase())
+    }
+
+    /// Applies the per-torrent Racing Mode preset immediately after a NEW
+    /// torrent is added (callers skip duplicate adds). Racing applies when the
+    /// global preset is on, or when the new-download option is on.
+    ///
+    /// Only the per-torrent knobs are touched (peer limit, bandwidth
+    /// priority). Session-wide racing tuning (disk cache, global peer cap,
+    /// unchoke slots, queue-stall threshold) belongs to `racing_mode_enabled`
+    /// and is never changed here.
     fn apply_racing_mode_on_add(&self, hash: &str) {
-        let settings_opt = self
+        // A missing or unreadable settings row means "defaults", which
+        // include auto_racing_new_downloads = true, not "feature off".
+        let settings = self
             .db
             .get_setting("user_settings_json")
             .ok()
             .flatten()
             .and_then(|raw| {
                 serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
-            });
+            })
+            .unwrap_or_default();
 
-        let Some(settings) = settings_opt else {
-            return;
-        };
+        // Record this torrent's own choice so the list sync and settings
+        // changes honor it and it survives restarts. The new-download option
+        // pins racing on; otherwise a choice left behind by an earlier torrent
+        // with the same hash (metadata rows outlive removal) is cleared so the
+        // re-added torrent starts from the current policy.
+        self.set_racing_override(hash, settings.auto_racing_new_downloads.then_some(true));
 
-        if !settings.racing_mode_enabled {
+        if !settings.racing_mode_enabled && !settings.auto_racing_new_downloads {
             return;
         }
 
@@ -2100,30 +2176,44 @@ impl TorrentEngine for TransmissionTorrentEngine {
             let is_downloading = status_num == 3 || status_num == 4;
             let is_seeding = status_num == 5 || status_num == 6;
 
+            // Racing Mode policy for this torrent: its own saved choice (the
+            // new-download option or a manual toggle) wins over the global
+            // preset; without one it follows the global preset.
+            let want_racing = meta
+                .and_then(|m| m.racing_override)
+                .unwrap_or(global_racing);
+            let at_racing_preset = bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150;
+            let mut racing_now = at_racing_preset;
+
             // Policy synchronization:
-            // 1. Actively downloading torrents: apply Racing mode if globally enabled, restore if disabled
+            // 1. Actively downloading torrents: apply Racing mode when wanted, restore when not
             if is_downloading {
-                if global_racing && (bandwidth_priority != Some(1) || peer_limit.unwrap_or(0) < 150)
-                {
-                    let _ = self.rpc_client.torrent_set(
-                        &id,
-                        serde_json::json!({
-                            "peer-limit": 150i64,
-                            "bandwidthPriority": 1i64,
-                            "honorsSessionLimits": true,
-                        }),
-                    );
-                } else if !global_racing
-                    && (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150)
-                {
-                    let _ = self.rpc_client.torrent_set(
-                        &id,
-                        serde_json::json!({
-                            "peer-limit": user_peer_limit as i64,
-                            "bandwidthPriority": 0i64,
-                            "honorsSessionLimits": true,
-                        }),
-                    );
+                if want_racing && !at_racing_preset {
+                    let applied = self
+                        .rpc_client
+                        .torrent_set(
+                            &id,
+                            serde_json::json!({
+                                "peer-limit": 150i64,
+                                "bandwidthPriority": 1i64,
+                                "honorsSessionLimits": true,
+                            }),
+                        )
+                        .is_ok();
+                    racing_now = applied;
+                } else if !want_racing && at_racing_preset {
+                    let restored = self
+                        .rpc_client
+                        .torrent_set(
+                            &id,
+                            serde_json::json!({
+                                "peer-limit": user_peer_limit as i64,
+                                "bandwidthPriority": 0i64,
+                                "honorsSessionLimits": true,
+                            }),
+                        )
+                        .is_ok();
+                    racing_now = !restored;
                 }
             } else if is_seeding {
                 // 2. Actively seeding torrents: must NEVER retain downloading Racing mode overrides
@@ -2140,10 +2230,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
             }
 
             // Applied indicators (strictly following state applicability):
-            // Racing mode applied: actively downloading AND has racing mode active
-            let is_racing_applied = is_downloading
-                && (global_racing
-                    || (bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150));
+            // Racing mode applied: actively downloading AND the preset is in
+            // effect on this torrent after the sync above (a torrent pinned off
+            // while the global preset is on correctly reports false).
+            let is_racing_applied = is_downloading && racing_now;
             let racing_mode = Some(is_racing_applied);
 
             // Super seeding applied: actively seeding AND has super seeding active
@@ -2299,8 +2389,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
             args["download-dir"] = json!(d);
         }
 
-        let hash = self.rpc_client.torrent_add(args)?;
-        self.apply_racing_mode_on_add(&hash);
+        let (hash, duplicate) = self.rpc_client.torrent_add_ex(args)?;
+        // Re-adding a torrent Transmission already has must not rewrite it.
+        if !duplicate {
+            self.apply_racing_mode_on_add(&hash);
+        }
         info!("Added torrent {hash} via Transmission sidecar (active download)");
         Ok(hash)
     }
@@ -2351,8 +2444,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
             args["download-dir"] = json!(d);
         }
 
-        let hash = self.rpc_client.torrent_add(args)?;
-        self.apply_racing_mode_on_add(&hash);
+        let (hash, duplicate) = self.rpc_client.torrent_add_ex(args)?;
+        // Re-adding a torrent Transmission already has must not rewrite it.
+        if !duplicate {
+            self.apply_racing_mode_on_add(&hash);
+        }
         info!(
             "Added torrent {hash} from metainfo bytes via Transmission sidecar (active download)"
         );
@@ -3101,10 +3197,17 @@ impl TorrentEngine for TransmissionTorrentEngine {
         );
 
         // 3. Synchronize existing torrents according to active policies:
-        // - Downloading torrents: apply/remove Racing mode based on settings.racing_mode_enabled.
+        // - Downloading torrents: apply/remove Racing mode based on settings.racing_mode_enabled,
+        //   unless the torrent has its own saved Racing choice.
         // - Seeding torrents: apply/remove Super seeding based on settings.super_seeding_enabled,
         //   and ensure racing-specific bandwidthPriority / peer-limit overrides are removed.
         let user_peer_limit = settings.max_connections_per_torrent.max(1);
+        // A torrent's own saved Racing choice (new-download option or manual
+        // toggle) wins over the global preset, so changing the global switch
+        // never rewrites a torrent that carries its own choice. The
+        // new-download option itself is not consulted here: it only affects
+        // torrents added afterwards.
+        let racing_overrides = self.racing_overrides_snapshot();
         if let Ok(arr) = self.rpc_client.torrent_get(None) {
             for t in arr {
                 let id = t.get("id").and_then(|v| v.as_i64());
@@ -3121,7 +3224,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
                 // Status 3 (Download Wait) or 4 (Downloading)
                 if status_num == 3 || status_num == 4 {
-                    if settings.racing_mode_enabled {
+                    let want_racing = hash
+                        .and_then(|h| racing_overrides.get(&h.to_lowercase()).copied())
+                        .unwrap_or(settings.racing_mode_enabled);
+                    if want_racing {
                         if prio != 1 || peer_limit < 150 {
                             let _ = self.rpc_client.torrent_set(
                                 &id_str,
@@ -3169,6 +3275,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn set_torrent_racing_mode(&self, id: &str, enabled: bool) -> Result<(), String> {
         use serde_json::json;
 
+        // The choice is stored per torrent (by info hash) so list polling and
+        // settings changes keep honoring it, and it survives restarts.
+        let hash = self
+            .resolve_info_hash(id)
+            .ok_or_else(|| format!("Torrent '{id}' was not found"))?;
+
         // When disabling Racing Mode, restore the user's actual configured peer limit
         // from DB settings rather than an arbitrary default.
         let user_peer_limit = self
@@ -3182,7 +3294,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .map(|s| s.max_connections_per_torrent.max(1))
             .unwrap_or(100);
 
-        if enabled {
+        // Save the choice before touching the engine so a list poll that lands
+        // in between already sees it; undo it if the engine rejects the change.
+        let previous = self.racing_overrides_snapshot().get(&hash).copied();
+        self.set_racing_override(&hash, Some(enabled));
+
+        let result = if enabled {
             // Preserve session limits: global upload cap, alternate speed policy,
             // and queue limits must remain honored even when Racing Mode preset is active.
             self.rpc_client.torrent_set(
@@ -3192,8 +3309,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     "bandwidthPriority":   1i64,
                     "honorsSessionLimits": true,
                 }),
-            )?;
-            info!("[racing_mode] enabled on torrent {id}");
+            )
         } else {
             self.rpc_client.torrent_set(
                 id,
@@ -3202,7 +3318,16 @@ impl TorrentEngine for TransmissionTorrentEngine {
                     "bandwidthPriority":   0i64,
                     "honorsSessionLimits": true,
                 }),
-            )?;
+            )
+        };
+        if let Err(e) = result {
+            self.set_racing_override(&hash, previous);
+            return Err(e);
+        }
+
+        if enabled {
+            info!("[racing_mode] enabled on torrent {id}");
+        } else {
             info!("[racing_mode] disabled on torrent {id} (restored peer-limit={user_peer_limit})");
         }
         Ok(())

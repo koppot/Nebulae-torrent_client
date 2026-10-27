@@ -1253,6 +1253,9 @@ export const SettingsModal: React.FC = () => {
                         <p className="text-[11px] text-[#a3a3a3] mt-0.5">
                           Applies to torrents you add from now on (files, magnet links, and adds that start paused); existing torrents are never changed by this option. Only the per-torrent preset is applied (peer limit 150, high bandwidth priority). Session-wide tuning (disk cache, global peer limit, unchoke slots) stays controlled by Enable racing mode above. Racing can still be switched on or off for any single torrent from its context menu, and that choice is kept.
                         </p>
+                        <p className="text-[11px] text-[#a3a3a3] mt-1">
+                          Per-torrent vs global: a torrent's own racing setting (applied automatically by this option when it is added, or chosen from its context menu) wins over Enable racing mode in both directions. Turning Enable racing mode off does not strip a torrent that has its own racing setting, and a torrent switched off stays off while Enable racing mode is on.
+                        </p>
                       </div>
                     </label>
 

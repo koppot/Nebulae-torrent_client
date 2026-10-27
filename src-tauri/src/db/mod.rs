@@ -39,6 +39,9 @@ impl Database {
             ("sequential_download", "INTEGER DEFAULT 0"),
             ("first_last_piece_prio", "INTEGER DEFAULT 0"),
             ("super_seeding", "INTEGER DEFAULT 0"),
+            // Per-torrent Racing Mode choice: NULL = follow the global preset,
+            // 1 = pinned on, 0 = pinned off.
+            ("racing_override", "INTEGER"),
         ];
         for (col, col_type) in extra_cols {
             let sql = format!("ALTER TABLE torrent_metadata ADD COLUMN {col} {col_type}");
@@ -213,8 +216,8 @@ impl Database {
             "INSERT INTO torrent_metadata (
                 info_hash, display_title, category, labels, is_watched, notes, added_at,
                 completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                sequential_download, first_last_piece_prio, super_seeding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                sequential_download, first_last_piece_prio, super_seeding, racing_override
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(info_hash) DO UPDATE SET
                 display_title = excluded.display_title,
                 category = excluded.category,
@@ -228,7 +231,8 @@ impl Database {
                 ratio_limit = excluded.ratio_limit,
                 sequential_download = excluded.sequential_download,
                 first_last_piece_prio = excluded.first_last_piece_prio,
-                super_seeding = excluded.super_seeding",
+                super_seeding = excluded.super_seeding,
+                racing_override = excluded.racing_override",
             params![
                 meta.info_hash,
                 meta.display_title,
@@ -245,8 +249,40 @@ impl Database {
                 if meta.sequential_download { 1 } else { 0 },
                 if meta.first_last_piece_prio { 1 } else { 0 },
                 if meta.super_seeding { 1 } else { 0 },
+                meta.racing_override.map(|v| if v { 1i64 } else { 0i64 }),
             ],
         )?;
+        Ok(())
+    }
+
+    /// Persist an explicit per-torrent Racing Mode choice: `Some(true)` /
+    /// `Some(false)` pin the torrent on / off regardless of the global preset,
+    /// `None` returns it to following the global preset.
+    ///
+    /// Targeted write on purpose: it never touches the other metadata columns.
+    /// The readers drop any row whose `added_at` is NULL (and the choice with
+    /// it on the next start), so a missing row is created with `added_at`
+    /// stamped and an existing row with a NULL `added_at` is repaired.
+    pub fn set_torrent_racing_override(&self, info_hash: &str, value: Option<bool>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let v: Option<i64> = value.map(|b| if b { 1 } else { 0 });
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let updated = conn.execute(
+            "UPDATE torrent_metadata
+             SET racing_override = ?1, added_at = COALESCE(added_at, ?2)
+             WHERE info_hash = ?3",
+            params![v, now, info_hash],
+        )?;
+        if updated == 0 && v.is_some() {
+            conn.execute(
+                "INSERT INTO torrent_metadata (info_hash, added_at, racing_override)
+                 VALUES (?1, ?2, ?3)",
+                params![info_hash, now, v],
+            )?;
+        }
         Ok(())
     }
 
@@ -270,7 +306,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override
              FROM torrent_metadata WHERE info_hash = ?1",
         )?;
         let mut rows = stmt.query(params![info_hash])?;
@@ -284,6 +320,7 @@ impl Database {
             let seq_int: i32 = row.get(12).unwrap_or(0);
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
+            let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
 
             Ok(Some(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -301,6 +338,7 @@ impl Database {
                 sequential_download: seq_int == 1,
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
+                racing_override: ro_opt.map(|v| v == 1),
             }))
         } else {
             Ok(None)
@@ -314,7 +352,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override
              FROM torrent_metadata",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -327,6 +365,7 @@ impl Database {
             let seq_int: i32 = row.get(12).unwrap_or(0);
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
+            let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
 
             Ok(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -344,6 +383,7 @@ impl Database {
                 sequential_download: seq_int == 1,
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
+                racing_override: ro_opt.map(|v| v == 1),
             })
         })?;
 
@@ -381,4 +421,147 @@ pub struct TorrentDbMetadata {
     pub sequential_download: bool,
     pub first_last_piece_prio: bool,
     pub super_seeding: bool,
+    pub racing_override: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn memory_db() -> Database {
+        Database::new(Path::new(":memory:")).expect("in-memory database")
+    }
+
+    #[test]
+    fn racing_override_round_trips_and_keeps_off_distinct_from_unset() {
+        let db = memory_db();
+
+        // Clearing a choice that was never stored must not create a row.
+        db.set_torrent_racing_override(HASH, None).unwrap();
+        assert!(db.get_torrent_metadata(HASH).unwrap().is_none());
+
+        // A choice creates the row, with the schema defaults for the rest.
+        db.set_torrent_racing_override(HASH, Some(true)).unwrap();
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, Some(true));
+        assert_eq!(row.ratio_limit, -1.0);
+        assert_eq!(row.download_limit_kib, 0);
+
+        // An explicit "off" is a stored choice, not the same as "unset".
+        db.set_torrent_racing_override(HASH, Some(false)).unwrap();
+        let all = db.list_all_torrent_metadata().unwrap();
+        assert_eq!(all[HASH].racing_override, Some(false));
+
+        // Clearing returns the torrent to following the global preset.
+        db.set_torrent_racing_override(HASH, None).unwrap();
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, None);
+    }
+
+    #[test]
+    fn racing_override_write_leaves_other_metadata_untouched() {
+        let db = memory_db();
+        let meta = TorrentDbMetadata {
+            info_hash: HASH.to_string(),
+            category: Some("tv".to_string()),
+            added_at: 1_700_000_000,
+            ratio_limit: 2.5,
+            sequential_download: true,
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+
+        db.set_torrent_racing_override(HASH, Some(true)).unwrap();
+
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, Some(true));
+        assert_eq!(row.category.as_deref(), Some("tv"));
+        assert_eq!(row.added_at, 1_700_000_000);
+        assert_eq!(row.ratio_limit, 2.5);
+        assert!(row.sequential_download);
+    }
+
+    #[test]
+    fn full_row_upsert_stores_the_racing_choice_it_carries() {
+        let db = memory_db();
+        let mut meta = TorrentDbMetadata {
+            info_hash: HASH.to_string(),
+            added_at: 1,
+            ratio_limit: -1.0,
+            racing_override: Some(false),
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, Some(false));
+
+        // The engine keeps its metadata cache in step with this column,
+        // because a full-row upsert writes whatever the row carries.
+        meta.racing_override = None;
+        db.upsert_torrent_metadata(&meta).unwrap();
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, None);
+    }
+
+    #[test]
+    fn racing_override_repairs_a_row_that_has_no_added_at() {
+        let db = memory_db();
+        // The super-seeding writer creates rows without added_at, which the
+        // readers drop; storing a racing choice must not lose it with the row.
+        db.set_torrent_super_seeding(HASH, true).unwrap();
+
+        db.set_torrent_racing_override(HASH, Some(true)).unwrap();
+
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert_eq!(row.racing_override, Some(true));
+        assert!(row.super_seeding);
+        assert!(row.added_at > 0);
+    }
+
+    #[test]
+    fn racing_override_column_is_added_to_an_existing_database() {
+        let path = std::env::temp_dir().join(format!(
+            "nebulae-racing-migration-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            // A database created before the column existed.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE torrent_metadata (
+                    info_hash TEXT PRIMARY KEY, display_title TEXT, category TEXT,
+                    labels TEXT, is_watched INTEGER DEFAULT 0, notes TEXT,
+                    added_at INTEGER, completed_on INTEGER, save_path TEXT,
+                    download_limit_kib INTEGER DEFAULT 0,
+                    upload_limit_kib INTEGER DEFAULT 0,
+                    ratio_limit REAL DEFAULT -1.0,
+                    sequential_download INTEGER DEFAULT 0,
+                    first_last_piece_prio INTEGER DEFAULT 0,
+                    super_seeding INTEGER DEFAULT 0);
+                 INSERT INTO torrent_metadata (info_hash, category, added_at)
+                    VALUES ('old', 'keep', 5);",
+            )
+            .unwrap();
+        }
+
+        let db = Database::new(&path).unwrap();
+        let rows = db.list_all_torrent_metadata().unwrap();
+        assert_eq!(rows["old"].category.as_deref(), Some("keep"));
+        assert_eq!(
+            rows["old"].racing_override, None,
+            "existing torrents start without a racing choice"
+        );
+
+        db.set_torrent_racing_override("old", Some(false)).unwrap();
+        let row = db.get_torrent_metadata("old").unwrap().unwrap();
+        assert_eq!(row.racing_override, Some(false));
+
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 }
