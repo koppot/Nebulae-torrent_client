@@ -824,36 +824,40 @@ fn start_playback_inner(
                         });
 
                         // DISC WARNING SKIP WATCHER:
-                        // For discs that play a mandatory warning clip before their authored
-                        // menu (e.g. Summer Wars FBI warning: PLAYLIST/00100.mpls, 9 s),
-                        // once the warning has genuinely played through once, persist a flag
-                        // so subsequent sessions skip directly past it.
+                        // For discs that play a mandatory warning clip after the user selects
+                        // Play from the authored top menu (e.g. Summer Wars FBI warning:
+                        // PLAYLIST/00100.mpls, ~9 s), once the warning has genuinely played
+                        // through once, persist a flag so subsequent sessions skip past it.
                         //
-                        // Identity: the flag is keyed to a combination of:
-                        //   - SHA-1 of BDMV/MovieObject.bdmv   (disc authoring identity)
-                        //   - byte-size of BDMV/PLAYLIST/NNN.mpls where NNN is the warning MPLS
-                        //     number seen at the time the flag is first written
-                        // Both must match for the flag to apply. This prevents false matches
-                        // across physically different discs with the same MovieObject (unlikely
-                        // but possible with OEM pressings).
+                        // Actual sequence handled:
+                        //   Disc opens → is_menu_title true (top menu) →
+                        //   user selects Play → playlist_id changes to warning MPLS →
+                        //   warning plays to near-end → playlist_id changes to feature MPLS →
+                        //   flag written.
                         //
-                        // Detection: uses libvlc_media_player_get_bluray_playlist_id(), a custom
-                        // export added by patches/vlc-3.0.23/bluray-playlist-id.patch.
-                        // If that export is absent (unpatched libvlc), this entire watcher exits
-                        // immediately and does nothing.
+                        // Identity: (disc_sha1, warn_mpls_id, warn_mpls_size).
+                        //   disc_sha1     = SHA-1 of BDMV/MovieObject.bdmv
+                        //   warn_mpls_id  = MPLS number of the warning clip
+                        //   warn_mpls_size = byte size of that MPLS file at record time
+                        // All three must match on a subsequent session for the skip to fire.
                         //
-                        // Completion: "natural end" is defined as:
-                        //   playlist_id == warning_id for ≥ 1 poll AND position > 0.95 at
-                        //   any point during that playlist AND the playlist_id subsequently
-                        //   changes to a different value.
-                        // User seek near end also satisfies this — intentionally. The user
-                        // has been shown the warning content; that is the flag's purpose.
+                        // Detection: libvlc_media_player_get_bluray_playlist_id() — custom
+                        // export from patches/vlc-3.0.23/bluray-playlist-id.patch.
+                        // Absent export → watcher exits immediately; no effect.
                         //
-                        // Skip: on subsequent sessions, when playlist_id first becomes the
-                        // known warning_id, call set_position(0.99) once to advance through
-                        // the warning clip's authored completion path (no set_title, no
-                        // navigate, no explicit title change — the disc's HDMV VM handles
-                        // the transition to the menu).
+                        // Recording state machine (RECORD MODE):
+                        //   1. Wait up to 15 s for is_menu_title == true (top menu active).
+                        //      Not a menu-first disc → exit without recording.
+                        //   2. Wait for is_menu_title == false (user selects Play).
+                        //      First playlist_id while is_menu_title is false = warning candidate.
+                        //   3. Track position on candidate. On playlist_id change:
+                        //      - is_menu_title true → user backed to menu; do NOT write flag.
+                        //      - Different non-menu playlist_id AND saw_near_end → write flag.
+                        //      - Different non-menu playlist_id AND NOT saw_near_end → exit, no flag.
+                        //
+                        // Skip (SKIP MODE):
+                        //   When playlist_id == recorded warn_mpls_id (and MPLS size matches),
+                        //   call set_position(0.99) once. Disc HDMV VM handles transition.
                         if resolved.is_disc {
                             let app_warn = app.clone();
                             let warn_gen =
@@ -875,15 +879,14 @@ fn start_playback_inner(
                                     Some(f) => f,
                                     None => {
                                         tracing::debug!(
-                                                "[warn-watcher] libvlc_media_player_get_bluray_playlist_id \
-                                                 not present — warning-skip feature inactive"
-                                            );
+                                            "[warn-watcher] libvlc_media_player_get_bluray_playlist_id \
+                                             not present — warning-skip feature inactive"
+                                        );
                                         return;
                                     }
                                 };
 
-                                // Compute disc identity from the disc root path.
-                                // The resolved_path for a Blu-ray disc is the BDMV or its parent.
+                                // Resolve disc root from resolved_path.
                                 let disc_root = {
                                     let p = Path::new(&warn_disc_path);
                                     if p.join("BDMV").is_dir()
@@ -897,7 +900,6 @@ fn start_playback_inner(
                                     {
                                         p.parent().unwrap().to_path_buf()
                                     } else {
-                                        // Not a directory-based Blu-ray; skip.
                                         return;
                                     }
                                 };
@@ -912,28 +914,35 @@ fn start_playback_inner(
                                     None => return,
                                 };
 
-                                // Check whether the warn-seen flag is already set for this disc.
-                                let state = app_warn.state::<PlayerState>();
-                                let gen_now =
-                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                if gen_now != warn_gen {
-                                    return;
+                                // Session/generation fence macro.
+                                // Returns current mp pointer, or returns from thread if stale.
+                                macro_rules! mp_or_return {
+                                    () => {{
+                                        let s = app_warn.state::<PlayerState>();
+                                        let g =
+                                            s.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                        if g != warn_gen || !*poison(&s.started) {
+                                            return;
+                                        }
+                                        let mp = *poison(&s.media_player);
+                                        if mp == 0 || mp != warn_mp {
+                                            return;
+                                        }
+                                        mp
+                                    }};
                                 }
 
+                                // Find any existing flag for this disc.
+                                // Key: disc_sha1 only (at most one warning entry per disc).
                                 let warns = read_disc_warns(&app_warn);
-                                // Look for an existing flag for this disc. The flag key is
-                                // "<sha1>:<mpls_size>" where mpls_size is determined at the
-                                // time the flag was first written. On a "skip" session we
-                                // find the flag by sha1 prefix match (before the ':') and
-                                // then verify that the MPLS file still has the recorded size.
                                 let existing_entry: Option<DiscWarnEntry> = warns
                                     .iter()
                                     .find(|e| e.disc_sha1 == disc_sha1 && e.warn_seen)
                                     .cloned();
 
                                 if let Some(entry) = existing_entry {
-                                    // The warning was previously seen on this disc.
-                                    // Verify the expected MPLS file size still matches before skipping.
+                                    // ---- SKIP MODE ----
+                                    // Verify MPLS file still has the recorded size.
                                     let playlist_path = bdmv_dir
                                         .join("PLAYLIST")
                                         .join(format!("{:05}.mpls", entry.warn_mpls_id));
@@ -942,43 +951,32 @@ fn start_playback_inner(
                                         .unwrap_or(0);
                                     if actual_size == 0 || actual_size != entry.warn_mpls_size {
                                         tracing::warn!(
-                                            "[warn-watcher] skip: MPLS size mismatch \
-                                             (expected {}, got {}) — not skipping",
+                                            "[warn-watcher] skip: MPLS {:05} size mismatch \
+                                             (recorded {}, on-disc {}) — not skipping",
+                                            entry.warn_mpls_id,
                                             entry.warn_mpls_size,
                                             actual_size
                                         );
                                         return;
                                     }
-
-                                    // SKIP MODE: poll for the warning playlist to become active,
-                                    // then advance through it via set_position(0.99).
                                     tracing::info!(
-                                        "[warn-watcher] skip mode: disc sha1={}, mpls={:05}, size={}",
+                                        "[warn-watcher] skip mode: disc_sha1={} \
+                                         warning={:05} ({}B)",
                                         disc_sha1,
                                         entry.warn_mpls_id,
                                         entry.warn_mpls_size
                                     );
-                                    // Poll for up to 15s (300 * 50ms) for the warning playlist to start.
+                                    // Poll up to 30 s (600 × 50 ms) for the warning playlist.
                                     let mut skipped = false;
-                                    for _ in 0..300 {
+                                    for _ in 0..600 {
                                         std::thread::sleep(std::time::Duration::from_millis(50));
-                                        let state = app_warn.state::<PlayerState>();
-                                        let gen_now = state
-                                            .session_gen
-                                            .load(std::sync::atomic::Ordering::SeqCst);
-                                        if gen_now != warn_gen || !*poison(&state.started) {
-                                            return;
-                                        }
-                                        let mp = *poison(&state.media_player);
-                                        if mp == 0 || mp != warn_mp {
-                                            return;
-                                        }
+                                        let mp = mp_or_return!();
                                         let playlist_id =
                                             unsafe { get_playlist_id(mp as *mut c_void) as i32 };
                                         if playlist_id == entry.warn_mpls_id as i32 {
                                             tracing::info!(
-                                                "[warn-watcher] skip: warning playlist {:05} active, \
-                                                 seeking to 0.99",
+                                                "[warn-watcher] skip: warning playlist {:05} \
+                                                 active — seeking to 0.99",
                                                 entry.warn_mpls_id
                                             );
                                             unsafe {
@@ -993,50 +991,105 @@ fn start_playback_inner(
                                     }
                                     if !skipped {
                                         tracing::info!(
-                                            "[warn-watcher] skip: warning playlist never became active \
-                                             within 15 s; no skip performed"
+                                            "[warn-watcher] skip: warning playlist {:05} never \
+                                             became active within 30 s",
+                                            entry.warn_mpls_id
                                         );
                                     }
                                 } else {
-                                    // RECORD MODE: watch for the warning playlist to play through
-                                    // to completion, then persist the flag.
-                                    // Poll for up to 60s (1200 * 50ms). The warning clip on most
-                                    // discs is under 30 s; 60 s is a conservative ceiling.
-                                    let mut warn_playlist_id: Option<u32> = None;
-                                    let mut saw_near_end = false;
-                                    let mut prev_playlist_id: i32 = -1;
+                                    // ---- RECORD MODE ----
 
-                                    for _ in 0..1200 {
+                                    // Step 1: wait up to 15 s for the top menu (is_menu_title).
+                                    let mut saw_menu = false;
+                                    for _ in 0..300 {
                                         std::thread::sleep(std::time::Duration::from_millis(50));
-                                        let state = app_warn.state::<PlayerState>();
-                                        let gen_now = state
-                                            .session_gen
-                                            .load(std::sync::atomic::Ordering::SeqCst);
-                                        if gen_now != warn_gen || !*poison(&state.started) {
-                                            return;
+                                        let mp = mp_or_return!();
+                                        if unsafe { engine::is_menu_title(&lib, mp) } {
+                                            saw_menu = true;
+                                            break;
                                         }
-                                        let mp = *poison(&state.media_player);
-                                        if mp == 0 || mp != warn_mp {
-                                            return;
-                                        }
+                                    }
+                                    if !saw_menu {
+                                        tracing::info!(
+                                            "[warn-watcher] record: top menu not seen in 15 s \
+                                             — not a menu-first disc; exiting"
+                                        );
+                                        return;
+                                    }
+                                    tracing::info!(
+                                        "[warn-watcher] record: top menu confirmed \
+                                         (disc_sha1={}); waiting for Play selection",
+                                        disc_sha1
+                                    );
+
+                                    // Step 2+3: track first post-menu playlist as warning candidate.
+                                    let mut warn_candidate: Option<u32> = None;
+                                    let mut saw_near_end = false;
+
+                                    for _ in 0..2400 {
+                                        // up to 120 s
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                        let mp = mp_or_return!();
 
                                         let playlist_id =
                                             unsafe { get_playlist_id(mp as *mut c_void) as i32 };
+                                        let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
 
                                         if playlist_id < 0 {
-                                            prev_playlist_id = playlist_id;
                                             continue;
                                         }
 
-                                        // Once the disc is at the menu (is_menu_title), no
-                                        // further tracking is needed — the warning is done.
-                                        if unsafe { engine::is_menu_title(&lib, mp) } {
-                                            if let Some(wid) = warn_playlist_id {
+                                        if warn_candidate.is_none() {
+                                            // Waiting for menu exit.
+                                            if at_menu {
+                                                continue; // still at menu
+                                            }
+                                            // Menu just exited; this playlist is the candidate.
+                                            warn_candidate = Some(playlist_id as u32);
+                                            tracing::info!(
+                                                "[warn-watcher] record: menu exited; \
+                                                 tracking warning candidate {:05}",
+                                                playlist_id
+                                            );
+                                        } else if let Some(wid) = warn_candidate {
+                                            if playlist_id == wid as i32 {
+                                                // Still on warning candidate.
+                                                if !at_menu {
+                                                    let total = unsafe {
+                                                        (lib.libvlc_media_player_get_length)(
+                                                            mp as *mut c_void,
+                                                        )
+                                                    };
+                                                    let cur = unsafe {
+                                                        (lib.libvlc_media_player_get_time)(
+                                                            mp as *mut c_void,
+                                                        )
+                                                    };
+                                                    if total > 0 && cur > 0 {
+                                                        let frac = cur as f64 / total as f64;
+                                                        if frac > 0.80 {
+                                                            saw_near_end = true;
+                                                        }
+                                                    }
+                                                }
+                                            } else if at_menu {
+                                                // User backed to menu — no flag.
+                                                tracing::info!(
+                                                    "[warn-watcher] record: returned to menu \
+                                                     from candidate {:05} — \
+                                                     not completed; flag not written",
+                                                    wid
+                                                );
+                                                return;
+                                            } else {
+                                                // Playlist changed to a different non-menu value.
                                                 if saw_near_end {
                                                     tracing::info!(
-                                                        "[warn-watcher] record: menu reached after \
-                                                         playlist {:05} near-end — writing flag",
-                                                        wid
+                                                        "[warn-watcher] record: candidate {:05} \
+                                                         transitioned to {:05} after near-end \
+                                                         — writing flag",
+                                                        wid,
+                                                        playlist_id
                                                     );
                                                     let playlist_path = bdmv_dir
                                                         .join("PLAYLIST")
@@ -1049,66 +1102,28 @@ fn start_playback_inner(
                                                         write_disc_warn(
                                                             &app_warn, &disc_sha1, wid, mpls_size,
                                                         );
+                                                    } else {
+                                                        tracing::warn!(
+                                                            "[warn-watcher] record: MPLS {:05} \
+                                                             not found — flag not written",
+                                                            wid
+                                                        );
                                                     }
+                                                } else {
+                                                    tracing::info!(
+                                                        "[warn-watcher] record: candidate {:05} \
+                                                         transitioned before near-end \
+                                                         — flag not written",
+                                                        wid
+                                                    );
                                                 }
-                                            }
-                                            return;
-                                        }
-
-                                        // Detect a short first playlist (potential warning clip):
-                                        // record which playlist we are in and watch for near-end.
-                                        if warn_playlist_id.is_none()
-                                            && playlist_id != prev_playlist_id
-                                        {
-                                            // Only consider the FIRST playlist the disc plays
-                                            // (before any menu is reached).
-                                            if prev_playlist_id < 0 {
-                                                // This is the first playlist. Track it.
-                                                warn_playlist_id = Some(playlist_id as u32);
-                                                tracing::info!(
-                                                    "[warn-watcher] record: tracking first playlist {:05}",
-                                                    playlist_id
-                                                );
-                                            } else {
-                                                // A second playlist started before a menu was reached.
-                                                // This is not a simple warning-before-menu pattern;
-                                                // stop tracking.
-                                                tracing::info!(
-                                                    "[warn-watcher] record: second playlist {:05} \
-                                                     started before menu — not a simple warning pattern",
-                                                    playlist_id
-                                                );
                                                 return;
                                             }
                                         }
-
-                                        if let Some(wid) = warn_playlist_id {
-                                            if playlist_id == wid as i32 {
-                                                let pos = unsafe {
-                                                    (lib.libvlc_media_player_get_length)(
-                                                        mp as *mut c_void,
-                                                    )
-                                                };
-                                                let cur = unsafe {
-                                                    (lib.libvlc_media_player_get_time)(
-                                                        mp as *mut c_void,
-                                                    )
-                                                };
-                                                if pos > 0 && cur > 0 {
-                                                    let frac = cur as f64 / pos as f64;
-                                                    if frac > 0.80 {
-                                                        saw_near_end = true;
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        prev_playlist_id = playlist_id;
                                     }
-                                    // 60s elapsed without reaching menu — do not write flag.
                                     tracing::info!(
-                                        "[warn-watcher] record: 60s elapsed without reaching menu \
-                                         — no flag written"
+                                        "[warn-watcher] record: 120 s elapsed without \
+                                         completion — no flag written"
                                     );
                                 }
                             });
@@ -3335,12 +3350,13 @@ pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String>
 // ---------------------------------------------------------------------------
 // Disc-warning persistence helpers
 // ---------------------------------------------------------------------------
-// Stores a per-disc flag recording that a pre-menu warning clip has been shown
-// at least once. On subsequent sessions the watcher uses this flag to seek
-// past the warning automatically.
+// Stores a per-disc flag recording that the post-menu warning clip has been
+// shown at least once. On subsequent sessions the watcher uses this flag to
+// seek past the warning automatically.
 //
 // Storage: <app_data_dir>/disc_warns.json  — a JSON array of DiscWarnEntry.
-// Keyed by (disc_sha1, warn_mpls_id, warn_mpls_size). All three must match.
+// Keyed by disc_sha1 only (one entry per disc). warn_mpls_id and warn_mpls_size
+// are verified at skip-time to guard against disc replacement.
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct DiscWarnEntry {
@@ -3387,12 +3403,12 @@ fn write_disc_warn(
         }
     };
     let mut entries = read_disc_warns(app);
-    // Replace any existing entry for this disc + playlist, or append.
-    let existing = entries
-        .iter_mut()
-        .find(|e| e.disc_sha1 == disc_sha1 && e.warn_mpls_id == warn_mpls_id);
+    // Replace any existing entry for this disc (keyed by disc_sha1 only;
+    // each disc has exactly one warning entry — a new recording overwrites any prior one).
+    let existing = entries.iter_mut().find(|e| e.disc_sha1 == disc_sha1);
     if let Some(e) = existing {
         e.warn_seen = true;
+        e.warn_mpls_id = warn_mpls_id;
         e.warn_mpls_size = warn_mpls_size;
     } else {
         entries.push(DiscWarnEntry {
