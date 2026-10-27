@@ -1124,18 +1124,25 @@ export const TorrentManagerView: React.FC = () => {
                       )}
                     </td>
                     <td
-                      className="py-2 px-2.5 text-white"
-                      title={t.current_download_rate !== undefined ? `Current: ${formatSpeed(t.current_download_rate)}` : undefined}
+                      className="py-2 px-2.5 text-white whitespace-nowrap"
+                      title={t.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_download_rate)}` : undefined}
                     >
                       {formatSpeed(t.download_rate)}
+                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
+                    </td>
+                    <td
+                      className="py-2 px-2.5 whitespace-nowrap"
+                      title={t.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_upload_rate)}` : undefined}
+                    >
+                      {formatSpeed(t.upload_rate)}
+                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
                     </td>
                     <td
                       className="py-2 px-2.5"
-                      title={t.current_upload_rate !== undefined ? `Current: ${formatSpeed(t.current_upload_rate)}` : undefined}
+                      title={t.eta_seconds !== undefined ? 'Estimated from the average download rate since the transfer began' : undefined}
                     >
-                      {formatSpeed(t.upload_rate)}
+                      {formatEta(t.eta_seconds)}
                     </td>
-                    <td className="py-2 px-2.5">{formatEta(t.eta_seconds)}</td>
                     <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
                     <td className="py-2 px-2.5 text-white">
                       {/* Swarm seed count from the engine's tracker scrape.
@@ -1251,9 +1258,10 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_download_rate !== undefined ? `Current: ${formatSpeed(selectedTorrent.current_download_rate)}` : undefined}
+                                title={selectedTorrent.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_download_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.download_rate)}
+                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.download_limit_kib > 0 ? ` [${selectedTorrent.download_limit_kib}K]` : ''}
                               </span>
                             </div>
@@ -1263,9 +1271,10 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_upload_rate !== undefined ? `Current: ${formatSpeed(selectedTorrent.current_upload_rate)}` : undefined}
+                                title={selectedTorrent.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_upload_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.upload_rate)}
+                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.upload_limit_kib > 0 ? ` [${selectedTorrent.upload_limit_kib}K]` : ''}
                               </span>
                             </div>

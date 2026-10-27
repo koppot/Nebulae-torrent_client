@@ -8,6 +8,8 @@ export interface PeerTelemetry {
   port: number;
   rtt_ms: number;
   req_resp_latency_ms: number;
+  /** Sustained per-peer rates in BITS per second (the backend converts Transmission's
+   *  bytes/s). Divide by 8 before passing to formatSpeed(), which expects bytes/s. */
   sustained_dl_bps: number;
   sustained_ul_bps: number;
   upload_reciprocity: number;

@@ -448,14 +448,15 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
                     )}
                   </td>
 
-                  {/* Down speed */}
+                  {/* Down speed. sustained_*_bps are BITS per second (the backend
+                      converts Transmission's bytes/s); formatSpeed expects bytes/s. */}
                   <td className="py-1.5 px-2 text-white whitespace-nowrap">
-                    {formatSpeed(p.sustained_dl_bps)}
+                    {formatSpeed(p.sustained_dl_bps / 8)}
                   </td>
 
-                  {/* Up speed */}
+                  {/* Up speed (bits/s to bytes/s, as above) */}
                   <td className="py-1.5 px-2 text-[#a3a3a3] whitespace-nowrap">
-                    {formatSpeed(p.sustained_ul_bps)}
+                    {formatSpeed(p.sustained_ul_bps / 8)}
                   </td>
 
                   {/* Quality bar */}
