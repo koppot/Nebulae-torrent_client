@@ -26,7 +26,9 @@ pub struct PeerTelemetry {
     pub port: u16,
     pub rtt_ms: u32,
     pub req_resp_latency_ms: u32,
+    /// Sustained download rate in bits per second (bits/s = bytes/s * 8).
     pub sustained_dl_bps: u64,
+    /// Sustained upload rate in bits per second (bits/s = bytes/s * 8).
     pub sustained_ul_bps: u64,
     pub upload_reciprocity: f32,
     pub stability_score: f32, // 0.0 - 1.0
@@ -68,8 +70,10 @@ pub struct PeerEmaState {
 
 impl PeerTelemetry {
     pub fn compute_quality_score(&self, mode: PeeringMode) -> f32 {
-        // Normalize throughput: 10 MiB/s = 1.0
-        let norm_tp = (self.sustained_dl_bps as f32 / (10.0 * 1024.0 * 1024.0)).clamp(0.0, 1.0);
+        // Normalize throughput: 10 MiB/s expressed in bits/s = 1.0
+        // sustained_dl_bps carries bits/s. 10 MiB/s = 10 * 8 * 1024 * 1024 bits/s = 83886080.
+        let norm_tp =
+            (self.sustained_dl_bps as f32 / (10.0 * 8.0 * 1024.0 * 1024.0)).clamp(0.0, 1.0);
 
         // Normalize latency: 10ms = 1.0, 500ms = 0.0
         let norm_lat = (1.0 - (self.rtt_ms as f32 / 500.0)).clamp(0.0, 1.0);
@@ -142,14 +146,18 @@ mod tests {
 
     #[test]
     fn test_peer_quality_scoring() {
+        // The fixture was authored with 8 MiB/s download and 1 MiB/s upload throughput in mind.
+        // Under the established bits/s contract (sustained_dl_bps = bytes/s * 8):
+        // 8 MiB/s = 8 * 8 * 1024 * 1024 bits/s = 67_108_864 bits/s.
+        // 1 MiB/s = 1 * 8 * 1024 * 1024 bits/s = 8_388_608 bits/s.
         let peer = PeerTelemetry {
             peer_id: "test-peer-1".to_string(),
             ip: "192.168.1.50".to_string(),
             port: 41413,
             rtt_ms: 15,
             req_resp_latency_ms: 20,
-            sustained_dl_bps: 8 * 1024 * 1024, // 8 MiB/s
-            sustained_ul_bps: 1024 * 1024,
+            sustained_dl_bps: 8 * 8 * 1024 * 1024, // 8 MiB/s actual throughput in bits/s convention
+            sustained_ul_bps: 8 * 1024 * 1024,     // 1 MiB/s actual throughput in bits/s convention
             upload_reciprocity: 0.8,
             stability_score: 0.95,
             disconnect_count: 0,
@@ -180,5 +188,73 @@ mod tests {
         assert!(latency > 0.7);
         assert!(local > 0.7);
         assert!(privacy > 0.7);
+    }
+
+    fn make_ideal_peer(sustained_dl_bps: u64) -> PeerTelemetry {
+        PeerTelemetry {
+            peer_id: "test-peer".to_string(),
+            ip: "192.168.1.50".to_string(),
+            port: 41413,
+            rtt_ms: 5,
+            req_resp_latency_ms: 5,
+            sustained_dl_bps,
+            sustained_ul_bps: 1024 * 1024,
+            upload_reciprocity: 1.0,
+            stability_score: 1.0,
+            disconnect_count: 0,
+            timeout_count: 0,
+            choke_events: 0,
+            client_name: "ADC/1.0".to_string(),
+            locality_tier: LocalityTier::Lan,
+            country_code: Some("US".to_string()),
+            asn: None,
+            utp: true,
+            encryption: true,
+            ipv6: false,
+            dht: false,
+            pex: false,
+            connection_age_seconds: 3600,
+            total_downloaded_bytes: 500_000_000,
+            total_uploaded_bytes: 100_000_000,
+        }
+    }
+
+    #[test]
+    fn test_quality_score_no_saturation_at_10_mbps() {
+        // 80 * 1024 * 1024 bits/s = 10 MiB/s in the bits/s convention.
+        // norm_tp should be exactly 1.0; SpeedFirst score with ideal lat/rel/loc must be >= 0.95.
+        let peer = make_ideal_peer(80 * 1024 * 1024);
+        let score = peer.compute_quality_score(PeeringMode::SpeedFirst);
+        assert!(
+            score >= 0.95,
+            "Peer at 10 MiB/s (80 Mib) must score >= 0.95 in SpeedFirst, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_quality_score_low_throughput_below_half() {
+        // 4 * 1024 * 1024 bits/s = 0.5 MiB/s actual throughput.
+        // SpeedFirst score with ideal lat/rel/loc must be < 0.5 (throughput axis dominates at 0.60).
+        let peer = make_ideal_peer(4 * 1024 * 1024);
+        let score = peer.compute_quality_score(PeeringMode::SpeedFirst);
+        assert!(
+            score < 0.5,
+            "Peer at 0.5 MiB/s (4 Mib) must score < 0.5 in SpeedFirst, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_quality_score_throughput_differentiates_peers() {
+        // High-throughput peer: 80 * 1024 * 1024 bits/s = 10 MiB/s.
+        // Low-throughput peer:   8 * 1024 * 1024 bits/s =  1 MiB/s.
+        // The high-throughput peer must score at least 0.3 higher in SpeedFirst.
+        let high = make_ideal_peer(80 * 1024 * 1024);
+        let low = make_ideal_peer(8 * 1024 * 1024);
+        let high_score = high.compute_quality_score(PeeringMode::SpeedFirst);
+        let low_score = low.compute_quality_score(PeeringMode::SpeedFirst);
+        assert!(
+            high_score - low_score >= 0.3,
+            "High-throughput peer ({high_score}) must score at least 0.3 above low-throughput peer ({low_score})"
+        );
     }
 }

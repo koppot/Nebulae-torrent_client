@@ -15,6 +15,10 @@ export type EngineMode = 'local' | 'rtorrent_server';
 export const SUPERSEEDING_UNSUPPORTED_MESSAGE =
   'Superseeding is not supported by the current engine.';
 
+/** Shown wherever a first/last-piece priority control cannot take effect. */
+export const FIRST_LAST_PIECE_UNSUPPORTED_MESSAGE =
+  'First/last piece priority is not supported by the current engine.';
+
 /**
  * Whether the engine performs a superseeding operation.
  *
@@ -34,4 +38,13 @@ const SUPERSEEDING_SUPPORT: Record<EngineMode, boolean> = {
 
 export function supportsSuperseeding(engineMode: string): boolean {
   return SUPERSEEDING_SUPPORT[engineMode as EngineMode] ?? false;
+}
+
+const FIRST_LAST_PIECE_SUPPORT: Record<EngineMode, boolean> = {
+  local: false,
+  rtorrent_server: false,
+};
+
+export function supportsFirstLastPiece(engineMode: string): boolean {
+  return FIRST_LAST_PIECE_SUPPORT[engineMode as EngineMode] ?? false;
 }

@@ -122,7 +122,7 @@ pre-release-marked releases, and the old updater manifest pointed at stale
 - **Torrent Inspector, Speed Graph & Per-Torrent Controls (WS4)**:
   - Added Speed Graph tab with live SVG throughput curves powered by 500ms push telemetry.
   - Replaced hardcoded tracker status displays with honest tracker lists and per-tracker reannounce triggers.
-  - Added interactive swarm toggles for sequential downloading, first/last piece header priority, and super-seeding with honest Observational banner (`docs/upstream-issues/rqbit-super-seeding.md`).
+  - Added interactive swarm toggles for sequential downloading, first/last piece header priority, and super-seeding with honest Observational banner (`docs/upstream-issues/rqbit-super-seeding.md`). *(Note: Engine-level superseeding [ASI-13] and first/last piece priority remain unimplemented in the Transmission backend; these entries reflect UI-honesty corrections and capability gating, not active engine support).*
   - Added per-torrent speed limits dialog (Download/Upload KiB/s and ratio cutoffs) in General tab and context menu.
 - **ADC Connect In-App Supervisor Documentation (WS7)**:
   - Updated `docs/connectivity.md` to document ADC Connect as an internal supervisor coordinating the 500ms kill-switch watcher and seeding rules loops, maintaining single signed binary compliance.

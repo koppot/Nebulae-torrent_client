@@ -361,19 +361,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   toggleFirstLast: async (id: string) => {
-    let result = false;
+    // Mirror only what the engine accepted. A refused request (first/last piece
+    // priority is not supported by the current engine) leaves the torrent as it was
+    // instead of flipping the flag locally.
+    const current = get().torrents.find((t) => t.id === id)?.first_last_piece_prio ?? false;
     try {
-      result = await invoke<boolean>('toggle_torrent_first_last', { id });
-    } catch {
-      const item = get().torrents.find((t) => t.id === id);
-      result = !item?.first_last_piece_prio;
+      const result = await invoke<boolean>('toggle_torrent_first_last', { id });
+      set({
+        torrents: get().torrents.map((t) =>
+          t.id === id ? { ...t, first_last_piece_prio: result } : t
+        ),
+      });
+      return result;
+    } catch (err) {
+      console.warn('toggle_torrent_first_last failed:', err);
+      return current;
     }
-    set({
-      torrents: get().torrents.map((t) =>
-        t.id === id ? { ...t, first_last_piece_prio: result } : t
-      ),
-    });
-    return result;
   },
 
   toggleSuperSeeding: async (id: string) => {

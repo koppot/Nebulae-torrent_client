@@ -111,7 +111,7 @@ This matrix replaces all unsupported blanket statements with verifiable evidence
 | **Non-Blocking Force Recheck** | VERIFIED (SCRIPT) | `scripts/verify-force-recheck.py`: context menu closes immediately; recheck progresses asynchronously. | None. |
 | **Preferences Apply / Cancel Behavior** | VERIFIED (MAC) | Apply pushes live session settings without closing modal; Cancel reverts unapplied form edits. | None. |
 | **No Duplicate Media-Mode Controls** | VERIFIED (MAC) | Single consolidated toggle in SettingsModal. | None. |
-| **Racing Mode & Super-Seeding Controls** | VERIFIED (UNIT/MAC) | Status bar indicator, Settings toggle, and AddTorrentModal initial seeder opt-in dialog verified. | None. |
+| **Racing Mode & Super-Seeding Controls** | VERIFIED (UNIT/MAC) | Status bar indicator, Settings toggle, and AddTorrentModal initial seeder opt-in dialog verified. *(Note: Reflects UI honesty/gating; engine-level superseeding [ASI-13] is not implemented and remains Blocked).* | None. |
 | **Right-Aligned Status-Bar Second Row** | VERIFIED (MAC) | Tailwind layout in `StatusBar.tsx` aligns secondary metrics to the right. | None. |
 | **First-Run Media-Mode Decision Persistence** | VERIFIED (SCRIPT) | `scripts/verify-first-run-media-mode.py`: verified Yes/No persistence in database across full relaunch. | None. |
 | **User-Facing Tailnet Label** | VERIFIED (MAC) | Status bar and settings display "Tailnet" rather than internal daemon terminology. | None. |

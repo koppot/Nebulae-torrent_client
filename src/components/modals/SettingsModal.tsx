@@ -1622,14 +1622,23 @@ export const SettingsModal: React.FC = () => {
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="Pause">Pause torrent</option>
-                        <option value="Remove">Remove torrent</option>
-                        <option value="RemoveAndFiles">Remove torrent and files</option>
+                        <option value="Remove" disabled>
+                          Remove torrent (not supported — automatic removal is not implemented)
+                        </option>
+                        <option value="RemoveAndFiles" disabled>
+                          Remove torrent and files (not supported — automatic removal is not implemented)
+                        </option>
                         <option value="SuperSeeding" disabled={!superseedingSupported}>
                           {superseedingSupported
                             ? 'Switch to Super-Seeding'
                             : 'Switch to Super-Seeding (not supported by the current engine)'}
                         </option>
                       </select>
+                      {(settings.seeding_limit_action === 'Remove' || settings.seeding_limit_action === 'RemoveAndFiles') && (
+                        <p className="text-[10px] text-amber-400/90 mt-1">
+                          The saved action &apos;{settings.seeding_limit_action}&apos; requires automatic torrent removal, which is not implemented by the engine. It will not execute. The engine&apos;s configured seeding-limit stop behavior (Transmission-managed pause) remains active.
+                        </p>
+                      )}
                       {!superseedingSupported && settings.seeding_limit_action === 'SuperSeeding' && (
                         <p className="text-[10px] text-amber-400/90 mt-1">
                           {SUPERSEEDING_UNSUPPORTED_MESSAGE} This saved choice is kept as it is, but it cannot take effect.

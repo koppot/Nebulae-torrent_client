@@ -402,6 +402,27 @@ pub fn save_user_settings(
     if settings.engine.trim() == "librqbit" {
         settings.engine = "transmission".to_string();
     }
+
+    // Validate seeding_limit_action transition:
+    // - Reject newly selecting Remove or RemoveAndFiles.
+    // - Reject switching between Remove and RemoveAndFiles.
+    // - Permit unrelated saves carrying the same unchanged legacy unsupported value.
+    // - Permit changing a legacy unsupported value to Pause.
+    let stored_action = db
+        .get_setting("user_settings_json")
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| {
+            v.get("seeding_limit_action")
+                .and_then(|a| a.as_str().map(String::from))
+        });
+
+    validate_seeding_limit_action_transition(
+        stored_action.as_deref(),
+        &settings.seeding_limit_action,
+    )?;
+
     let json = serde_json::to_string(&settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
 
@@ -717,6 +738,30 @@ pub fn get_engine_identity_info(
     })
 }
 
+/// Validate transition for `seeding_limit_action`.
+/// - Reject newly selecting Remove or RemoveAndFiles.
+/// - Reject switching between Remove and RemoveAndFiles.
+/// - Permit unrelated saves carrying the same unchanged legacy unsupported value.
+/// - Permit changing a legacy unsupported value to Pause.
+pub fn validate_seeding_limit_action_transition(
+    stored_action: Option<&str>,
+    new_action: &str,
+) -> Result<(), String> {
+    const UNSUPPORTED_SEEDING_ACTIONS: &[&str] = &["Remove", "RemoveAndFiles", "SuperSeeding"];
+    if UNSUPPORTED_SEEDING_ACTIONS.contains(&new_action) {
+        let is_unchanged_legacy = stored_action == Some(new_action);
+        if !is_unchanged_legacy {
+            return Err(format!(
+                "seeding_limit_action '{}' is not supported by the current engine. \
+                 Only 'Pause' can be selected. The engine's built-in seeding-limit \
+                 stop behavior remains active regardless of this setting.",
+                new_action
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,6 +913,85 @@ mod tests {
         assert!(
             deserialized_true.blackout_other_displays_in_fullscreen,
             "Explicit true must be preserved"
+        );
+    }
+
+    // ─── Finding B: seeding_limit_action honesty tests ───────────────────────
+
+    fn settings_with_seeding_action(action: &str) -> UserSettings {
+        let json = format!(r#"{{"seeding_limit_action": "{}"}}"#, action);
+        serde_json::from_str(&json).expect("settings JSON must deserialize")
+    }
+
+    #[test]
+    fn test_seeding_limit_action_pause_to_remove_rejected() {
+        let result = validate_seeding_limit_action_transition(Some("Pause"), "Remove");
+        assert!(result.is_err(), "Pause -> Remove must be rejected");
+        assert!(result.unwrap_err().contains("not supported"));
+    }
+
+    #[test]
+    fn test_seeding_limit_action_pause_to_remove_and_files_rejected() {
+        let result = validate_seeding_limit_action_transition(Some("Pause"), "RemoveAndFiles");
+        assert!(result.is_err(), "Pause -> RemoveAndFiles must be rejected");
+        assert!(result.unwrap_err().contains("not supported"));
+    }
+
+    #[test]
+    fn test_seeding_limit_action_none_to_remove_rejected() {
+        let result = validate_seeding_limit_action_transition(None, "Remove");
+        assert!(result.is_err(), "None -> Remove must be rejected");
+    }
+
+    #[test]
+    fn test_seeding_limit_action_legacy_remove_unchanged_succeeds() {
+        let result = validate_seeding_limit_action_transition(Some("Remove"), "Remove");
+        assert!(
+            result.is_ok(),
+            "Legacy Remove -> unchanged Remove must succeed for unrelated saves"
+        );
+    }
+
+    #[test]
+    fn test_seeding_limit_action_legacy_remove_and_files_unchanged_succeeds() {
+        let result =
+            validate_seeding_limit_action_transition(Some("RemoveAndFiles"), "RemoveAndFiles");
+        assert!(
+            result.is_ok(),
+            "Legacy RemoveAndFiles -> unchanged RemoveAndFiles must succeed"
+        );
+    }
+
+    #[test]
+    fn test_seeding_limit_action_switch_between_unsupported_rejected() {
+        let result1 = validate_seeding_limit_action_transition(Some("Remove"), "RemoveAndFiles");
+        assert!(
+            result1.is_err(),
+            "Remove -> RemoveAndFiles must be rejected"
+        );
+
+        let result2 = validate_seeding_limit_action_transition(Some("RemoveAndFiles"), "Remove");
+        assert!(
+            result2.is_err(),
+            "RemoveAndFiles -> Remove must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_seeding_limit_action_legacy_unsupported_to_pause_succeeds() {
+        let result1 = validate_seeding_limit_action_transition(Some("Remove"), "Pause");
+        assert!(result1.is_ok(), "Remove -> Pause must succeed");
+
+        let result2 = validate_seeding_limit_action_transition(Some("RemoveAndFiles"), "Pause");
+        assert!(result2.is_ok(), "RemoveAndFiles -> Pause must succeed");
+    }
+
+    #[test]
+    fn test_seeding_limit_action_legacy_remove_preserved_on_load() {
+        let s = settings_with_seeding_action("Remove");
+        assert_eq!(
+            s.seeding_limit_action, "Remove",
+            "Legacy 'Remove' stored in DB must load as 'Remove' without silent rewrite"
         );
     }
 }

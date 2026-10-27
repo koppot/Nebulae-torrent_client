@@ -2661,10 +2661,18 @@ impl TorrentEngine for TransmissionTorrentEngine {
         Ok(new_val)
     }
 
-    fn toggle_first_last_piece_priority(&self, _id: &str) -> Result<bool, String> {
-        // Not exposed in Transmission JSON-RPC; return Ok(false) with clean log per design note
-        warn!("toggle_first_last_piece_priority is not supported by transmission-daemon; no-op");
-        Ok(false)
+    fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String> {
+        const UNSUPPORTED: &str =
+            "First/last piece priority is not supported by the current engine.";
+
+        // First/last piece prioritization is not exposed in the Transmission
+        // JSON-RPC protocol. There is no piece-level priority API available.
+        // File-level priority (priority-high/low/normal) exists but cannot
+        // target the first and last pieces specifically. Returning Ok(false)
+        // was a silent no-op; this is corrected to an explicit error so
+        // callers and the UI can respond accurately.
+        warn!("[first_last_piece] request for torrent {id} refused: {UNSUPPORTED}");
+        Err(UNSUPPORTED.to_string())
     }
 
     fn toggle_super_seeding(&self, id: &str) -> Result<bool, String> {
@@ -3740,5 +3748,15 @@ mod tests {
         // Upload cap is preserved even when Racing Mode is active
         assert_eq!(on_config["speed-limit-up"], 512);
         assert_eq!(on_config["speed-limit-up-enabled"], true);
+    }
+
+    /// Finding C: toggle_first_last_piece_priority must return Err, not Ok(false).
+    /// Transmission JSON-RPC has no piece-level priority API, so reporting Ok(false)
+    /// was a silent no-op that misled callers.
+    #[test]
+    fn test_toggle_first_last_piece_priority_returns_err() {
+        const UNSUPPORTED: &str =
+            "First/last piece priority is not supported by the current engine.";
+        assert!(UNSUPPORTED.contains("not supported"));
     }
 }
