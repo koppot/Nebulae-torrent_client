@@ -297,24 +297,24 @@ export default function PlayerOverlay() {
       // episode if the user later selects a different title from the menu.
       if (wasAtMenuRef.current && !p.at_menu) {
         justLeftMenuRef.current = true;
-        invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
+        invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
       if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
         const savedMs = savedPositionMs(player.resolvedPath, p.title);
-        invoke('log_frontend', { message: `[resume-diag] ARM attempt: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} savedMs=${savedMs} path=${player.resolvedPath}` }).catch(() => {});
+        invoke('log_frontend', { message: `[resume-diag] ARM attempt: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} savedMs=${savedMs} path=${player.resolvedPath}` }).catch(() => {});
         if (savedMs >= 10000) {
           pendingResumeRef.current = savedMs;
           pendingResumeTitleRef.current = p.title;
-          invoke('log_frontend', { message: `[resume-diag] ARM armed: pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] ARM armed: gen=${player.gen} pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
         } else {
-          invoke('log_frontend', { message: `[resume-diag] ARM no-save: savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] ARM no-save: gen=${player.gen} savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
         }
         // Arm attempted (whether or not a position was found): stop retrying
         // for this title-start so subsequent poll ticks don't re-check.
         justLeftMenuRef.current = false;
       } else if (justLeftMenuRef.current && !p.at_menu && p.length_ms <= 300_000 && pendingResumeRef.current === null) {
         // Log each waiting tick while length_ms is not yet available (DVD async).
-        invoke('log_frontend', { message: `[resume-diag] ARM waiting: title=${p.title} length_ms=${p.length_ms} playing=${p.playing} (need length_ms>300000)` }).catch(() => {});
+        invoke('log_frontend', { message: `[resume-diag] ARM waiting: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} (need length_ms>300000)` }).catch(() => {});
       }
       // Apply the pending resume: wait until the feature is confirmed playing
       // (VLC may briefly report length before actually playing), then seek
@@ -334,11 +334,11 @@ export default function PlayerOverlay() {
           const seekTarget = pendingResumeRef.current;
           pendingResumeRef.current = null;
           pendingResumeTitleRef.current = null;
-          invoke('log_frontend', { message: `[resume-diag] SEEK dispatching: positionMs=${seekTarget} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] SEEK dispatching: gen=${player.gen} positionMs=${seekTarget} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
           invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
         } else {
           // Log each blocked tick (bounded: clears on seek or at_menu cancel).
-          invoke('log_frontend', { message: `[resume-diag] APPLY blocked: pending=${pendingResumeRef.current} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${guardPlaying} length_ok=${guardLen} time_ok=${guardTime} at_menu=${p.at_menu}` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] APPLY blocked: gen=${player.gen} pending=${pendingResumeRef.current} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${guardPlaying} length_ok=${guardLen} time_ok=${guardTime} at_menu=${p.at_menu}` }).catch(() => {});
         }
       }
       // Cancel pending resume if the user returned to the menu (e.g. pressed
@@ -346,7 +346,7 @@ export default function PlayerOverlay() {
       // a different disc (resolvedPath changed → new useEffect instance).
       if (p.at_menu) {
         if (pendingResumeRef.current !== null) {
-          invoke('log_frontend', { message: `[resume-diag] CANCEL: returned to menu, clearing pendingResume=${pendingResumeRef.current}` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] CANCEL: gen=${player.gen} returned to menu, clearing pendingResume=${pendingResumeRef.current}` }).catch(() => {});
         }
         pendingResumeRef.current = null;
         pendingResumeTitleRef.current = null;
@@ -374,18 +374,39 @@ export default function PlayerOverlay() {
       ro.disconnect();
       window.removeEventListener('resize', syncViewport);
     };
-  }, [player.open, player.resolvedPath, syncViewport]);
+  }, [player.open, player.resolvedPath, player.gen, syncViewport]);
 
   // Listen for playback errors (e.g. AACS decryption failure detected by liveness check).
   useEffect(() => {
     if (!player.open) return;
     const unlisten = listen<string>('nebulae://player-error', (event) => {
+      invoke('log_frontend', {
+        message: `[frontend-diag] player-error received: gen=${player.gen} path=${player.resolvedPath} error=${event.payload}`,
+      }).catch(() => {});
       setErrorMessage(event.payload);
     });
     return () => {
       unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [player.open]);
+  }, [player.open, player.gen, player.resolvedPath]);
+
+  // Track error overlay visibility (z-50 modal)
+  useEffect(() => {
+    if (!player.open) return;
+    if (errorMessage) {
+      invoke('log_frontend', {
+        message: `[frontend-diag] error overlay rendered: gen=${player.gen} (modal active at z-50, backdrop active)`,
+      }).catch(() => {});
+    }
+  }, [errorMessage, player.open, player.gen]);
+
+  // Track controls visibility state changes
+  useEffect(() => {
+    if (!player.open) return;
+    invoke('log_frontend', {
+      message: `[frontend-diag] controlsVisible=${controlsVisible} (gen=${player.gen}, playing=${poll.playing}, title=${poll.title}, at_menu=${poll.at_menu})`,
+    }).catch(() => {});
+  }, [controlsVisible, player.open, player.gen]);
 
   // Track the volume slider once playback is running.
   useEffect(() => {
@@ -1611,7 +1632,10 @@ export default function PlayerOverlay() {
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setErrorMessage(null)}
+                onClick={() => {
+                  invoke('log_frontend', { message: `[frontend-diag] error overlay dismissed by user: gen=${player.gen}` }).catch(() => {});
+                  setErrorMessage(null);
+                }}
                 className="px-3 py-1.5 text-xs rounded border border-[#333333] text-white hover:bg-[#262626] transition"
               >
                 Dismiss
@@ -1619,6 +1643,7 @@ export default function PlayerOverlay() {
               <button
                 type="button"
                 onClick={() => {
+                  invoke('log_frontend', { message: `[frontend-diag] error overlay closePlayer clicked by user: gen=${player.gen}` }).catch(() => {});
                   setErrorMessage(null);
                   void closePlayer();
                 }}

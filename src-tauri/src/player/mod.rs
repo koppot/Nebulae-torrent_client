@@ -110,6 +110,8 @@ pub struct PlayerState {
     pub open_lock: tokio::sync::Mutex<()>,
     /// Encoded black-bar cropping state.
     pub framing: Mutex<FramingState>,
+    /// Last poll transition state logged: (gen, title, at_menu, playing) for bounded diagnostics.
+    pub last_logged_poll_state: Mutex<Option<(u64, i32, bool, bool)>>,
 }
 
 /// Black-bar measurement and crop tracking state for the active session.

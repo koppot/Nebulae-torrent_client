@@ -63,24 +63,32 @@ export const App: React.FC = () => {
   };
   useEffect(() => {
     const un = listen<PlayerOpenInfo>('player-opened', (e) => {
-      invoke('log_frontend', { message: `[player-opened] external=${e.payload.external}` }).catch(() => {});
+      const isStale = isStaleEngineGen(e.payload.gen);
+      const cur = playerStore.get();
+      invoke('log_frontend', {
+        message: `[frontend-diag] player-opened received: gen=${e.payload.gen} path=${e.payload.resolved_path} external=${e.payload.external} isStale=${isStale} curOpen=${cur.open} curGen=${cur.gen} curPath=${cur.resolvedPath}`,
+      }).catch(() => {});
       if (e.payload.external) return;
       noteEngineGen(e.payload.gen);
       // The event repeats at 0/1.5/4/8s after open: a repeat that outlives
       // a user close belongs to a dead session - never let it reopen the
       // player UI.
-      if (isStaleEngineGen(e.payload.gen)) return;
+      if (isStale) return;
       // The event repeats several times per open; an explicit open already
       // set the correct display title for THIS path (e.g. the import
       // prompt's "Name (Year)") - don't overwrite it with a torrent guess.
-      const cur = playerStore.get();
       if (cur.open && cur.resolvedPath === e.payload.resolved_path) return;
+      invoke('log_frontend', {
+        message: `[frontend-diag] playerStore.open invoked from player-opened: gen=${e.payload.gen} path=${e.payload.resolved_path}`,
+      }).catch(() => {});
       playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
     });
     const unClosed1 = listen('player-closed', () => {
+      invoke('log_frontend', { message: `[frontend-diag] player-closed received` }).catch(() => {});
       playerStore.close();
     });
     const unClosed2 = listen('player://closed', () => {
+      invoke('log_frontend', { message: `[frontend-diag] player://closed received` }).catch(() => {});
       playerStore.close();
     });
     // Belt-and-braces: poll the engine for a live session while the player
@@ -99,12 +107,16 @@ export const App: React.FC = () => {
           // flight while the session was torn down) must not reopen the UI.
           if (isStaleEngineGen(s.gen)) return;
           if (!playerStore.get().open) {
+            invoke('log_frontend', {
+              message: `[frontend-diag] playerStore.open adopted via engine poll: gen=${s.gen} path=${s.resolved_path}`,
+            }).catch(() => {});
             playerStore.open(
               {
                 resolved_path: s.resolved_path,
                 title: s.title,
                 is_disc: s.is_disc,
                 external: false,
+                gen: s.gen,
               },
               featureLabelForPath(s.resolved_path),
             );

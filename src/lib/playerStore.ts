@@ -29,9 +29,10 @@ interface PlayerStoreState {
   year?: number | string | null;
   resolvedPath: string;
   isDisc: boolean;
+  gen?: number | null;
 }
 
-let state: PlayerStoreState = { open: false, title: '', year: null, resolvedPath: '', isDisc: false };
+let state: PlayerStoreState = { open: false, title: '', year: null, resolvedPath: '', isDisc: false, gen: null };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -46,10 +47,12 @@ export const playerStore = {
       year: year ?? null,
       resolvedPath: info.resolved_path,
       isDisc: info.is_disc,
+      gen: info.gen ?? null,
     };
     emit();
   },
   close() {
+    invoke('log_frontend', { message: `[frontend-diag] playerStore.close() called` }).catch(() => {});
     state = { ...state, open: false };
     try {
       if (typeof document !== 'undefined') {
@@ -122,6 +125,9 @@ export async function openInPlayer(
     // menu (engine flag, no race) and seeks once the feature engages.
     const resume = !!opts?.resume;
     const seekTo = opts?.seekTo ?? 0;
+    invoke('log_frontend', {
+      message: `[frontend-diag] openInPlayer starting: filePath=${filePath} resume=${resume} seekTo=${seekTo}`,
+    }).catch(() => {});
     // A close still in flight must land BEFORE the new session starts:
     // player_close stops whatever is live and the commands run concurrently
     // on the backend, so an overlapping close would kill the new session.
@@ -130,6 +136,9 @@ export async function openInPlayer(
       filePath,
       resume,
     });
+    invoke('log_frontend', {
+      message: `[frontend-diag] openInPlayer resolved: gen=${info.gen} path=${info.resolved_path} is_disc=${info.is_disc} external=${info.external}`,
+    }).catch(() => {});
     // Fence anchor: even if no player-opened event or poll has arrived yet,
     // a close right after this point still fences this session's callbacks.
     closeCoordinator.noteEngineGen(info.gen);
