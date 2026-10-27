@@ -6,7 +6,7 @@ import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { resolvePoster } from '../../lib/posters';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { clearPositionMs, openInPlayer, resumeInPlayer, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
+import { openInPlayer, resumeInPlayer, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import {
   TorrentItem,
   DiscStructureInfo,
@@ -776,14 +776,6 @@ export const SimpleMediaView: React.FC = () => {
       discs.length - 1,
     );
     const effDisc = discs[effIdx] || discs[0];
-    // Resume target: a stored path (multi-ISO set) or a torrent id (boxset).
-    // An absolute path starts with / (Unix) or a drive letter (Windows: C:\).
-    const isAbsPath = (k: string) => k.startsWith('/') || /^[A-Za-z]:[/\\]/.test(k);
-    const resumePath = rememberedKey
-      ? isAbsPath(rememberedKey)
-        ? rememberedKey
-        : (discs.find((d) => d.key === rememberedKey)?.path ?? effDisc.path)
-      : null;
 
     // Aggregated disc badge from the FULL disc set (multi-ISO torrents count
     // every disc by its own size), owner's mock format: "DVD-9 ×2", mixed
@@ -835,7 +827,14 @@ export const SimpleMediaView: React.FC = () => {
               <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                 {(() => {
                   const onPrimary = () => {
-                    if (resumePath) clearPositionMs(resumePath);
+                    // Do NOT clear the saved position here. clearPositionMs was previously
+                    // called on every library Play click, which destroyed the resume point
+                    // written by X-btn / pause / Menu before the user even reached the
+                    // authored disc menu — causing the ARM to always read savedMs=0.
+                    // The ARM mechanism already handles a missing save correctly (reads 0,
+                    // does not arm, feature plays from beginning). A saved position is
+                    // restored only when the user selects the same feature from the
+                    // authored menu (wasAtMenuRef → justLeftMenuRef → ARM → seek).
                     handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
                   };
                   return (
