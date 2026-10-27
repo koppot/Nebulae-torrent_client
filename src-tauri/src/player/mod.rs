@@ -74,6 +74,9 @@ pub struct PlayerState {
     /// Used by embed_macos to configure ITU-R BT.2100 PQ color space on the
     /// video layer instead of standard sRGB.
     pub is_hdr: std::sync::atomic::AtomicBool,
+    /// Indicates whether the active session is playing in direct main-feature mode
+    /// with menus bypassed (via :no-bluray-menu and :no-dvdnav-menu).
+    pub bypass_menu: std::sync::atomic::AtomicBool,
     /// The loaded libVLC, created on first use.
     pub lib: Mutex<Option<std::sync::Arc<engine::VlcLib>>>,
     /// libvlc_instance_t*

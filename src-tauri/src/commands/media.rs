@@ -505,6 +505,9 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     state
         .edr_applied
         .store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .bypass_menu
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 
     use tauri::Emitter;
     let _ = app.emit("player://closed", ());
@@ -523,7 +526,7 @@ fn start_playback(
     file_path: &str,
     resume: bool,
 ) -> Result<ResolvedPlayback, String> {
-    start_playback_inner(app, state, file_path, resume, None)
+    start_playback_inner(app, state, file_path, resume, None, false)
 }
 
 /// Inner implementation; `explicit_feature` bypasses the disc-file redirect
@@ -535,7 +538,11 @@ fn start_playback_inner(
     file_path: &str,
     resume: bool,
     explicit_feature: Option<&str>,
+    bypass_menu: bool,
 ) -> Result<ResolvedPlayback, String> {
+    state
+        .bypass_menu
+        .store(bypass_menu, std::sync::atomic::Ordering::SeqCst);
     let resolved = if let Some(feature) = explicit_feature {
         // Explicit resume: the caller already resolved the feature file.
         // Treat it as a plain file path so resolve_playback cannot redirect
@@ -598,6 +605,7 @@ fn start_playback_inner(
                 &state.shared_instance,
                 &resolved.resolved_path,
                 view,
+                bypass_menu,
             ) {
                 Ok(session) => {
                     // Record session pointers immediately so stop_session and
@@ -668,165 +676,115 @@ fn start_playback_inner(
                         resolved.is_disc
                     );
                     if resolved.is_disc && !resume {
-                        // AUTHORED MENU WATCHER:
-                        // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
-                        // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
-                        // unless an interactive menu call is dispatched.
-                        // We poll at a tight 20ms cadence for demuxer readiness, dispatch
-                        // navigate_menu immediately, and if First Play masks menu calls
-                        // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
-                        // end of First Play (0.99) so it triggers its authored JumpTitle 0 into Top Menu.
-                        let app_menu = app.clone();
-                        let menu_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                        let menu_mp = session.media_player;
-                        std::thread::spawn(move || {
-                            use tauri::Manager;
-                            let max_wait_attempts = 150; // 150 * 20ms = 3s
-                            let mut ready = false;
-                            for _ in 0..max_wait_attempts {
-                                std::thread::sleep(std::time::Duration::from_millis(20));
+                        if !bypass_menu {
+                            // AUTHORED MENU WATCHER:
+                            // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
+                            // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
+                            // unless an interactive menu call is dispatched.
+                            // We poll at a tight 20ms cadence for demuxer readiness, dispatch
+                            // navigate_menu immediately, and if First Play masks menu calls
+                            // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
+                            // end of First Play (0.99) so it triggers its authored JumpTitle 0 into Top Menu.
+                            let app_menu = app.clone();
+                            let menu_gen =
+                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                            let menu_mp = session.media_player;
+                            std::thread::spawn(move || {
+                                use tauri::Manager;
+                                let max_wait_attempts = 150; // 150 * 20ms = 3s
+                                let mut ready = false;
+                                for _ in 0..max_wait_attempts {
+                                    std::thread::sleep(std::time::Duration::from_millis(20));
+                                    let state = app_menu.state::<PlayerState>();
+                                    let gen_now =
+                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                    if gen_now != menu_gen || !*poison(&state.started) {
+                                        return;
+                                    }
+                                    let mp = *poison(&state.media_player);
+                                    if mp == 0 || mp != menu_mp {
+                                        return;
+                                    }
+                                    let lib = match loaded_lib(&state) {
+                                        Ok(l) => l,
+                                        Err(_) => return,
+                                    };
+                                    let count = unsafe {
+                                        (lib.libvlc_media_player_get_title_count)(mp as *mut c_void)
+                                    };
+                                    if count > 0 {
+                                        ready = true;
+                                        break;
+                                    }
+                                }
+                                if !ready {
+                                    tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 3s; exiting"
+                                );
+                                    return;
+                                }
+
                                 let state = app_menu.state::<PlayerState>();
-                                let gen_now =
-                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                if gen_now != menu_gen || !*poison(&state.started) {
-                                    return;
-                                }
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 || mp != menu_mp {
-                                    return;
-                                }
                                 let lib = match loaded_lib(&state) {
                                     Ok(l) => l,
                                     Err(_) => return,
                                 };
-                                let count = unsafe {
-                                    (lib.libvlc_media_player_get_title_count)(mp as *mut c_void)
-                                };
-                                if count > 0 {
-                                    ready = true;
-                                    break;
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 || mp != menu_mp {
+                                    return;
                                 }
-                            }
-                            if !ready {
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 3s; exiting"
-                                );
-                                return;
-                            }
 
-                            let state = app_menu.state::<PlayerState>();
-                            let lib = match loaded_lib(&state) {
-                                Ok(l) => l,
-                                Err(_) => return,
-                            };
-                            let mp = *poison(&state.media_player);
-                            if mp == 0 || mp != menu_mp {
-                                return;
-                            }
-
-                            // Title/menu evidence: log once when titles first become ready
-                            unsafe {
-                                let title_count =
-                                    (lib.libvlc_media_player_get_title_count)(mp as *mut c_void);
-                                let cur_title =
-                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void);
-                                let has_menu = engine::has_menu_title(&lib, mp);
-                                let is_menu = engine::is_menu_title(&lib, mp);
-                                tracing::info!(
+                                // Title/menu evidence: log once when titles first become ready
+                                unsafe {
+                                    let title_count = (lib.libvlc_media_player_get_title_count)(
+                                        mp as *mut c_void,
+                                    );
+                                    let cur_title =
+                                        (lib.libvlc_media_player_get_title)(mp as *mut c_void);
+                                    let has_menu = engine::has_menu_title(&lib, mp);
+                                    let is_menu = engine::is_menu_title(&lib, mp);
+                                    tracing::info!(
                                     "[title-diag] session_gen={menu_gen} titles ready: count={title_count} cur_title={cur_title} has_menu_title={has_menu} is_menu_title={is_menu}"
                                 );
-                                let mut titles_ptr: *mut *mut engine::VlcTitleDescription =
-                                    std::ptr::null_mut();
-                                let n = (lib.libvlc_media_player_get_full_title_descriptions)(
-                                    mp as *mut c_void,
-                                    &mut titles_ptr,
-                                );
-                                if n > 0 && !titles_ptr.is_null() {
-                                    for idx in 0..n {
-                                        let t = &**titles_ptr.add(idx as usize);
-                                        let name = if !t.psz_name.is_null() {
-                                            std::ffi::CStr::from_ptr(t.psz_name)
-                                                .to_string_lossy()
-                                                .into_owned()
-                                        } else {
-                                            "none".to_string()
-                                        };
-                                        let flags = t.i_flags;
-                                        let is_menu_flag = (flags & engine::INPUT_TITLE_MENU) != 0;
-                                        let is_interactive =
-                                            (flags & engine::INPUT_TITLE_INTERACTIVE) != 0;
-                                        tracing::info!(
+                                    let mut titles_ptr: *mut *mut engine::VlcTitleDescription =
+                                        std::ptr::null_mut();
+                                    let n = (lib.libvlc_media_player_get_full_title_descriptions)(
+                                        mp as *mut c_void,
+                                        &mut titles_ptr,
+                                    );
+                                    if n > 0 && !titles_ptr.is_null() {
+                                        for idx in 0..n {
+                                            let t = &**titles_ptr.add(idx as usize);
+                                            let name = if !t.psz_name.is_null() {
+                                                std::ffi::CStr::from_ptr(t.psz_name)
+                                                    .to_string_lossy()
+                                                    .into_owned()
+                                            } else {
+                                                "none".to_string()
+                                            };
+                                            let flags = t.i_flags;
+                                            let is_menu_flag =
+                                                (flags & engine::INPUT_TITLE_MENU) != 0;
+                                            let is_interactive =
+                                                (flags & engine::INPUT_TITLE_INTERACTIVE) != 0;
+                                            tracing::info!(
                                             "[title-diag] session_gen={menu_gen} title[{idx}]: name='{name}' duration_ms={} flags=0x{flags:02x} (MENU={is_menu_flag}, INTERACTIVE={is_interactive})",
                                             t.i_duration
                                         );
-                                    }
-                                    (lib.libvlc_title_descriptions_release)(titles_ptr, n);
-                                }
-                            }
-
-                            // Outcome A: If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
-                            if unsafe { engine::is_menu_title(&lib, mp) } {
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
-                                );
-                                return;
-                            }
-
-                            // Outcome B: If already at confirmed active feature playback, preserve it and done.
-                            if unsafe { engine::is_active_feature_playback(&lib, mp) } {
-                                let cur = unsafe {
-                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                };
-                                let len = unsafe {
-                                    (lib.libvlc_media_player_get_length)(mp as *mut c_void)
-                                };
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at active feature playback on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
-                                );
-                                return;
-                            }
-
-                            let nav_menu = {
-                                let lib_clone = lib.clone();
-                                move || unsafe {
-                                    if let Some(navigate_menu) =
-                                        lib_clone.libvlc_media_player_navigate_menu
-                                    {
-                                        navigate_menu(mp as *mut c_void);
-                                    } else {
-                                        tracing::warn!(
-                                            "[menu-diag] navigate_menu symbol unavailable on this libvlc build"
-                                        );
+                                        }
+                                        (lib.libvlc_title_descriptions_release)(titles_ptr, n);
                                     }
                                 }
-                            };
 
-                            tracing::info!(
-                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU"
-                            );
-                            nav_menu();
-
-                            // Check if navigate_menu or natural flow reached menu or feature within 200ms (10 * 20ms)
-                            for _ in 0..10 {
-                                std::thread::sleep(std::time::Duration::from_millis(20));
-                                let gen_now =
-                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                if gen_now != menu_gen || !*poison(&state.started) {
-                                    tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): aborted during initial 200ms check"
-                                    );
-                                    return;
-                                }
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 || mp != menu_mp {
-                                    return;
-                                }
+                                // Outcome A: If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
                                 if unsafe { engine::is_menu_title(&lib, mp) } {
                                     tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms [Outcome A]"
-                                    );
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
+                                );
                                     return;
                                 }
+
+                                // Outcome B: If already at confirmed active feature playback, preserve it and done.
                                 if unsafe { engine::is_active_feature_playback(&lib, mp) } {
                                     let cur = unsafe {
                                         (lib.libvlc_media_player_get_title)(mp as *mut c_void)
@@ -835,451 +793,533 @@ fn start_playback_inner(
                                         (lib.libvlc_media_player_get_length)(mp as *mut c_void)
                                     };
                                     tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at active feature playback on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
+                                );
+                                    return;
+                                }
+
+                                let nav_menu = {
+                                    let lib_clone = lib.clone();
+                                    move || unsafe {
+                                        if let Some(navigate_menu) =
+                                            lib_clone.libvlc_media_player_navigate_menu
+                                        {
+                                            navigate_menu(mp as *mut c_void);
+                                        } else {
+                                            tracing::warn!(
+                                            "[menu-diag] navigate_menu symbol unavailable on this libvlc build"
+                                        );
+                                        }
+                                    }
+                                };
+
+                                tracing::info!(
+                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU"
+                            );
+                                nav_menu();
+
+                                // Check if navigate_menu or natural flow reached menu or feature within 200ms (10 * 20ms)
+                                for _ in 0..10 {
+                                    std::thread::sleep(std::time::Duration::from_millis(20));
+                                    let gen_now =
+                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                    if gen_now != menu_gen || !*poison(&state.started) {
+                                        tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): aborted during initial 200ms check"
+                                    );
+                                        return;
+                                    }
+                                    let mp = *poison(&state.media_player);
+                                    if mp == 0 || mp != menu_mp {
+                                        return;
+                                    }
+                                    if unsafe { engine::is_menu_title(&lib, mp) } {
+                                        tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms [Outcome A]"
+                                    );
+                                        return;
+                                    }
+                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                        let cur = unsafe {
+                                            (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                        };
+                                        let len = unsafe {
+                                            (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                        };
+                                        tracing::info!(
                                         "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur} (length_ms={len}) within 200ms [Outcome B]; preserving playback"
                                     );
-                                    return;
+                                        return;
+                                    }
                                 }
-                            }
 
-                            // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
-                            // navigate_menu is rejected by libbluray. If the disc has an authored menu title
-                            // and we are currently in First Play / short intro (<= 300s), seek to the end of
-                            // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
-                            let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
-                            let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
-                            let is_feat = unsafe { engine::is_active_feature_playback(&lib, mp) };
-                            if has_menu && is_fp && !is_feat {
-                                tracing::info!(
+                                // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
+                                // navigate_menu is rejected by libbluray. If the disc has an authored menu title
+                                // and we are currently in First Play / short intro (<= 300s), seek to the end of
+                                // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
+                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+                                let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
+                                let is_feat =
+                                    unsafe { engine::is_active_feature_playback(&lib, mp) };
+                                if has_menu && is_fp && !is_feat {
+                                    tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 APPLIED (has_menu=true, is_fp=true)"
                                 );
-                                unsafe {
-                                    (lib.libvlc_media_player_set_position)(mp as *mut c_void, 0.99);
-                                }
-                            } else {
-                                tracing::info!(
+                                    unsafe {
+                                        (lib.libvlc_media_player_set_position)(
+                                            mp as *mut c_void,
+                                            0.99,
+                                        );
+                                    }
+                                } else {
+                                    tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 SKIPPED (has_menu={has_menu}, is_fp={is_fp}, is_feat={is_feat})"
                                 );
-                            }
+                                }
 
-                            // Poll up to 15s (75 * 200ms).
-                            for i in 0..75 {
-                                std::thread::sleep(std::time::Duration::from_millis(200));
-                                let gen_now =
-                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                if gen_now != menu_gen || !*poison(&state.started) {
-                                    tracing::info!(
+                                // Poll up to 15s (75 * 200ms).
+                                for i in 0..75 {
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                    let gen_now =
+                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                    if gen_now != menu_gen || !*poison(&state.started) {
+                                        tracing::info!(
                                         "[menu-diag] menu watcher (session_gen={menu_gen}): cancelled at iteration {i} (session ended/changed)"
                                     );
-                                    return;
-                                }
-                                let mp = *poison(&state.media_player);
-                                if mp == 0 || mp != menu_mp {
-                                    return;
-                                }
+                                        return;
+                                    }
+                                    let mp = *poison(&state.media_player);
+                                    if mp == 0 || mp != menu_mp {
+                                        return;
+                                    }
 
-                                // Outcome A: Authored menu reached safely
-                                if unsafe { engine::is_menu_title(&lib, mp) } {
-                                    tracing::info!(
+                                    // Outcome A: Authored menu reached safely
+                                    if unsafe { engine::is_menu_title(&lib, mp) } {
+                                        tracing::info!(
                                         "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{}ms) [Outcome A]",
                                         i * 200
                                     );
-                                    return;
-                                }
+                                        return;
+                                    }
 
-                                // Outcome B: Confirmed active feature playback engaged
-                                if unsafe { engine::is_active_feature_playback(&lib, mp) } {
-                                    let cur = unsafe {
-                                        (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                    };
-                                    let len = unsafe {
-                                        (lib.libvlc_media_player_get_length)(mp as *mut c_void)
-                                    };
-                                    tracing::info!(
+                                    // Outcome B: Confirmed active feature playback engaged
+                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                        let cur = unsafe {
+                                            (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                        };
+                                        let len = unsafe {
+                                            (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                        };
+                                        tracing::info!(
                                         "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at iteration {i} (T+{}ms) [Outcome B]; stopping startup watcher",
                                         i * 200
                                     );
+                                        return;
+                                    }
+
+                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU every 2s.
+                                    // NOTE: Do NOT repeatedly force set_title(menu_title) over active content.
+                                    if i > 0 && i % 10 == 0 {
+                                        tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU at iteration {i}"
+                                    );
+                                        nav_menu();
+                                    }
+                                }
+
+                                // Bounded startup window (15s) elapsed.
+                                let gen_now =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                if gen_now != menu_gen || !*poison(&state.started) {
+                                    return;
+                                }
+                                let mp = *poison(&state.media_player);
+                                if mp == 0 || mp != menu_mp {
                                     return;
                                 }
 
-                                // If introductory logos mask menu calls, retry INPUT_NAV_MENU every 2s.
-                                // NOTE: Do NOT repeatedly force set_title(menu_title) over active content.
-                                if i > 0 && i % 10 == 0 {
+                                let is_playing = unsafe {
+                                    (lib.libvlc_media_player_is_playing)(mp as *mut c_void) != 0
+                                };
+                                let cur_title = unsafe {
+                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                };
+                                let cur_len = unsafe {
+                                    (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                };
+
+                                if unsafe { engine::is_menu_title(&lib, mp) } {
                                     tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU at iteration {i}"
-                                    );
-                                    nav_menu();
-                                }
-                            }
-
-                            // Bounded startup window (15s) elapsed.
-                            let gen_now =
-                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                            if gen_now != menu_gen || !*poison(&state.started) {
-                                return;
-                            }
-                            let mp = *poison(&state.media_player);
-                            if mp == 0 || mp != menu_mp {
-                                return;
-                            }
-
-                            let is_playing = unsafe {
-                                (lib.libvlc_media_player_is_playing)(mp as *mut c_void) != 0
-                            };
-                            let cur_title =
-                                unsafe { (lib.libvlc_media_player_get_title)(mp as *mut c_void) };
-                            let cur_len =
-                                unsafe { (lib.libvlc_media_player_get_length)(mp as *mut c_void) };
-
-                            if unsafe { engine::is_menu_title(&lib, mp) } {
-                                tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): disc at authored menu at 15s exit [Outcome A]"
                                 );
-                                return;
-                            }
+                                    return;
+                                }
 
-                            if is_playing
-                                && (cur_len >= 120_000
-                                    || unsafe { engine::is_active_feature_playback(&lib, mp) })
-                            {
-                                tracing::info!(
+                                if is_playing
+                                    && (cur_len >= 120_000
+                                        || unsafe { engine::is_active_feature_playback(&lib, mp) })
+                                {
+                                    tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur_title} (length_ms={cur_len}) at 15s exit [Outcome B]; preserving playback"
                                 );
-                                return;
-                            }
-
-                            // Outcome C: Menu startup did not complete and no usable playback is active.
-                            // Use safe bounded main-feature fallback if available.
-                            let disc_path = poison(&state.current_resolved)
-                                .clone()
-                                .or_else(|| poison(&state.current_path).clone());
-                            if let Some(feature_title) = unsafe {
-                                engine::find_main_feature_title_with_disc_meta(
-                                    &lib,
-                                    mp,
-                                    disc_path.as_deref(),
-                                )
-                            } {
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete and on static/intro title {cur_title}; falling back to main feature title {feature_title} [Outcome C]"
-                                );
-                                unsafe {
-                                    (lib.libvlc_media_player_set_title)(
-                                        mp as *mut c_void,
-                                        feature_title,
-                                    );
-                                    (lib.libvlc_media_player_play)(mp as *mut c_void);
+                                    return;
                                 }
-                                select_normal_audio_track(&lib, mp, menu_gen);
-                            } else {
-                                tracing::warn!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no safe feature title found [Outcome None]; leaving recoverable player state"
+
+                                // Outcome C: Menu startup did not complete and no usable playback is active.
+                                // Use safe bounded main-feature fallback: reopen the disc with bypass_menu=true.
+                                let disc_path = poison(&state.current_resolved)
+                                    .clone()
+                                    .or_else(|| poison(&state.current_path).clone());
+                                if let Some(path) = disc_path {
+                                    tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete on static/intro title {cur_title}; falling back to direct main-feature playback [Outcome C]"
                                 );
-                            }
-                        });
+                                    let app_fallback = app_menu.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        use tauri::Manager;
+                                        let s = app_fallback.state::<PlayerState>();
+                                        let _ = player_open_inner(
+                                            &app_fallback,
+                                            &s,
+                                            path,
+                                            false,
+                                            None,
+                                            true,
+                                        )
+                                        .await;
+                                    });
+                                } else {
+                                    tracing::warn!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no disc path found [Outcome None]; leaving recoverable player state"
+                                );
+                                }
+                            });
 
-                        // DISC WARNING SKIP WATCHER:
-                        // For discs that play a mandatory warning clip after the user selects
-                        // Play from the authored top menu (e.g. Summer Wars FBI warning:
-                        // PLAYLIST/00100.mpls, ~9 s), once the warning has genuinely played
-                        // through once, persist a flag so subsequent sessions skip past it.
-                        //
-                        // Actual sequence handled:
-                        //   Disc opens → is_menu_title true (top menu) →
-                        //   user selects Play → playlist_id changes to warning MPLS →
-                        //   warning plays to near-end → playlist_id changes to feature MPLS →
-                        //   flag written.
-                        //
-                        // Identity: (disc_sha1, warn_mpls_id, warn_mpls_size).
-                        //   disc_sha1     = SHA-1 of BDMV/MovieObject.bdmv
-                        //   warn_mpls_id  = MPLS number of the warning clip
-                        //   warn_mpls_size = byte size of that MPLS file at record time
-                        // All three must match on a subsequent session for the skip to fire.
-                        //
-                        // Detection: libvlc_media_player_get_bluray_playlist_id() — custom
-                        // export from patches/vlc-3.0.23/bluray-playlist-id.patch.
-                        // Absent export → watcher exits immediately; no effect.
-                        //
-                        // Recording state machine (RECORD MODE):
-                        //   1. Wait up to 15 s for is_menu_title == true (top menu active).
-                        //      Not a menu-first disc → exit without recording.
-                        //   2. Wait for is_menu_title == false (user selects Play).
-                        //      First playlist_id while is_menu_title is false = warning candidate.
-                        //   3. Track position on candidate. On playlist_id change:
-                        //      - is_menu_title true → user backed to menu; do NOT write flag.
-                        //      - Different non-menu playlist_id AND saw_near_end → write flag.
-                        //      - Different non-menu playlist_id AND NOT saw_near_end → exit, no flag.
-                        //
-                        // Skip (SKIP MODE):
-                        //   When playlist_id == recorded warn_mpls_id (and MPLS size matches),
-                        //   call set_position(0.99) once. Disc HDMV VM handles transition.
-                        if resolved.is_disc {
-                            let app_warn = app.clone();
-                            let warn_gen =
-                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                            let warn_mp = session.media_player;
-                            let warn_disc_path = resolved.resolved_path.clone();
-                            std::thread::spawn(move || {
-                                use tauri::Manager;
+                            // DISC WARNING SKIP WATCHER:
+                            // For discs that play a mandatory warning clip after the user selects
+                            // Play from the authored top menu (e.g. Summer Wars FBI warning:
+                            // PLAYLIST/00100.mpls, ~9 s), once the warning has genuinely played
+                            // through once, persist a flag so subsequent sessions skip past it.
+                            //
+                            // Actual sequence handled:
+                            //   Disc opens → is_menu_title true (top menu) →
+                            //   user selects Play → playlist_id changes to warning MPLS →
+                            //   warning plays to near-end → playlist_id changes to feature MPLS →
+                            //   flag written.
+                            //
+                            // Identity: (disc_sha1, warn_mpls_id, warn_mpls_size).
+                            //   disc_sha1     = SHA-1 of BDMV/MovieObject.bdmv
+                            //   warn_mpls_id  = MPLS number of the warning clip
+                            //   warn_mpls_size = byte size of that MPLS file at record time
+                            // All three must match on a subsequent session for the skip to fire.
+                            //
+                            // Detection: libvlc_media_player_get_bluray_playlist_id() — custom
+                            // export from patches/vlc-3.0.23/bluray-playlist-id.patch.
+                            // Absent export → watcher exits immediately; no effect.
+                            //
+                            // Recording state machine (RECORD MODE):
+                            //   1. Wait up to 15 s for is_menu_title == true (top menu active).
+                            //      Not a menu-first disc → exit without recording.
+                            //   2. Wait for is_menu_title == false (user selects Play).
+                            //      First playlist_id while is_menu_title is false = warning candidate.
+                            //   3. Track position on candidate. On playlist_id change:
+                            //      - is_menu_title true → user backed to menu; do NOT write flag.
+                            //      - Different non-menu playlist_id AND saw_near_end → write flag.
+                            //      - Different non-menu playlist_id AND NOT saw_near_end → exit, no flag.
+                            //
+                            // Skip (SKIP MODE):
+                            //   When playlist_id == recorded warn_mpls_id (and MPLS size matches),
+                            //   call set_position(0.99) once. Disc HDMV VM handles transition.
+                            if resolved.is_disc {
+                                let app_warn = app.clone();
+                                let warn_gen =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                let warn_mp = session.media_player;
+                                let warn_disc_path = resolved.resolved_path.clone();
+                                std::thread::spawn(move || {
+                                    use tauri::Manager;
 
-                                // Require the custom bluray-playlist-id export.
-                                let state = app_warn.state::<PlayerState>();
-                                let lib = match loaded_lib(&state) {
-                                    Ok(l) => l,
-                                    Err(_) => return,
-                                };
-                                let get_playlist_id = match lib
-                                    .libvlc_media_player_get_bluray_playlist_id
-                                {
-                                    Some(f) => f,
-                                    None => {
-                                        tracing::debug!(
+                                    // Require the custom bluray-playlist-id export.
+                                    let state = app_warn.state::<PlayerState>();
+                                    let lib = match loaded_lib(&state) {
+                                        Ok(l) => l,
+                                        Err(_) => return,
+                                    };
+                                    let get_playlist_id = match lib
+                                        .libvlc_media_player_get_bluray_playlist_id
+                                    {
+                                        Some(f) => f,
+                                        None => {
+                                            tracing::debug!(
                                             "[warn-watcher] libvlc_media_player_get_bluray_playlist_id \
                                              not present — warning-skip feature inactive"
                                         );
-                                        return;
-                                    }
-                                };
-
-                                // Resolve disc root from resolved_path.
-                                let disc_root = {
-                                    let p = Path::new(&warn_disc_path);
-                                    if p.join("BDMV").is_dir()
-                                        || p.file_name().and_then(|n| n.to_str()) == Some("BDMV")
-                                    {
-                                        p.to_path_buf()
-                                    } else if p
-                                        .parent()
-                                        .map(|pp| pp.join("BDMV").is_dir())
-                                        .unwrap_or(false)
-                                    {
-                                        p.parent().unwrap().to_path_buf()
-                                    } else {
-                                        return;
-                                    }
-                                };
-
-                                let bdmv_dir = disc_root.join("BDMV");
-                                let movieobject_path = bdmv_dir.join("MovieObject.bdmv");
-                                if !movieobject_path.exists() {
-                                    return;
-                                }
-                                let disc_sha1 = match sha1_file(&movieobject_path) {
-                                    Some(s) => s,
-                                    None => return,
-                                };
-
-                                // Session/generation fence macro.
-                                // Returns current mp pointer, or returns from thread if stale.
-                                macro_rules! mp_or_return {
-                                    () => {{
-                                        let s = app_warn.state::<PlayerState>();
-                                        let g =
-                                            s.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                        if g != warn_gen || !*poison(&s.started) {
                                             return;
                                         }
-                                        let mp = *poison(&s.media_player);
-                                        if mp == 0 || mp != warn_mp {
+                                    };
+
+                                    // Resolve disc root from resolved_path.
+                                    let disc_root = {
+                                        let p = Path::new(&warn_disc_path);
+                                        if p.join("BDMV").is_dir()
+                                            || p.file_name().and_then(|n| n.to_str())
+                                                == Some("BDMV")
+                                        {
+                                            p.to_path_buf()
+                                        } else if p
+                                            .parent()
+                                            .map(|pp| pp.join("BDMV").is_dir())
+                                            .unwrap_or(false)
+                                        {
+                                            p.parent().unwrap().to_path_buf()
+                                        } else {
                                             return;
                                         }
-                                        mp
-                                    }};
-                                }
+                                    };
 
-                                // Find any existing flag for this disc.
-                                // Key: disc_sha1 only (at most one warning entry per disc).
-                                let warns = read_disc_warns(&app_warn);
-                                let existing_entry: Option<DiscWarnEntry> = warns
-                                    .iter()
-                                    .find(|e| e.disc_sha1 == disc_sha1 && e.warn_seen)
-                                    .cloned();
-
-                                if let Some(entry) = existing_entry {
-                                    // ---- SKIP MODE ----
-                                    // Verify MPLS file still has the recorded size.
-                                    let playlist_path = bdmv_dir
-                                        .join("PLAYLIST")
-                                        .join(format!("{:05}.mpls", entry.warn_mpls_id));
-                                    let actual_size = std::fs::metadata(&playlist_path)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0);
-                                    if actual_size == 0 || actual_size != entry.warn_mpls_size {
-                                        tracing::warn!(
-                                            "[warn-watcher] skip: MPLS {:05} size mismatch \
-                                             (recorded {}, on-disc {}) — not skipping",
-                                            entry.warn_mpls_id,
-                                            entry.warn_mpls_size,
-                                            actual_size
-                                        );
+                                    let bdmv_dir = disc_root.join("BDMV");
+                                    let movieobject_path = bdmv_dir.join("MovieObject.bdmv");
+                                    if !movieobject_path.exists() {
                                         return;
                                     }
-                                    tracing::info!(
-                                        "[warn-watcher] skip mode: disc_sha1={} \
-                                         warning={:05} ({}B)",
-                                        disc_sha1,
-                                        entry.warn_mpls_id,
-                                        entry.warn_mpls_size
-                                    );
-                                    // Poll up to 30 s (600 × 50 ms) for the warning playlist.
-                                    let mut skipped = false;
-                                    for _ in 0..600 {
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                        let mp = mp_or_return!();
-                                        let playlist_id =
-                                            unsafe { get_playlist_id(mp as *mut c_void) as i32 };
-                                        if playlist_id == entry.warn_mpls_id as i32 {
-                                            tracing::info!(
-                                                "[warn-watcher] skip: warning playlist {:05} \
-                                                 active — seeking to 0.99",
-                                                entry.warn_mpls_id
-                                            );
-                                            unsafe {
-                                                (lib.libvlc_media_player_set_position)(
-                                                    mp as *mut c_void,
-                                                    0.99,
-                                                );
+                                    let disc_sha1 = match sha1_file(&movieobject_path) {
+                                        Some(s) => s,
+                                        None => return,
+                                    };
+
+                                    // Session/generation fence macro.
+                                    // Returns current mp pointer, or returns from thread if stale.
+                                    macro_rules! mp_or_return {
+                                        () => {{
+                                            let s = app_warn.state::<PlayerState>();
+                                            let g = s
+                                                .session_gen
+                                                .load(std::sync::atomic::Ordering::SeqCst);
+                                            if g != warn_gen || !*poison(&s.started) {
+                                                return;
                                             }
-                                            skipped = true;
-                                            break;
-                                        }
+                                            let mp = *poison(&s.media_player);
+                                            if mp == 0 || mp != warn_mp {
+                                                return;
+                                            }
+                                            mp
+                                        }};
                                     }
-                                    if !skipped {
+
+                                    // Find any existing flag for this disc.
+                                    // Key: disc_sha1 only (at most one warning entry per disc).
+                                    let warns = read_disc_warns(&app_warn);
+                                    let existing_entry: Option<DiscWarnEntry> = warns
+                                        .iter()
+                                        .find(|e| e.disc_sha1 == disc_sha1 && e.warn_seen)
+                                        .cloned();
+
+                                    if let Some(entry) = existing_entry {
+                                        // ---- SKIP MODE ----
+                                        // Verify MPLS file still has the recorded size.
+                                        let playlist_path = bdmv_dir
+                                            .join("PLAYLIST")
+                                            .join(format!("{:05}.mpls", entry.warn_mpls_id));
+                                        let actual_size = std::fs::metadata(&playlist_path)
+                                            .map(|m| m.len())
+                                            .unwrap_or(0);
+                                        if actual_size == 0 || actual_size != entry.warn_mpls_size {
+                                            tracing::warn!(
+                                                "[warn-watcher] skip: MPLS {:05} size mismatch \
+                                             (recorded {}, on-disc {}) — not skipping",
+                                                entry.warn_mpls_id,
+                                                entry.warn_mpls_size,
+                                                actual_size
+                                            );
+                                            return;
+                                        }
                                         tracing::info!(
+                                            "[warn-watcher] skip mode: disc_sha1={} \
+                                         warning={:05} ({}B)",
+                                            disc_sha1,
+                                            entry.warn_mpls_id,
+                                            entry.warn_mpls_size
+                                        );
+                                        // Poll up to 30 s (600 × 50 ms) for the warning playlist.
+                                        let mut skipped = false;
+                                        for _ in 0..600 {
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
+                                            let mp = mp_or_return!();
+                                            let playlist_id = unsafe {
+                                                get_playlist_id(mp as *mut c_void) as i32
+                                            };
+                                            if playlist_id == entry.warn_mpls_id as i32 {
+                                                tracing::info!(
+                                                    "[warn-watcher] skip: warning playlist {:05} \
+                                                 active — seeking to 0.99",
+                                                    entry.warn_mpls_id
+                                                );
+                                                unsafe {
+                                                    (lib.libvlc_media_player_set_position)(
+                                                        mp as *mut c_void,
+                                                        0.99,
+                                                    );
+                                                }
+                                                skipped = true;
+                                                break;
+                                            }
+                                        }
+                                        if !skipped {
+                                            tracing::info!(
                                             "[warn-watcher] skip: warning playlist {:05} never \
                                              became active within 30 s",
                                             entry.warn_mpls_id
                                         );
-                                    }
-                                } else {
-                                    // ---- RECORD MODE ----
-
-                                    // Step 1: wait up to 15 s for the top menu (is_menu_title).
-                                    let mut saw_menu = false;
-                                    for _ in 0..300 {
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                        let mp = mp_or_return!();
-                                        if unsafe { engine::is_menu_title(&lib, mp) } {
-                                            saw_menu = true;
-                                            break;
                                         }
-                                    }
-                                    if !saw_menu {
-                                        tracing::info!(
-                                            "[warn-watcher] record: top menu not seen in 15 s \
-                                             — not a menu-first disc; exiting"
-                                        );
-                                        return;
-                                    }
-                                    tracing::info!(
-                                        "[warn-watcher] record: top menu confirmed \
-                                         (disc_sha1={}); waiting for Play selection",
-                                        disc_sha1
-                                    );
+                                    } else {
+                                        // ---- RECORD MODE ----
 
-                                    // Step 2+3: track first post-menu playlist as warning candidate.
-                                    let mut warn_candidate: Option<u32> = None;
-                                    let mut saw_near_end = false;
-
-                                    for _ in 0..2400 {
-                                        // up to 120 s
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                        let mp = mp_or_return!();
-
-                                        let playlist_id =
-                                            unsafe { get_playlist_id(mp as *mut c_void) as i32 };
-                                        let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
-
-                                        if playlist_id < 0 {
-                                            continue;
-                                        }
-
-                                        if warn_candidate.is_none() {
-                                            // Waiting for menu exit.
-                                            if at_menu {
-                                                continue; // still at menu
+                                        // Step 1: wait up to 15 s for the top menu (is_menu_title).
+                                        let mut saw_menu = false;
+                                        for _ in 0..300 {
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
+                                            let mp = mp_or_return!();
+                                            if unsafe { engine::is_menu_title(&lib, mp) } {
+                                                saw_menu = true;
+                                                break;
                                             }
-                                            // Menu just exited; this playlist is the candidate.
-                                            warn_candidate = Some(playlist_id as u32);
+                                        }
+                                        if !saw_menu {
                                             tracing::info!(
-                                                "[warn-watcher] record: menu exited; \
-                                                 tracking warning candidate {:05}",
-                                                playlist_id
+                                                "[warn-watcher] record: top menu not seen in 15 s \
+                                             — not a menu-first disc; exiting"
                                             );
-                                        } else if let Some(wid) = warn_candidate {
-                                            if playlist_id == wid as i32 {
-                                                // Still on warning candidate.
-                                                if !at_menu {
-                                                    let total = unsafe {
-                                                        (lib.libvlc_media_player_get_length)(
-                                                            mp as *mut c_void,
-                                                        )
-                                                    };
-                                                    let cur = unsafe {
-                                                        (lib.libvlc_media_player_get_time)(
-                                                            mp as *mut c_void,
-                                                        )
-                                                    };
-                                                    if total > 0 && cur > 0 {
-                                                        let frac = cur as f64 / total as f64;
-                                                        if frac > 0.80 {
-                                                            saw_near_end = true;
+                                            return;
+                                        }
+                                        tracing::info!(
+                                            "[warn-watcher] record: top menu confirmed \
+                                         (disc_sha1={}); waiting for Play selection",
+                                            disc_sha1
+                                        );
+
+                                        // Step 2+3: track first post-menu playlist as warning candidate.
+                                        let mut warn_candidate: Option<u32> = None;
+                                        let mut saw_near_end = false;
+
+                                        for _ in 0..2400 {
+                                            // up to 120 s
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
+                                            let mp = mp_or_return!();
+
+                                            let playlist_id = unsafe {
+                                                get_playlist_id(mp as *mut c_void) as i32
+                                            };
+                                            let at_menu =
+                                                unsafe { engine::is_menu_title(&lib, mp) };
+
+                                            if playlist_id < 0 {
+                                                continue;
+                                            }
+
+                                            if warn_candidate.is_none() {
+                                                // Waiting for menu exit.
+                                                if at_menu {
+                                                    continue; // still at menu
+                                                }
+                                                // Menu just exited; this playlist is the candidate.
+                                                warn_candidate = Some(playlist_id as u32);
+                                                tracing::info!(
+                                                    "[warn-watcher] record: menu exited; \
+                                                 tracking warning candidate {:05}",
+                                                    playlist_id
+                                                );
+                                            } else if let Some(wid) = warn_candidate {
+                                                if playlist_id == wid as i32 {
+                                                    // Still on warning candidate.
+                                                    if !at_menu {
+                                                        let total = unsafe {
+                                                            (lib.libvlc_media_player_get_length)(
+                                                                mp as *mut c_void,
+                                                            )
+                                                        };
+                                                        let cur = unsafe {
+                                                            (lib.libvlc_media_player_get_time)(
+                                                                mp as *mut c_void,
+                                                            )
+                                                        };
+                                                        if total > 0 && cur > 0 {
+                                                            let frac = cur as f64 / total as f64;
+                                                            if frac > 0.80 {
+                                                                saw_near_end = true;
+                                                            }
                                                         }
                                                     }
-                                                }
-                                            } else if at_menu {
-                                                // User backed to menu — no flag.
-                                                tracing::info!(
-                                                    "[warn-watcher] record: returned to menu \
+                                                } else if at_menu {
+                                                    // User backed to menu — no flag.
+                                                    tracing::info!(
+                                                        "[warn-watcher] record: returned to menu \
                                                      from candidate {:05} — \
                                                      not completed; flag not written",
-                                                    wid
-                                                );
-                                                return;
-                                            } else {
-                                                // Playlist changed to a different non-menu value.
-                                                if saw_near_end {
-                                                    tracing::info!(
+                                                        wid
+                                                    );
+                                                    return;
+                                                } else {
+                                                    // Playlist changed to a different non-menu value.
+                                                    if saw_near_end {
+                                                        tracing::info!(
                                                         "[warn-watcher] record: candidate {:05} \
                                                          transitioned to {:05} after near-end \
                                                          — writing flag",
                                                         wid,
                                                         playlist_id
                                                     );
-                                                    let playlist_path = bdmv_dir
-                                                        .join("PLAYLIST")
-                                                        .join(format!("{:05}.mpls", wid));
-                                                    let mpls_size =
-                                                        std::fs::metadata(&playlist_path)
-                                                            .map(|m| m.len())
-                                                            .unwrap_or(0);
-                                                    if mpls_size > 0 {
-                                                        write_disc_warn(
-                                                            &app_warn, &disc_sha1, wid, mpls_size,
-                                                        );
-                                                    } else {
-                                                        tracing::warn!(
+                                                        let playlist_path = bdmv_dir
+                                                            .join("PLAYLIST")
+                                                            .join(format!("{:05}.mpls", wid));
+                                                        let mpls_size =
+                                                            std::fs::metadata(&playlist_path)
+                                                                .map(|m| m.len())
+                                                                .unwrap_or(0);
+                                                        if mpls_size > 0 {
+                                                            write_disc_warn(
+                                                                &app_warn, &disc_sha1, wid,
+                                                                mpls_size,
+                                                            );
+                                                        } else {
+                                                            tracing::warn!(
                                                             "[warn-watcher] record: MPLS {:05} \
                                                              not found — flag not written",
                                                             wid
                                                         );
-                                                    }
-                                                } else {
-                                                    tracing::info!(
+                                                        }
+                                                    } else {
+                                                        tracing::info!(
                                                         "[warn-watcher] record: candidate {:05} \
                                                          transitioned before near-end \
                                                          — flag not written",
                                                         wid
                                                     );
+                                                    }
+                                                    return;
                                                 }
-                                                return;
                                             }
                                         }
-                                    }
-                                    tracing::info!(
-                                        "[warn-watcher] record: 120 s elapsed without \
+                                        tracing::info!(
+                                            "[warn-watcher] record: 120 s elapsed without \
                                          completion — no flag written"
-                                    );
-                                }
+                                        );
+                                    }
+                                });
+                            }
+                        } else {
+                            // Direct main-feature playback: select normal audio track in background
+                            let audio_gen =
+                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                            let audio_mp = session.media_player;
+                            let lib_audio = lib.clone();
+                            tokio::task::spawn_blocking(move || {
+                                select_normal_audio_track(&lib_audio, audio_mp, audio_gen);
                             });
                         }
 
@@ -1427,10 +1467,23 @@ pub async fn player_open(
     file_path: String,
     resume: Option<bool>,
 ) -> Result<PlayerOpenResult, String> {
-    let _open_guard = state.open_lock.lock().await;
     let resume = resume.unwrap_or(false);
-    tracing::info!("[lifecycle-diag] player_open entry: path='{file_path}' (resume={resume})");
-    stop_session(&app, &state);
+    player_open_inner(&app, &state, file_path, resume, None, false).await
+}
+
+pub async fn player_open_inner(
+    app: &tauri::AppHandle,
+    state: &PlayerState,
+    file_path: String,
+    resume: bool,
+    explicit_feature: Option<String>,
+    bypass_menu: bool,
+) -> Result<PlayerOpenResult, String> {
+    let _open_guard = state.open_lock.lock().await;
+    tracing::info!(
+        "[lifecycle-diag] player_open entry: path='{file_path}' (resume={resume}, bypass_menu={bypass_menu})"
+    );
+    stop_session(app, state);
     *poison(&state.current_path) = Some(file_path.clone());
     // An explicit resume must not sit through the disc's first-play flow
     // (FBI warning → menu chain): resolve the disc's main feature file and
@@ -1441,7 +1494,9 @@ pub async fn player_open(
     // redirects any path inside BDMV/ or VIDEO_TS/ back to the disc root.
     // When resuming to a feature file, bypass that redirect by passing the
     // file as explicit_feature to start_playback_inner.
-    let (open_target, explicit_feature): (String, Option<String>) = if resume {
+    let (open_target, explicit_feature): (String, Option<String>) = if explicit_feature.is_some() {
+        (file_path.clone(), explicit_feature)
+    } else if resume {
         match resolve_playback(&file_path) {
             Ok(r) if r.is_disc && !r.external => {
                 match find_main_video(Path::new(&r.resolved_path)) {
@@ -1462,11 +1517,12 @@ pub async fn player_open(
         (file_path.clone(), None)
     };
     let resolved = match start_playback_inner(
-        &app,
-        &state,
+        app,
+        state,
         &open_target,
         resume,
         explicit_feature.as_deref(),
+        bypass_menu,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -1487,9 +1543,10 @@ pub async fn player_open(
     // top of this open, and nothing else bumps it until the next stop.
     let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
     tracing::info!(
-        "[lifecycle-diag] player_open success: session_gen={gen} path='{}' is_disc={}",
+        "[lifecycle-diag] player_open success: session_gen={gen} path='{}' is_disc={} bypass_menu={}",
         resolved.resolved_path,
-        resolved.is_disc
+        resolved.is_disc,
+        bypass_menu
     );
     let result = PlayerOpenResult {
         info: resolved,
@@ -1586,8 +1643,33 @@ pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
 /// navigation may complete asynchronously. The command reports dispatch
 /// acceptance, not menu visibility.
 #[tauri::command]
-pub async fn player_return_to_menu(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
-    dispatch_main_menu(&state)
+pub async fn player_return_to_menu(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PlayerState>,
+) -> Result<(), String> {
+    if state.bypass_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        let path = {
+            let _mp_guard = state
+                .media_player_cell
+                .lock()
+                .map_err(|_| "player state poisoned")?;
+            let mp = *poison(&state.media_player);
+            if mp == 0 || !*poison(&state.started) {
+                return Err("no active player session".into());
+            }
+            poison(&state.current_path)
+                .clone()
+                .or_else(|| poison(&state.current_resolved).clone())
+                .ok_or_else(|| "no active disc path".to_string())?
+        };
+        tracing::info!(
+            "[player] return_to_menu: currently in bypass_menu mode; reopening '{path}' with menus enabled"
+        );
+        player_open_inner(&app, &state, path, false, None, false).await?;
+        Ok(())
+    } else {
+        dispatch_main_menu(&state)
+    }
 }
 
 /// Send a disc root / main menu request through the libvlc_media_player_navigate_menu()
@@ -1694,10 +1776,20 @@ fn select_normal_audio_track(lib: &player::engine::VlcLib, mp: usize, session_ge
 
 /// Explicit application-level escape route to play the disc's main feature directly.
 /// Bypasses the authored menu / notice screen without invoking failing menu commands,
-/// sets the main feature title from disc metadata, starts playback, and selects normal audio.
+/// reopening the disc in direct playback mode (:no-bluray-menu and :no-dvdnav-menu).
 #[tauri::command]
-pub async fn player_play_main_feature(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
-    let (mp, lib, session_gen, disc_path) = {
+pub async fn player_play_main_feature(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PlayerState>,
+) -> Result<(), String> {
+    if state.bypass_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        tracing::info!(
+            "[feature-play] player_play_main_feature: already in bypass_menu mode; ignoring redundant request"
+        );
+        return Ok(());
+    }
+
+    let path = {
         let _mp_guard = state
             .media_player_cell
             .lock()
@@ -1706,43 +1798,16 @@ pub async fn player_play_main_feature(state: tauri::State<'_, PlayerState>) -> R
         if mp == 0 || !*poison(&state.started) {
             return Err("no active player session".into());
         }
-        let lib = loaded_lib(&state)?;
-        let gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-        let path = poison(&state.current_resolved)
+        poison(&state.current_path)
             .clone()
-            .or_else(|| poison(&state.current_path).clone());
-        (mp, lib, gen, path)
+            .or_else(|| poison(&state.current_resolved).clone())
+            .ok_or_else(|| "no active disc path".to_string())?
     };
 
-    let target_title =
-        unsafe { engine::find_main_feature_title_with_disc_meta(&lib, mp, disc_path.as_deref()) }
-            .unwrap_or(1);
-
     tracing::info!(
-        "[feature-play] player_play_main_feature invoked: switching to title {target_title} (session_gen={session_gen})"
+        "[feature-play] player_play_main_feature: reopening '{path}' with bypass_menu=true"
     );
-
-    {
-        let _mp_guard = state
-            .media_player_cell
-            .lock()
-            .map_err(|_| "player state poisoned")?;
-        let mp_now = *poison(&state.media_player);
-        let gen_now = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-        if mp_now == 0 || mp_now != mp || gen_now != session_gen {
-            return Err("session changed or closed".into());
-        }
-        unsafe {
-            (lib.libvlc_media_player_set_title)(mp as *mut c_void, target_title);
-            (lib.libvlc_media_player_play)(mp as *mut c_void);
-        }
-    }
-
-    let lib_clone = lib.clone();
-    tokio::task::spawn_blocking(move || {
-        select_normal_audio_track(&lib_clone, mp, session_gen);
-    });
-
+    player_open_inner(&app, &state, path, false, None, true).await?;
     Ok(())
 }
 

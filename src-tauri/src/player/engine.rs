@@ -27,6 +27,7 @@ pub struct VlcLib {
     pub libvlc_media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     // MRL-based media (bluray://, dvd://) — folder-based disc images.
     pub libvlc_media_new_location: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    pub libvlc_media_add_option: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub libvlc_media_release: unsafe extern "C" fn(*mut c_void),
     // libvlccore internal, exported by the bundled dylib: sets a variable on
     // a VLC object directly. Needed because libvlc_media_player_set_nsobject()
@@ -863,6 +864,7 @@ impl VlcLib {
             libvlc_get_version: sym!("libvlc_get_version": unsafe extern "C" fn() -> *const c_char),
             libvlc_media_new_path: sym!("libvlc_media_new_path": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
             libvlc_media_new_location: sym!("libvlc_media_new_location": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
+            libvlc_media_add_option: sym!("libvlc_media_add_option": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_media_release: sym!("libvlc_media_release": unsafe extern "C" fn(*mut c_void)),
             // var_SetChecked lives in libvlccore, not libvlc; look it up in
             // the preloaded dependency libraries. libvlc.5 keeps libvlccore
@@ -964,7 +966,7 @@ impl VlcSession {
         // Standalone constructor: instance created here is kept for the
         // process lifetime (never released — see close()).
         let shared = std::sync::atomic::AtomicUsize::new(0);
-        Self::open_shared(lib, &shared, path, video_target)
+        Self::open_shared(lib, &shared, path, video_target, false)
     }
 
     /// Shared-instance variant: the instance is created once and kept for
@@ -974,6 +976,7 @@ impl VlcSession {
         shared: &std::sync::atomic::AtomicUsize,
         path: &str,
         video_target: usize,
+        bypass_menu: bool,
     ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
         let mut args = vec![
@@ -1075,6 +1078,14 @@ impl VlcSession {
                 // it leaves a dangling pointer in the AtomicUsize and causes a
                 // use-after-free on the next playback attempt.
                 return Err(format!("libvlc could not open {path}"));
+            }
+            if bypass_menu {
+                if let Ok(opt) = CString::new(":no-bluray-menu") {
+                    (lib.libvlc_media_add_option)(media, opt.as_ptr());
+                }
+                if let Ok(opt) = CString::new(":no-dvdnav-menu") {
+                    (lib.libvlc_media_add_option)(media, opt.as_ptr());
+                }
             }
             let mp = (lib.libvlc_media_player_new_from_media)(media);
             if mp.is_null() {
