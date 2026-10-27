@@ -215,7 +215,9 @@ pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
         return false;
     }
     let t = &**titles.add(current as usize);
-    let dur_s = t.i_duration / 1000;
+    let cur_len = (lib.libvlc_media_player_get_length)(m);
+    let effective_dur = cur_len.max(t.i_duration);
+    let dur_s = effective_dur / 1000;
     let is_short = dur_s <= 300;
     let is_named_fp = if !t.psz_name.is_null() {
         let cstr = std::ffi::CStr::from_ptr(t.psz_name);
@@ -226,7 +228,116 @@ pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
         false
     };
     (lib.libvlc_title_descriptions_release)(titles, n);
-    is_named_fp || is_short
+    is_named_fp || (effective_dur > 0 && is_short)
+}
+
+/// Return true if the player is actively playing a confirmed feature title
+/// (i.e. playing, not a menu title, non-intro duration >= 120s, and not named
+/// "First Play" or "Menu").
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn is_active_feature_playback(lib: &VlcLib, mp: usize) -> bool {
+    if mp == 0 {
+        return false;
+    }
+    let m = mp as *mut c_void;
+    if (lib.libvlc_media_player_is_playing)(m) == 0 {
+        return false;
+    }
+    if is_menu_title(lib, mp) {
+        return false;
+    }
+    let current = (lib.libvlc_media_player_get_title)(m);
+    if current < 0 {
+        return false;
+    }
+    let cur_len = (lib.libvlc_media_player_get_length)(m);
+
+    let mut titles_ptr: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles_ptr);
+    let mut is_named_menu_or_fp = false;
+    let mut desc_dur = 0i64;
+    let mut is_menu_flag = false;
+    if n > 0 && !titles_ptr.is_null() {
+        if current < n {
+            let t = &**titles_ptr.add(current as usize);
+            is_menu_flag = (t.i_flags & INPUT_TITLE_MENU) != 0;
+            desc_dur = t.i_duration;
+            if !t.psz_name.is_null() {
+                let name = CStr::from_ptr(t.psz_name)
+                    .to_string_lossy()
+                    .to_ascii_lowercase();
+                if name.contains("menu") || name.contains("first play") {
+                    is_named_menu_or_fp = true;
+                }
+            }
+        }
+        (lib.libvlc_title_descriptions_release)(titles_ptr, n);
+    }
+    if is_menu_flag || is_named_menu_or_fp {
+        return false;
+    }
+    let effective_dur = cur_len.max(desc_dur);
+    effective_dur >= 120_000
+}
+
+/// Find the first non-menu feature title.
+///
+/// On single-feature discs, this identifies the sole feature film.
+/// On episodic discs with multiple features, this returns the first feature title
+/// (e.g. Episode 1), adhering to the policy of never blindly picking the longest
+/// title (which would select Play All or seamless branch duplicates).
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn find_main_feature_title(lib: &VlcLib, mp: usize) -> Option<i32> {
+    if mp == 0 {
+        return None;
+    }
+    let m = mp as *mut c_void;
+    let mut titles_ptr: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles_ptr);
+    if n <= 0 || titles_ptr.is_null() {
+        return None;
+    }
+    let mut feature_candidates: Vec<i32> = Vec::new();
+    for idx in 0..n {
+        let t = &**titles_ptr.add(idx as usize);
+        let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+        let is_named_menu_or_fp = if !t.psz_name.is_null() {
+            let name = CStr::from_ptr(t.psz_name)
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            name.contains("menu") || name.contains("first play")
+        } else {
+            false
+        };
+        if !is_menu && !is_named_menu_or_fp && t.i_duration >= 120_000 {
+            feature_candidates.push(idx);
+        }
+    }
+    if feature_candidates.is_empty() {
+        for idx in 0..n {
+            let t = &**titles_ptr.add(idx as usize);
+            let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
+            let is_named_menu_or_fp = if !t.psz_name.is_null() {
+                let name = CStr::from_ptr(t.psz_name)
+                    .to_string_lossy()
+                    .to_ascii_lowercase();
+                name.contains("menu") || name.contains("first play")
+            } else {
+                false
+            };
+            if !is_menu && !is_named_menu_or_fp {
+                feature_candidates.push(idx);
+                break;
+            }
+        }
+    }
+    (lib.libvlc_title_descriptions_release)(titles_ptr, n);
+
+    feature_candidates.first().copied()
 }
 
 /// Mirror of libvlc_chapter_description_t (C layout, header-verified).

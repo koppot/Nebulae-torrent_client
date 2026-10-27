@@ -764,10 +764,24 @@ fn start_playback_inner(
                                 }
                             }
 
-                            // If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
+                            // Outcome A: If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
                             if unsafe { engine::is_menu_title(&lib, mp) } {
                                 tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
+                                );
+                                return;
+                            }
+
+                            // Outcome B: If already at confirmed active feature playback, preserve it and done.
+                            if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                let cur = unsafe {
+                                    (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                };
+                                let len = unsafe {
+                                    (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                };
+                                tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at active feature playback on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
                                 );
                                 return;
                             }
@@ -780,11 +794,8 @@ fn start_playback_inner(
                                     {
                                         navigate_menu(mp as *mut c_void);
                                     } else {
-                                        let menu_title =
-                                            engine::find_menu_title(&lib_clone, mp).unwrap_or(0);
-                                        (lib_clone.libvlc_media_player_set_title)(
-                                            mp as *mut c_void,
-                                            menu_title,
+                                        tracing::warn!(
+                                            "[menu-diag] navigate_menu symbol unavailable on this libvlc build"
                                         );
                                     }
                                 }
@@ -795,8 +806,7 @@ fn start_playback_inner(
                             );
                             nav_menu();
 
-                            // Check if navigate_menu succeeded within 200ms (10 * 20ms)
-                            let mut menu_reached = false;
+                            // Check if navigate_menu or natural flow reached menu or feature within 200ms (10 * 20ms)
                             for _ in 0..10 {
                                 std::thread::sleep(std::time::Duration::from_millis(20));
                                 let gen_now =
@@ -812,16 +822,23 @@ fn start_playback_inner(
                                     return;
                                 }
                                 if unsafe { engine::is_menu_title(&lib, mp) } {
-                                    menu_reached = true;
-                                    break;
+                                    tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms [Outcome A]"
+                                    );
+                                    return;
                                 }
-                            }
-
-                            if menu_reached {
-                                tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms"
-                                );
-                                return;
+                                if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                    let cur = unsafe {
+                                        (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                    };
+                                    let len = unsafe {
+                                        (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                    };
+                                    tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur} (length_ms={len}) within 200ms [Outcome B]; preserving playback"
+                                    );
+                                    return;
+                                }
                             }
 
                             // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
@@ -830,7 +847,8 @@ fn start_playback_inner(
                             // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
                             let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
                             let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
-                            if has_menu && is_fp {
+                            let is_feat = unsafe { engine::is_active_feature_playback(&lib, mp) };
+                            if has_menu && is_fp && !is_feat {
                                 tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 APPLIED (has_menu=true, is_fp=true)"
                                 );
@@ -839,12 +857,11 @@ fn start_playback_inner(
                                 }
                             } else {
                                 tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 SKIPPED (has_menu={has_menu}, is_fp={is_fp})"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 SKIPPED (has_menu={has_menu}, is_fp={is_fp}, is_feat={is_feat})"
                                 );
                             }
 
-                            // Poll up to 15s (75 * 200ms). If introductory logos mask menu calls,
-                            // retry periodically every 2s.
+                            // Poll up to 15s (75 * 200ms).
                             for i in 0..75 {
                                 std::thread::sleep(std::time::Duration::from_millis(200));
                                 let gen_now =
@@ -859,36 +876,104 @@ fn start_playback_inner(
                                 if mp == 0 || mp != menu_mp {
                                     return;
                                 }
+
+                                // Outcome A: Authored menu reached safely
                                 if unsafe { engine::is_menu_title(&lib, mp) } {
                                     tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{}ms)",
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{}ms) [Outcome A]",
                                         i * 200
                                     );
                                     return;
                                 }
+
+                                // Outcome B: Confirmed active feature playback engaged
+                                if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                    let cur = unsafe {
+                                        (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                    };
+                                    let len = unsafe {
+                                        (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                    };
+                                    tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at iteration {i} (T+{}ms) [Outcome B]; stopping startup watcher",
+                                        i * 200
+                                    );
+                                    return;
+                                }
+
+                                // If introductory logos mask menu calls, retry INPUT_NAV_MENU every 2s.
+                                // NOTE: Do NOT repeatedly force set_title(menu_title) over active content.
                                 if i > 0 && i % 10 == 0 {
                                     tracing::info!(
                                         "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU at iteration {i}"
                                     );
                                     nav_menu();
-                                    if let Some(menu_title) =
-                                        unsafe { engine::find_menu_title(&lib, mp) }
-                                    {
-                                        tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): fallback setting title {menu_title}"
-                                        );
-                                        unsafe {
-                                            (lib.libvlc_media_player_set_title)(
-                                                mp as *mut c_void,
-                                                menu_title,
-                                            );
-                                        }
-                                    }
                                 }
                             }
-                            tracing::info!(
-                                "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s (75 iterations) without reaching authored menu"
-                            );
+
+                            // Bounded startup window (15s) elapsed.
+                            let gen_now =
+                                state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                            if gen_now != menu_gen || !*poison(&state.started) {
+                                return;
+                            }
+                            let mp = *poison(&state.media_player);
+                            if mp == 0 || mp != menu_mp {
+                                return;
+                            }
+
+                            let is_playing = unsafe {
+                                (lib.libvlc_media_player_is_playing)(mp as *mut c_void) != 0
+                            };
+                            let cur_title =
+                                unsafe { (lib.libvlc_media_player_get_title)(mp as *mut c_void) };
+                            let cur_len =
+                                unsafe { (lib.libvlc_media_player_get_length)(mp as *mut c_void) };
+
+                            if unsafe { engine::is_menu_title(&lib, mp) } {
+                                tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc at authored menu at 15s exit [Outcome A]"
+                                );
+                                return;
+                            }
+
+                            if is_playing
+                                && (cur_len >= 120_000
+                                    || unsafe { engine::is_active_feature_playback(&lib, mp) })
+                            {
+                                tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur_title} (length_ms={cur_len}) at 15s exit [Outcome B]; preserving playback"
+                                );
+                                return;
+                            }
+
+                            if is_playing {
+                                tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): usable playback active on title {cur_title} (length_ms={cur_len}) at 15s exit; preserving playback without interrupting"
+                                );
+                                return;
+                            }
+
+                            // Outcome C: Menu startup did not complete and no usable playback is active.
+                            // Use safe bounded main-feature fallback if available.
+                            if let Some(feature_title) =
+                                unsafe { engine::find_main_feature_title(&lib, mp) }
+                            {
+                                tracing::info!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete and no usable playback; falling back to main feature title {feature_title} [Outcome C]"
+                                );
+                                unsafe {
+                                    (lib.libvlc_media_player_set_title)(
+                                        mp as *mut c_void,
+                                        feature_title,
+                                    );
+                                    (lib.libvlc_media_player_play)(mp as *mut c_void);
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no safe feature title found [Outcome None]; leaving recoverable player state"
+                                );
+                            }
                         });
 
                         // DISC WARNING SKIP WATCHER:
