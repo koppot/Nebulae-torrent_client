@@ -22,9 +22,15 @@ Only copies are modified. The source libraries (for example the Homebrew
 cellar) are never touched. Running the tool again on an already relocated tree
 is harmless.
 
+  * a name given with --provided (for example libvlccore.dylib for a VLC plugin,
+    whose official core must stay byte-for-byte what VideoLAN shipped) is left
+    alone: references to @rpath/<name> are neither bundled nor rewritten, and
+    the process that loads the target is expected to supply that library.
+
 Usage:
   relocate-macos-dylibs.py --lib-dir DIR [--add-rpath RPATH]... [--sign ID]
-                           [--manifest FILE] [--licenses-dir DIR] TARGET...
+                           [--provided NAME]... [--manifest FILE]
+                           [--licenses-dir DIR] TARGET...
 """
 
 from __future__ import annotations
@@ -106,7 +112,13 @@ def resolve(ref: str, img: Image, lib_dir: str) -> "str | None":
     return None
 
 
-def discover(targets: list[str], lib_dir: str, arch: "str | None") -> tuple[list[Image], "OrderedDict[str, Image]"]:
+def is_provided(ref: str, provided: "set[str]") -> bool:
+    return ref.startswith("@rpath/") and os.path.basename(ref) in provided
+
+
+def discover(
+    targets: list[str], lib_dir: str, arch: "str | None", provided: "set[str]"
+) -> tuple[list[Image], "OrderedDict[str, Image]"]:
     roots: list[Image] = []
     libs: "OrderedDict[str, Image]" = OrderedDict()
     queue: deque = deque()
@@ -126,7 +138,7 @@ def discover(targets: list[str], lib_dir: str, arch: "str | None") -> tuple[list
         img = queue.popleft()
         img.info = parse_load_commands(img.src)
         for _cmd, ref in img.info["deps"]:
-            if is_system(ref):
+            if is_system(ref) or is_provided(ref, provided):
                 continue
             if ".framework/" in ref:
                 raise RelocationError(f"{img.src}: framework dependency not supported: {ref}")
@@ -201,7 +213,7 @@ def sign(path: str, identity: str) -> None:
     run_checked(argv)
 
 
-def verify(images: list[Image], lib_dir: str) -> list[str]:
+def verify(images: list[Image], lib_dir: str, provided: "set[str]") -> list[str]:
     problems: list[str] = []
     for img in images:
         info = parse_load_commands(img.path)
@@ -211,7 +223,7 @@ def verify(images: list[Image], lib_dir: str) -> list[str]:
         if info["id"] and info["id"].startswith("/") and not is_system(info["id"]):
             problems.append(f"{img.path}: absolute install name {info['id']}")
         for _cmd, ref in info["deps"]:
-            if is_system(ref):
+            if is_system(ref) or is_provided(ref, provided):
                 continue
             if ref.startswith("@rpath/"):
                 if not os.path.isfile(os.path.join(lib_dir, ref[len("@rpath/"):])):
@@ -222,10 +234,14 @@ def verify(images: list[Image], lib_dir: str) -> list[str]:
 
 
 def provenance(lib: Image) -> dict:
+    """Describe one bundled library.
+
+    The manifest ships inside the app, so it carries no path of the machine
+    that built it. The keg location is only kept in memory, to find the license
+    files; manifest_entry() leaves it out.
+    """
     entry = {
         "name": lib.name,
-        "source": lib.src,
-        "original_install_name": lib.info["id"],
         "current_version": lib.info["current_version"],
         "compatibility_version": lib.info["compat_version"],
         "min_macos": lib.info.get("min_os"),
@@ -234,10 +250,17 @@ def provenance(lib: Image) -> dict:
     }
     m = CELLAR_RE.search(lib.src)
     if m:
+        entry["origin"] = "homebrew"
         entry["homebrew_formula"] = m.group(1)
         entry["homebrew_version"] = m.group(2)
         entry["keg"] = lib.src[: m.end() - 1]
+    else:
+        entry["origin"] = "not a Homebrew keg"
     return entry
+
+
+def manifest_entry(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if k != "keg"}
 
 
 def copy_licenses(entries: list[dict], licenses_dir: str) -> list[str]:
@@ -273,21 +296,30 @@ def main() -> int:
     ap.add_argument("--add-rpath", action="append", default=[], help="rpath to add to the targets (repeatable)")
     ap.add_argument("--sign", default="-", help="codesign identity ('-' for ad-hoc, the default)")
     ap.add_argument("--arch", default=None, help="require this architecture (for example arm64)")
+    ap.add_argument(
+        "--provided",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="library the loading process supplies (for example libvlccore.dylib); "
+        "@rpath/NAME references are left untouched (repeatable)",
+    )
     ap.add_argument("--manifest", help="write the list of bundled libraries as JSON")
     ap.add_argument("--licenses-dir", help="copy the license files of the Homebrew kegs used")
     args = ap.parse_args()
 
     lib_dir = os.path.abspath(args.lib_dir)
     targets = [os.path.abspath(t) for t in args.targets]
+    provided = set(args.provided)
     try:
-        roots, libs = discover(targets, lib_dir, args.arch)
+        roots, libs = discover(targets, lib_dir, args.arch, provided)
         copy_libs(libs)
         images = list(libs.values()) + roots
         changed = [img for img in images if rewrite(img, args.add_rpath)]
         for img in changed:
             sign(img.path, args.sign)
         # An unchanged file whose signature was already valid stays as it is.
-        problems = verify(images, lib_dir)
+        problems = verify(images, lib_dir, provided)
     except RelocationError as exc:
         print(f"relocate: ERROR: {exc}", file=sys.stderr)
         return 1
@@ -308,7 +340,7 @@ def main() -> int:
     if args.manifest:
         os.makedirs(os.path.dirname(os.path.abspath(args.manifest)), exist_ok=True)
         with open(args.manifest, "w", encoding="utf-8") as fh:
-            json.dump({"libraries": entries}, fh, indent=2)
+            json.dump({"libraries": [manifest_entry(e) for e in entries]}, fh, indent=2)
             fh.write("\n")
     if args.licenses_dir:
         missing = copy_licenses(entries, os.path.abspath(args.licenses_dir))
