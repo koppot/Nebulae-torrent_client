@@ -17,19 +17,44 @@
 //!
 //! # Graceful Degradation
 //!
-//! If the `.mmdb` files are absent (dev build without running the download
-//! script), `GeoResolver::from_resource_dir` returns `Ok(None)` and all
-//! callers fall back to the two-tier LAN/Global classification already
-//! present in `get_peer_telemetry`.
+//! If the `.mmdb` files are absent (a build that did not run the download
+//! script, or any release without a MaxMind licence key),
+//! `GeoResolver::from_resource_dir` returns `Ok(None)` and all callers fall
+//! back to the two-tier LAN/Global classification already present in
+//! `get_peer_telemetry`. The files are never created or fetched at runtime.
 
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use maxminddb::{geoip2, Reader};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::models::peering::LocalityTier;
+
+const COUNTRY_DB: &str = "GeoLite2-Country.mmdb";
+const ASN_DB: &str = "GeoLite2-ASN.mmdb";
+
+/// Folders that can hold the GeoLite2 files, in the order they are tried.
+///
+/// `scripts/download_geo_db.sh` writes to `src-tauri/resources/geo`, and the
+/// macOS bundle keeps Tauri's `resources/**/*` under `<resource dir>/resources/`,
+/// so a packaged build has the files in `<resource dir>/resources/geo`. The flat
+/// `<resource dir>/geo` layout stays valid for a resource dir that already is the
+/// `resources` folder (`NEBULAE_RESOURCE_DIR`).
+fn geo_dir_candidates(resource_dir: &Path) -> [PathBuf; 2] {
+    [
+        resource_dir.join("resources").join("geo"),
+        resource_dir.join("geo"),
+    ]
+}
+
+/// First candidate folder that holds the country database.
+fn locate_geo_dir(resource_dir: &Path) -> Option<PathBuf> {
+    geo_dir_candidates(resource_dir)
+        .into_iter()
+        .find(|dir| dir.join(COUNTRY_DB).is_file())
+}
 
 /// Holds open MaxMind DB reader handles for Country and ASN lookups.
 pub struct GeoResolver {
@@ -42,30 +67,32 @@ pub struct GeoResolver {
 }
 
 impl GeoResolver {
-    /// Load the databases from `<resource_dir>/geo/`.
+    /// Load the databases from `<resource_dir>/resources/geo/` (packaged app) or
+    /// `<resource_dir>/geo/`.
     ///
-    /// Returns `Ok(None)` if `GeoLite2-Country.mmdb` is absent (graceful
-    /// degradation for dev builds without the DB).
+    /// Returns `Ok(None)` if `GeoLite2-Country.mmdb` is absent from both
+    /// (graceful degradation for builds without the DB).
     pub fn from_resource_dir(resource_dir: &Path) -> Result<Option<Self>, String> {
-        let country_path = resource_dir.join("geo").join("GeoLite2-Country.mmdb");
-        if !country_path.exists() {
-            warn!(
-                "[geo] GeoLite2-Country.mmdb not found at '{}' — locality classification will use LAN/Global only. \
-                 Run scripts/download_geo_db.sh to enable full geo.",
-                country_path.display()
+        let Some(geo_dir) = locate_geo_dir(resource_dir) else {
+            let [packaged, flat] = geo_dir_candidates(resource_dir);
+            info!(
+                "[geo] {COUNTRY_DB} not found in '{}' or '{}'. Run scripts/download_geo_db.sh \
+                 before building to bundle it.",
+                packaged.display(),
+                flat.display()
             );
             return Ok(None);
-        }
+        };
 
-        let country = Reader::open_readfile(&country_path)
-            .map_err(|e| format!("Failed to open GeoLite2-Country.mmdb: {e}"))?;
+        let country = Reader::open_readfile(geo_dir.join(COUNTRY_DB))
+            .map_err(|e| format!("Failed to open {COUNTRY_DB}: {e}"))?;
 
-        let asn_path = resource_dir.join("geo").join("GeoLite2-ASN.mmdb");
-        let asn = if asn_path.exists() {
+        let asn_path = geo_dir.join(ASN_DB);
+        let asn = if asn_path.is_file() {
             match Reader::open_readfile(&asn_path) {
                 Ok(r) => Some(r),
                 Err(e) => {
-                    warn!("[geo] Failed to open GeoLite2-ASN.mmdb: {e} — ASN lookup disabled");
+                    warn!("[geo] Failed to open {ASN_DB}: {e} — ASN lookup disabled");
                     None
                 }
             }
@@ -190,6 +217,75 @@ fn is_rfc1918_172(addr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("neb-geo-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn put_country_db(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(COUNTRY_DB), b"not a real database").unwrap();
+    }
+
+    #[test]
+    fn geo_dir_is_found_where_the_packaged_app_keeps_it() {
+        // Contents/Resources/resources/geo is where Tauri puts resources/geo.
+        let resource_dir = scratch_dir("packaged");
+        let geo = resource_dir.join("resources").join("geo");
+        put_country_db(&geo);
+        assert_eq!(locate_geo_dir(&resource_dir), Some(geo));
+        let _ = fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn geo_dir_is_found_in_the_flat_layout() {
+        let resource_dir = scratch_dir("flat");
+        let geo = resource_dir.join("geo");
+        put_country_db(&geo);
+        assert_eq!(locate_geo_dir(&resource_dir), Some(geo));
+        let _ = fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn packaged_layout_wins_over_the_flat_layout() {
+        let resource_dir = scratch_dir("both");
+        let packaged = resource_dir.join("resources").join("geo");
+        put_country_db(&packaged);
+        put_country_db(&resource_dir.join("geo"));
+        assert_eq!(locate_geo_dir(&resource_dir), Some(packaged));
+        let _ = fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn missing_database_is_not_an_error() {
+        // The shipped state: resources/geo exists but only holds a .gitkeep.
+        let resource_dir = scratch_dir("absent");
+        let geo = resource_dir.join("resources").join("geo");
+        fs::create_dir_all(&geo).unwrap();
+        fs::write(geo.join(".gitkeep"), b"").unwrap();
+        assert!(locate_geo_dir(&resource_dir).is_none());
+        assert!(matches!(
+            GeoResolver::from_resource_dir(&resource_dir),
+            Ok(None)
+        ));
+        let _ = fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn database_in_the_packaged_folder_is_opened_not_skipped() {
+        // Before the fix the resolver only looked in <resource dir>/geo and
+        // reported "absent" here. Reaching the open call (which rejects the
+        // placeholder content) proves the packaged folder is now searched.
+        let resource_dir = scratch_dir("opened");
+        put_country_db(&resource_dir.join("resources").join("geo"));
+        let result = GeoResolver::from_resource_dir(&resource_dir);
+        assert!(matches!(result, Err(ref e) if e.contains(COUNTRY_DB)));
+        let _ = fs::remove_dir_all(&resource_dir);
+    }
 
     #[test]
     fn test_is_local_ip_rfc1918() {
