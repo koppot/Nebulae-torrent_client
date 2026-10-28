@@ -59,6 +59,28 @@ else
     status=1
 fi
 
+echo "--- Minimum macOS of the bundled images"
+DECLARED_MIN_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [ -z "$DECLARED_MIN_MACOS" ]; then
+    echo "note: the app declares no LSMinimumSystemVersion; not compared"
+elif ! MINOS_AUDIT="$(python3 -B "$SCRIPT_DIR/audit-macos-bundle.py" --arch "$APP_ARCHS" --max-minos "$DECLARED_MIN_MACOS" "$APP")"; then
+    echo "FAIL: the audit could not run"
+    status=1
+else
+    MINOS_REPORT="$(grep -E '^MINOS' <<<"$MINOS_AUDIT" || true)"
+    if [ -z "$MINOS_REPORT" ]; then
+        echo "OK: no image needs a newer macOS than the $DECLARED_MIN_MACOS the app declares"
+    else
+        echo "ADVICE: images that need a newer macOS than the $DECLARED_MIN_MACOS the app declares (a Homebrew"
+        echo "        bottle keeps the deployment target of the Mac that built it):"
+        printf '%s\n' "$MINOS_REPORT" | sed "s#$APP/#  #"
+        if [ "${NEBULAE_ENFORCE_MINOS:-0}" = "1" ]; then
+            echo "FAIL: NEBULAE_ENFORCE_MINOS=1"
+            status=1
+        fi
+    fi
+fi
+
 echo "--- Code signature"
 if codesign --verify --deep --strict "$APP" 2>&1; then
     echo "OK: signature valid"

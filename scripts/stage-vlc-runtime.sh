@@ -284,6 +284,69 @@ Licences        : COPYING (GNU GPL 2) and COPYING.LIB (GNU LGPL 2.1) from the so
                   most under the LGPL 2.1 or later and some under the GPL 2 or later.
 SOURCE_TXT
 
+# Index of the notices in licenses/. It also carries the credit that the FreeType
+# License asks for in the documentation of a binary distribution, because the app
+# does not ship THIRD-PARTY-NOTICES.md.
+python3 - "$DEST" "$VLC_VERSION" "$LB_VERSION" <<'PY'
+import json
+import os
+import sys
+
+dest, vlc, lb = sys.argv[1:4]
+licence_of = {
+    "libudfread": "GNU LGPL 2.1 or later",
+    "freetype": "FreeType License (FTL); the alternative is the GNU GPL 2",
+    "fontconfig": "HPND-sell-variant, Unicode-3.0, MIT-Modern-Variant and MIT (see COPYING)",
+    "libpng": "PNG Reference Library License version 2",
+    "gettext": "libintl: GNU LGPL 2.1 or later (the GPL 3 text in COPYING covers the gettext tools)",
+}
+libs = json.load(open(os.path.join(dest, "bundled-libraries.json")))["libraries"]
+rows = []
+for e in libs:
+    if e.get("origin") != "homebrew":
+        continue
+    name, version = e["homebrew_formula"], e["homebrew_version"]
+    rows.append("    %-20s lib/%s\n        %s" % (
+        "%s-%s/" % (name, version), e["name"], licence_of.get(name, "see the licence files in that directory")))
+
+text = f"""Nebulae macOS VLC runtime: components and licences
+==================================================
+
+The licence texts and the source information for what is in ../lib and ../plugins
+are in this directory, one directory per component. The version and SHA-256 sum of
+every file of the runtime are in ../../build-manifest.json; the libraries that were
+copied from Homebrew are described in ../bundled-libraries.json.
+
+VLC media player {vlc}                  vlc-{vlc}/
+    libvlc and libvlccore are licensed under the GNU LGPL 2.1 or later. Each plugin in
+    ../plugins carries the licence named in its source files: most are LGPL 2.1 or
+    later, some are GPL 2 or later. Five of the files are built by Nebulae from the VLC
+    source with the patches in vlc-{vlc}/; SOURCE.txt there lists them. All other
+    files are VideoLAN's own binaries, which include codec and format libraries that
+    VideoLAN builds from the "contrib" sources named in the VLC source tree.
+
+libbluray {lb}                          libbluray-{lb}/
+    GNU LGPL 2.1. Built unmodified from the upstream source, together with the BD-J
+    jars of the same version (lib/libbluray-*-{lb}.jar). SOURCE.txt has the URL and hash.
+
+Libraries copied from Homebrew. Only their load commands and their signature were
+changed; bundled-libraries.json has the hash of each file before and after.
+{chr(10).join(rows)}
+
+Replacing a library. The LGPL libraries (libvlc, libvlccore, libbluray, libudfread,
+libintl) are separate files that the app loads at run time. To use a modified version,
+replace the file in ../lib with a build of the same version and ABI, then sign the app
+again (codesign --force --deep --sign - Nebulae.app): macOS refuses an app whose
+signed contents have changed.
+
+FreeType. This software is based in part on the work of the FreeType Team
+(https://www.freetype.org). Portions of this software are copyright (c) 2026 The
+FreeType Project (www.freetype.org). All rights reserved.
+"""
+with open(os.path.join(dest, "licenses", "README.txt"), "w") as fh:
+    fh.write(text)
+PY
+
 # macOS Finder litter must never reach the app bundle.
 find "$RESOURCES" -name .DS_Store -type f -delete
 

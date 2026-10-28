@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # bundle-vlc-macos.sh
 #
+# LEGACY. Nebulae and its workflows use VLC 3.0.23, staged by
+# scripts/bundle-macos-vlc.sh (see BUILD_NOTES.md). This script stages a VLC 4.x
+# runtime into the same directory, which replaces the verified runtime with one that
+# scripts/verify-vlc-runtime.sh and scripts/verify-macos-app.sh reject. Do not run
+# it for a build of the app.
+#
 # Stage a VLC runtime into src-tauri/resources/vlc/
 # for LOCAL developer builds on macOS.
 # Supports both prebuilt VLC 3.x DMGs and VLC 4.x built from source.
