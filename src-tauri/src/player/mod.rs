@@ -23,6 +23,7 @@ pub use embed_macos::{
 };
 pub mod bluray_meta;
 pub mod dvd_meta;
+pub mod feature_lock;
 pub mod letterbox;
 pub mod menu_watch;
 
@@ -116,6 +117,10 @@ pub struct PlayerState {
     pub framing: Mutex<FramingState>,
     /// Last poll transition state logged: (gen, title, at_menu, playing) for bounded diagnostics.
     pub last_logged_poll_state: Mutex<Option<(u64, i32, bool, bool)>>,
+    /// DVD title the viewer just asked for with the step-title control. The
+    /// main-feature lock (`feature_lock`) takes it so that it follows the
+    /// viewer instead of pulling playback back. Cleared with every session.
+    pub feature_lock_request: Mutex<Option<i32>>,
 }
 
 /// Consecutive agreeing samples after which framing sampling stops.

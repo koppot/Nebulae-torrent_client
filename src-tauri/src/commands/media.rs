@@ -504,6 +504,7 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     tracing::info!("[lifecycle-diag] stop_session: session_gen={gen} (session teardown)");
     // Reset poll diagnostic tracker for fresh session
     *poison(&state.last_logged_poll_state) = None;
+    *poison(&state.feature_lock_request) = None;
     // Stop advertising the session IMMEDIATELY: the frontend's readiness
     // poll must not be able to capture (and later adopt) the session while
     // the slow teardown below (VLC stop can take ~1s, the overlay hide
@@ -1861,9 +1862,208 @@ fn select_normal_audio_track(lib: &player::engine::VlcLib, mp: usize, session_ge
     );
 }
 
+/// Run `f` on the live player of session `gen` while the player cell is held,
+/// so teardown cannot release the pointer during the call. `None` when the
+/// session ended or was replaced, or when `expected_mp` (0 = any) is no longer
+/// the session's player.
+fn with_session_player<R>(
+    state: &PlayerState,
+    gen: usize,
+    expected_mp: usize,
+    f: impl FnOnce(usize) -> R,
+) -> Option<R> {
+    let _cell = state.media_player_cell.lock().ok()?;
+    if state.session_gen.load(std::sync::atomic::Ordering::SeqCst) != gen
+        || !*poison(&state.started)
+    {
+        return None;
+    }
+    let mp = *poison(&state.media_player);
+    if mp == 0 || (expected_mp != 0 && mp != expected_mp) {
+        return None;
+    }
+    Some(f(mp))
+}
+
+/// Change the DVD title on the viewer's behalf. The feature lock is told first:
+/// it follows a title the viewer chose, and would otherwise read the change as
+/// the disc moving on by itself.
+fn jump_to_title(state: &PlayerState, lib: &engine::VlcLib, mp: usize, title: i32) {
+    *poison(&state.feature_lock_request) = Some(title);
+    unsafe { (lib.libvlc_media_player_set_title)(mp as *mut c_void, title) };
+}
+
+/// Keep a DVD "Play Main Feature" session on one title (see
+/// `player::feature_lock`). Started only by the explicit button; the menu
+/// watcher's automatic direct-playback fallback never starts it.
+fn spawn_feature_lock(app: tauri::AppHandle, gen_spawn: usize) {
+    use player::feature_lock as fl;
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        let state = app.state::<PlayerState>();
+        let lib = match loaded_lib(&state) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        let Some(mp_spawn) = with_session_player(&state, gen_spawn, 0, |mp| mp) else {
+            return;
+        };
+        // A request left over from before this session must not move the lock.
+        *poison(&state.feature_lock_request) = None;
+
+        let started = std::time::Instant::now();
+        let elapsed_ms = || started.elapsed().as_millis() as u64;
+        let nap = |ms: u64| std::thread::sleep(std::time::Duration::from_millis(ms));
+
+        // 1. Wait for the title list and for the title the disc started on.
+        let mut list: Option<(Vec<engine::TitleSnapshot>, i32)> = None;
+        while elapsed_ms() < fl::TITLES_READY_TIMEOUT_MS {
+            let snap = with_session_player(&state, gen_spawn, mp_spawn, |mp| unsafe {
+                engine::snapshot_titles(&lib, mp)
+            });
+            match snap {
+                None => return,
+                Some(Some((titles, current))) => {
+                    let known = current >= 0;
+                    list = Some((titles, current));
+                    if known {
+                        break;
+                    }
+                }
+                Some(None) => {}
+            }
+            nap(fl::POLL_MS);
+        }
+        let Some((titles, current)) = list else {
+            tracing::info!(
+                "[feature-lock] session_gen={gen_spawn}: no title list after {} ms; leaving the disc's own flow alone",
+                fl::TITLES_READY_TIMEOUT_MS
+            );
+            return;
+        };
+        if !fl::is_dvdnav_title_list(&titles) {
+            tracing::info!(
+                "[feature-lock] session_gen={gen_spawn}: not a DVD title list ({} titles); leaving the disc's own flow alone",
+                titles.len()
+            );
+            return;
+        }
+        let Some(target) = fl::choose_target(&titles, current) else {
+            tracing::info!(
+                "[feature-lock] session_gen={gen_spawn}: no feature title among {} titles; leaving the disc's own flow alone",
+                titles.len()
+            );
+            return;
+        };
+        tracing::info!(
+            "[feature-lock] session_gen={gen_spawn}: disc started on title {current}; main title is {} ({} ms) at T+{} ms",
+            target.index,
+            target.duration_ms,
+            elapsed_ms()
+        );
+
+        // 2. Leave First Play's clip, or the menu, for the main title.
+        if current != target.index {
+            let jumped = with_session_player(&state, gen_spawn, mp_spawn, |mp| unsafe {
+                (lib.libvlc_media_player_set_title)(mp as *mut c_void, target.index)
+            });
+            if jumped.is_none() {
+                return;
+            }
+            tracing::info!(
+                "[feature-lock] session_gen={gen_spawn}: set_title({}) issued at T+{} ms",
+                target.index,
+                elapsed_ms()
+            );
+        }
+
+        // 3. Hold the title: follow the viewer, pause at its end.
+        let mut lock = fl::Lock::new(target.index, target.duration_ms, elapsed_ms());
+        loop {
+            nap(lock.next_poll_ms());
+
+            let requested = poison(&state.feature_lock_request).take();
+            if let Some(requested) = requested {
+                match fl::follow_request(&titles, requested) {
+                    Some(main) => {
+                        tracing::info!(
+                            "[feature-lock] session_gen={gen_spawn}: the viewer moved to title {}; following",
+                            main.index
+                        );
+                        lock.retarget(main.index, main.duration_ms, elapsed_ms());
+                    }
+                    None => {
+                        tracing::info!(
+                            "[feature-lock] session_gen={gen_spawn}: the viewer left the main titles (title {requested}); lock released"
+                        );
+                        return;
+                    }
+                }
+            }
+
+            let sample = with_session_player(&state, gen_spawn, mp_spawn, |mp| unsafe {
+                let m = mp as *mut c_void;
+                let title = (lib.libvlc_media_player_get_title)(m);
+                fl::Sample {
+                    title,
+                    time_ms: (lib.libvlc_media_player_get_time)(m),
+                    playing: (lib.libvlc_media_player_is_playing)(m) != 0,
+                    at_menu: fl::is_menu_index(&titles, title),
+                }
+            });
+            let Some(sample) = sample else {
+                return;
+            };
+
+            match lock.observe(elapsed_ms(), sample) {
+                fl::Step::Wait => {}
+                fl::Step::Pause(reason) => {
+                    let paused = with_session_player(&state, gen_spawn, mp_spawn, |mp| unsafe {
+                        let m = mp as *mut c_void;
+                        match lib.libvlc_media_player_set_pause {
+                            Some(set_pause) => {
+                                set_pause(m, 1);
+                                true
+                            }
+                            // Without an idempotent pause, toggle only while playing.
+                            None if (lib.libvlc_media_player_is_playing)(m) != 0 => {
+                                (lib.libvlc_media_player_pause)(m);
+                                true
+                            }
+                            None => false,
+                        }
+                    });
+                    match paused {
+                        None => return,
+                        Some(done) => tracing::info!(
+                            "[feature-lock] session_gen={gen_spawn}: {reason:?}: paused={done} (title {} at {} ms, locked title {})",
+                            sample.title,
+                            sample.time_ms,
+                            lock.title()
+                        ),
+                    }
+                }
+                fl::Step::Release(reason) => {
+                    tracing::info!(
+                        "[feature-lock] session_gen={gen_spawn}: {reason:?}: lock released (title {} at {} ms, locked title {})",
+                        sample.title,
+                        sample.time_ms,
+                        lock.title()
+                    );
+                    return;
+                }
+            }
+        }
+    });
+}
+
 /// Explicit application-level escape route to play the disc's main feature directly.
 /// Bypasses the authored menu / notice screen without invoking failing menu commands,
 /// reopening the disc in direct playback mode (:no-bluray-menu and :no-dvdnav-menu).
+///
+/// A DVD still starts at its First Play chain in that mode, which can run a
+/// clip first and continue into other titles after the feature. This button
+/// plays one title, so a DVD session also gets the main-feature lock.
 #[tauri::command]
 pub async fn player_play_main_feature(
     app: tauri::AppHandle,
@@ -1894,7 +2094,10 @@ pub async fn player_play_main_feature(
     tracing::info!(
         "[feature-play] player_play_main_feature: reopening '{path}' with bypass_menu=true"
     );
-    player_open_inner(&app, &state, path, false, None, true).await?;
+    let opened = player_open_inner(&app, &state, path, false, None, true).await?;
+    if opened.info.is_disc {
+        spawn_feature_lock(app.clone(), opened.gen as usize);
+    }
     Ok(())
 }
 
@@ -2498,7 +2701,7 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
     }
     let lib = loaded_lib(&state)?;
     tracing::info!("[player] set_title({title})");
-    unsafe { (lib.libvlc_media_player_set_title)(mp as *mut c_void, title.max(0)) };
+    jump_to_title(&state, &lib, mp, title.max(0));
     Ok(())
 }
 
@@ -2898,7 +3101,7 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
                 "[player] step_title: no title list, set_title({})",
                 current + dir
             );
-            (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
+            jump_to_title(&state, &lib, mp, (current + dir).max(0));
             return Ok(());
         }
         // Feature titles: duration >= 2 min. Index 0 (menu domain) excluded.
@@ -2915,7 +3118,7 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
                 "[player] step_title: single feature, set_title({})",
                 current + dir
             );
-            (lib.libvlc_media_player_set_title)(m, (current + dir).max(0));
+            jump_to_title(&state, &lib, mp, (current + dir).max(0));
             return Ok(());
         }
         // Find the feature index nearest the current position.
@@ -2934,7 +3137,7 @@ pub fn player_step_title(state: tauri::State<PlayerState>, dir: i32) -> Result<(
             "[player] step_title: current={current} -> {next} ({} feature titles)",
             features.len()
         );
-        (lib.libvlc_media_player_set_title)(m, next as i32);
+        jump_to_title(&state, &lib, mp, next as i32);
         (lib.libvlc_title_descriptions_release)(titles, rc);
     }
     Ok(())
@@ -3405,6 +3608,37 @@ mod tests {
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["resolved_path"], "/Volumes/Media/Disc");
         assert_eq!(v["gen"], 3);
+    }
+
+    /// The feature lock calls libVLC only while its own session is the live
+    /// one; a closed, replaced, or swapped-player session must not reach the
+    /// pointer.
+    #[test]
+    fn session_player_fence_rejects_stale_sessions() {
+        let state = PlayerState::default();
+        state
+            .session_gen
+            .store(5, std::sync::atomic::Ordering::SeqCst);
+        // Not started yet: nothing to call into.
+        assert_eq!(with_session_player(&state, 5, 0, |mp| mp), None);
+
+        *poison(&state.media_player) = 0x1234;
+        *poison(&state.started) = true;
+        assert_eq!(with_session_player(&state, 5, 0, |mp| mp), Some(0x1234));
+        assert_eq!(
+            with_session_player(&state, 5, 0x1234, |mp| mp),
+            Some(0x1234)
+        );
+        // A newer session (stop_session bumps the generation).
+        assert_eq!(with_session_player(&state, 4, 0, |mp| mp), None);
+        // The same generation with a different player.
+        assert_eq!(with_session_player(&state, 5, 0x9999, |mp| mp), None);
+        // Torn down: the pointer is zeroed and started cleared.
+        *poison(&state.media_player) = 0;
+        assert_eq!(with_session_player(&state, 5, 0, |mp| mp), None);
+        *poison(&state.media_player) = 0x1234;
+        *poison(&state.started) = false;
+        assert_eq!(with_session_player(&state, 5, 0, |mp| mp), None);
     }
 
     #[test]

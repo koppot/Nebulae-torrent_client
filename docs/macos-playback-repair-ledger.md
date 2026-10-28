@@ -575,3 +575,52 @@ Limitation. With a crop applied the snapshot cannot show the full frame, so
 content whose framing changes inside one title (for example full-frame scenes
 following letterboxed ones) is not re-measured; the crop is released at the next
 title, menu or stream-size change.
+
+### 13.3 DVD "Play Main Feature" (D) — `feature_lock.rs`, `spawn_feature_lock`
+
+The control is the app's own **Play Main Feature** button, not the disc's menu.
+The owner's rule for it on Banner of the Stars III (DISC_1.ISO): play only
+title 1 (the 30:08 episode), skip the 12.5 s clip before it, and do not continue
+into other titles. The authored menu's Play/Select and the disc's own "Play
+All" keep their authored meaning and are not touched.
+
+* Cause. The button reopens the disc with `:no-dvdnav-menu`. That option only
+  skips VLC's own `dvdnav_menu_call` (`dvdnav.c` 282-304); libdvdnav still starts
+  at First Play and follows the authored chain. The B3 log (2026-10-28,
+  08:32:59 to 08:33:22) shows session 27 starting on title 3 (length 12,500 ms)
+  and moving to title 1 (length 1,808,266 ms) 23 s later. The log ends before the
+  episode finished, so the continuation after it was not observed; the rule
+  above covers it anyway.
+* Fix. `feature_lock.rs` decides, `spawn_feature_lock` in `commands/media.rs`
+  acts. It starts only from the button (never from the menu watcher's automatic
+  direct-playback fallback) and only for a dvdnav title list (entry 0 flagged
+  MENU and named "DVD Menu"; a Blu-ray list does not qualify).
+  * Target: the title First Play already landed on if it is feature-length
+    (>= 120 s, not a menu); otherwise the first feature title, never the longest
+    (the longest can be Play All).
+  * `libvlc_media_player_set_title` moves to the target when needed, then the
+    watcher polls (40 ms near the end, 250 ms far from it) and pauses with the
+    idempotent `libvlc_media_player_set_pause` once the title is 1.5 s from its
+    end, or when the disc moves to another title on two consecutive samples.
+  * It lets go when the disc returns to its menu, when libVLC never reports the
+    target within 4 s, or when the viewer steps to a menu or clip.
+    Stepping title with the player's previous/next buttons moves the lock to the
+    new feature title (`jump_to_title` tells the lock before libVLC changes the
+    title).
+  * Replay (seek back to more than 5 s before the end while playing) re-arms the
+    lock. The existing "ended" state of the overlay already shows for a pause at
+    the end (`time >= length - 1500`), so the frontend is unchanged.
+* Resume. The overlay arms the saved-position seek on the first non-menu title
+  of more than 300 s. With the lock that is title 1 from the start, so the
+  restore works as before without the clip in front of it.
+* Tests: 34 unit tests in `feature_lock.rs` (title list recognition, target
+  choice, the lock state machine including a full Banner run, following the
+  viewer, adaptive polling, replay) and one in `commands/media.rs` for the
+  session fence the watcher calls libVLC through.
+* Needs real playback: whether libdvdnav accepts the jump while First Play is
+  running, how much of the clip shows before the jump, whether the pause lands
+  before the disc's own continuation, Replay at the end, and step title on a
+  multi-episode disc.
+* Residual risks. On any other DVD, Play Main Feature now stops at the end of
+  the title it plays instead of following the disc's chain. A localized VLC
+  string for "DVD Menu" fails closed (no lock; the old First Play behavior).

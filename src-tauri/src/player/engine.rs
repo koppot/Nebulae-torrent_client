@@ -43,6 +43,9 @@ pub struct VlcLib {
     pub libvlc_media_player_play: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_stop: unsafe extern "C" fn(*mut c_void),
     pub libvlc_media_player_pause: unsafe extern "C" fn(*mut c_void),
+    // Idempotent pause (1) / resume (0). `libvlc_media_player_pause` only
+    // toggles, which a background helper cannot use without racing the viewer.
+    pub libvlc_media_player_set_pause: Option<unsafe extern "C" fn(*mut c_void, c_int)>,
     pub libvlc_media_player_is_playing: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
@@ -971,6 +974,7 @@ impl VlcLib {
             libvlc_media_player_play: sym!("libvlc_media_player_play": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_stop: sym!("libvlc_media_player_stop": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_pause: sym!("libvlc_media_player_pause": unsafe extern "C" fn(*mut c_void)),
+            libvlc_media_player_set_pause: sym_opt!("libvlc_media_player_set_pause": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_media_player_is_playing: sym!("libvlc_media_player_is_playing": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),
