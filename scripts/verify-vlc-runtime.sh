@@ -51,8 +51,17 @@ for f in lib/libvlc.5.dylib lib/libvlccore.9.dylib lib/libbluray.4.dylib \
 done
 ok "required files present"
 
-[ "$(readlink "$DEST/lib/libvlc.dylib" 2>/dev/null)" = "libvlc.5.dylib" ] || fail "lib/libvlc.dylib is not a link to libvlc.5.dylib"
-[ "$(readlink "$DEST/lib/libvlccore.dylib" 2>/dev/null)" = "libvlccore.9.dylib" ] || fail "lib/libvlccore.dylib is not a link to libvlccore.9.dylib"
+# is_alias NAME TARGET: NAME is a link to TARGET (the staged tree) or a regular file
+# with TARGET's content (a built app: Tauri's bundler copies links as files).
+is_alias() {
+  if [ -L "$1" ]; then
+    [ "$(readlink "$1")" = "$(basename "$2")" ]
+  else
+    [ -f "$1" ] && cmp -s "$1" "$2"
+  fi
+}
+is_alias "$DEST/lib/libvlc.dylib" "$DEST/lib/libvlc.5.dylib" || fail "lib/libvlc.dylib is neither a link to libvlc.5.dylib nor a copy of it"
+is_alias "$DEST/lib/libvlccore.dylib" "$DEST/lib/libvlccore.9.dylib" || fail "lib/libvlccore.dylib is neither a link to libvlccore.9.dylib nor a copy of it"
 
 # The core must be the official build, which links system libraries only.
 if otool -L "$DEST/lib/libvlccore.9.dylib" | tail -n +3 | grep -vE '^[[:space:]]+(/usr/lib/|/System/)' >/dev/null; then
@@ -214,8 +223,9 @@ expected = {e["name"] for e in json.load(open(os.path.join(dest, "bundled-librar
 missing = sorted(expected - bundled)
 if missing:
     sys.exit("bundled libraries that did not load from the bundle: " + ", ".join(missing))
-print("%s order: libvlc, %d bundled libraries and the Blu-ray plugin loaded; libbluray %s; nothing from outside the bundle"
-      % (order, len(expected), version))
+cores = sorted(os.path.basename(p) for p in new if os.path.basename(p).startswith("libvlccore"))
+print("%s order: libvlc, %d bundled libraries and the Blu-ray plugin loaded; libbluray %s; nothing from outside the bundle; "
+      "libvlccore images: %s" % (order, len(expected), version, ", ".join(cores)))
 PY
 for order in forward reverse; do
   env -i PATH=/usr/bin:/bin /usr/bin/python3 -B "$LOAD_CHECK" "$DEST" "$order" "$ENTRY" "$LB_VERSION" \

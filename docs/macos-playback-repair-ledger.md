@@ -700,8 +700,14 @@ workflows; the installed app was not edited by hand. No GitHub workflow was run.
   `lib/libvlccore.dylib` as regular files, so the built app holds two real copies
   of each. `engine.rs` preloads every dylib in `vlc/lib` whose name does not start
   with `libvlc.`, which includes both `libvlccore.9.dylib` and the copy named
-  `libvlccore.dylib`. The B3 app did the same and played discs; it was not
-  examined further here.
+  `libvlccore.dylib`; both files carry the install name `@rpath/libvlccore.dylib`,
+  which is what libvlc and every plugin link. `verify-vlc-runtime.sh` reproduces
+  the app's load order in a separate process: on the staged tree (where
+  `libvlccore.dylib` is a link) it maps one libvlccore image, on the vlc directory
+  of the built app it maps two. The B3 and earlier apps are laid out the same way
+  and played discs. Shipping only the two alias names as real files (no `.5` and
+  `.9` copies) would leave a single image; that changes what the app loads, so it
+  was not done without a playback test.
 * **Unsealed CI bundles.** Without a signing identity `tauri build` leaves the
   bundle unsealed (`Sealed Resources=none`), so `codesign --verify --deep
   --strict` fails on what the workflows build. The first real build of this

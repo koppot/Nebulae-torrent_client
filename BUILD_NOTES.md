@@ -88,7 +88,7 @@ The build may end with an updater-signing error when `TAURI_SIGNING_PRIVATE_KEY`
    Left out of the official set: `plugins.dat` (VLC validates it by mtime and size and bundling rewrites mtimes, so a shipped cache is always stale; the first launch writes a fresh one), the 1.4.0 jars that belong to the official Blu-ray plugin, and the two plugins of VLC.app that need Sparkle and Growl, which only VLC.app ships. There is no `Frameworks` directory.
 4. It writes `src-tauri/resources/build-manifest.json` (per-file SHA-256, source attribution, symlinks, git revision, target architecture) and runs `scripts/verify-vlc-runtime.sh`.
 
-`lib/libvlc.dylib` and `lib/libvlccore.dylib` are symlinks in the staged tree and are listed under `links` in the manifest. Tauri's bundler copies symlinks as regular files, so the built app has real files there; `verify-macos-app.sh` accepts both.
+`lib/libvlc.dylib` and `lib/libvlccore.dylib` are symlinks in the staged tree and are listed under `links` in the manifest. Tauri's bundler copies symlinks as regular files, so the built app has real files there; `verify-macos-app.sh` and `verify-vlc-runtime.sh` accept both. One consequence: the app preloads both `libvlccore.9.dylib` and the copy named `libvlccore.dylib` (the same install name), so the built app maps two libvlccore images where the staged tree maps one (the load check of `verify-vlc-runtime.sh` prints which). The earlier apps were laid out the same way; see the ledger, section 14.3.
 
 ## Verifying a produced bundle
 
