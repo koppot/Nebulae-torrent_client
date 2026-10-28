@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.4] - 2026-10-28
+
+### Fixed
+- **Blu-ray Menu Navigation and Input Control**: Resolved an issue where manual menu invocation during feature playback could fail or briefly appear without accepting input. Added a ground-truth menu visibility check via `libvlc_media_player_get_bluray_menu_open()` and scoped UO Disabled menu opening on disc mount. The fix ensures menu commands only execute when the disc's graphics controller is ready to accept input, and that subsequent menu commands don't replay warnings on re-entry.
+- **Runtime Dependency Completeness**: Verified all bundled libraries, plugins, and runtime data are present in Release builds including patched VLC with the working Blu-ray menu fix, libbluray with BD-J JARs, bundled Java runtime, Transmission with its complete dependency chain, Tailnet/Tailscale and required assets, fonts/fontconfig, and all license notices.
+
+### Added
+- **Menu Visibility Ground Truth**: New FFI symbol `libvlc_media_player_get_bluray_menu_open()` provides accurate menu visibility state from the disc's graphics controller, used by the Rust menu watcher to gate navigation commands and prevent stale retry/fallback behavior.
+
+### Changed
+- **Minimum macOS Version**: Updated documented minimum macOS to 11.0 to match the actual bundled components.
+
+### Known Limitations
+- **Fullmetal Alchemist: The Conqueror of Shamballa authored menu transition**: Selecting "Play" in the authored Blu-ray menu triggers an application crash (`EXC_BAD_ACCESS` in `libvlc_media_tracks_get`) due to an internal libVLC title transition race where track enumeration runs against a transient null input item. Under active investigation.
+
 ## [0.2.3] - 2026-10-24
 
 ### Fixed
