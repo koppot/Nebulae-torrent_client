@@ -92,7 +92,7 @@ ok "libvideotoolbox_plugin.dylib contains the VT-305 patch"
 
 # The export trie is what dlsym resolves, not just the static symbol table.
 LIBVLC_EXPORTS="$(dyld_info -exports "$DEST/lib/libvlc.5.dylib" 2>/dev/null || true)"
-for sym in _libvlc_media_player_navigate_menu _libvlc_media_player_get_bluray_playlist_id; do
+for sym in _libvlc_media_player_navigate_menu _libvlc_media_player_get_bluray_playlist_id _libvlc_media_player_get_bluray_menu_open; do
   grep -q "$sym" <<<"$LIBVLC_EXPORTS" || fail "libvlc.5.dylib does not export ${sym#_}"
   ok "libvlc.5.dylib exports ${sym#_}"
 done
@@ -100,6 +100,9 @@ done
 has_string "$DEST/plugins/liblibbluray_plugin.dylib" "bluray-playlist-id" \
   || fail "liblibbluray_plugin.dylib is missing the bluray-playlist-id patch"
 ok "liblibbluray_plugin.dylib contains the bluray-playlist-id patch"
+has_string "$DEST/plugins/liblibbluray_plugin.dylib" "bluray-menu-open" \
+  || fail "liblibbluray_plugin.dylib is missing the bluray-menu-first patch"
+ok "liblibbluray_plugin.dylib contains the bluray-menu-first patch"
 
 # No stale framework copy, no plugin cache (mtime-keyed, always stale after
 # bundling), no plugin that needs a framework the app does not ship.

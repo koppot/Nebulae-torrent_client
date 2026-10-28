@@ -10,11 +10,11 @@ tarball, and libbluray, which it builds from its own pinned tarball.
 |----------|--------|----------|
 | `lib/libvlccore.9.dylib` | official VLC 3.0.23 app | none |
 | `plugins/*` (331 files) | official VLC 3.0.23 app | none |
-| `lib/libvlc.5.dylib` | built from the patched source | `navigate-menu.patch`, `bluray-playlist-id.patch` |
+| `lib/libvlc.5.dylib` | built from the patched source | `navigate-menu.patch`, `bluray-playlist-id.patch`, `bluray-menu-first.patch` |
 | `plugins/libvideotoolbox_plugin.dylib` | built from the patched source | `vt-305.patch` |
 | `plugins/libcaopengllayer_plugin.dylib` | built from the patched source | `hdr-tonemap.patch` |
 | `plugins/libglconv_cvpx_plugin.dylib` | built from the patched source | none of its own: it must match the converter struct that `hdr-tonemap.patch` changes |
-| `plugins/liblibbluray_plugin.dylib` | built from the patched source | `bluray-playlist-id.patch` |
+| `plugins/liblibbluray_plugin.dylib` | built from the patched source | `bluray-playlist-id.patch`, `bluray-menu-first.patch` |
 | `lib/libbluray.4.dylib`, `lib/libbluray-j2se-1.5.0.jar`, `lib/libbluray-awt-j2se-1.5.0.jar` | libbluray 1.5.0, built unmodified | none |
 
 The Blu-ray plugin is linked to this libbluray 1.5.0, not to the libbluray 1.4.0
@@ -143,6 +143,42 @@ Note: `liblibbluray_plugin.la` needs `-lintl` when it is linked (GNU gettext, us
 `_("Top Menu")` strings in `bluray.c`). `scripts/build-vlc-runtime.sh` passes the
 Homebrew gettext link flags itself.
 
+## bluray-menu-first.patch — `modules/access/bluray.c` + `lib/media_player.c` + `lib/libvlc.sym` + `include/vlc/libvlc_media_player.h`
+
+Opens a menu-enabled Blu-ray on its authored top menu instead of its First
+Play warning reel, and exposes the graphics controller's menu-visible state:
+
+1. In `blurayOpen` (`b_menu` branch only), a new `blurayTopMenuCall()`
+   requests the top menu immediately after `bd_play()`. `bd_play()` always
+   lands on First Play, but libbluray's HDMV VM does not execute the First
+   Play movie object until the first `bd_read()`, so the menu call re-targets
+   the VM before a single intro/warning packet is decoded. When the disc has
+   no usable top menu the call fails and First Play proceeds as authored.
+2. `blurayTopMenuCall()` lowers libbluray's UO restriction enforcement to
+   `BLURAY_PLAYER_SETTING_UO_RESTRICTION_DISABLED` only around the menu call.
+   At the default RELAXED level a disc can mask the menu-call UO while its
+   warning clips play, which made `INPUT_NAV_MENU` a silent no-op until the
+   footage ended (B4 runtime finding: FBI/warning footage before the menu on
+   every tested Blu-ray). The masking window is scoped to this navigation
+   call: seeks and stream selection keep upstream enforcement.
+   `DEMUX_NAV_MENU` and the top-menu case of `bluraySetTitle` use the same
+   helper, so a manual Menu request during masked playback works as well.
+3. `blurayOpen` creates a `bluray-menu-open` integer variable on the input
+   thread (initialised to 0); the `BD_EVENT_MENU` handler publishes the
+   graphics controller's interactive-menu-visible state to it.
+   `libvlc_media_player_get_bluray_menu_open()` (new export) returns that
+   state: 1 while an interactive menu is displayed, 0 while none is, -1 when
+   the media is not Blu-ray. The current-title report cannot serve this
+   purpose: `input.c`'s `INPUT_CONTROL_SET_TITLE` announces the requested
+   title unconditionally, even when the disc's VM refused the menu call.
+
+Nebulae's startup menu watcher confirms the menu against this signal, so a
+rejected menu request can no longer end the watch while warnings still play.
+
+Status: **compiled** into `lib/libvlc.5.dylib` (new export) and
+`plugins/liblibbluray_plugin.dylib` (the `bluray.c` changes). Applies after
+`bluray-playlist-id.patch` (same header, symbol list and `lib/media_player.c`).
+
 ## Applying the patches
 
 Use `scripts/apply-vlc-patches.sh SOURCE_DIR` on a freshly unpacked VLC 3.0.23
@@ -150,10 +186,12 @@ tarball (SHA-256 `e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7
 Do not call `patch` by hand: the order and the checks below are part of the
 contract.
 
-- Order: `vt-305`, `navigate-menu`, `hdr-tonemap`, `bluray-playlist-id`.
-  `bluray-playlist-id.patch` is a diff against the tree *after*
-  `navigate-menu.patch`, because both edit the same header, symbol list and
-  `lib/media_player.c`.
+- Order: `vt-305`, `navigate-menu`, `hdr-tonemap`, `bluray-playlist-id`,
+  `bluray-menu-first`. `bluray-playlist-id.patch` is a diff against the tree
+  *after* `navigate-menu.patch`, because both edit the same header, symbol
+  list and `lib/media_player.c`; `bluray-menu-first.patch` is a diff against
+  the tree after `bluray-playlist-id.patch` for the same reason (and it also
+  edits `modules/access/bluray.c`).
 - Zero fuzz (`patch -F0`), dry run first. A fuzzy match can put a hunk in the
   wrong place and still report success.
 - After the last patch, every patched source file is compared with
@@ -168,7 +206,7 @@ tree. `bluray-playlist-id.patch` was malformed (`patch` stopped with
 only matched with fuzz, which placed the declaration above the typedef it needs.
 The shipped artifacts had been built from a hand-edited tree, so the workflows
 could not reproduce them (and `release.yml` never applied the playlist patch).
-Both patches were regenerated from that tree; applying the four patches to the
+Both patches were regenerated from that tree; applying the five patches to the
 pristine tarball now yields all nine patched files byte-identical to it.
 
 ## Build requirements

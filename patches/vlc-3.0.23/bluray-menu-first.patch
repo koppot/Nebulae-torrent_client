@@ -1,0 +1,161 @@
+diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+--- a/include/vlc/libvlc_media_player.h	2026-10-28 16:46:05
++++ b/include/vlc/libvlc_media_player.h	2026-10-28 16:47:42
+@@ -989,6 +989,7 @@
+                                               unsigned navigate );
+ LIBVLC_API void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi );
+ LIBVLC_API int libvlc_media_player_get_bluray_playlist_id( libvlc_media_player_t* p_mi );
++LIBVLC_API int libvlc_media_player_get_bluray_menu_open( libvlc_media_player_t* p_mi );
+ 
+ /**
+  * Set if, and how, the video title will be shown when media is played.
+diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
+--- a/lib/libvlc.sym	2026-10-28 16:46:05
++++ b/lib/libvlc.sym	2026-10-28 16:47:42
+@@ -204,6 +204,7 @@
+ libvlc_media_player_will_play
+ libvlc_media_player_navigate
+ libvlc_media_player_get_bluray_playlist_id
++libvlc_media_player_get_bluray_menu_open
+ libvlc_media_player_navigate_menu
+ libvlc_media_player_set_video_title_display
+ libvlc_media_release
+diff -ruN a/lib/media_player.c b/lib/media_player.c
+--- a/lib/media_player.c	2026-10-28 16:46:05
++++ b/lib/media_player.c	2026-10-28 16:47:42
+@@ -1857,6 +1857,31 @@
+     return i_val;
+ }
+ 
++/* Get the Blu-ray interactive-menu visibility from the input thread's
++ * "bluray-menu-open" variable, which is written by the bluray access
++ * demuxer (modules/access/bluray.c) on every BD_EVENT_MENU event. Unlike
++ * the current-title report, this state comes from the disc's graphics
++ * controller, so it only reports a menu that is actually displayed and
++ * accepting input; a title request the disc's VM refused never sets it.
++ *
++ * Returns 1 while an interactive menu (top menu, popup, BD-J OSD) is
++ * displayed, 0 while none is, and -1 when the variable does not exist
++ * (non-Blu-ray media) or the player is not playing.
++ */
++int libvlc_media_player_get_bluray_menu_open( libvlc_media_player_t* p_mi )
++{
++    input_thread_t *p_input = libvlc_get_input_thread ( p_mi );
++    if ( p_input == NULL )
++        return -1;
++
++    int i_val = -1;
++    if ( var_Type( p_input, "bluray-menu-open" ) & VLC_VAR_INTEGER )
++        i_val = (int)var_GetInteger( p_input, "bluray-menu-open" );
++
++    vlc_object_release( p_input );
++    return i_val;
++}
++
+ /* internal function, used by audio, video */
+ libvlc_track_description_t *
+         libvlc_get_track_description( libvlc_media_player_t *p_mi,
+diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
+--- a/modules/access/bluray.c	2026-10-28 16:46:05
++++ b/modules/access/bluray.c	2026-10-28 16:47:42
+@@ -59,6 +59,7 @@
+ 
+ 
+ #include <libbluray/bluray.h>
++#include <libbluray/player_settings.h>   /* bd_player_setting_uo_restriction_level */
+ #include <libbluray/bluray-version.h>
+ #include <libbluray/keys.h>
+ #include <libbluray/meta_data.h>
+@@ -378,6 +379,7 @@
+ static int   blurayDemux(demux_t *);
+ 
+ static void  blurayInitTitles(demux_t *p_demux, uint32_t menu_titles);
++static int   blurayTopMenuCall(demux_t *p_demux);
+ static int   bluraySetTitle(demux_t *p_demux, int i_title);
+ 
+ static void  blurayOverlayProc(void *ptr, const BD_OVERLAY * const overlay);
+@@ -811,6 +813,11 @@
+     var_Create( p_demux->p_input, "bluray-playlist-id", VLC_VAR_INTEGER );
+     var_SetInteger( p_demux->p_input, "bluray-playlist-id", -1 );
+ 
++    /* Expose the graphics controller's interactive-menu-visible state for
++     * libvlc_media_player_get_bluray_menu_open(); set on BD_EVENT_MENU. */
++    var_Create( p_demux->p_input, "bluray-menu-open", VLC_VAR_INTEGER );
++    var_SetInteger( p_demux->p_input, "bluray-menu-open", 0 );
++
+     var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
+ 
+     /* Open BluRay */
+@@ -953,6 +960,17 @@
+         if (bd_play(p_sys->bluray) == 0)
+             BLURAY_ERROR(_("Failed to start bluray playback. Please try without menu support."));
+ 
++        /* bd_play() always lands on First Play, and commercial discs chain
++         * studio logos and FBI warnings there before (or instead of) the
++         * top menu. The HDMV VM does not execute the First Play object
++         * until the first bd_read(), so requesting the top menu now
++         * re-targets the VM before a single intro packet is decoded: the
++         * disc opens on its authored menu, not on its warning reel. When
++         * the disc has no usable top menu this call fails and First Play
++         * proceeds as authored. */
++        if (blurayTopMenuCall(p_demux) == 0)
++            msg_Warn(p_demux, "bluray: no top menu at open; following First Play");
++
+     } else {
+         /* set start title number */
+         if (bluraySetTitle(p_demux, p_sys->i_longest_title) != VLC_SUCCESS) {
+@@ -2166,6 +2184,27 @@
+ }
+ 
+ /*****************************************************************************
++ * blurayTopMenuCall: request the top menu even while the disc masks it
++ *
++ * Warning/intro clips commonly mask the menu-call UO while they play, which
++ * makes a menu request a silent no-op until the footage ends. Lower the UO
++ * restriction enforcement only around this navigation call, so seeks and
++ * stream selection keep upstream mask enforcement.
++ *****************************************************************************/
++static int blurayTopMenuCall(demux_t *p_demux)
++{
++    demux_sys_t *p_sys = p_demux->p_sys;
++    int result;
++
++    bd_set_player_setting(p_sys->bluray, BLURAY_PLAYER_SETTING_UO_RESTRICTION_LEVEL,
++                          BLURAY_PLAYER_SETTING_UO_RESTRICTION_DISABLED);
++    result = bd_menu_call(p_sys->bluray, -1);
++    bd_set_player_setting(p_sys->bluray, BLURAY_PLAYER_SETTING_UO_RESTRICTION_LEVEL,
++                          BLURAY_PLAYER_SETTING_UO_RESTRICTION_RELAXED);
++    return result;
++}
++
++/*****************************************************************************
+  * bluraySetTitle: select new BD title
+  *****************************************************************************/
+ static int bluraySetTitle(demux_t *p_demux, int i_title)
+@@ -2176,7 +2215,7 @@
+         int result;
+         if (i_title <= 0) {
+             msg_Dbg(p_demux, "Playing TopMenu Title");
+-            result = bd_menu_call(p_sys->bluray, -1);
++            result = blurayTopMenuCall(p_demux);
+         } else if (i_title >= (int)p_sys->i_title - 1) {
+             msg_Dbg(p_demux, "Playing FirstPlay Title");
+             result = bd_play_title(p_sys->bluray, BLURAY_TITLE_FIRST_PLAY);
+@@ -2490,7 +2529,7 @@
+         return sendKeyEvent(p_sys, BD_VK_POPUP);
+     case DEMUX_NAV_MENU:
+         if (p_sys->b_menu) {
+-            if (bd_menu_call(p_sys->bluray, -1) == 1) {
++            if (blurayTopMenuCall(p_demux) == 1) {
+                 p_demux->info.i_update |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT;
+                 return VLC_SUCCESS;
+             }
+@@ -2816,6 +2855,8 @@
+ #endif
+     case BD_EVENT_MENU:
+         p_sys->b_menu_open = e->param;
++        /* Publish menu visibility for libvlc_media_player_get_bluray_menu_open() */
++        var_SetInteger( p_demux->p_input, "bluray-menu-open", (int)e->param );
+         break;
+     case BD_EVENT_POPUP:
+         p_sys->b_popup_available = e->param;

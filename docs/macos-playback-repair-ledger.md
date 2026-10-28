@@ -494,6 +494,27 @@ already present in c27c16b6.
 Everything below is **implemented but runtime-unverified** until the user plays
 the discs named in the verification list.
 
+> **Runtime result (2026-10-28, installed B4 executable
+> `14c2f3dcaaf7…6a39`): items B and C FAILED, and the manual Menu action with
+> them.** Both are OPEN again; see §13.4 for the second pass.
+>
+> User observations on the installed B4 build:
+>
+> * Summer Wars and Mobile Suit Gundam Narrative still visibly play FBI/warning
+>   footage before the menu on initial Play — reported across every Blu-ray
+>   tested.
+> * Patlabor 2: pressing Menu during playback first shows FBI/warning footage,
+>   then briefly switches to the menu; whether the menu stays usable was not
+>   established.
+>
+> Session-log correlation (`nebulae_session.log` 16:22–16:29): the watcher
+> declared "reached authored menu [Outcome A]" at T+2.2 s on Summer Wars and
+> T+1.6 s on Gundam Narrative while First Play's warning playlists were still
+> on screen; the Patlabor 2 Menu press from a bypass session reopened the disc
+> into its 62 s interactive First Play and only settled on the menu after the
+> warning footage. The 25 ms post-skip polling and the 1 s confirmation hold
+> did not fix any of it.
+
 ### 13.1 Disc startup watch (B, C) — `menu_watch.rs`, commit `ecfb084`
 
 * Cause. `libvlc_media_player_set_title` makes the input thread announce the
@@ -510,6 +531,13 @@ the discs named in the verification list.
 * Residual risk. A First Play whose length never becomes known is not skipped;
   the watch then retries every 2 s until the 15 s window ends and the fallback
   runs.
+* **Runtime verdict: FAILED (see §13 intro).** The 1 s confirmation did not
+  help because the false "menu" report does not revert after ~0.5 s as assumed:
+  while First Play's movie object chains warning playlists, no `BD_EVENT_TITLE`
+  fires, so nothing overwrites the announce — the report holds for the whole
+  warning sequence and the watcher confirms a menu that is not there. And no
+  polling cadence can fix the underlying fact that the menu requests themselves
+  are discarded while the disc masks the menu-call UO during its warning clips.
 
 ### 13.2 Automatic crop (A, E, F) — `letterbox.rs`, `FramingState`, `framing_tick`
 
@@ -624,6 +652,99 @@ All" keep their authored meaning and are not touched.
 * Residual risks. On any other DVD, Play Main Feature now stops at the end of
   the title it plays instead of following the disc's chain. A localized VLC
   string for "DVD Menu" fails closed (no lock; the old First Play behavior).
+
+### 13.4 B4 runtime failure — navigation rebuilt, second pass (2026-10-28)
+
+Status: **implemented, runtime-unverified** until the user re-tests Summer
+Wars, Gundam Narrative and Patlabor 2 on the corrected candidate. Items B, C
+and the manual Menu action are OPEN.
+
+Causes established from source and the B4 session log, separately for the two
+reported failures:
+
+* **Initial Play.** Three layers had to cooperate for the warnings to show, and
+  B4 only adjusted the third:
+  1. `bd_play()` always starts a menu-enabled Blu-ray at First Play
+     (`libbluray/bluray.c`), and First Play on these discs is the FBI/studio
+     warning chain (Summer Wars: 5.3 s non-interactive; Gundam Narrative:
+     36 s interactive; Patlabor 2 UHD: 62 s interactive).
+  2. While the warning clips play, the disc masks the menu-call UO, and at
+     libbluray's default RELAXED enforcement level `bd_menu_call()` is then a
+     silent no-op (`_try_menu_call`, "UO menu call masked"). The position seek
+     the watcher uses as a fallback only works on non-interactive First Play
+     and only after footage has already been decoded — on interactive First
+     Play `DEMUX_GET/SET_POSITION` is rejected outright.
+  3. `set_title` makes libVLC announce the requested title unconditionally
+     (`input.c` `INPUT_CONTROL_SET_TITLE` never checks the `DEMUX_SET_TITLE`
+     result), and nothing overwrites that announce while First Play keeps
+     running (no `BD_EVENT_TITLE` fires between its chained playlists), so the
+     B4 watcher could confirm a held "menu" report while the warnings were
+     still on screen.
+* **Manual Menu during playback (Patlabor 2).** A different path with the same
+  symptom: the press came from a `bypass_menu` session (Play Main Feature),
+  where the disc VM is not running at all, so `player_return_to_menu` fully
+  reopens the disc with menus — straight into First Play again. What followed
+  was timing luck: the retried menu call lands only when the VM happens to sit
+  in an unmasked segment, so the menu can appear late, briefly, or not at all
+  per run. In the logged run (gen 27) the menu was reached at T+3 s and held
+  until the user closed the player; the user report ("briefly switches to the
+  menu") shows that is not stable.
+
+Correction (no timing values were changed; the sequence itself was fixed):
+
+* `patches/vlc-3.0.23/bluray-menu-first.patch` (new, applied after
+  `bluray-playlist-id.patch`):
+  * In `blurayOpen` (menu-enabled opens only), right after `bd_play()`, the
+    top menu is requested before the first `bd_read()`. The HDMV VM does not
+    execute the First Play movie object until the first read, so the menu call
+    re-targets the VM before a single warning packet is decoded — the disc
+    opens on its authored menu, not on shortened footage. If the disc has no
+    usable top menu the call fails and First Play proceeds as authored.
+  * The menu call runs through a helper that lowers libbluray's UO restriction
+    enforcement to DISABLED only for the duration of the call. The same helper
+    serves `DEMUX_NAV_MENU` (manual Menu during playback) and the top-menu
+    case of `bluraySetTitle`, so a menu request can no longer be masked by
+    warning clips or by a masked feature section. Seek and stream-selection
+    mask enforcement is unchanged (scoped to navigation only).
+  * The `BD_EVENT_MENU` state ("interactive menu visible", from the disc's
+    graphics controller) is published as the `bluray-menu-open` input variable
+    and read through the new export
+    `libvlc_media_player_get_bluray_menu_open()` (1 shown / 0 not shown /
+    -1 not Blu-ray).
+* Watcher (`menu_watch.rs`, `commands/media.rs`): a menu report now counts
+  only while the ground truth agrees — `menu_open == Some(false)` vetoes a
+  spoofed title report no matter how long it holds; `None` (DVD, plain files,
+  unpatched libvlc) keeps the previous hold-for-1 s rule. The same gate covers
+  the pre-loop "already at menu" exit and the 15 s window-end decision.
+  Everything else is unchanged: one First Play skip, the 2 s retry grid, the
+  1 s confirmation hold, the bounded one-shot fallback, and the
+  session-generation fences that make a manual Menu press supersede any stale
+  watcher or fallback work (the reopen bumps the generation; old watchers and
+  a queued fallback drop out).
+* Manual Menu from a bypass session still reopens the disc (the VM is not
+  running there — no menu call is possible without it), but the reopen now
+  goes through the same open-time menu call and lands on the menu directly.
+  The saved resume position ("Menu-btn") is untouched.
+
+Tests: four new `menu_watch` regression tests script the real failure
+lifecycles — a spoofed menu report held past the confirmation time never ends
+the watch (retries continue on the grid), ground truth + report confirm
+normally, popup ground truth without a menu title report does not end the
+watch, and confirmation runs from the moment the menu really opens. Full
+suite 295 passed; `cargo clippy --all-targets -D warnings` clean.
+
+Needs real playback (user-coordinated, on the corrected candidate): Summer
+Wars and Gundam Narrative initial Play → menu with zero warning footage;
+Patlabor 2 initial Play, then Menu during the feature → menu shown directly,
+stable and accepting input; repeated Play/Menu leaves no competing watchers;
+and the sanity cases (no-top-menu disc follows First Play; Play Main Feature
+bypass unchanged; DVD paths unchanged).
+
+Limitations: discs whose top menu depends on First Play setup (PSR writes by
+the First Play object) could show a degraded menu; the bounded fallback still
+applies, and the disc can always be played via Play Main Feature. BD-J top
+menus take the same early menu call; their JVM start dominates the timing
+there. None of this is claimed universal until the named discs are re-tested.
 
 ## 14. B4 packaging repair — dependencies, libbluray, Transmission, geo, Finder files (2026-10-28)
 

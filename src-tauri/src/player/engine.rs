@@ -74,6 +74,13 @@ pub struct VlcLib {
     // (patches/vlc-3.0.23/bluray-playlist-id.patch).
     pub libvlc_media_player_get_bluray_playlist_id:
         Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+    // Reports the Blu-ray graphics controller's interactive-menu-visible state
+    // (BD_EVENT_MENU): 1 while a menu is displayed, 0 while none is, -1 on
+    // non-Blu-ray media. Unlike the current-title report, a set_title the
+    // disc's VM refused can never set it. Present only in custom-patched
+    // libvlc builds (patches/vlc-3.0.23/bluray-menu-first.patch).
+    pub libvlc_media_player_get_bluray_menu_open:
+        Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     // Full title/chapter descriptions: real chapter time offsets for the
     // seek bar marks, and duration-aware title navigation (features only).
     pub libvlc_media_player_get_full_title_descriptions:
@@ -169,6 +176,29 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
     (lib.libvlc_title_descriptions_release)(titles, n);
     is_menu
+}
+
+/// Whether the Blu-ray graphics controller reports an interactive menu on
+/// screen right now.
+///
+/// - `Some(true)` / `Some(false)`: the patched bluray demuxer is publishing
+///   BD_EVENT_MENU ("interactive menu visible"). This is ground truth: the
+///   current-title report can claim the menu after a `set_title` the disc's
+///   VM refused (3.0.x `input.c` announces the requested title
+///   unconditionally), but it cannot set this.
+/// - `None`: not a Blu-ray session (DVD, plain file) or an unpatched libvlc,
+///   so the signal is unavailable and callers must fall back to the title
+///   report.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn bluray_menu_open(lib: &VlcLib, mp: usize) -> Option<bool> {
+    let f = lib.libvlc_media_player_get_bluray_menu_open?;
+    match f(mp as *mut c_void) {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
 }
 
 /// Return the 0-based index of the first title marked with INPUT_TITLE_MENU, if any.
@@ -991,6 +1021,7 @@ impl VlcLib {
             libvlc_media_player_navigate: sym!("libvlc_media_player_navigate": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_media_player_navigate_menu: sym_opt!("libvlc_media_player_navigate_menu": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_get_bluray_playlist_id: sym_opt!("libvlc_media_player_get_bluray_playlist_id": unsafe extern "C" fn(*mut c_void) -> c_int),
+            libvlc_media_player_get_bluray_menu_open: sym_opt!("libvlc_media_player_get_bluray_menu_open": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_full_title_descriptions: sym!("libvlc_media_player_get_full_title_descriptions": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcTitleDescription) -> c_int),
             libvlc_title_descriptions_release: sym!("libvlc_title_descriptions_release": unsafe extern "C" fn(*mut *mut VlcTitleDescription, c_int)),
             libvlc_media_player_get_full_chapter_descriptions: sym!("libvlc_media_player_get_full_chapter_descriptions": unsafe extern "C" fn(*mut c_void, c_int, *mut *mut *mut VlcChapterDescription) -> c_int),

@@ -4,10 +4,12 @@
 # Applies the Nebulae patches in patches/vlc-3.0.23/ to a pristine, unpacked
 # VLC 3.0.23 source tree, in the one order they are written for:
 #
-#   vt-305, navigate-menu, hdr-tonemap, bluray-playlist-id
+#   vt-305, navigate-menu, hdr-tonemap, bluray-playlist-id, bluray-menu-first
 #
 # bluray-playlist-id.patch builds on navigate-menu.patch (it edits the same
-# header, symbol list and media_player.c), so the order is part of the contract.
+# header, symbol list and media_player.c), and bluray-menu-first.patch builds
+# on bluray-playlist-id.patch (same three files plus modules/access/bluray.c),
+# so the order is part of the contract.
 #
 # The patches are applied with no fuzz, because a fuzzy match can land a hunk in
 # the wrong place and still report success (that is how navigate-menu.patch once
@@ -20,7 +22,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCH_DIR="$SCRIPT_DIR/../patches/vlc-3.0.23"
-PATCHES=(vt-305 navigate-menu hdr-tonemap bluray-playlist-id)
+PATCHES=(vt-305 navigate-menu hdr-tonemap bluray-playlist-id bluray-menu-first)
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 

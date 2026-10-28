@@ -720,16 +720,16 @@ fn start_playback_inner(
                     );
                     if resolved.is_disc && !resume {
                         if menu_watch::startup_watchers_enabled(bypass_menu) {
-                            // AUTHORED MENU WATCHER:
-                            // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
-                            // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
-                            // unless an interactive menu call is dispatched.
-                            // We poll at a tight 20ms cadence for demuxer readiness, dispatch
-                            // navigate_menu immediately, and if First Play masks menu calls
-                            // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
-                            // end of First Play (0.99) once so it triggers its authored JumpTitle 0
-                            // into Top Menu. The seek is gated by menu_watch::decide: a positively
-                            // identified First Play with a known length on a disc that has a menu.
+                            // AUTHORED MENU WATCHER (safety net):
+                            // The patched bluray module already requests the top menu at open,
+                            // before the First Play object executes (bluray-menu-first.patch), so
+                            // a normal disc Open lands on the authored menu directly. This watcher
+                            // covers the discs where that open-time call fails (no top menu,
+                            // BD-J timing): it dispatches navigate_menu once titles are ready,
+                            // repeats on a 2s grid, may seek a positively identified First Play to
+                            // its end once, and confirms the menu against the demuxer's
+                            // menu-visible ground truth (menu_watch), never against libVLC's
+                            // spoofable title report alone.
                             let app_menu = app.clone();
                             let menu_gen =
                                 state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
@@ -822,7 +822,11 @@ fn start_playback_inner(
                                 }
 
                                 // Outcome A: If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
-                                if unsafe { engine::is_menu_title(&lib, mp) } {
+                                // On Blu-ray the demuxer's menu-visible ground truth must agree:
+                                // the title report alone can be the announce of a refused set_title.
+                                if unsafe { engine::is_menu_title(&lib, mp) }
+                                    && unsafe { engine::bluray_menu_open(&lib, mp) } != Some(false)
+                                {
                                     tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
                                 );
@@ -913,6 +917,7 @@ fn start_playback_inner(
                                     }
                                     let sample = menu_watch::Sample {
                                         at_menu: kind == engine::TitleKind::Menu,
+                                        menu_open: unsafe { engine::bluray_menu_open(&lib, mp) },
                                         has_menu,
                                         kind,
                                         feature_active: unsafe {
@@ -923,14 +928,14 @@ fn start_playback_inner(
                                     match progress.menu_claim_since_ms() {
                                         Some(since) if !menu_claim_logged => {
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): libVLC reports the authored menu since T+{since}ms; confirming it holds for {}ms",
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): menu reported and demuxer confirms it open since T+{since}ms; confirming it holds for {}ms",
                                             menu_watch::MENU_CONFIRM_MS
                                         );
                                             menu_claim_logged = true;
                                         }
                                         None if menu_claim_logged => {
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): the menu report ended at T+{t_ms}ms before it was confirmed (the disc refused the menu request); current title {kind:?}"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): the menu claim ended at T+{t_ms}ms before it was confirmed (the disc refused the menu request or closed the menu); current title {kind:?}"
                                         );
                                             menu_claim_logged = false;
                                         }
@@ -1011,7 +1016,11 @@ fn start_playback_inner(
                                 let cur_len = unsafe {
                                     (lib.libvlc_media_player_get_length)(mp as *mut c_void)
                                 };
-                                let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                // Same ground-truth rule as the watch loop: on
+                                // Blu-ray a title report that the demuxer does
+                                // not confirm is not "at menu".
+                                let at_menu = unsafe { engine::is_menu_title(&lib, mp) }
+                                    && unsafe { engine::bluray_menu_open(&lib, mp) } != Some(false);
                                 let keep_playing = is_playing
                                     && (cur_len >= 120_000
                                         || unsafe { engine::is_active_feature_playback(&lib, mp) });

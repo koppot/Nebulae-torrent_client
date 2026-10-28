@@ -1,6 +1,6 @@
 {
-  "staged_at_utc": "2026-10-28T19:57:48Z",
-  "git_rev": "2bee2c1",
+  "staged_at_utc": "2026-10-28T20:53:58Z",
+  "git_rev": "1e4c924",
   "vlc_version": "3.0.23",
   "target_arch": "arm64",
   "sources": {
@@ -10,7 +10,8 @@
       "patches/vlc-3.0.23/vt-305.patch",
       "patches/vlc-3.0.23/navigate-menu.patch",
       "patches/vlc-3.0.23/hdr-tonemap.patch",
-      "patches/vlc-3.0.23/bluray-playlist-id.patch"
+      "patches/vlc-3.0.23/bluray-playlist-id.patch",
+      "patches/vlc-3.0.23/bluray-menu-first.patch"
     ],
     "vlc_source": {
       "version": "3.0.23",
@@ -28,7 +29,7 @@
         "current_version": "4.0.0",
         "compatibility_version": "4.0.0",
         "min_macos": "11.0",
-        "sha256_source": "ba4f1ed55d40dbab6e757d655b60e9e8b4bb68aa69e2338dd45177d53beb74c5",
+        "sha256_source": "f6dfb92f24a27b134c45929eac7835b5af82ae3de0a8723c749404da7c99c21f",
         "sha256_bundled": "7fb3c5fa2714cfed31b3ed9045daf2402f356c53053c409bcab8cf36137942c2",
         "origin": "not a Homebrew keg"
       },
@@ -92,17 +93,17 @@
   "files": [
     {
       "path": "vlc/bundled-libraries.json",
-      "sha256": "e2cd07eecc6be04a1006fb2ce3c5464a6dde34b0e81df10ee7e5702ac2397fe7",
+      "sha256": "c45e26963f8c5c5a5620d1dd8376c76f50a5820a7e07e35293dee367a834952a",
       "source": "nebulae-notice"
     },
     {
       "path": "vlc/lib/libbluray-awt-j2se-1.5.0.jar",
-      "sha256": "c6f871d5cf65e19fe69fee70a33778b1ffb6e1ec33caa680cf382e489d852ab3",
+      "sha256": "148050f1fbef9f6c844359260c2fd03cfe0b3614b63dc3944a24b144aec591f3",
       "source": "libbluray-build"
     },
     {
       "path": "vlc/lib/libbluray-j2se-1.5.0.jar",
-      "sha256": "dddf1463c7335d6f3176bd549f5d55361a6808210e3917cb23ca8b3da6f301da",
+      "sha256": "daa584f761306b8906bdb9390b956723aef60fe7c5a31ab17ca278c71121aa5d",
       "source": "libbluray-build"
     },
     {
@@ -137,7 +138,7 @@
     },
     {
       "path": "vlc/lib/libvlc.5.dylib",
-      "sha256": "7c9924ccd37def826d5da0241379b469e8461c1245dd13fc9ed20c05609915e5",
+      "sha256": "783d8f6d232bfec4c141e805f8492f75a1e499c0ca458d9be8844c3a2b0476fe",
       "source": "custom-build"
     },
     {
@@ -212,7 +213,12 @@
     },
     {
       "path": "vlc/licenses/vlc-3.0.23/SOURCE.txt",
-      "sha256": "a76d31737ba7852c57019a3ce880c66982af9471e582bf8ede038aa3059d5cd4",
+      "sha256": "7356eef3b39f41b5b3b7c26cba18df06c487f83ffe41eba1b4f4ff2ad05f203e",
+      "source": "nebulae-notice"
+    },
+    {
+      "path": "vlc/licenses/vlc-3.0.23/bluray-menu-first.patch",
+      "sha256": "f793124b151b8467a8ea276cacc4b8df3712b6b59517fd5ca7057ac359ef7233",
       "source": "nebulae-notice"
     },
     {
@@ -947,7 +953,7 @@
     },
     {
       "path": "vlc/plugins/liblibbluray_plugin.dylib",
-      "sha256": "2357011e4e2cc2f51230ab2d8a23c0eb71dfaf634321c1cc942d0e3fad6adefa",
+      "sha256": "0d123be39f2d046105294f19dbf7b190009d8df718a1787689a4daba6ee8c970",
       "source": "custom-build"
     },
     {

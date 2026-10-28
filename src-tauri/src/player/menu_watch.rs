@@ -16,9 +16,19 @@
 //! requested title whether or not the Blu-ray VM accepted it (3.0.x
 //! `input.c`, `INPUT_CONTROL_SET_TITLE`). While First Play runs with the menu
 //! call masked, that false "menu" report holds until the demuxer's next title
-//! event, about half a second later (Gundam Narrative and Patlabor 2 UHD, B3
-//! logs). A menu report therefore only ends the watch once it has held for
-//! [`MENU_CONFIRM_MS`].
+//! event — on discs whose First Play chains warning playlists that can be the
+//! whole intro, not the half second originally assumed (Summer Wars, Gundam
+//! Narrative and Patlabor 2 UHD, B4 logs), so even a menu report that held
+//! for [`MENU_CONFIRM_MS`] could not be trusted on its own.
+//!
+//! The watch therefore confirms the menu against the demuxer's own ground
+//! truth: `BD_EVENT_MENU`, the graphics controller's "interactive menu
+//! visible" state, published by the patched bluray module as the
+//! `bluray-menu-open` input variable and read through
+//! `libvlc_media_player_get_bluray_menu_open`. Where that signal exists
+//! (Blu-ray), a menu report only counts while it says the menu is open; where
+//! it does not (DVD, plain files, unpatched libvlc), the title report is all
+//! there is and the old hold-for-[`MENU_CONFIRM_MS`] rule applies unchanged.
 
 use super::engine::{first_play_skip_allowed, TitleKind};
 
@@ -52,14 +62,29 @@ pub const fn startup_watchers_enabled(bypass_menu: bool) -> bool {
 /// What the watcher sees at one poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sample {
-    /// The current title is the authored Top Menu.
+    /// The current title is the authored Top Menu, per libVLC's title report
+    /// (which a refused `set_title` can fake — see the module docs).
     pub at_menu: bool,
+    /// The demuxer's menu-visible ground truth (`BD_EVENT_MENU`):
+    /// `Some(true)`/`Some(false)` when the patched bluray module publishes it,
+    /// `None` when the signal does not exist (DVD, file, unpatched libvlc).
+    pub menu_open: Option<bool>,
     /// The disc's title list contains an authored menu title.
     pub has_menu: bool,
     /// What VLC's title list says the current title is.
     pub kind: TitleKind,
     /// A feature title is actively playing.
     pub feature_active: bool,
+}
+
+impl Sample {
+    /// The menu counts as reached only where the title report and the
+    /// demuxer's menu-visible ground truth agree. When the ground truth
+    /// exists, "menu not open" vetoes a (possibly spoofed) report; when it
+    /// does not, the report alone decides, as before.
+    fn menu_really_open(&self) -> bool {
+        self.at_menu && self.menu_open != Some(false)
+    }
 }
 
 /// State carried between polls of one watcher run.
@@ -123,19 +148,22 @@ pub enum Decision {
 /// watch started).
 ///
 /// - A menu report ends the watch only after it has held without a gap for
-///   [`MENU_CONFIRM_MS`]; until then the watcher waits and sends no further
-///   menu requests. A report that disappears (the VM refused the request) is
-///   forgotten.
+///   [`MENU_CONFIRM_MS`], and only while the demuxer's menu-visible ground
+///   truth agrees when that signal exists (a `set_title` the disc refused
+///   reports the menu without the menu ever opening; the ground truth is not
+///   fooled, however long the report holds). Until confirmation the watcher
+///   waits and sends no further menu requests. A report that ends before
+///   confirmation is forgotten.
 /// - A feature title becoming active does not end the watch while the disc has
 ///   an authored menu that has not appeared yet; only a disc without a menu
 ///   title takes the plain-playback exit.
 /// - First Play is skipped at most once per run, and only when
 ///   [`first_play_skip_allowed`] says so.
 /// - Once the title has left First Play after that skip, the menu is requested
-///   again right away (the menu call was masked only while First Play ran);
-///   otherwise requests repeat on the fixed [`RETRY_EVERY_MS`] grid.
+///   again right away; otherwise requests repeat on the fixed
+///   [`RETRY_EVERY_MS`] grid.
 pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
-    if s.at_menu {
+    if s.menu_really_open() {
         let since = *progress.menu_since_ms.get_or_insert(now_ms);
         return if now_ms.saturating_sub(since) >= MENU_CONFIRM_MS {
             Decision::Reached
@@ -213,8 +241,15 @@ mod tests {
     };
 
     fn sample(kind: TitleKind) -> Sample {
+        // menu_open None: the demuxer's ground truth does not exist (DVD,
+        // file, unpatched libvlc), so the title report alone decides.
+        sample_with_menu_open(kind, None)
+    }
+
+    fn sample_with_menu_open(kind: TitleKind, menu_open: Option<bool>) -> Sample {
         Sample {
             at_menu: kind == TitleKind::Menu,
+            menu_open,
             has_menu: true,
             kind,
             feature_active: matches!(kind, TitleKind::Other { duration_ms } if duration_ms >= FEATURE_MIN_MS),
@@ -315,6 +350,65 @@ mod tests {
         });
         assert!(!decisions(&events).contains(&Decision::Reached));
         assert_eq!(events[0], (800, Decision::SkipFirstPlay));
+    }
+
+    #[test]
+    fn a_held_menu_report_without_menu_open_never_ends_the_watch() {
+        // B4 failure (Summer Wars, Gundam Narrative, Patlabor 2 UHD): the
+        // menu request is masked during the warning clips, yet libVLC keeps
+        // reporting the menu title (the set_title announce does not revert
+        // while First Play runs), so the report holds past MENU_CONFIRM_MS.
+        // With the demuxer's ground truth present and saying "menu not open",
+        // the watch must not end no matter how long the report holds; the
+        // request repeats on the grid instead.
+        let events = run(|_| sample_with_menu_open(TitleKind::Menu, Some(false)));
+        assert!(!decisions(&events).contains(&Decision::Reached));
+        assert!(!decisions(&events).contains(&Decision::SkipFirstPlay));
+        assert_eq!(
+            times(&events),
+            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+        );
+        assert!(decisions(&events).iter().all(|d| *d == Decision::RetryMenu));
+    }
+
+    #[test]
+    fn a_menu_report_with_menu_open_confirms_normally() {
+        // The healthy Blu-ray path: title report and ground truth agree.
+        let events = run(|_| sample_with_menu_open(TitleKind::Menu, Some(true)));
+        assert_eq!(events, vec![(POLL_MS + MENU_CONFIRM_MS, Decision::Reached)]);
+    }
+
+    #[test]
+    fn menu_open_without_a_menu_report_does_not_end_the_watch() {
+        // A popup menu over a feature sets the ground truth while the title
+        // report stays on the feature: that is not the authored top menu.
+        let events =
+            run(|_| sample_with_menu_open(TitleKind::FirstPlay { duration_ms: 5_255 }, Some(true)));
+        assert!(!decisions(&events).contains(&Decision::Reached));
+        assert_eq!(skips(&events), 1);
+    }
+
+    #[test]
+    fn menu_open_vetoes_a_spoofed_report_until_the_menu_really_opens() {
+        // Masked at first (report spoofed, ground truth says closed), then the
+        // retry lands and the menu really opens: confirmation runs from the
+        // real opening, not from the first spoofed report.
+        let events = run(|t| {
+            if t < 4_000 {
+                sample_with_menu_open(TitleKind::Menu, Some(false))
+            } else {
+                sample_with_menu_open(TitleKind::Menu, Some(true))
+            }
+        });
+        // Confirmation starts when the menu really opens (t=4000 poll), so
+        // the watch ends at 4000 + MENU_CONFIRM_MS, not one poll later.
+        assert_eq!(
+            events.last(),
+            Some(&(4_000 + MENU_CONFIRM_MS, Decision::Reached))
+        );
+        assert!(events[..events.len() - 1]
+            .iter()
+            .all(|e| e.1 == Decision::RetryMenu));
     }
 
     #[test]

@@ -1,0 +1,741 @@
+diff --git a/docs/FACTORY_AI_HANDOVER.md b/docs/FACTORY_AI_HANDOVER.md
+index 4af5aff..64e2cd5 100644
+--- a/docs/FACTORY_AI_HANDOVER.md
++++ b/docs/FACTORY_AI_HANDOVER.md
+@@ -37,6 +37,9 @@ All agents, models, and workflows operating on this repository must strictly adh
+ 5. **Windows Deployment & Verification:**
+    - The interactive desktop user on `supermicro.local` is `supermicro\administrator` (session ID 2), not `dev`.
+    - Never claim an update is installed on Windows without inspecting `LastWriteTime`, `FileVersionInfo`, and verifying the running instance via CDP at `http://127.0.0.1:9222`.
++6. **Mandatory Bundled Dependency Retention:**
++   - Never remove, omit, or replace bundled dependencies that belong in the application (patched Transmission daemon and its required libraries, Tailscale daemon and CLI, Temurin JRE for BD-J menus, verified custom VLC runtime and plugins).
++   - All bundled dependencies must be packaged and installed in the application bundle.
+ 
+ ---
+ 
+diff --git a/src-tauri/src/commands/media.rs b/src-tauri/src/commands/media.rs
+index 302551c..59d2b7c 100644
+--- a/src-tauri/src/commands/media.rs
++++ b/src-tauri/src/commands/media.rs
+@@ -153,6 +153,44 @@ pub struct PlayerOpenResult {
+     pub gen: u64,
+ }
+ 
++/// Derive the best user-facing title and year for a disc release.
++/// Generic folder or disc names (e.g. "FUUKA_CS_D1", "DISC_1", "VIDEO_TS")
++/// look up the release's parent directory name to extract clean title & year.
++fn best_display_title_for_disc(path: &Path, default_title: &str) -> String {
++    let is_generic_disc = {
++        let lower = default_title.to_lowercase();
++        lower.starts_with("disc")
++            || lower.contains("_d1")
++            || lower.contains("_d2")
++            || lower.contains("_d3")
++            || lower.contains("_disc")
++            || lower == "video_ts"
++            || lower == "bdmv"
++    };
++    if is_generic_disc {
++        if let Some(parent) = path.parent() {
++            if let Some(parent_name) = parent.file_name().and_then(|n| n.to_str()) {
++                let parsed = MediaTitleParser::parse(parent_name);
++                if !parsed.clean_title.is_empty() {
++                    return if let Some(y) = parsed.year {
++                        format!("{} ({})", parsed.clean_title, y)
++                    } else {
++                        parsed.clean_title
++                    };
++                }
++            }
++        }
++    }
++    let parsed = MediaTitleParser::parse(default_title);
++    if let Some(y) = parsed.year {
++        format!("{} ({})", parsed.clean_title, y)
++    } else if !parsed.clean_title.is_empty() {
++        parsed.clean_title
++    } else {
++        default_title.to_string()
++    }
++}
++
+ /// Resolve what to play for a save path / file / folder. A disc image or
+ /// disc folder ALWAYS wins over loose episode files; a disc-less folder
+ /// plays its largest video file (the main feature).
+@@ -162,7 +200,7 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
+         return Err(format!("Media path does not exist: {file_path}"));
+     }
+     if let Some(disc) = DiscDetector::inspect(path) {
+-        let title = disc.title.clone();
++        let title = best_display_title_for_disc(path, &disc.title);
+         return Ok(ResolvedPlayback {
+             resolved_path: disc.root_path.clone(),
+             title,
+@@ -180,11 +218,11 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
+             .to_ascii_lowercase();
+         if dir_name == "bdmv" || dir_name == "video_ts" {
+             if let Some(disc_root) = path.parent() {
+-                let title = disc_root
++                let raw_title = disc_root
+                     .file_name()
+                     .and_then(|s| s.to_str())
+-                    .unwrap_or("Video")
+-                    .to_string();
++                    .unwrap_or("Video");
++                let title = best_display_title_for_disc(disc_root, raw_title);
+                 return Ok(ResolvedPlayback {
+                     resolved_path: disc_root.display().to_string(),
+                     title,
+@@ -195,7 +233,7 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
+         }
+         if let Some(target) = resolve_disc_target(path) {
+             if let Some(disc) = DiscDetector::inspect(&target) {
+-                let title = disc.title.clone();
++                let title = best_display_title_for_disc(&target, &disc.title);
+                 return Ok(ResolvedPlayback {
+                     resolved_path: disc.root_path.clone(),
+                     title,
+@@ -787,8 +825,11 @@ fn start_playback_inner(
+                                     return;
+                                 }
+ 
+-                                // Outcome B: If already at confirmed active feature playback, preserve it and done.
+-                                if unsafe { engine::is_active_feature_playback(&lib, mp) } {
++                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
++
++                                // Outcome B: Only for discs WITHOUT an authored menu (e.g. episodic discs without a top menu).
++                                // If the disc has an authored menu, we must never abort menu navigation early.
++                                if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                     let cur = unsafe {
+                                         (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                     };
+@@ -796,7 +837,7 @@ fn start_playback_inner(
+                                         (lib.libvlc_media_player_get_length)(mp as *mut c_void)
+                                     };
+                                     tracing::info!(
+-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at active feature playback on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
++                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc without authored menu active on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
+                                 );
+                                     return;
+                                 }
+@@ -808,20 +849,22 @@ fn start_playback_inner(
+                                             lib_clone.libvlc_media_player_navigate_menu
+                                         {
+                                             navigate_menu(mp as *mut c_void);
+-                                        } else {
+-                                            tracing::warn!(
+-                                            "[menu-diag] navigate_menu symbol unavailable on this libvlc build"
+-                                        );
++                                        }
++                                        if let Some(mt) = engine::find_menu_title(&lib_clone, mp) {
++                                            (lib_clone.libvlc_media_player_set_title)(
++                                                mp as *mut c_void,
++                                                mt,
++                                            );
+                                         }
+                                     }
+                                 };
+ 
+                                 tracing::info!(
+-                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU"
++                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU / set_title"
+                             );
+                                 nav_menu();
+ 
+-                                // Check if navigate_menu or natural flow reached menu or feature within 200ms (10 * 20ms)
++                                // Check if navigate_menu or set_title reached menu within 200ms (10 * 20ms)
+                                 for _ in 0..10 {
+                                     std::thread::sleep(std::time::Duration::from_millis(20));
+                                     let gen_now =
+@@ -838,11 +881,11 @@ fn start_playback_inner(
+                                     }
+                                     if unsafe { engine::is_menu_title(&lib, mp) } {
+                                         tracing::info!(
+-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms [Outcome A]"
++                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu / set_title within 200ms [Outcome A]"
+                                     );
+                                         return;
+                                     }
+-                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
++                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                         let cur = unsafe {
+                                             (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                         };
+@@ -856,31 +899,7 @@ fn start_playback_inner(
+                                     }
+                                 }
+ 
+-                                // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
+-                                // navigate_menu is rejected by libbluray. If the disc has an authored menu title
+-                                // and we are currently in First Play / short intro (<= 300s), seek to the end of
+-                                // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
+-                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+-                                let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
+-                                let is_feat =
+-                                    unsafe { engine::is_active_feature_playback(&lib, mp) };
+-                                if has_menu && is_fp && !is_feat {
+-                                    tracing::info!(
+-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 APPLIED (has_menu=true, is_fp=true)"
+-                                );
+-                                    unsafe {
+-                                        (lib.libvlc_media_player_set_position)(
+-                                            mp as *mut c_void,
+-                                            0.99,
+-                                        );
+-                                    }
+-                                } else {
+-                                    tracing::info!(
+-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 SKIPPED (has_menu={has_menu}, is_fp={is_fp}, is_feat={is_feat})"
+-                                );
+-                                }
+-
+-                                // Poll up to 15s (75 * 200ms).
++                                // Poll up to 15s (75 * 200ms) for authored menu or confirmed feature.
+                                 for i in 0..75 {
+                                     std::thread::sleep(std::time::Duration::from_millis(200));
+                                     let gen_now =
+@@ -905,8 +924,8 @@ fn start_playback_inner(
+                                         return;
+                                     }
+ 
+-                                    // Outcome B: Confirmed active feature playback engaged
+-                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
++                                    // Outcome B: Confirmed active feature playback engaged on discs without a menu
++                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                         let cur = unsafe {
+                                             (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                         };
+@@ -920,11 +939,10 @@ fn start_playback_inner(
+                                         return;
+                                     }
+ 
+-                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU every 2s.
+-                                    // NOTE: Do NOT repeatedly force set_title(menu_title) over active content.
++                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU / set_title every 2s.
+                                     if i > 0 && i % 10 == 0 {
+                                         tracing::info!(
+-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU at iteration {i}"
++                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at iteration {i}"
+                                     );
+                                         nav_menu();
+                                     }
+@@ -1143,20 +1161,22 @@ fn start_playback_inner(
+                                             entry.warn_mpls_id,
+                                             entry.warn_mpls_size
+                                         );
+-                                        // Poll up to 30 s (600 × 50 ms) for the warning playlist.
+-                                        let mut skipped = false;
+-                                        for _ in 0..600 {
+-                                            std::thread::sleep(std::time::Duration::from_millis(
+-                                                50,
+-                                            ));
++                                        let mut lifecycle = WarnSkipLifecycle::new();
++
++                                        loop {
++                                            std::thread::sleep(std::time::Duration::from_millis(50));
+                                             let mp = mp_or_return!();
+-                                            let playlist_id = unsafe {
+-                                                get_playlist_id(mp as *mut c_void) as i32
++
++                                            let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
++                                            let playlist_id = if at_menu {
++                                                -1
++                                            } else {
++                                                unsafe { get_playlist_id(mp as *mut c_void) as i32 }
+                                             };
+-                                            if playlist_id == entry.warn_mpls_id as i32 {
++
++                                            if lifecycle.tick(at_menu, playlist_id, entry.warn_mpls_id) {
+                                                 tracing::info!(
+-                                                    "[warn-watcher] skip: warning playlist {:05} \
+-                                                 active — seeking to 0.99",
++                                                    "[warn-watcher] skip: warning playlist {:05} active — seeking to 0.99",
+                                                     entry.warn_mpls_id
+                                                 );
+                                                 unsafe {
+@@ -1165,17 +1185,8 @@ fn start_playback_inner(
+                                                         0.99,
+                                                     );
+                                                 }
+-                                                skipped = true;
+-                                                break;
+                                             }
+                                         }
+-                                        if !skipped {
+-                                            tracing::info!(
+-                                            "[warn-watcher] skip: warning playlist {:05} never \
+-                                             became active within 30 s",
+-                                            entry.warn_mpls_id
+-                                        );
+-                                        }
+                                     } else {
+                                         // ---- RECORD MODE ----
+ 
+@@ -1339,6 +1350,11 @@ fn start_playback_inner(
+                         let spawn_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                         let spawn_mp = session.media_player;
+                         let spawn_time = std::time::Instant::now();
++                        let is_bluray = {
++                            let r = std::path::Path::new(&resolved.resolved_path);
++                            r.join("BDMV").exists() || r.join("bdmv").exists()
++                        };
++                        let is_bypass = bypass_menu;
+                         std::thread::spawn(move || {
+                             use tauri::{Emitter, Manager};
+                             std::thread::sleep(std::time::Duration::from_secs(6));
+@@ -1429,6 +1445,10 @@ fn start_playback_inner(
+                                     tracing::info!(
+                                         "[liveness-diag] session_gen={spawn_gen}: at disc menu, get_time=-1 is expected (player-error NOT emitted)"
+                                     );
++                                } else if !is_bluray || is_bypass {
++                                    tracing::info!(
++                                        "[liveness-diag] session_gen={spawn_gen}: get_time=-1 during bypass_menu or DVD playback; suppressing spurious decryption warning"
++                                    );
+                                 } else {
+                                     tracing::error!(
+                                         "[liveness-diag] session_gen={spawn_gen} LIVENESS FAILED: get_time=-1, at_menu=false after {elapsed}ms. Emitting nebulae://player-error (reason: get_time=-1 after 6s on non-menu title). Backend error: '{backend_err}'"
+@@ -3485,6 +3505,54 @@ mod tests {
+         assert!(!status.player_name.is_empty());
+         assert!(!status.player_type.is_empty());
+     }
++
++    #[test]
++    fn test_warn_skip_lifecycle_menu_dwell_and_rearm() {
++        let mut lifecycle = WarnSkipLifecycle::new();
++        let warn_mpls = 100u32;
++
++        // 1. Initial first-play before menu: does not seek arbitrary content (playlist 2)
++        assert!(!lifecycle.tick(false, 2, warn_mpls));
++
++        // 2. Disc reaches authored menu
++        assert!(!lifecycle.tick(true, -1, warn_mpls));
++
++        // 3. Menu dwell > 30 seconds (800 ticks * 50ms = 40 seconds)
++        for _ in 0..800 {
++            assert!(!lifecycle.tick(true, -1, warn_mpls));
++        }
++
++        // 4. User selects Play: menu -> playback transition, warning playlist 100 becomes active
++        // MUST seek to 0.99!
++        assert!(lifecycle.tick(false, 100, warn_mpls));
++
++        // 5. While warning playlist 100 remains active, do NOT repeatedly seek
++        assert!(!lifecycle.tick(false, 100, warn_mpls));
++        assert!(!lifecycle.tick(false, 100, warn_mpls));
++
++        // 6. Transition to main feature playlist (playlist 1)
++        assert!(!lifecycle.tick(false, 1, warn_mpls));
++
++        // 7. Feature plays for >30 seconds (700 ticks = 35 seconds)
++        for _ in 0..700 {
++            assert!(!lifecycle.tick(false, 1, warn_mpls));
++        }
++
++        // 8. User returns to menu (without reopening the disc)
++        assert!(!lifecycle.tick(true, -1, warn_mpls));
++
++        // 9. Dwell at menu again
++        for _ in 0..100 {
++            assert!(!lifecycle.tick(true, -1, warn_mpls));
++        }
++
++        // 10. User selects Play again: warning playlist becomes active again
++        // MUST seek to 0.99 again!
++        assert!(lifecycle.tick(false, 100, warn_mpls));
++
++        // 11. Again, no repeated seek while active
++        assert!(!lifecycle.tick(false, 100, warn_mpls));
++    }
+ }
+ 
+ /// One externally-opened media item in the persistent collection.
+@@ -3748,6 +3816,58 @@ pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String>
+ // ---------------------------------------------------------------------------
+ // Disc-warning persistence helpers
+ // ---------------------------------------------------------------------------
++
++/// Pure lifecycle state machine for disc warning skipping.
++/// Decides whether a skip seek (to 0.99) should fire on each poll tick (50ms).
++#[derive(Clone, Debug, Default)]
++pub struct WarnSkipLifecycle {
++    pub ticks_remaining: u32,
++    pub was_at_menu: bool,
++    pub already_skipped_active: bool,
++}
++
++impl WarnSkipLifecycle {
++    pub fn new() -> Self {
++        Self {
++            ticks_remaining: 600, // 30 s initial window for first-play warning
++            was_at_menu: false,
++            already_skipped_active: false,
++        }
++    }
++
++    /// Process one tick (50ms). Returns true if a seek to 0.99 should be executed.
++    pub fn tick(&mut self, at_menu: bool, playlist_id: i32, warn_mpls_id: u32) -> bool {
++        if at_menu {
++            if !self.was_at_menu {
++                self.was_at_menu = true;
++                self.already_skipped_active = false;
++            }
++            return false;
++        }
++
++        // !at_menu:
++        if self.was_at_menu {
++            self.was_at_menu = false;
++            self.ticks_remaining = 600; // Arm / rearm 30 s window on menu -> playback
++            self.already_skipped_active = false;
++        }
++
++        let mut should_seek = false;
++        if self.ticks_remaining > 0 {
++            self.ticks_remaining -= 1;
++            if playlist_id == warn_mpls_id as i32 {
++                if !self.already_skipped_active {
++                    should_seek = true;
++                    self.already_skipped_active = true;
++                }
++            } else if playlist_id > 0 {
++                self.already_skipped_active = false;
++            }
++        }
++        should_seek
++    }
++}
++
+ // Stores a per-disc flag recording that the post-menu warning clip has been
+ // shown at least once. On subsequent sessions the watcher uses this flag to
+ // seek past the warning automatically.
+diff --git a/src/App.tsx b/src/App.tsx
+index 57edfd7..2e460d5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -81,7 +81,14 @@ export const App: React.FC = () => {
+       invoke('log_frontend', {
+         message: `[frontend-diag] playerStore.open invoked from player-opened: gen=${e.payload.gen} path=${e.payload.resolved_path}`,
+       }).catch(() => {});
+-      playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
++      const isSamePath = cur.open && (
++        cur.resolvedPath === e.payload.resolved_path ||
++        cur.resolvedPath.startsWith(e.payload.resolved_path) ||
++        e.payload.resolved_path.startsWith(cur.resolvedPath)
++      );
++      const titleToPass = featureLabelForPath(e.payload.resolved_path) || (isSamePath ? cur.title : undefined);
++      const yearToPass = isSamePath ? cur.year : undefined;
++      playerStore.open(e.payload, titleToPass, yearToPass);
+     });
+     const unClosed1 = listen('player-closed', () => {
+       invoke('log_frontend', { message: `[frontend-diag] player-closed received` }).catch(() => {});
+@@ -110,6 +117,12 @@ export const App: React.FC = () => {
+             invoke('log_frontend', {
+               message: `[frontend-diag] playerStore.open adopted via engine poll: gen=${s.gen} path=${s.resolved_path}`,
+             }).catch(() => {});
++            const cur = playerStore.get();
++            const isSamePath = cur.open && (
++              cur.resolvedPath === s.resolved_path ||
++              cur.resolvedPath.startsWith(s.resolved_path) ||
++              s.resolved_path.startsWith(cur.resolvedPath)
++            );
+             playerStore.open(
+               {
+                 resolved_path: s.resolved_path,
+@@ -118,7 +131,8 @@ export const App: React.FC = () => {
+                 external: false,
+                 gen: s.gen,
+               },
+-              featureLabelForPath(s.resolved_path),
++              featureLabelForPath(s.resolved_path) || (isSamePath ? cur.title : undefined),
++              isSamePath ? cur.year : undefined,
+             );
+           }
+         })
+diff --git a/src/components/layout/StatusBar.tsx b/src/components/layout/StatusBar.tsx
+index 0d365fe..114d68f 100644
+--- a/src/components/layout/StatusBar.tsx
++++ b/src/components/layout/StatusBar.tsx
+@@ -205,13 +205,13 @@ export const StatusBar: React.FC = () => {
+           className="flex items-center gap-1.5"
+           title={
+             tailscale?.connected
+-              ? !tailscale.adc_node && tailscale.adc_reachable == null
+-                ? 'Tailnet connected — ADC host not found in netmap'
++              ? tailscale.adc_reachable === true
++                ? `Tailnet connected · ADC verified reachable (${tailscale.tailnet_ip ?? ''})`
+                 : tailscale.adc_reachable === false
+-                  ? 'Tailnet connected, but the ADC host is not answering — private ADC traffic cannot get through right now'
+-                  : tailscale.adc_reachable === true
+-                    ? `Tailnet connected — ADC host verified reachable — IP ${tailscale.tailnet_ip ?? ''}`
+-                    : 'Tailnet connected — ADC host not yet verified (probe pending)'
++                  ? 'Tailnet connected · ADC service endpoint unreachable over mesh'
++                  : !tailscale.adc_node
++                    ? 'Tailnet connected · ADC node not found in netmap'
++                    : 'Tailnet connected · verifying ADC reachability…'
+               : 'Tailnet is not connected'
+           }
+         >
+@@ -230,13 +230,13 @@ export const StatusBar: React.FC = () => {
+           />
+           <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
+           {tailscale?.connected && tailscale.adc_reachable === false && (
+-            <span className="text-amber-500">· ADC host offline</span>
++            <span className="text-amber-500">· ADC unreachable</span>
+           )}
+           {tailscale?.connected && tailscale.adc_reachable == null && !tailscale.adc_node && (
+-            <span className="text-amber-500/80">· ADC unavailable</span>
++            <span className="text-amber-500/80">· ADC unmapped</span>
+           )}
+           {tailscale?.connected && tailscale.adc_reachable == null && tailscale.adc_node && (
+-            <span className="text-[#a3a3a3]">· ADC unverified</span>
++            <span className="text-[#a3a3a3]">· ADC verifying…</span>
+           )}
+         </div>
+ 
+diff --git a/src/components/manager/TorrentManagerView.tsx b/src/components/manager/TorrentManagerView.tsx
+index 61bbad7..45919fc 100644
+--- a/src/components/manager/TorrentManagerView.tsx
++++ b/src/components/manager/TorrentManagerView.tsx
+@@ -852,7 +852,11 @@ export const TorrentManagerView: React.FC = () => {
+               type="button"
+               onClick={() => {
+                 const fullPath = `${selectedTorrent!.save_path}/${file.name}`;
+-                openInPlayer(fullPath).catch(() => {});
++                const t = selectedTorrent!;
++                openInPlayer(fullPath, {
++                  displayTitle: t.media_meta?.clean_title || t.name,
++                  year: t.media_meta?.year,
++                }).catch(() => {});
+               }}
+               className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+               title={`Play "${node.name}" in media player`}
+@@ -1639,7 +1643,10 @@ export const TorrentManagerView: React.FC = () => {
+                                   type="button"
+                                   onClick={() => {
+                                     const fullPath = `${selectedTorrent.save_path}/${file.name}`;
+-                                    openInPlayer(fullPath).catch(() => {});
++                                    openInPlayer(fullPath, {
++                                      displayTitle: selectedTorrent.media_meta?.clean_title || selectedTorrent.name,
++                                      year: selectedTorrent.media_meta?.year,
++                                    }).catch(() => {});
+                                   }}
+                                   className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
+                                   title="Play in media player"
+diff --git a/src/components/modals/SettingsModal.tsx b/src/components/modals/SettingsModal.tsx
+index a9eaa01..07f5205 100644
+--- a/src/components/modals/SettingsModal.tsx
++++ b/src/components/modals/SettingsModal.tsx
+@@ -36,6 +36,7 @@ import {
+   Zap,
+   AlertCircle,
+   Fingerprint,
++  Info,
+ } from 'lucide-react';
+ 
+ type SettingsTab =
+@@ -1237,10 +1238,18 @@ export const SettingsModal: React.FC = () => {
+                         onChange={(e) => saveSettings({ racing_mode_enabled: e.target.checked })}
+                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                       />
+-                      <div>
+-                        <span className="text-white font-medium text-xs">Enable racing mode</span>
++                      <div className="flex-1">
++                        <div className="flex items-center gap-1.5">
++                          <span className="text-white font-medium text-xs">Enable racing mode</span>
++                          <span
++                            title="Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents."
++                            className="cursor-help text-[#666666] hover:text-[#a3a3a3] transition"
++                          >
++                            <Info className="w-3 h-3" />
++                          </span>
++                        </div>
+                         <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+-                          Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents.
++                          Apply session-wide performance tuning.
+                         </p>
+                       </div>
+                     </label>
+@@ -1252,13 +1261,18 @@ export const SettingsModal: React.FC = () => {
+                         onChange={(e) => saveSettings({ auto_racing_new_downloads: e.target.checked })}
+                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                       />
+-                      <div>
+-                        <span className="text-white font-medium text-xs">Automatically enable racing mode for new downloads</span>
++                      <div className="flex-1">
++                        <div className="flex items-center gap-1.5">
++                          <span className="text-white font-medium text-xs">Automatically enable racing mode for new downloads</span>
++                          <span
++                            title="Applies the per-torrent preset (peer limit 150, high bandwidth priority) to newly added torrents. Session-wide tuning (disk cache, global peer limit, unchoke slots) is controlled by Enable racing mode. A torrent's own racing setting wins over global mode in both directions."
++                            className="cursor-help text-[#666666] hover:text-[#a3a3a3] transition"
++                          >
++                            <Info className="w-3 h-3" />
++                          </span>
++                        </div>
+                         <p className="text-[11px] text-[#a3a3a3] mt-0.5">
+-                          Applies to torrents you add from now on (files, magnet links, and adds that start paused); existing torrents are never changed by this option. Only the per-torrent preset is applied (peer limit 150, high bandwidth priority). Session-wide tuning (disk cache, global peer limit, unchoke slots) stays controlled by Enable racing mode above. Racing can still be switched on or off for any single torrent from its context menu, and that choice is kept.
+-                        </p>
+-                        <p className="text-[11px] text-[#a3a3a3] mt-1">
+-                          Per-torrent vs global: a torrent's own racing setting (applied automatically by this option when it is added, or chosen from its context menu) wins over Enable racing mode in both directions. Turning Enable racing mode off does not strip a torrent that has its own racing setting, and a torrent switched off stays off while Enable racing mode is on.
++                          Apply the per-torrent racing preset to newly added torrents. Existing torrents are unchanged; manual choices are preserved.
+                         </p>
+                       </div>
+                     </label>
+diff --git a/src/components/player/PlayerOverlay.tsx b/src/components/player/PlayerOverlay.tsx
+index 3b56977..30d47f5 100644
+--- a/src/components/player/PlayerOverlay.tsx
++++ b/src/components/player/PlayerOverlay.tsx
+@@ -223,6 +223,9 @@ export default function PlayerOverlay() {
+   // Allows the arm to retry across multiple ticks when dvdnav reports
+   // length_ms=0 on the first non-menu tick (common on DVD).
+   const justLeftMenuRef = useRef(false);
++  // Latches initial resume arming on feature start so direct-feature and menu-less
++  // playback check saved position as soon as length is reported.
++  const initialResumeArmedRef = useRef(false);
+   // Tracks titles that have reached natural completion so that subsequent
+   // pause, close, teardown, or periodic saves do not recreate their resume records.
+   const completedTitlesRef = useRef<Set<number>>(new Set());
+@@ -279,6 +282,7 @@ export default function PlayerOverlay() {
+     pendingResumeRef.current = null;
+     pendingResumeTitleRef.current = null;
+     justLeftMenuRef.current = false;
++    initialResumeArmedRef.current = false;
+     completedTitlesRef.current.clear();
+     manualSeekingRef.current = false;
+     if (manualSeekingTimerRef.current !== null) {
+@@ -402,7 +406,9 @@ export default function PlayerOverlay() {
+         justLeftMenuRef.current = true;
+         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
+       }
+-      if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
++      const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null;
++      if (shouldAttemptResume) {
++        initialResumeArmedRef.current = true;
+         if (completedTitlesRef.current.has(p.title)) {
+           justLeftMenuRef.current = false;
+         } else {
+@@ -458,6 +464,7 @@ export default function PlayerOverlay() {
+         pendingResumeRef.current = null;
+         pendingResumeTitleRef.current = null;
+         justLeftMenuRef.current = false;
++        initialResumeArmedRef.current = true;
+       }
+ 
+       wasAtMenuRef.current = p.at_menu;
+@@ -579,7 +586,7 @@ export default function PlayerOverlay() {
+           // Close (owner): persist the resume point, then close.
+           {
+             const p = pollRef.current;
+-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
++            if (!p.at_menu && (p.length_ms > 300_000 || !player.isDisc) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
+               savePositionMs(player.resolvedPath, p.time_ms, p.title);
+               invoke('log_frontend', { message: `[resume-diag] SAVE Q/X-close path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+             }
+@@ -907,20 +914,30 @@ export default function PlayerOverlay() {
+   }, [popoverOpen, poll.playing, poll.at_menu, player.isDisc, ended]);
+ 
+   // Subtitle track list for the current title: fetched as soon as the
+-  // feature engages so the bar can hide the Subtitles pill entirely when
+-  // the title has no subtitle streams (owner).
++  // feature engages with periodic retry during early playback while LibVLC demuxes SPU streams.
+   useEffect(() => {
+     if (!player.open || (poll.at_menu && player.isDisc)) return;
+     let alive = true;
+-    invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
+-      .then((tracks) => {
+-        if (alive) setSubTracks(tracks.map((t) => ({ ...t, active: false })));
+-      })
+-      .catch(() => {});
++    const fetchSubs = () => {
++      invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
++        .then((tracks) => {
++          if (alive && tracks && tracks.length > 0) {
++            setSubTracks(tracks.map((t) => ({ ...t, active: false })));
++          }
++        })
++        .catch(() => {});
++    };
++    fetchSubs();
++    const iv = window.setInterval(() => {
++      if (alive && subTracks.length === 0 && poll.playing && !poll.at_menu) {
++        fetchSubs();
++      }
++    }, 1000);
+     return () => {
+       alive = false;
++      window.clearInterval(iv);
+     };
+-  }, [player.open, poll.title, poll.at_menu, player.isDisc]);
++  }, [player.open, poll.title, poll.at_menu, player.isDisc, poll.playing, subTracks.length]);
+ 
+   // Preferred audio/subtitle languages (owner, "media player preferences"
+   // on the media screen): stored by SimpleMediaView, applied automatically
+@@ -1591,9 +1608,8 @@ export default function PlayerOverlay() {
+ 
+         {/* Subtitles / Audio (owner): pill buttons styled like the disc
+             button, with the popover listing the disc's tracks. The
+-            Subtitles pill is hidden entirely when the current title has
+-            no subtitle streams. */}
+-        {subTracks.length > 0 && (
++            Subtitles pill is visible during feature playback (!poll.at_menu). */}
++        {!poll.at_menu && (
+         <div
+           className="relative shrink-0"
+           onMouseEnter={async () => {
+@@ -1756,7 +1772,7 @@ export default function PlayerOverlay() {
+             // Persist the final position no matter the throttle/pause state:
+             // quitting mid-feature must always leave a resume point.
+             const p = pollRef.current;
+-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
++            if (!p.at_menu && (p.length_ms > 300_000 || !player.isDisc) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
+               savePositionMs(player.resolvedPath, p.time_ms, p.title);
+               invoke('log_frontend', { message: `[resume-diag] SAVE X-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+             }
+diff --git a/src/lib/playerStore.ts b/src/lib/playerStore.ts
+index 7510f43..0cac70f 100644
+--- a/src/lib/playerStore.ts
++++ b/src/lib/playerStore.ts
+@@ -41,10 +41,22 @@ function emit() {
+ 
+ export const playerStore = {
+   open(info: PlayerOpenInfo, displayTitle?: string, year?: number | string | null) {
++    const isSameMedia = state.open && (
++      state.resolvedPath === info.resolved_path ||
++      (state.resolvedPath && info.resolved_path && (
++        state.resolvedPath.startsWith(info.resolved_path) ||
++        info.resolved_path.startsWith(state.resolvedPath)
++      ))
++    );
++    const resolvedTitle = displayTitle || (isSameMedia && state.title ? state.title : '') || info.title;
++    const resolvedYear = (year !== undefined && year !== null)
++      ? year
++      : (isSameMedia ? state.year : null);
++
+     state = {
+       open: true,
+-      title: displayTitle || info.title,
+-      year: year ?? null,
++      title: resolvedTitle,
++      year: resolvedYear,
+       resolvedPath: info.resolved_path,
+       isDisc: info.is_disc,
+       gen: info.gen ?? null,
+@@ -271,15 +283,12 @@ async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
+  *  When `title` is 0 or undefined, reads the path-only / title:0 key. */
+ export function savedPositionMs(discPath: string, title?: number): number {
+   try {
+-    if (title !== undefined) {
+-      if (title > 0) {
+-        const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
+-        return v !== null ? (Number(v) || 0) : 0;
+-      }
+-      const v0 = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:0`);
+-      if (v0 !== null) return Number(v0) || 0;
+-      return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
++    if (title !== undefined && title > 0) {
++      const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
++      if (v !== null && Number(v) > 0) return Number(v);
+     }
++    const v0 = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:0`);
++    if (v0 !== null && Number(v0) > 0) return Number(v0);
+     return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
+   } catch {
+     return 0;

@@ -12,10 +12,11 @@
 #   2. What scripts/build-vlc-runtime.sh built from the pinned sources
 #      (patches/vlc-3.0.23/, NEBULAE_VLC_WORK):
 #        lib/libvlc.5.dylib                      navigate-menu + bluray-playlist-id
+#                                                + bluray-menu-first
 #        plugins/libvideotoolbox_plugin.dylib    vt-305
 #        plugins/libcaopengllayer_plugin.dylib   hdr-tonemap
 #        plugins/libglconv_cvpx_plugin.dylib     matches the patched converter.h
-#        plugins/liblibbluray_plugin.dylib       bluray-playlist-id
+#        plugins/liblibbluray_plugin.dylib       bluray-playlist-id + bluray-menu-first
 #        lib/libbluray.4.dylib                   libbluray 1.5.0, the library the
 #        lib/libbluray-j2se-1.5.0.jar            plugin is linked to, and the BD-J
 #        lib/libbluray-awt-j2se-1.5.0.jar        jars of exactly that version
@@ -144,13 +145,16 @@ done
 has_string "$SRC_BLURAY" "bluray-playlist-id" \
   || fail "the custom Blu-ray plugin lacks the bluray-playlist-id patch (string not found)"
 echo "OK: custom Blu-ray plugin contains the bluray-playlist-id patch"
+has_string "$SRC_BLURAY" "bluray-menu-open" \
+  || fail "the custom Blu-ray plugin lacks the bluray-menu-first patch (string not found)"
+echo "OK: custom Blu-ray plugin contains the bluray-menu-first patch"
 VT_SYMS="$(nm "$SRC_VT" 2>/dev/null || true)"
 grep -q "VTDecompressionSessionCanAcceptFormatDescription" <<<"$VT_SYMS" \
   || fail "the custom videotoolbox plugin lacks the VT-305 patch symbol"
 echo "OK: custom videotoolbox plugin contains the VT-305 patch"
 
 LIBVLC_EXPORTS="$(dyld_info -exports "$SRC_LIBVLC" 2>/dev/null || nm -gU "$SRC_LIBVLC")"
-for sym in _libvlc_media_player_navigate_menu _libvlc_media_player_get_bluray_playlist_id; do
+for sym in _libvlc_media_player_navigate_menu _libvlc_media_player_get_bluray_playlist_id _libvlc_media_player_get_bluray_menu_open; do
   grep -q "$sym" <<<"$LIBVLC_EXPORTS" || fail "the custom libvlc does not export $sym"
   echo "OK: custom libvlc exports ${sym#_}"
 done
@@ -267,11 +271,11 @@ Unmodified VideoLAN binaries, taken from the official VLC ${VLC_VERSION} app:
 Built from the source above with the *.patch files in this directory, applied in
 the order given by patches/vlc-3.0.23/README.md of the Nebulae repository, using
 scripts/build-vlc-runtime.sh:
-    lib/libvlc.5.dylib                      navigate-menu.patch, bluray-playlist-id.patch
+    lib/libvlc.5.dylib                      navigate-menu.patch, bluray-playlist-id.patch, bluray-menu-first.patch
     plugins/libvideotoolbox_plugin.dylib    vt-305.patch
     plugins/libcaopengllayer_plugin.dylib   hdr-tonemap.patch
     plugins/libglconv_cvpx_plugin.dylib     built from the source patched by hdr-tonemap.patch
-    plugins/liblibbluray_plugin.dylib       bluray-playlist-id.patch
+    plugins/liblibbluray_plugin.dylib       bluray-playlist-id.patch, bluray-menu-first.patch
 
 Not shipped: plugins.dat (stale by construction), VLC.app's own interface and
 notification plugins (they need Sparkle.framework and Growl.framework, which are
@@ -427,7 +431,7 @@ doc = {
         "official_app": "VLC media player %s, libvlccore.9.dylib sha256 %s" % (
             vlc_version, sha256(os.path.join(dest, "lib/libvlccore.9.dylib"))),
         "custom_build": build_dir,
-        "custom_patches": ["patches/vlc-3.0.23/%s.patch" % n for n in ("vt-305", "navigate-menu", "hdr-tonemap", "bluray-playlist-id")],
+        "custom_patches": ["patches/vlc-3.0.23/%s.patch" % n for n in ("vt-305", "navigate-menu", "hdr-tonemap", "bluray-playlist-id", "bluray-menu-first")],
         "vlc_source": info["vlc"],
         "libbluray_source": info["libbluray"],
         "relocated_homebrew_libraries": bundled,
@@ -445,7 +449,7 @@ PY
 echo
 echo "=== Staged ==="
 echo "  lib/libvlccore.9.dylib        official ($OFFICIAL_VERSION)"
-echo "  lib/libvlc.5.dylib            custom (navigate-menu.patch + bluray-playlist-id.patch)"
+echo "  lib/libvlc.5.dylib            custom (navigate-menu.patch + bluray-playlist-id.patch + bluray-menu-first.patch)"
 echo "  lib/libbluray.4.dylib + jars  libbluray ${LB_VERSION}, built from source"
 echo "  lib/ (relocated)              $(python3 -c 'import json,sys; print(", ".join(sorted(e["name"] for e in json.load(open(sys.argv[1]))["libraries"])))' "$DEST/bundled-libraries.json")"
 echo "  plugins/ ($PLUGIN_COUNT files)  official, except libvideotoolbox, libcaopengllayer, libglconv_cvpx and liblibbluray (custom)"
