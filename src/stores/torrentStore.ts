@@ -131,7 +131,6 @@ interface TorrentState {
   setTorrentLimits: (id: string, dlKib: number, ulKib: number, ratioLimit: number) => Promise<void>;
   toggleSequential: (id: string) => Promise<boolean>;
   toggleFirstLast: (id: string) => Promise<boolean>;
-  toggleSuperSeeding: (id: string) => Promise<boolean>;
   setFilePriority: (id: string, fileIndex: number, priority: number) => Promise<void>;
   renameTorrent: (id: string, newName: string) => Promise<void>;
   renameTorrentFile: (id: string, fileIndex: number, newFileName: string) => Promise<void>;
@@ -375,23 +374,6 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       return result;
     } catch (err) {
       console.warn('toggle_torrent_first_last failed:', err);
-      return current;
-    }
-  },
-
-  toggleSuperSeeding: async (id: string) => {
-    // Mirror only what the engine accepted. A refused request (superseeding is
-    // not supported by the current engine) leaves the torrent as it was
-    // instead of flipping the flag locally.
-    const current = get().torrents.find((t) => t.id === id)?.super_seeding ?? false;
-    try {
-      const result = await invoke<boolean>('toggle_torrent_super_seeding', { id });
-      set({
-        torrents: get().torrents.map((t) => (t.id === id ? { ...t, super_seeding: result } : t)),
-      });
-      return result;
-    } catch (err) {
-      console.warn('toggle_torrent_super_seeding failed:', err);
       return current;
     }
   },

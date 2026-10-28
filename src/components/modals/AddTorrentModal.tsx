@@ -4,7 +4,6 @@ import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { InspectTorrentResult, TorrentContentMatch, FileWithPath } from '../../types';
 import { errorMessage as toErrorMessage } from '../../utils/errors';
-import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 import {
   X,
   Plus,
@@ -27,7 +26,6 @@ export const AddTorrentModal: React.FC = () => {
     useUiStore();
   const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
-  const superseedingSupported = supportsSuperseeding(engineMode);
 
   const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
   const [torrentSource, setTorrentSource] = useState('');
@@ -41,8 +39,6 @@ export const AddTorrentModal: React.FC = () => {
   const [category, setCategory] = useState('General');
   const [startImmediately, setStartImmediately] = useState(!settings.do_not_start_automatically);
   const [sequentialDownload, setSequentialDownload] = useState(false);
-  const [superSeedDialogDismissed, setSuperSeedDialogDismissed] = useState(false);
-  const [enableSuperSeeding, setEnableSuperSeeding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -182,7 +178,6 @@ export const AddTorrentModal: React.FC = () => {
           await applyTorrentRenames(targetDir, renames);
         }
       }
-      // TODO: apply enableSuperSeeding via toggleSuperSeeding after torrent is added
       await addTorrent(source, targetDir, selectedFileBytes || undefined);
       if (targetDir) {
         await addRecentDirectory(targetDir);
@@ -195,8 +190,6 @@ export const AddTorrentModal: React.FC = () => {
       setContentMatch(null);
       setRenameInputs({});
       setShowAddTorrent(false);
-      setSuperSeedDialogDismissed(false);
-      setEnableSuperSeeding(false);
     } catch (err: unknown) {
       setErrorMessage(toErrorMessage(err, 'Failed to add torrent'));
     } finally {
@@ -474,8 +467,6 @@ export const AddTorrentModal: React.FC = () => {
     setTorrentSource('');
     setContentMatch(null);
     setRenameInputs({});
-    setSuperSeedDialogDismissed(false);
-    setEnableSuperSeeding(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -896,70 +887,6 @@ export const AddTorrentModal: React.FC = () => {
                   className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
                 />
                 <span className="text-white">Download in sequential order (media stream preview)</span>
-              </label>
-            )}
-            {engineMode !== 'rtorrent_server' && !superseedingSupported && (
-              <label
-                className="flex items-start gap-2 cursor-not-allowed opacity-70"
-                title={SUPERSEEDING_UNSUPPORTED_MESSAGE}
-              >
-                <input
-                  type="checkbox"
-                  checked={false}
-                  disabled
-                  className="mt-0.5 rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-                />
-                <span>
-                  <span className="text-white">Super-seeding mode (initial seeder)</span>
-                  <span className="block text-[11px] text-amber-400/90">{SUPERSEEDING_UNSUPPORTED_MESSAGE}</span>
-                </span>
-              </label>
-            )}
-            {superseedingSupported && !superSeedDialogDismissed && (
-              <div className="mt-2 p-3 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-2 text-xs">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2">
-                    <span className="text-[#e50914] text-base leading-none mt-0.5">⚡</span>
-                    <div>
-                      <span className="font-semibold text-white block mb-0.5">Initial Seeder? Enable Super-Seeding</span>
-                      <p className="text-[#a3a3a3] text-[11px] leading-relaxed">
-                        Super-seeding (Initial Seeding mode) makes the swarm self-sufficient faster by sending each peer a
-                        unique piece, so every peer re-uploads something the others need. Use it when you are the
-                        <span className="text-white font-medium"> first or primary seeder</span> — a personal rip, a rare
-                        archive, or a release you are introducing to the swarm. Do not use it if you are downloading, or
-                        if the torrent already has many active seeds.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSuperSeedDialogDismissed(true)}
-                    className="text-[#737373] hover:text-white transition flex-shrink-0 text-base leading-none"
-                    title="Dismiss"
-                  >
-                    ×
-                  </button>
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer pl-5">
-                  <input
-                    type="checkbox"
-                    checked={enableSuperSeeding}
-                    onChange={(e) => setEnableSuperSeeding(e.target.checked)}
-                    className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-                  />
-                  <span className="text-white">Enable Super-Seeding for this torrent</span>
-                </label>
-              </div>
-            )}
-            {superseedingSupported && superSeedDialogDismissed && (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableSuperSeeding}
-                  onChange={(e) => setEnableSuperSeeding(e.target.checked)}
-                  className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
-                />
-                <span className="text-white">Super-seeding mode (initial seeder)</span>
               </label>
             )}
           </div>

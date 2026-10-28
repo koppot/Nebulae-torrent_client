@@ -6,7 +6,6 @@ import { useConnectivityStore } from '../../stores/connectivityStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
-import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 
 // How far the last live probe of the ADC host got. No value means "offline":
 // `unavailable` only says the probe got no connection and no tailnet answer
@@ -60,14 +59,9 @@ const REPORT_FRESH_MS = 15 * 60 * 1000;
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
-  const { settings, saveSettings, engineMode } = useSettingsStore();
-  const superseedingSupported = supportsSuperseeding(engineMode);
-  // What the engine is doing, not what is stored: with no superseeding support
-  // a saved "on" preference must not light the indicator.
-  const superseedingActive = superseedingSupported && settings.super_seeding_enabled;
+  const { settings, saveSettings } = useSettingsStore();
 
   const [isTogglingRacing, setIsTogglingRacing] = useState(false);
-  const [isTogglingSuperSeeding, setIsTogglingSuperSeeding] = useState(false);
 
   const handleToggleRacingMode = async () => {
     if (isTogglingRacing) return;
@@ -78,18 +72,6 @@ export const StatusBar: React.FC = () => {
       console.error('Failed to toggle racing mode:', err);
     } finally {
       setIsTogglingRacing(false);
-    }
-  };
-
-  const handleToggleSuperSeeding = async () => {
-    if (!superseedingSupported || isTogglingSuperSeeding) return;
-    setIsTogglingSuperSeeding(true);
-    try {
-      await saveSettings({ super_seeding_enabled: !settings.super_seeding_enabled });
-    } catch (err) {
-      console.error('Failed to toggle super seeding:', err);
-    } finally {
-      setIsTogglingSuperSeeding(false);
     }
   };
 
@@ -319,42 +301,6 @@ export const StatusBar: React.FC = () => {
           />
           <span className={settings.racing_mode_enabled ? 'text-white' : 'text-[#a3a3a3]'}>
             Racing mode
-          </span>
-        </button>
-
-        <span className="text-[#333333]">|</span>
-
-        <button
-          type="button"
-          onClick={handleToggleSuperSeeding}
-          disabled={!superseedingSupported || isTogglingSuperSeeding}
-          className="flex items-center gap-1.5 hover:text-white transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-          title={
-            !superseedingSupported
-              ? SUPERSEEDING_UNSUPPORTED_MESSAGE
-              : superseedingActive
-                ? 'Super seeding enabled (click to disable)'
-                : 'Super seeding disabled (click to enable)'
-          }
-          aria-label={
-            !superseedingSupported
-              ? SUPERSEEDING_UNSUPPORTED_MESSAGE
-              : superseedingActive
-                ? 'Disable super seeding'
-                : 'Enable super seeding'
-          }
-        >
-          <span
-            className={`w-2 h-2 rounded-full transition-colors ${
-              !superseedingSupported
-                ? 'bg-[#525252]'
-                : superseedingActive
-                  ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
-                  : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
-            }`}
-          />
-          <span className={superseedingActive ? 'text-white' : 'text-[#a3a3a3]'}>
-            Super seeding{superseedingSupported ? '' : ' (unsupported)'}
           </span>
         </button>
       </div>

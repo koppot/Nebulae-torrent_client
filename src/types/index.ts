@@ -157,8 +157,6 @@ export interface TorrentItem {
   total_pieces: number;
   sequential_download: boolean;
   first_last_piece_prio: boolean;
-  /** True only while the engine reports the torrent as superseeding. The Transmission adapter performs no superseeding operation, so it reports false. */
-  super_seeding: boolean;
   bandwidthPriority?: number; // 1 = high, 0 = normal, -1 = low
   peerLimit?: number;
   racingMode?: boolean;
@@ -261,7 +259,7 @@ export interface UserSettings {
   slow_torrent_ul_threshold_kib: number;
   max_ratio_limit: number;
   max_seeding_time_minutes: number;
-  /** 'SuperSeeding' stays a valid saved value so existing settings keep loading; it cannot take effect while the engine does not support superseeding. */
+  /** Only 'Pause' can be selected. The other values are legacy: they stay valid so existing settings keep loading, are kept as stored, and never take effect. */
   seeding_limit_action: 'Pause' | 'Remove' | 'RemoveAndFiles' | 'SuperSeeding';
   default_trackers_list: string;
 
@@ -306,7 +304,7 @@ export interface UserSettings {
 
   // 11. Racing Mode — maximizes piece acquisition and peer connectivity
   racing_mode_enabled: boolean;
-  /** Stored preference only. It has no effect while the engine does not support superseeding (see lib/engineCapabilities.ts); saved values are kept. */
+  /** Legacy stored value, kept so a save writes it back unchanged. Nothing in the UI reads or sets it. */
   super_seeding_enabled: boolean;
   /** Per-torrent racing preset for torrents added from now on; defaults to true. */
   auto_racing_new_downloads: boolean;

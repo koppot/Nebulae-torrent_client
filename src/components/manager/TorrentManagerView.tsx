@@ -1118,11 +1118,6 @@ export const TorrentManagerView: React.FC = () => {
                           <Zap className="w-3 h-3 text-[#e50914] flex-shrink-0" fill="currentColor" />
                           <span>Racing mode</span>
                         </span>
-                      ) : t.status === 'Seeding' && t.super_seeding ? (
-                        <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
-                          <Zap className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="currentColor" />
-                          <span>Super seeding</span>
-                        </span>
                       ) : (
                         <span className="text-[11px] font-sans text-white">{t.status}</span>
                       )}
@@ -1323,12 +1318,6 @@ export const TorrentManagerView: React.FC = () => {
                                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-950/80 text-red-400 border border-red-700/50">
                                     <Zap className="w-2.5 h-2.5 text-red-500 fill-current" />
                                     <span>Racing mode</span>
-                                  </span>
-                                )}
-                                {selectedTorrent.status === 'Seeding' && selectedTorrent.super_seeding && (
-                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50">
-                                    <Zap className="w-2.5 h-2.5 text-emerald-500 fill-current" />
-                                    <span>Super seeding</span>
                                   </span>
                                 )}
                               </div>
