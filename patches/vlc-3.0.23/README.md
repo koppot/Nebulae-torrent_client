@@ -45,7 +45,9 @@ candidates since 2026-10-21. Device-level effect on VT-305 errors: not
 re-tested in the 2026-10-21 repair session (no playback testing).
 
 SHA-256 of the patched `videotoolbox.m`:
-`5c6a7e87c96fb7902424f7f6918f4adcf987b734f616a455be7815a928af77f6`
+`ef722854db01c2835b75cba934809627ac94fb97dc84cd9b91d041589ca57586`
+(listed with the other patched sources in `patched-sources.sha256`; an earlier
+revision of this README quoted a different value that did not match the file).
 
 ## navigate-menu.patch — `lib/media_player.c` + `lib/libvlc.sym`
 
@@ -65,11 +67,12 @@ the app detect the capability at runtime against unmodified libVLC builds.
 Status: **compiled** into the staged `lib/libvlc.5.dylib`; the export is
 verified via `dyld_info -exports` by `scripts/verify-vlc-runtime.sh`.
 
-Provenance: written for Nebulae, not an upstream VLC patch. Regenerate with:
-`diff -ruN` between the release tarball and the patched tree for
-`lib/media_player.c` and `lib/libvlc.sym` (the declaration in
-`include/vlc/libvlc_media_player.h` is also required; it is part of the
-build tree and documented in BUILD_NOTES.md).
+Provenance: written for Nebulae, not an upstream VLC patch. The patch now also
+carries the declaration in `include/vlc/libvlc_media_player.h` (placed right
+after `libvlc_media_player_navigate`), so applying it to a pristine tree yields
+the header the build needs. Regenerate with `diff -ruN` between the release
+tarball and the patched tree for the header, `lib/media_player.c` and
+`lib/libvlc.sym`.
 
 ## hdr-tonemap.patch — `modules/video_output/opengl/fragment_shaders.c`
 
@@ -111,7 +114,8 @@ Exposes the active Blu-ray MPLS playlist number (0–99999) to Nebulae:
    Blu-ray playlist is active.
 
 3. `lib/libvlc.sym` exports the new symbol; the declaration is in
-   `include/vlc/libvlc_media_player.h` (after `libvlc_media_player_navigate`).
+   `include/vlc/libvlc_media_player.h` (after
+   `libvlc_media_player_navigate_menu`, which this patch builds on).
 
 Nebulae uses this in `src-tauri/src/commands/media.rs` (warning-skip watcher)
 to identify the exact warning playlist (e.g. Summer Wars `00100.mpls`) without
@@ -128,6 +132,34 @@ used for `_("Top Menu")` strings in `bluray.c`). When the configure-generated
 ```
 make -C modules liblibbluray_plugin.la LDFLAGS="-L/opt/homebrew/lib" LIBS="-lintl"
 ```
+
+## Applying the patches
+
+Use `scripts/apply-vlc-patches.sh SOURCE_DIR` on a freshly unpacked VLC 3.0.23
+tarball (SHA-256 `e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0`).
+Do not call `patch` by hand: the order and the checks below are part of the
+contract.
+
+- Order: `vt-305`, `navigate-menu`, `hdr-tonemap`, `bluray-playlist-id`.
+  `bluray-playlist-id.patch` is a diff against the tree *after*
+  `navigate-menu.patch`, because both edit the same header, symbol list and
+  `lib/media_player.c`.
+- Zero fuzz (`patch -F0`), dry run first. A fuzzy match can put a hunk in the
+  wrong place and still report success.
+- After the last patch, every patched source file is compared with
+  `patched-sources.sha256`. A tree that is not byte-for-byte the reviewed tree
+  fails the script.
+- The script refuses a tree that was already patched, and fails on any `.rej`
+  or `.orig` file. Nothing falls back to unpatched VLC.
+
+Why this exists: before 2026-10-28 the set could not be applied to a pristine
+tree. `bluray-playlist-id.patch` was malformed (`patch` stopped with
+"malformed patch at line 24"), and the header hunk of `navigate-menu.patch`
+only matched with fuzz, which placed the declaration above the typedef it needs.
+The shipped artifacts had been built from a hand-edited tree, so the workflows
+could not reproduce them (and `release.yml` never applied the playlist patch).
+Both patches were regenerated from that tree; applying the four patches to the
+pristine tarball now yields all nine patched files byte-identical to it.
 
 ## Build requirements
 

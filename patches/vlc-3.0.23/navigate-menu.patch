@@ -1,17 +1,17 @@
 diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
---- a/include/vlc/libvlc_media_player.h	2026-10-21 16:15:45
-+++ b/include/vlc/libvlc_media_player.h	2026-10-21 16:15:45
-@@ -141,6 +141,7 @@
-  *
-  * \param p_mi media player
+--- a/include/vlc/libvlc_media_player.h	2026-10-26 04:00:00
++++ b/include/vlc/libvlc_media_player.h	2026-10-26 04:00:00
+@@ -987,6 +987,7 @@
   */
+ LIBVLC_API void libvlc_media_player_navigate( libvlc_media_player_t* p_mi,
+                                               unsigned navigate );
 +LIBVLC_API void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi );
  
  /**
-  * Enumeration of values used to set position (e.g. of video title).
+  * Set if, and how, the video title will be shown when media is played.
 diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
---- a/lib/libvlc.sym	2026-10-21 16:09:26
-+++ b/lib/libvlc.sym	2026-10-21 16:09:26
+--- a/lib/libvlc.sym	2026-10-26 04:00:00
++++ b/lib/libvlc.sym	2026-10-26 04:00:00
 @@ -203,6 +203,7 @@
  libvlc_media_player_stop
  libvlc_media_player_will_play
@@ -21,8 +21,8 @@ diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
  libvlc_media_release
  libvlc_media_retain
 diff -ruN a/lib/media_player.c b/lib/media_player.c
---- a/lib/media_player.c	2026-10-21 16:09:26
-+++ b/lib/media_player.c	2026-10-21 16:09:26
+--- a/lib/media_player.c	2026-10-26 04:00:00
++++ b/lib/media_player.c	2026-10-26 04:00:00
 @@ -1815,6 +1815,27 @@
      vlc_object_release( p_input );
  }

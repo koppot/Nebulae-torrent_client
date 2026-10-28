@@ -1,32 +1,18 @@
-diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
---- a/include/vlc/libvlc_media_player.h	2026-10-21 16:15:45
-+++ b/include/vlc/libvlc_media_player.h	2026-10-26 00:00:00
-@@ -148,6 +148,19 @@
-  */
+diff -ruN b/include/vlc/libvlc_media_player.h c/include/vlc/libvlc_media_player.h
+--- b/include/vlc/libvlc_media_player.h	2026-10-26 04:00:00
++++ c/include/vlc/libvlc_media_player.h	2026-10-26 04:00:00
+@@ -988,6 +988,7 @@
+ LIBVLC_API void libvlc_media_player_navigate( libvlc_media_player_t* p_mi,
+                                               unsigned navigate );
  LIBVLC_API void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi );
- 
-+/**
-+ * Get the current Blu-ray MPLS playlist number (0–99999).
-+ *
-+ * Returns the numeric part of the currently active ?????.mpls filename as
-+ * reported by libbluray's BD_EVENT_PLAYLIST event.  This value is set on the
-+ * input thread's "bluray-playlist-id" variable every time a new playlist
-+ * begins playing (BD_EVENT_PLAYLIST fires), and is therefore available for
-+ * the entire duration of that playlist's playback.
-+ *
-+ * Returns -1 when no Blu-ray playlist is active, when the demuxer has not
-+ * yet received BD_EVENT_PLAYLIST, or when the media is not a Blu-ray disc.
-+ *
-+ * \param p_mi media player
-+ */
 +LIBVLC_API int libvlc_media_player_get_bluray_playlist_id( libvlc_media_player_t* p_mi );
-+
+ 
  /**
-  * Enumeration of values used to set position (e.g. of video title).
-diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
---- a/lib/libvlc.sym	2026-10-21 16:09:26
-+++ b/lib/libvlc.sym	2026-10-26 00:00:00
-@@ -204,6 +204,7 @@
+  * Set if, and how, the video title will be shown when media is played.
+diff -ruN b/lib/libvlc.sym c/lib/libvlc.sym
+--- b/lib/libvlc.sym	2026-10-26 04:00:00
++++ c/lib/libvlc.sym	2026-10-26 04:00:00
+@@ -203,6 +203,7 @@
  libvlc_media_player_stop
  libvlc_media_player_will_play
  libvlc_media_player_navigate
@@ -34,10 +20,10 @@ diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
  libvlc_media_player_navigate_menu
  libvlc_media_player_set_video_title_display
  libvlc_media_release
-diff -ruN a/lib/media_player.c b/lib/media_player.c
---- a/lib/media_player.c	2026-10-21 16:09:26
-+++ b/lib/media_player.c	2026-10-26 00:00:00
-@@ -1842,6 +1842,30 @@
+diff -ruN b/lib/media_player.c c/lib/media_player.c
+--- b/lib/media_player.c	2026-10-26 04:00:00
++++ c/lib/media_player.c	2026-10-26 04:00:00
+@@ -1836,6 +1836,27 @@
      vlc_object_release( p_input );
  }
  
@@ -50,13 +36,13 @@ diff -ruN a/lib/media_player.c b/lib/media_player.c
 + */
 +int libvlc_media_player_get_bluray_playlist_id( libvlc_media_player_t* p_mi )
 +{
-+    input_thread_t *p_input = libvlc_get_input_thread( p_mi );
++    input_thread_t *p_input = libvlc_get_input_thread ( p_mi );
 +    if ( p_input == NULL )
 +        return -1;
 +
 +    int i_val = -1;
 +    if ( var_Type( p_input, "bluray-playlist-id" ) & VLC_VAR_INTEGER )
-+        i_val = var_GetInteger( p_input, "bluray-playlist-id" );
++        i_val = (int)var_GetInteger( p_input, "bluray-playlist-id" );
 +
 +    vlc_object_release( p_input );
 +    return i_val;
@@ -65,16 +51,15 @@ diff -ruN a/lib/media_player.c b/lib/media_player.c
  /* internal function, used by audio, video */
  libvlc_track_description_t *
          libvlc_get_track_description( libvlc_media_player_t *p_mi,
-diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
---- a/modules/access/bluray.c	2026-10-21 16:09:26
-+++ b/modules/access/bluray.c	2026-10-26 00:00:00
+diff -ruN b/modules/access/bluray.c c/modules/access/bluray.c
+--- b/modules/access/bluray.c	2026-10-26 04:00:00
++++ c/modules/access/bluray.c	2026-10-26 04:00:00
 @@ -806,6 +806,11 @@
      var_Create( p_demux, "ts-pcr-offsetfix", VLC_VAR_BOOL );
      var_SetBool( p_demux, "ts-pcr-offsetfix", false );
  
-+    /* Expose the current Blu-ray MPLS playlist number on the input thread so
-+     * that libvlc_media_player_get_bluray_playlist_id() can read it.
-+     * Initialised to -1 (no playlist active); set on BD_EVENT_PLAYLIST. */
++    /* Expose active Blu-ray MPLS playlist number for
++     * libvlc_media_player_get_bluray_playlist_id(); set on BD_EVENT_PLAYLIST. */
 +    var_Create( p_demux->p_input, "bluray-playlist-id", VLC_VAR_INTEGER );
 +    var_SetInteger( p_demux->p_input, "bluray-playlist-id", -1 );
 +
@@ -85,7 +70,7 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
      case BD_EVENT_PLAYLIST:
          /* Start of playlist playback (?????.mpls) */
          blurayUpdatePlaylist(p_demux, e->param);
-+        /* Publish the active MPLS number for libvlc_media_player_get_bluray_playlist_id() */
++        /* Publish active MPLS number for libvlc_media_player_get_bluray_playlist_id() */
 +        var_SetInteger( p_demux->p_input, "bluray-playlist-id", (int)e->param );
          if (p_sys->b_pl_playing) {
              /* previous playlist was stopped in middle. flush to avoid delay */
