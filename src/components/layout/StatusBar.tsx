@@ -8,13 +8,44 @@ import { VpnStatus } from '../../types/vpn';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
 import { SUPERSEEDING_UNSUPPORTED_MESSAGE, supportsSuperseeding } from '../../lib/engineCapabilities';
 
+// How far the last live probe of the ADC host got. No value means "offline":
+// `unavailable` only says the probe got no connection and no tailnet answer
+// just now, and `host_answered` says the host is up on the tailnet but does
+// not accept :443 at the address checked. `reachable` is a TCP result on :443,
+// not HTTPS or application health.
+type AdcLink = 'reachable' | 'host_answered' | 'unavailable';
+
 interface TailscaleStatus {
   connected: boolean;
   interface: string | null;
   tailnet_ip: string | null;
   adc_reachable?: boolean | null;
+  adc_link?: AdcLink | null;
   adc_node?: string | null;
 }
+
+// The status comes from the embedded node unless it has not started, in which
+// case the backend falls back to a system Tailscale interface.
+const tailnetSource = (status: TailscaleStatus): string =>
+  status.interface?.startsWith('nebulae-embedded')
+    ? 'embedded node'
+    : `system Tailscale${status.interface ? ` ${status.interface}` : ''}`;
+
+const adcTooltip = (status: TailscaleStatus): string => {
+  const head = `Tailnet connected (${tailnetSource(status)})`;
+  switch (status.adc_link) {
+    case 'reachable':
+      return `${head} · ADC accepted a connection on port 443 (TCP check only, HTTPS not tested) · ${status.tailnet_ip ?? ''}`;
+    case 'host_answered':
+      return `${head} · the ADC host answered but does not accept connections on port 443 at the address checked. This is not an HTTPS test and does not mean ADC is down.`;
+    case 'unavailable':
+      return `${head} · the last check got no connection and no answer from ADC. That does not prove ADC is offline; it is checked again automatically.`;
+    default:
+      return status.adc_node
+        ? `${head} · checking ADC…`
+        : `${head} · no ADC node found in the tailnet map`;
+  }
+};
 
 interface VolumeSpace {
   mount_point: string;
@@ -203,39 +234,34 @@ export const StatusBar: React.FC = () => {
 
         <div
           className="flex items-center gap-1.5"
-          title={
-            tailscale?.connected
-              ? tailscale.adc_reachable === true
-                ? `Tailnet connected · ADC verified reachable (${tailscale.tailnet_ip ?? ''})`
-                : tailscale.adc_reachable === false
-                  ? 'Tailnet connected · ADC service endpoint unreachable over mesh'
-                  : !tailscale.adc_node
-                    ? 'Tailnet connected · ADC node not found in netmap'
-                    : 'Tailnet connected · verifying ADC reachability…'
-              : 'Tailnet is not connected'
-          }
+          title={tailscale?.connected ? adcTooltip(tailscale) : 'Tailnet is not connected'}
         >
           <span
             className={`w-2 h-2 rounded-full ${
               !tailscale?.connected
                 ? 'bg-[#333333]'
-                : tailscale.adc_reachable === false
+                : tailscale.adc_link === 'unavailable'
                   ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]'
-                  : tailscale.adc_reachable === true
-                    ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
-                    : !tailscale.adc_node
-                      ? 'bg-amber-500/60'
-                      : 'bg-[#555555] animate-pulse'
+                  : tailscale.adc_link === 'host_answered'
+                    ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]'
+                    : tailscale.adc_link === 'reachable'
+                      ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                      : !tailscale.adc_node
+                        ? 'bg-amber-500/60'
+                        : 'bg-[#555555] animate-pulse'
             }`}
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
-          {tailscale?.connected && tailscale.adc_reachable === false && (
-            <span className="text-amber-500">· ADC unreachable</span>
+          {tailscale?.connected && tailscale.adc_link === 'unavailable' && (
+            <span className="text-amber-500">· ADC unavailable (reachability unknown)</span>
           )}
-          {tailscale?.connected && tailscale.adc_reachable == null && !tailscale.adc_node && (
+          {tailscale?.connected && tailscale.adc_link === 'host_answered' && (
+            <span className="text-amber-400">· ADC host up, port 443 not open</span>
+          )}
+          {tailscale?.connected && tailscale.adc_link == null && !tailscale.adc_node && (
             <span className="text-amber-500/80">· ADC unmapped</span>
           )}
-          {tailscale?.connected && tailscale.adc_reachable == null && tailscale.adc_node && (
+          {tailscale?.connected && tailscale.adc_link == null && tailscale.adc_node && (
             <span className="text-[#a3a3a3]">· ADC verifying…</span>
           )}
         </div>

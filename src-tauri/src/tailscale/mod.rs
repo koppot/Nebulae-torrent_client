@@ -1019,6 +1019,31 @@ pub fn socks_addr() -> Option<SocketAddr> {
     }
 }
 
+/// Why a SOCKS5 CONNECT through the daemon's proxy did not connect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocksFailure {
+    /// The local proxy could not be used: nothing listening, or the
+    /// handshake failed. Says nothing about the target.
+    Proxy(String),
+    /// The proxy answered but its own dial to the target failed. The
+    /// daemon's SOCKS5 server sends the same reply (1) for a refusal, a
+    /// timeout and a missing route, so the code cannot tell them apart.
+    Dial(u8),
+    /// The proxy accepted the request but had not answered when the probe
+    /// budget ran out (its dial was still pending).
+    NoReply,
+}
+
+impl std::fmt::Display for SocksFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SocksFailure::Proxy(msg) => f.write_str(msg),
+            SocksFailure::Dial(code) => write!(f, "socks CONNECT failed (code {code})"),
+            SocksFailure::NoReply => f.write_str("socks connect reply: timed out"),
+        }
+    }
+}
+
 /// Minimal SOCKS5 CONNECT through the daemon's local proxy (no new deps):
 /// greeting (no auth) -> CONNECT to <ip:port> -> reply code 0x00 = success.
 /// Only used for TCP reachability probes; HTTP goes through reqwest.
@@ -1028,80 +1053,120 @@ pub fn socks5_tcp_connect(
     port: u16,
     timeout: Duration,
 ) -> Result<(), String> {
-    use std::io::{Read, Write};
+    socks5_connect(proxy, ip, port, timeout).map_err(|e| e.to_string())
+}
+
+/// Typed core of [`socks5_tcp_connect`].
+pub fn socks5_connect(
+    proxy: SocketAddr,
+    ip: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<(), SocksFailure> {
+    use std::io::{ErrorKind, Write};
     use std::net::TcpStream;
 
+    let proxy_err = |what: &str, e: std::io::Error| SocksFailure::Proxy(format!("{what}: {e}"));
+
     let mut stream =
-        TcpStream::connect_timeout(&proxy, timeout).map_err(|e| format!("socks connect: {e}"))?;
+        TcpStream::connect_timeout(&proxy, timeout).map_err(|e| proxy_err("socks connect", e))?;
     stream.set_read_timeout(Some(timeout)).ok();
     stream.set_write_timeout(Some(timeout)).ok();
 
     stream
         .write_all(&[0x05, 0x01, 0x00])
         .and_then(|_| stream.flush())
-        .map_err(|e| format!("socks greeting: {e}"))?;
+        .map_err(|e| proxy_err("socks greeting", e))?;
     let mut reply = [0u8; 2];
     stream
         .read_exact(&mut reply)
-        .map_err(|e| format!("socks greeting reply: {e}"))?;
+        .map_err(|e| proxy_err("socks greeting reply", e))?;
     if reply[1] != 0x00 {
-        return Err("socks: no acceptable auth method".into());
+        return Err(SocksFailure::Proxy(
+            "socks: no acceptable auth method".into(),
+        ));
     }
 
     // CONNECT, domain-less: IPv4 target (tailnet IPs are v4 CGNAT).
     let octets: Vec<u8> = ip.split('.').filter_map(|o| o.parse::<u8>().ok()).collect();
     if octets.len() != 4 {
-        return Err(format!("not an IPv4 target: {ip}"));
+        return Err(SocksFailure::Proxy(format!("not an IPv4 target: {ip}")));
     }
     let mut req = vec![0x05, 0x01, 0x00, 0x01];
     req.extend_from_slice(&octets);
     req.extend_from_slice(&port.to_be_bytes());
     stream
         .write_all(&req)
-        .map_err(|e| format!("socks connect: {e}"))?;
+        .map_err(|e| proxy_err("socks connect", e))?;
 
     let mut resp = [0u8; 4];
-    stream
-        .read_exact(&mut resp)
-        .map_err(|e| format!("socks connect reply: {e}"))?;
+    stream.read_exact(&mut resp).map_err(|e| match e.kind() {
+        ErrorKind::WouldBlock | ErrorKind::TimedOut => SocksFailure::NoReply,
+        _ => proxy_err("socks connect reply", e),
+    })?;
     if resp[1] != 0x00 {
-        return Err(format!("socks CONNECT failed (code {})", resp[1]));
+        return Err(SocksFailure::Dial(resp[1]));
     }
     // Bounded drain of the bound address field (4b addr + 2b port for v4).
     let mut rest = [0u8; 6];
     stream
         .read_exact(&mut rest)
-        .map_err(|e| format!("socks tail: {e}"))?;
+        .map_err(|e| proxy_err("socks tail", e))?;
     Ok(())
 }
 
-/// Probe reachability to an IP:port target. If the embedded daemon is Running
-/// and its SOCKS5 proxy is listening on 127.0.0.1:1055, routes through SOCKS5
-/// so the packets ride the userspace WireGuard mesh. If SOCKS5 is not available
-/// or returns an error, falls back to direct TcpStream connect.
-pub fn probe_target_reachability(ip: &str, port: u16, timeout: Duration) -> bool {
-    let socks_proxy: Option<SocketAddr> = format!("127.0.0.1:{SOCKS_PORT}").parse().ok();
-    if let Some(proxy) = socks_proxy {
-        if socks5_tcp_connect(proxy, ip, port, timeout).is_ok() {
-            return true;
+/// Arguments for one tailnet-level (disco) ping. `--until-direct=false` is
+/// required: with the default, a reply relayed through DERP still exits
+/// non-zero ("direct connection not established").
+fn ping_args(node_ip: &str) -> [&str; 5] {
+    [
+        "ping",
+        "--c=1",
+        "--until-direct=false",
+        "--timeout=3s",
+        node_ip,
+    ]
+}
+
+/// True when the peer's Tailscale node answers a tailnet ping, which shows
+/// the host is up and reachable on the mesh whichever TCP ports it serves.
+/// A missing answer proves nothing (a slow path or a filtered ping look the
+/// same). Asks the EMBEDDED daemon only, never a system Tailscale.
+pub fn peer_answers_ping(node_ip: &str) -> bool {
+    cli(&ping_args(node_ip), Duration::from_secs(6)).is_ok()
+}
+
+/// Maps one SOCKS5 connect outcome to an [`AdcLink`]. `ping` runs only
+/// after the daemon's dial failed, because that failure alone cannot tell a
+/// closed port from a host that does not answer. `None`: the proxy itself
+/// was unusable, so nothing can be said about the host.
+fn adc_link_from_connect(
+    connect: Result<(), SocksFailure>,
+    ping: impl FnOnce() -> bool,
+) -> Option<crate::utils::network::AdcLink> {
+    use crate::utils::network::{classify_with_peer_answer, AdcLink};
+    match connect {
+        Ok(()) => Some(AdcLink::Reachable),
+        Err(SocksFailure::Proxy(_)) => None,
+        Err(SocksFailure::Dial(_) | SocksFailure::NoReply) => {
+            Some(classify_with_peer_answer(false, ping()))
         }
     }
-    // Fallback: direct OS TCP connect ONLY for CGNAT/tailnet IPs (100.64.0.0/10)
-    // in legacy system TUN mode. A public IP must NEVER fall back to direct OS connect,
-    // as that bypasses the private WireGuard mesh.
-    if crate::utils::network::is_tailnet_ip(ip) {
-        let socket_addr = if ip.starts_with('[') {
-            format!("{ip}:{port}").parse().ok()
-        } else if ip.contains(':') {
-            format!("[{ip}]:{port}").parse().ok()
-        } else {
-            format!("{ip}:{port}").parse().ok()
-        };
-        if let Some(addr) = socket_addr {
-            return std::net::TcpStream::connect_timeout(&addr, timeout).is_ok();
-        }
-    }
-    false
+}
+
+/// Probe of the ADC host for the embedded daemon's status. TCP :443 goes
+/// through the daemon's SOCKS5 proxy ONLY: there is no direct OS fallback
+/// (a tailnet address would then be reached through a separate system
+/// Tailscale), so that install can neither satisfy nor fail this app's status.
+pub fn probe_adc_link(
+    target_ip: &str,
+    node_ip: Option<&str>,
+) -> Option<crate::utils::network::AdcLink> {
+    let proxy: SocketAddr = format!("127.0.0.1:{SOCKS_PORT}").parse().ok()?;
+    adc_link_from_connect(
+        socks5_connect(proxy, target_ip, 443, Duration::from_secs(2)),
+        || node_ip.is_some_and(peer_answers_ping),
+    )
 }
 
 /// TCP reachability through the daemon's SOCKS5 proxy, to the ADC node's
@@ -1218,6 +1283,120 @@ mod tests {
         if let Ok(p) = Paths::resolve() {
             assert!(p.tailscaled().is_file() && p.tailscale().is_file());
         }
+    }
+
+    /// One-shot mock SOCKS5 proxy: answers the greeting, reads the CONNECT
+    /// request, then sends `reply` as the result code (`None`: never answer).
+    fn mock_socks(reply: Option<u8>) -> (SocketAddr, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut greeting = [0u8; 3];
+            s.read_exact(&mut greeting).unwrap();
+            s.write_all(&[0x05, 0x00]).unwrap();
+            let mut req = [0u8; 10];
+            s.read_exact(&mut req).unwrap();
+            match reply {
+                Some(code) => s
+                    .write_all(&[0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                    .unwrap(),
+                None => {
+                    // Hold the socket open until the probe gives up.
+                    let mut sink = [0u8; 1];
+                    let _ = s.read(&mut sink);
+                }
+            }
+        });
+        (addr, handle)
+    }
+
+    #[test]
+    fn socks_connect_reports_success() {
+        let (addr, handle) = mock_socks(Some(0));
+        let out = socks5_connect(addr, "100.117.16.0", 443, Duration::from_secs(2));
+        assert_eq!(out, Ok(()));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn socks_dial_failure_keeps_its_reply_code_and_message() {
+        let (addr, handle) = mock_socks(Some(1));
+        let out = socks5_connect(addr, "100.117.16.0", 443, Duration::from_secs(2));
+        assert_eq!(out, Err(SocksFailure::Dial(1)));
+        handle.join().unwrap();
+
+        let (addr, handle) = mock_socks(Some(1));
+        let msg = socks5_tcp_connect(addr, "100.117.16.0", 443, Duration::from_secs(2));
+        assert_eq!(msg, Err("socks CONNECT failed (code 1)".to_string()));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn socks_silence_is_no_reply_not_a_proxy_fault() {
+        let (addr, handle) = mock_socks(None);
+        let out = socks5_connect(addr, "100.117.16.0", 443, Duration::from_millis(300));
+        assert_eq!(out, Err(SocksFailure::NoReply));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn socks_proxy_that_is_not_listening_is_a_proxy_fault() {
+        let addr = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        match socks5_connect(addr, "100.117.16.0", 443, Duration::from_millis(500)) {
+            Err(SocksFailure::Proxy(msg)) => assert!(msg.starts_with("socks connect:"), "{msg}"),
+            other => panic!("expected a proxy fault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connected_probe_is_reachable_without_pinging() {
+        use crate::utils::network::AdcLink;
+        let link = adc_link_from_connect(Ok(()), || panic!("must not ping after a connect"));
+        assert_eq!(link, Some(AdcLink::Reachable));
+    }
+
+    #[test]
+    fn unusable_proxy_says_nothing_about_the_host() {
+        let link = adc_link_from_connect(Err(SocksFailure::Proxy("down".into())), || {
+            panic!("must not ping when the proxy is the fault")
+        });
+        assert_eq!(link, None);
+    }
+
+    #[test]
+    fn failed_dial_is_split_by_the_peer_ping() {
+        use crate::utils::network::AdcLink;
+        for failure in [SocksFailure::Dial(1), SocksFailure::NoReply] {
+            assert_eq!(
+                adc_link_from_connect(Err(failure.clone()), || true),
+                Some(AdcLink::HostAnswered),
+                "{failure:?} with a ping reply"
+            );
+            assert_eq!(
+                adc_link_from_connect(Err(failure.clone()), || false),
+                Some(AdcLink::Unavailable),
+                "{failure:?} without a ping reply"
+            );
+        }
+    }
+
+    #[test]
+    fn ping_is_single_and_does_not_wait_for_a_direct_path() {
+        assert_eq!(
+            ping_args("100.117.16.0"),
+            [
+                "ping",
+                "--c=1",
+                "--until-direct=false",
+                "--timeout=3s",
+                "100.117.16.0"
+            ]
+        );
     }
 
     /// Missing bundled binaries must produce the CLEAR error naming the

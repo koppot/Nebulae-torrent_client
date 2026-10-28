@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::engine::SharedEngine;
 use crate::models::connectivity::{ConnectivityReport, NatType, PortStatus};
+use crate::utils::network::AdcLink;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -337,57 +338,94 @@ pub async fn get_connectivity_certificate(
 
 /// Live Tailscale (Secure Network) detection for the status bar: reports the
 /// tailnet interface and member IP when the VPN data plane is up, plus a
-/// live probe of the ADC server over the tailnet. When `adc_reachable` is
-/// `false` the tailnet path to ADC is down: the user must be told, since
-/// traffic then falls back to the default connection (or the Nebula VPN).
+/// live probe of the ADC server over the tailnet. `adc_link` says how far
+/// the probe got: a host that answered but does not accept :443 on the probed
+/// address is not the same as one that did not answer at all, no outcome
+/// claims the host is offline, and neither the TCP result nor either failure
+/// says anything about HTTPS health. When the path to ADC is not confirmed
+/// the user must be told, since traffic then falls back to the default
+/// connection (or the Nebula VPN).
 #[derive(Debug, Clone, Serialize)]
 pub struct TailscaleStatus {
     pub connected: bool,
     pub interface: Option<String>,
     pub tailnet_ip: Option<String>,
+    /// `Some(true)` only when a TCP connection to the ADC host's :443 was
+    /// accepted; `Some(false)` for both other `adc_link` outcomes.
     pub adc_reachable: Option<bool>,
+    /// Outcome of the live probe; `None` while it could not be run.
+    pub adc_link: Option<AdcLink>,
     pub adc_node: Option<String>,
 }
 
-/// Freshness window for the ADC reachability probe: a successful result is
-/// trusted for this long, then the next status poll re-probes. Failures are
-/// cached for the same window so a confirmed failure immediately replaces a
-/// previous healthy indication (an older success can never overwrite a
-/// newer failure — every write is the latest probe's result, keyed by the
-/// probed address so a route/peer change invalidates the cache).
+/// Freshness window for a healthy ADC probe result: trusted for this long,
+/// then the next status poll re-probes. Every write is the latest probe's
+/// result, keyed by the probed address so a route/peer change invalidates
+/// the cache.
 const ADC_PROBE_FRESH_SECS: u64 = 60;
+/// Window for anything but a healthy result. It stays under the 15 s status
+/// poll interval so a host or route that comes back shows on the next poll
+/// without restarting the app, yet a failure still replaces a previous
+/// healthy indication as soon as a probe sees it.
+const ADC_PROBE_RETRY_SECS: u64 = 10;
 
-static ADC_PROBE_CACHE: std::sync::Mutex<Option<(String, bool, std::time::Instant)>> =
-    std::sync::Mutex::new(None);
+type AdcProbeCache = std::sync::Mutex<Option<(String, AdcLink, std::time::Instant)>>;
 
-/// Bounded live check of the ADC node over the tailnet, using the EMBEDDED
-/// daemon's own peer/route data (no system `tailscale` CLI — embedded-only
-/// installs do not have one on PATH). A TCP connect to the node's tailnet
-/// IP:443 within 2s; TLS is validated by the actual HTTPS clients that use
-/// the route (the doctor), never faked here. Returns `(node, Some(reachable))`
-/// when a node was resolvable, `(node, None)` when it could not be resolved
-/// at all, and falls back to the last cached result while it is still fresh.
-fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>, Option<bool>) {
-    let Some(ip) = target.map(|s| s.to_string()) else {
+static ADC_PROBE_CACHE: AdcProbeCache = std::sync::Mutex::new(None);
+
+fn adc_probe_is_fresh(link: AdcLink, age: std::time::Duration) -> bool {
+    let window = if link.tcp_open() {
+        ADC_PROBE_FRESH_SECS
+    } else {
+        ADC_PROBE_RETRY_SECS
+    };
+    age.as_secs() < window
+}
+
+/// Cache and bookkeeping around one live probe. `probe` runs only on a cache
+/// miss; when it cannot say anything (`None`) the cache is emptied so no
+/// stale indication survives.
+fn live_adc_probe_with(
+    cache: &AdcProbeCache,
+    target: Option<&str>,
+    node: Option<String>,
+    probe: impl FnOnce(&str) -> Option<AdcLink>,
+) -> (Option<String>, Option<AdcLink>) {
+    let Some(ip) = target else {
         // No ADC node resolvable at all: do not serve a stale "reachable".
-        if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
+        if let Ok(mut c) = cache.lock() {
             *c = None;
         }
         return (node, None);
     };
-    if let Ok(c) = ADC_PROBE_CACHE.lock() {
-        if let Some((cip, ok, at)) = c.as_ref() {
-            if cip == &ip && at.elapsed().as_secs() < ADC_PROBE_FRESH_SECS {
-                return (node.or_else(|| Some(cip.clone())), Some(*ok));
+    if let Ok(c) = cache.lock() {
+        if let Some((cip, link, at)) = c.as_ref() {
+            if cip == ip && adc_probe_is_fresh(*link, at.elapsed()) {
+                return (node.or_else(|| Some(cip.clone())), Some(*link));
             }
         }
     }
-    let reachable =
-        crate::tailscale::probe_target_reachability(&ip, 443, std::time::Duration::from_secs(2));
-    if let Ok(mut c) = ADC_PROBE_CACHE.lock() {
-        *c = Some((ip, reachable, std::time::Instant::now()));
+    let link = probe(ip);
+    if let Ok(mut c) = cache.lock() {
+        *c = link.map(|l| (ip.to_string(), l, std::time::Instant::now()));
     }
-    (node, Some(reachable))
+    (node, link)
+}
+
+/// Bounded live check of the ADC node over the tailnet, using the EMBEDDED
+/// daemon's own peer/route data (no system `tailscale` CLI — embedded-only
+/// installs do not have one on PATH). A TCP connect to `target`:443 through
+/// the daemon's proxy, and when that fails a tailnet ping tells a host that
+/// answers from one that does not; TLS is validated by the actual HTTPS
+/// clients that use the route (the doctor), never faked here. Returns
+/// `(node, Some(link))` when a node was resolvable, `(node, None)` when it
+/// could not be resolved at all or the daemon's proxy was unusable, and
+/// falls back to the last cached result while it is still fresh.
+fn live_adc_probe(target: Option<&str>, node: Option<String>) -> (Option<String>, Option<AdcLink>) {
+    let node_ip = node.clone();
+    live_adc_probe_with(&ADC_PROBE_CACHE, target, node, |ip| {
+        crate::tailscale::probe_adc_link(ip, node_ip.as_deref())
+    })
 }
 
 /// Truthful tailscale status for the status bar: the EMBEDDED daemon's
@@ -407,7 +445,7 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
     // (mixed-stack defect, 2026-10-20).
     if !ts.backend_state.is_empty() {
         let running = ts.backend_state == "Running";
-        let (adc_node, adc_reachable) = if running {
+        let (adc_node, adc_link) = if running {
             // Owner defect (2026-10-20): a Running daemon with a CACHED
             // route entry reported ADC as reachable while the ADC Linux
             // host was offline. Reachability must be a live bounded probe
@@ -421,7 +459,12 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
             } else {
                 ts.adc_node.clone()
             };
-            live_adc_probe(target.as_deref(), ts.adc_node)
+            // The probe can block for several seconds (proxy connect, then a
+            // tailnet ping): keep it off the async workers.
+            let node = ts.adc_node;
+            tokio::task::spawn_blocking(move || live_adc_probe(target.as_deref(), node))
+                .await
+                .map_err(|e| format!("join: {e}"))?
         } else {
             // Not running: clear any cached probe result so a stale
             // healthy indication cannot survive a daemon stop/logout.
@@ -434,7 +477,8 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
             connected: running,
             interface: running.then(|| "nebulae-embedded (userspace)".to_string()),
             tailnet_ip: running.then_some(ts.tailnet_ip).flatten(),
-            adc_reachable,
+            adc_reachable: adc_link.map(AdcLink::tcp_open),
+            adc_link,
             adc_node,
         });
     }
@@ -456,7 +500,8 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
                     connected: true,
                     interface: Some(interface),
                     tailnet_ip: Some(tailnet_ip),
-                    adc_reachable: probe.as_ref().map(|(_, r)| *r),
+                    adc_reachable: probe.as_ref().map(|(_, l)| l.tcp_open()),
+                    adc_link: probe.as_ref().map(|(_, l)| *l),
                     adc_node: probe.map(|(n, _)| n),
                 }
             }
@@ -465,10 +510,177 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
                 interface: None,
                 tailnet_ip: None,
                 adc_reachable: None,
+                adc_link: None,
                 adc_node: None,
             },
         })
     })
     .await
     .map_err(|e| format!("join: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn empty_cache() -> AdcProbeCache {
+        std::sync::Mutex::new(None)
+    }
+
+    #[test]
+    fn healthy_result_is_trusted_for_a_minute_failures_for_less_than_a_poll() {
+        assert!(adc_probe_is_fresh(
+            AdcLink::Reachable,
+            Duration::from_secs(59)
+        ));
+        assert!(!adc_probe_is_fresh(
+            AdcLink::Reachable,
+            Duration::from_secs(60)
+        ));
+        for link in [AdcLink::HostAnswered, AdcLink::Unavailable] {
+            assert!(adc_probe_is_fresh(link, Duration::from_secs(9)), "{link:?}");
+            assert!(
+                !adc_probe_is_fresh(link, Duration::from_secs(10)),
+                "{link:?} must be re-probed before the 15 s status poll"
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_target_reports_nothing_and_drops_the_cache() {
+        let cache = empty_cache();
+        let (_, first) = live_adc_probe_with(&cache, Some("203.0.113.5"), None, |_| {
+            Some(AdcLink::Reachable)
+        });
+        assert_eq!(first, Some(AdcLink::Reachable));
+        let (node, link) = live_adc_probe_with(&cache, None, Some("100.64.0.9".into()), |_| {
+            panic!("no target, no probe")
+        });
+        assert_eq!((node.as_deref(), link), (Some("100.64.0.9"), None));
+        assert!(cache.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn fresh_result_is_served_without_probing_again() {
+        let cache = empty_cache();
+        let probe_once = |link| {
+            live_adc_probe_with(
+                &cache,
+                Some("203.0.113.5"),
+                Some("100.64.0.9".into()),
+                |_| Some(link),
+            )
+        };
+        assert_eq!(
+            probe_once(AdcLink::HostAnswered).1,
+            Some(AdcLink::HostAnswered)
+        );
+        let (node, link) = live_adc_probe_with(
+            &cache,
+            Some("203.0.113.5"),
+            Some("100.64.0.9".into()),
+            |_| panic!("a fresh result must not be probed again"),
+        );
+        assert_eq!(
+            (node.as_deref(), link),
+            (Some("100.64.0.9"), Some(AdcLink::HostAnswered))
+        );
+    }
+
+    #[test]
+    fn a_different_target_is_probed_even_when_the_cache_is_fresh() {
+        let cache = empty_cache();
+        live_adc_probe_with(&cache, Some("203.0.113.5"), None, |_| {
+            Some(AdcLink::Reachable)
+        });
+        let (_, link) = live_adc_probe_with(&cache, Some("100.64.0.9"), None, |_| {
+            Some(AdcLink::Unavailable)
+        });
+        assert_eq!(link, Some(AdcLink::Unavailable));
+        let cached = cache.lock().unwrap();
+        assert_eq!(
+            cached.as_ref().map(|(ip, l, _)| (ip.as_str(), *l)),
+            Some(("100.64.0.9", AdcLink::Unavailable))
+        );
+    }
+
+    /// Cache entry that was written `age` ago.
+    fn aged_cache(ip: &str, link: AdcLink, age: Duration) -> Option<AdcProbeCache> {
+        let at = std::time::Instant::now().checked_sub(age)?;
+        Some(std::sync::Mutex::new(Some((ip.to_string(), link, at))))
+    }
+
+    #[test]
+    fn recovery_after_a_failure_shows_on_the_next_status_poll() {
+        // The status poll runs every 15 s. A failure older than the 10 s
+        // retry window is probed again, so a host that came back (for
+        // example after a reboot) is reported without restarting the app.
+        for failed in [AdcLink::Unavailable, AdcLink::HostAnswered] {
+            let Some(cache) = aged_cache("203.0.113.5", failed, Duration::from_secs(15)) else {
+                return;
+            };
+            let (_, link) = live_adc_probe_with(&cache, Some("203.0.113.5"), None, |_| {
+                Some(AdcLink::Reachable)
+            });
+            assert_eq!(link, Some(AdcLink::Reachable), "after {failed:?}");
+            let cached = cache.lock().unwrap();
+            assert_eq!(
+                cached.as_ref().map(|(_, l, _)| *l),
+                Some(AdcLink::Reachable)
+            );
+        }
+    }
+
+    #[test]
+    fn a_healthy_result_replaced_by_a_failure_once_its_window_ends() {
+        let Some(cache) = aged_cache("203.0.113.5", AdcLink::Reachable, Duration::from_secs(61))
+        else {
+            return;
+        };
+        let (_, link) = live_adc_probe_with(&cache, Some("203.0.113.5"), None, |_| {
+            Some(AdcLink::Unavailable)
+        });
+        assert_eq!(link, Some(AdcLink::Unavailable));
+    }
+
+    #[test]
+    fn a_healthy_result_is_trusted_inside_its_window_without_probing() {
+        let Some(cache) = aged_cache("203.0.113.5", AdcLink::Reachable, Duration::from_secs(30))
+        else {
+            return;
+        };
+        let (_, link) = live_adc_probe_with(&cache, Some("203.0.113.5"), None, |_| {
+            panic!("a healthy result inside its window must not be probed again")
+        });
+        assert_eq!(link, Some(AdcLink::Reachable));
+    }
+
+    #[test]
+    fn an_unusable_proxy_is_unverified_and_keeps_nothing() {
+        let cache = empty_cache();
+        let (node, link) = live_adc_probe_with(
+            &cache,
+            Some("203.0.113.5"),
+            Some("100.64.0.9".into()),
+            |_| None,
+        );
+        assert_eq!((node.as_deref(), link), (Some("100.64.0.9"), None));
+        assert!(cache.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn status_payload_carries_the_three_way_result_and_the_tcp_flag() {
+        let status = TailscaleStatus {
+            connected: true,
+            interface: None,
+            tailnet_ip: None,
+            adc_reachable: Some(AdcLink::HostAnswered.tcp_open()),
+            adc_link: Some(AdcLink::HostAnswered),
+            adc_node: Some("100.64.0.9".into()),
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["adc_link"], "host_answered");
+        assert_eq!(json["adc_reachable"], false);
+    }
 }

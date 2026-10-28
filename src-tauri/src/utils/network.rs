@@ -127,18 +127,71 @@ pub fn is_tailnet_ip(ip: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// How far a bounded reachability probe of the ADC host got.
+///
+/// A refused connection proves the host's network stack answered, so it must
+/// not read as unavailable: the ADC node has no :443 listener on its tailnet
+/// address (observed live; the HTTPS listener is on the public address that
+/// the advertised subnet route reaches). Only an accepted connection is
+/// `Reachable`, and that is a TCP result, not HTTPS or application health.
+///
+/// No variant claims the host is offline. A probe that got neither a
+/// connection nor an answer says only that this probe could not reach the
+/// host just now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdcLink {
+    /// A TCP connection to :443 was accepted.
+    Reachable,
+    /// The host answered (connection refused, or a reply to a tailnet ping)
+    /// but did not accept a TCP connection to :443.
+    HostAnswered,
+    /// No connection and no answer within the probe's bounds. Reachability is
+    /// unknown: a filtered ping, a slow path or a host that is down all look
+    /// the same.
+    Unavailable,
+}
+
+impl AdcLink {
+    pub fn tcp_open(self) -> bool {
+        self == AdcLink::Reachable
+    }
+}
+
+/// Classify a bounded TCP connect to the ADC host.
+pub fn classify_tcp_connect(result: &std::io::Result<()>) -> AdcLink {
+    match result {
+        Ok(()) => AdcLink::Reachable,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => AdcLink::HostAnswered,
+        Err(_) => AdcLink::Unavailable,
+    }
+}
+
+/// Combine a failed or successful TCP probe with an independent "does the
+/// peer answer at all" check (a tailnet ping), for transports such as a SOCKS
+/// proxy that cannot tell a refusal from a timeout.
+pub fn classify_with_peer_answer(tcp_open: bool, peer_answers: bool) -> AdcLink {
+    if tcp_open {
+        AdcLink::Reachable
+    } else if peer_answers {
+        AdcLink::HostAnswered
+    } else {
+        AdcLink::Unavailable
+    }
+}
+
 /// Live probe of the ADC server over the tailnet.
 ///
 /// The owner requirement: when the tailnet path to the ADC server is NOT
 /// routed through, the user must be told — traffic then falls back to the
 /// default connection (or the Nebula VPN when one is active).
 ///
-/// Returns `Some((node_label, reachable))` when a tailnet member whose name
+/// Returns `Some((node_label, link))` when a tailnet member whose name
 /// contains "asiandvdclub" is known to the local Tailscale client, with the
-/// second element describing whether its HTTPS endpoint answered within the
-/// bounded window. `None` means the Tailscale client could not be queried
-/// at all.
-pub fn probe_adc_over_tailnet() -> Option<(String, bool)> {
+/// second element describing the outcome of a bounded TCP connect to its
+/// :443 (see [`AdcLink`]); HTTPS itself is not exercised. `None` means the
+/// Tailscale client could not be queried at all.
+pub fn probe_adc_over_tailnet() -> Option<(String, AdcLink)> {
     use std::io::Read;
     use std::net::{SocketAddr, TcpStream};
     use std::process::Stdio;
@@ -234,8 +287,8 @@ pub fn probe_adc_over_tailnet() -> Option<(String, bool)> {
     let (node_label, node_ip) = (node_label?, node_ip?);
 
     let addr: SocketAddr = format!("{node_ip}:443").parse().ok()?;
-    let reachable = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).is_ok();
-    Some((node_label, reachable))
+    let connect = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map(|_| ());
+    Some((node_label, classify_tcp_connect(&connect)))
 }
 
 /// Detects a running Tailscale client: a VPN-type interface carrying an
@@ -323,6 +376,64 @@ mod tests {
         assert!(!is_tailnet_ip("100.128.0.1")); // above CGNAT block
         assert!(!is_tailnet_ip("192.168.1.50")); // LAN
         assert!(!is_tailnet_ip("100.64.0.1.5")); // malformed
+    }
+
+    #[test]
+    fn refused_connect_is_host_answered_not_unavailable() {
+        let refused: std::io::Result<()> = Err(std::io::ErrorKind::ConnectionRefused.into());
+        assert_eq!(classify_tcp_connect(&refused), AdcLink::HostAnswered);
+    }
+
+    #[test]
+    fn accepted_connect_is_reachable() {
+        assert_eq!(classify_tcp_connect(&Ok(())), AdcLink::Reachable);
+    }
+
+    #[test]
+    fn silence_and_routing_errors_are_unavailable() {
+        for kind in [
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::AddrNotAvailable,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Other,
+        ] {
+            let failed: std::io::Result<()> = Err(kind.into());
+            assert_eq!(
+                classify_tcp_connect(&failed),
+                AdcLink::Unavailable,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_accepted_connect_counts_as_tcp_open() {
+        assert!(AdcLink::Reachable.tcp_open());
+        assert!(!AdcLink::HostAnswered.tcp_open());
+        assert!(!AdcLink::Unavailable.tcp_open());
+    }
+
+    #[test]
+    fn peer_answer_separates_a_closed_port_from_no_answer_at_all() {
+        assert_eq!(classify_with_peer_answer(true, false), AdcLink::Reachable);
+        assert_eq!(classify_with_peer_answer(true, true), AdcLink::Reachable);
+        assert_eq!(
+            classify_with_peer_answer(false, true),
+            AdcLink::HostAnswered
+        );
+        assert_eq!(
+            classify_with_peer_answer(false, false),
+            AdcLink::Unavailable
+        );
+    }
+
+    #[test]
+    fn adc_link_serializes_as_snake_case_strings() {
+        let json = |l: AdcLink| serde_json::to_string(&l).unwrap();
+        assert_eq!(json(AdcLink::Reachable), "\"reachable\"");
+        assert_eq!(json(AdcLink::HostAnswered), "\"host_answered\"");
+        assert_eq!(json(AdcLink::Unavailable), "\"unavailable\"");
     }
 
     #[test]

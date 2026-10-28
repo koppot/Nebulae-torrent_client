@@ -32,6 +32,28 @@ CLI always passes `--socket <our socket>`.
 - If a restricted VPN mode is selected by the user, that mode's rules win;
   the ADC-network layer never overrides or bypasses them.
 
+## Status bar indicator (`get_tailscale_status`)
+A bounded live check, never a cached netmap entry, that claims only what the
+check proves. The target is the ADC peer's advertised subnet route when routes
+are accepted, else its tailnet IP. The indicator is display-only: it does not
+gate or reroute any request to ADC.
+- `adc_link: reachable`: TCP :443 was accepted through the daemon's SOCKS5
+  proxy. TCP only; HTTPS and application health are not tested.
+- `adc_link: host_answered`: the connect failed but the peer answered a
+  tailnet ping. The host is up; :443 does not accept connections at the
+  address checked.
+- `adc_link: unavailable`: the connect failed and the ping got no answer. This
+  does not prove the host is offline (a slow path and a filtered ping look the
+  same), so the bar says "reachability unknown".
+- `adc_link: null`: nothing could be checked (daemon not Running, proxy
+  unusable, or no ADC peer seen).
+- Retry: the status bar's existing 15 s poll is the only loop. A healthy result
+  is trusted for 60 s; any other result is probed again on the next poll (10 s
+  window), so a host or daemon that comes back shows without restarting the app.
+- Only the embedded daemon is asked. A system Tailscale is never consulted or
+  changed; its interface appears only through the legacy fallback when the
+  embedded daemon has never started, and the tooltip names which one is shown.
+
 ## Lifecycle (verified locally end-to-end)
 - **Launch**: `ensure_daemon()` starts the bundled daemon from the resolved
   resources and waits (30 s bound) for it to answer on OUR socket. A second
