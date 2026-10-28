@@ -138,10 +138,17 @@ jobs:
         run: |
           ./scripts/bundle-linux-transmission.sh
 
-      - name: Install transmission-cli on macOS runner
+      # A candidate must contain the runtime a release would ship, so this uses
+      # the same scripts as release.yml (VLC 3.0.23 with the Nebulae patches,
+      # libbluray 1.5.0 with its BD-J jars, Transmission with relocated
+      # libraries). An earlier version of this step bundled the unpatched
+      # official VLC 3.0.21.
+      - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install transmission-cli || brew upgrade transmission-cli || true
+          brew install cmake meson ninja pkgconf bison \
+            libevent libdeflate libpsl miniupnpc gettext \
+            libudfread fontconfig freetype
 
       - name: Bundle transmission-daemon engine (macOS)
         if: runner.os == 'macOS'
@@ -151,14 +158,7 @@ jobs:
       - name: Bundle libVLC (macOS)
         if: runner.os == 'macOS'
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
-          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
-          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
-          mkdir -p src-tauri/resources/vlc
-          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
-          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
-          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
-          hdiutil detach /tmp/vlcmnt -quiet || true
+          ./scripts/bundle-macos-vlc.sh "${{ matrix.target }}"
           ls src-tauri/resources/vlc
 
       - name: Bundle JRE (BD-J/UHD menus)
@@ -256,9 +256,28 @@ jobs:
             Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
 
+      # tauri.conf.json's "resources/**/*" glob copies hidden files too, so a
+      # .DS_Store left by Finder in src-tauri/resources would end up inside the
+      # signed app. Remove them before the build; the verification after it
+      # proves none are left.
+      - name: Remove Finder metadata from the staged resources (macOS)
+        if: runner.os == 'macOS'
+        run: find src-tauri/resources -name .DS_Store -type f -print -delete
+
       - name: Build Tauri Application
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}
+
+      # The x86_64 leg runs on an arm64 runner and bundles helpers built for the
+      # runner, so its findings are reported but do not fail the candidate (see
+      # scripts/bundle-macos-vlc.sh).
+      - name: Verify the macOS app bundle
+        if: runner.os == 'macOS'
+        continue-on-error: ${{ matrix.target != 'aarch64-apple-darwin' }}
+        run: |
+          APP_DIR=$(find src-tauri/target -name "Nebulae.app" -type d | head -n 1)
+          if [ -z "$APP_DIR" ]; then echo "::error::Nebulae.app was not produced"; exit 1; fi
+          ./scripts/verify-macos-app.sh "$APP_DIR"
 
       - name: Prepare candidate artifact (macOS)
         if: runner.os == 'macOS'

@@ -121,10 +121,16 @@ jobs:
         run: |
           ./scripts/bundle-linux-transmission.sh
 
-      - name: Install transmission-cli on macOS runner
+      # The macOS runtime comes from the same scripts as release.yml (VLC 3.0.23
+      # with the Nebulae patches, libbluray 1.5.0 with its BD-J jars, Transmission
+      # with relocated libraries). An earlier version of this step bundled the
+      # unpatched official VLC 3.0.21.
+      - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install transmission-cli || brew upgrade transmission-cli || true
+          brew install cmake meson ninja pkgconf bison \
+            libevent libdeflate libpsl miniupnpc gettext \
+            libudfread fontconfig freetype
 
       - name: Bundle transmission-daemon engine (macOS)
         if: runner.os == 'macOS'
@@ -135,14 +141,7 @@ jobs:
       - name: Bundle libVLC (macOS)
         if: runner.os == 'macOS'
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then VLCARCH=arm64; else VLCARCH=intel64; fi
-          curl -fL -o vlc.dmg "https://download.videolan.org/pub/videolan/vlc/3.0.21/macosx/vlc-3.0.21-${VLCARCH}.dmg"
-          hdiutil attach vlc.dmg -mountpoint /tmp/vlcmnt -nobrowse -quiet
-          mkdir -p src-tauri/resources/vlc
-          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/lib src-tauri/resources/vlc/
-          cp -R /tmp/vlcmnt/VLC.app/Contents/MacOS/plugins src-tauri/resources/vlc/
-          cp -R /tmp/vlcmnt/VLC.app/Contents/Frameworks src-tauri/resources/vlc/ || true
-          hdiutil detach /tmp/vlcmnt -quiet || true
+          ./scripts/bundle-macos-vlc.sh "${{ matrix.target }}"
           ls src-tauri/resources/vlc
 
       - name: Bundle libVLC (Windows)
