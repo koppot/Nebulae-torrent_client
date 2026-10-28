@@ -337,14 +337,17 @@ def source_of(rel):
 
 
 files = []
-for root, _dirs, names in os.walk(dest):
-    for name in names:
+links = []
+for root, dirs, names in os.walk(dest):
+    for name in names + dirs:
         path = os.path.join(root, name)
-        if os.path.islink(path):
-            continue
         rel = os.path.relpath(path, dest)
-        files.append({"path": "vlc/" + rel, "sha256": sha256(path), "source": source_of(rel)})
+        if os.path.islink(path):
+            links.append({"path": "vlc/" + rel, "target": os.readlink(path)})
+        elif os.path.isfile(path):
+            files.append({"path": "vlc/" + rel, "sha256": sha256(path), "source": source_of(rel)})
 files.sort(key=lambda e: e["path"])
+links.sort(key=lambda e: e["path"])
 
 try:
     rev = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"], stdout=subprocess.PIPE,
@@ -367,6 +370,9 @@ doc = {
         "relocated_homebrew_libraries": bundled,
     },
     "files": files,
+    # The Tauri bundler copies a symlink as a regular file with the target's
+    # content, so the bundled app is checked against these entries as well.
+    "links": links,
 }
 with open(manifest, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, indent=2)
