@@ -1,6 +1,6 @@
 {
-  "staged_at_utc": "2026-10-28T19:35:41Z",
-  "git_rev": "2c35dce",
+  "staged_at_utc": "2026-10-28T19:57:48Z",
+  "git_rev": "2bee2c1",
   "vlc_version": "3.0.23",
   "target_arch": "arm64",
   "sources": {
@@ -97,12 +97,12 @@
     },
     {
       "path": "vlc/lib/libbluray-awt-j2se-1.5.0.jar",
-      "sha256": "46944442811c7efb88f1ae6e9dd4b929ffd4fbe89d2098aebc01c6e27024ae49",
+      "sha256": "c6f871d5cf65e19fe69fee70a33778b1ffb6e1ec33caa680cf382e489d852ab3",
       "source": "libbluray-build"
     },
     {
       "path": "vlc/lib/libbluray-j2se-1.5.0.jar",
-      "sha256": "90b91e4dd71ada5aa412d5e1ab4fbbc0847fd6fbc94e423a9696c3202fb5e925",
+      "sha256": "dddf1463c7335d6f3176bd549f5d55361a6808210e3917cb23ca8b3da6f301da",
       "source": "libbluray-build"
     },
     {
@@ -137,13 +137,18 @@
     },
     {
       "path": "vlc/lib/libvlc.5.dylib",
-      "sha256": "37ea264cde817383ef8f53134d7be960f6ca3a4e7b49e27467cce2e0763145ae",
+      "sha256": "7c9924ccd37def826d5da0241379b469e8461c1245dd13fc9ed20c05609915e5",
       "source": "custom-build"
     },
     {
       "path": "vlc/lib/libvlccore.9.dylib",
       "sha256": "739dd7e5622951239669199349e8ece74b07d618e7320cc9b11a1d40ac903183",
       "source": "official-vlc-app"
+    },
+    {
+      "path": "vlc/licenses/README.txt",
+      "sha256": "b436ce60d1e1d12544a9b6cc439122abbec44588a73d3d030ec9b4e3efacd547",
+      "source": "nebulae-notice"
     },
     {
       "path": "vlc/licenses/fontconfig-2.18.3/AUTHORS",
