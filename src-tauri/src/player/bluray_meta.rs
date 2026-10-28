@@ -98,7 +98,8 @@ static BD_PROBE_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Locate and open the libbluray dylib (bundled first, then system fallback).
 /// Candidates are checked in priority order: bundled resources ship inside
-/// the app on all platforms; system paths are the last resort only.
+/// the app on all platforms; system paths are the last resort only (and on
+/// macOS exist in development builds only).
 /// Cached in a OnceLock so the dylib and its dependencies (fontconfig, freetype)
 /// are NEVER dlclosed while worker threads or VLC playback are active.
 unsafe fn open_bluray_lib() -> Result<&'static Library, String> {
@@ -139,7 +140,13 @@ unsafe fn open_bluray_lib() -> Result<&'static Library, String> {
 
             // System fallback paths (last resort — a missing bundled copy is
             // reported clearly by the empty bundled candidates failing first).
-            #[cfg(target_os = "macos")]
+            //
+            // On macOS this is for development checkouts only. The bundled
+            // libbluray is built together with the BD-J jars and the VLC Blu-ray
+            // plugin, which load the same copy; a Homebrew libbluray is a
+            // different build with no jars, and a release build must report the
+            // missing bundled library instead of loading it next to the plugin's.
+            #[cfg(all(target_os = "macos", debug_assertions))]
             {
                 candidates.push(PathBuf::from("/opt/homebrew/lib/libbluray.4.dylib"));
                 candidates.push(PathBuf::from("/usr/local/lib/libbluray.4.dylib"));
