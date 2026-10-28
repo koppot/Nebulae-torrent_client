@@ -832,7 +832,9 @@ fn start_playback_inner(
 
                                 // Outcome B: Only for discs WITHOUT an authored menu (e.g. episodic discs without a top menu).
                                 // If the disc has an authored menu, we must never abort menu navigation early.
-                                if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                if !has_menu
+                                    && unsafe { engine::is_active_feature_playback(&lib, mp) }
+                                {
                                     let cur = unsafe {
                                         (lib.libvlc_media_player_get_title)(mp as *mut c_void)
                                     };
@@ -888,7 +890,9 @@ fn start_playback_inner(
                                     );
                                         return;
                                     }
-                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                    if !has_menu
+                                        && unsafe { engine::is_active_feature_playback(&lib, mp) }
+                                    {
                                         let cur = unsafe {
                                             (lib.libvlc_media_player_get_title)(mp as *mut c_void)
                                         };
@@ -1227,17 +1231,24 @@ fn start_playback_inner(
                                         let mut lifecycle = WarnSkipLifecycle::new();
 
                                         loop {
-                                            std::thread::sleep(std::time::Duration::from_millis(50));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                50,
+                                            ));
                                             let mp = mp_or_return!();
 
-                                            let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                            let at_menu =
+                                                unsafe { engine::is_menu_title(&lib, mp) };
                                             let playlist_id = if at_menu {
                                                 -1
                                             } else {
                                                 unsafe { get_playlist_id(mp as *mut c_void) as i32 }
                                             };
 
-                                            if lifecycle.tick(at_menu, playlist_id, entry.warn_mpls_id) {
+                                            if lifecycle.tick(
+                                                at_menu,
+                                                playlist_id,
+                                                entry.warn_mpls_id,
+                                            ) {
                                                 tracing::info!(
                                                     "[warn-watcher] skip: warning playlist {:05} active — seeking to 0.99",
                                                     entry.warn_mpls_id
