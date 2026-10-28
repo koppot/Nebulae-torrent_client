@@ -869,60 +869,32 @@ fn start_playback_inner(
                             );
                                 nav_menu();
 
-                                // Check if navigate_menu or set_title reached menu within 200ms (10 * 20ms)
-                                for _ in 0..10 {
-                                    std::thread::sleep(std::time::Duration::from_millis(20));
-                                    let gen_now =
-                                        state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
-                                    if gen_now != menu_gen || !*poison(&state.started) {
-                                        tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): aborted during initial 200ms check"
-                                    );
-                                        return;
-                                    }
-                                    let mp = *poison(&state.media_player);
-                                    if mp == 0 || mp != menu_mp {
-                                        return;
-                                    }
-                                    if unsafe { engine::is_menu_title(&lib, mp) } {
-                                        tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu / set_title within 200ms [Outcome A]"
-                                    );
-                                        return;
-                                    }
-                                    if !has_menu
-                                        && unsafe { engine::is_active_feature_playback(&lib, mp) }
-                                    {
-                                        let cur = unsafe {
-                                            (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                        };
-                                        let len = unsafe {
-                                            (lib.libvlc_media_player_get_length)(mp as *mut c_void)
-                                        };
-                                        tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur} (length_ms={len}) within 200ms [Outcome B]; preserving playback"
-                                    );
-                                        return;
-                                    }
-                                }
-
-                                // Poll for up to 15s (MAX_POLLS * POLL_MS). menu_watch::decide
-                                // says each poll whether to wait, repeat the menu request
-                                // (every 2s) or seek First Play to its end once. The watch
-                                // ends at the authored menu, or on a disc without a menu once
-                                // a feature plays; a feature that starts on a disc WITH a
-                                // menu does not end it.
+                                // Poll for up to WINDOW_MS. menu_watch::decide says each poll
+                                // whether to wait, repeat the menu request (every 2s), seek First
+                                // Play to its end once, or stop. A "menu" report ends the watch
+                                // only after it has held for MENU_CONFIRM_MS: set_title makes
+                                // libVLC report the menu even when the Blu-ray VM refused the
+                                // call (see menu_watch). On a disc without a menu the watch ends
+                                // once a feature plays; a feature that starts on a disc WITH a
+                                // menu does not end it. After the First Play seek the poll is
+                                // fast so the menu request follows the title change at once.
                                 let mut progress = menu_watch::Progress::default();
                                 let mut logged_kind = None;
-                                for i in 0..menu_watch::MAX_POLLS {
-                                    std::thread::sleep(std::time::Duration::from_millis(
-                                        menu_watch::POLL_MS,
-                                    ));
+                                let mut menu_claim_logged = false;
+                                let watch_started = std::time::Instant::now();
+                                let mut sleep_ms = progress.next_poll_ms(0);
+                                loop {
+                                    std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                                    let t_ms = u64::try_from(watch_started.elapsed().as_millis())
+                                        .unwrap_or(u64::MAX);
+                                    if t_ms > menu_watch::WINDOW_MS {
+                                        break;
+                                    }
                                     let gen_now =
                                         state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                     if gen_now != menu_gen || !*poison(&state.started) {
                                         tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): cancelled at iteration {i} (session ended/changed)"
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): cancelled at T+{t_ms}ms (session ended/changed)"
                                     );
                                         return;
                                     }
@@ -931,11 +903,10 @@ fn start_playback_inner(
                                         return;
                                     }
 
-                                    let t_ms = u64::from(i) * menu_watch::POLL_MS;
                                     let kind = unsafe { engine::current_title_kind(&lib, mp) };
                                     if logged_kind != Some(kind) {
                                         tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): iteration {i} (T+{t_ms}ms): current title {kind:?}, has_menu={has_menu}"
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): T+{t_ms}ms: current title {kind:?}, has_menu={has_menu}"
                                     );
                                         logged_kind = Some(kind);
                                     }
@@ -947,12 +918,30 @@ fn start_playback_inner(
                                             engine::is_active_feature_playback(&lib, mp)
                                         },
                                     };
-                                    match menu_watch::decide(&mut progress, i, sample) {
+                                    let decision = menu_watch::decide(&mut progress, t_ms, sample);
+                                    match progress.menu_claim_since_ms() {
+                                        Some(since) if !menu_claim_logged => {
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): libVLC reports the authored menu since T+{since}ms; confirming it holds for {}ms",
+                                            menu_watch::MENU_CONFIRM_MS
+                                        );
+                                            menu_claim_logged = true;
+                                        }
+                                        None if menu_claim_logged => {
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): the menu report ended at T+{t_ms}ms before it was confirmed (the disc refused the menu request); current title {kind:?}"
+                                        );
+                                            menu_claim_logged = false;
+                                        }
+                                        _ => {}
+                                    }
+                                    match decision {
                                         menu_watch::Decision::Wait => {}
                                         menu_watch::Decision::Reached => {
-                                            // Outcome A: Authored menu reached safely
+                                            // Outcome A: authored menu reached and held
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{t_ms}ms) [Outcome A]"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at T+{t_ms}ms (held for {}ms) [Outcome A]",
+                                            menu_watch::MENU_CONFIRM_MS
                                         );
                                             return;
                                         }
@@ -969,7 +958,7 @@ fn start_playback_inner(
                                                 )
                                             };
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at iteration {i} (T+{t_ms}ms) [Outcome B]; stopping startup watcher"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at T+{t_ms}ms [Outcome B]; stopping startup watcher"
                                         );
                                             return;
                                         }
@@ -978,7 +967,7 @@ fn start_playback_inner(
                                             // lets the disc run its own jump to the menu. Decided at most
                                             // once per watcher run.
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): First Play identified ({kind:?}) at iteration {i} (T+{t_ms}ms); seeking near its end (0.99) once to reach the menu"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): First Play identified ({kind:?}) at T+{t_ms}ms; seeking near its end (0.99) once to reach the menu"
                                         );
                                             unsafe {
                                                 (lib.libvlc_media_player_set_position)(
@@ -989,15 +978,16 @@ fn start_playback_inner(
                                         }
                                         menu_watch::Decision::RetryMenu => {
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at iteration {i} (T+{t_ms}ms)"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at T+{t_ms}ms (current title {kind:?})"
                                         );
                                             nav_menu();
                                         }
                                     }
+                                    sleep_ms = progress.next_poll_ms(t_ms);
                                 }
                                 tracing::info!(
                                 "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms",
-                                menu_watch::POLL_MS * u64::from(menu_watch::MAX_POLLS)
+                                menu_watch::WINDOW_MS
                             );
 
                                 // Bounded startup window (15s) elapsed.

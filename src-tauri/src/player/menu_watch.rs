@@ -1,25 +1,44 @@
 //! Decision logic for the disc startup menu watcher.
 //!
 //! After the initial menu request, the watcher thread in `commands::media`
-//! samples the player every [`POLL_MS`] for up to [`MAX_POLLS`] polls and asks
-//! [`decide`] what to do next. The thread owns all side effects (libVLC calls,
-//! session checks, the fallback); this module only decides, so the startup
-//! rules can be tested without a player.
+//! samples the player and asks [`decide`] what to do next. The thread owns all
+//! side effects (libVLC calls, session checks, the fallback); this module only
+//! decides, so the startup rules can be tested without a player.
 //!
 //! The watcher is bounded and cannot re-trigger itself. It only exists for a
 //! session opened with menus (`bypass_menu == false`), runs once per such
-//! open, and its single fallback reopens the disc with
-//! [`FALLBACK_BYPASS_MENU`]; a session opened that way never starts a watcher
-//! ([`startup_watchers_enabled`]).
+//! open for at most [`WINDOW_MS`], and its single fallback reopens the disc
+//! with [`FALLBACK_BYPASS_MENU`]; a session opened that way never starts a
+//! watcher ([`startup_watchers_enabled`]).
+//!
+//! libVLC's current-title report is not proof that the disc shows its menu.
+//! `libvlc_media_player_set_title` makes the input thread announce the
+//! requested title whether or not the Blu-ray VM accepted it (3.0.x
+//! `input.c`, `INPUT_CONTROL_SET_TITLE`). While First Play runs with the menu
+//! call masked, that false "menu" report holds until the demuxer's next title
+//! event, about half a second later (Gundam Narrative and Patlabor 2 UHD, B3
+//! logs). A menu report therefore only ends the watch once it has held for
+//! [`MENU_CONFIRM_MS`].
 
 use super::engine::{first_play_skip_allowed, TitleKind};
 
-/// Poll cadence after the initial menu request.
+/// Poll cadence.
 pub const POLL_MS: u64 = 200;
-/// The menu request is repeated every this many polls (2 s).
-pub const RETRY_EVERY_POLLS: u32 = 10;
-/// The watcher gives up after this many polls (15 s).
-pub const MAX_POLLS: u32 = 75;
+/// Poll cadence while the watcher waits for the disc to leave First Play after
+/// the skip, so the menu request follows the title change within a few
+/// milliseconds instead of up to a whole [`POLL_MS`]. The feature that First
+/// Play jumps to is on screen from that title change until the menu call
+/// lands.
+pub const FAST_POLL_MS: u64 = 25;
+/// The fast cadence lasts at most this long after the skip.
+pub const FAST_POLL_WINDOW_MS: u64 = 4_000;
+/// The menu request is repeated on this grid (2 s).
+pub const RETRY_EVERY_MS: u64 = 2_000;
+/// The watcher gives up after this long (15 s).
+pub const WINDOW_MS: u64 = 15_000;
+/// A "menu" report must hold this long before it ends the watch. It is longer
+/// than the roughly half-second a rejected `set_title` report survives.
+pub const MENU_CONFIRM_MS: u64 = 1_000;
 
 /// `bypass_menu` of the session the fallback reopens.
 pub const FALLBACK_BYPASS_MENU: bool = true;
@@ -46,18 +65,40 @@ pub struct Sample {
 /// State carried between polls of one watcher run.
 #[derive(Debug)]
 pub struct Progress {
-    skipped_first_play: bool,
+    skipped_at_ms: Option<u64>,
     retry_after_skip_pending: bool,
-    next_cadence_poll: u32,
+    menu_since_ms: Option<u64>,
+    next_cadence_ms: u64,
 }
 
 impl Default for Progress {
     fn default() -> Self {
         Self {
-            skipped_first_play: false,
+            skipped_at_ms: None,
             retry_after_skip_pending: false,
-            next_cadence_poll: RETRY_EVERY_POLLS,
+            menu_since_ms: None,
+            next_cadence_ms: RETRY_EVERY_MS,
         }
+    }
+}
+
+impl Progress {
+    /// How long to sleep before the next poll, given the time of the last one.
+    pub fn next_poll_ms(&self, now_ms: u64) -> u64 {
+        match self.skipped_at_ms {
+            Some(at)
+                if self.retry_after_skip_pending
+                    && now_ms.saturating_sub(at) < FAST_POLL_WINDOW_MS =>
+            {
+                FAST_POLL_MS
+            }
+            _ => POLL_MS,
+        }
+    }
+
+    /// Start of the current unbroken run of "menu" reports, if one is running.
+    pub fn menu_claim_since_ms(&self) -> Option<u64> {
+        self.menu_since_ms
     }
 }
 
@@ -66,7 +107,8 @@ impl Default for Progress {
 pub enum Decision {
     /// Nothing to do until the next poll.
     Wait,
-    /// The authored menu is showing; stop watching.
+    /// The authored menu has been showing for [`MENU_CONFIRM_MS`]; stop
+    /// watching.
     Reached,
     /// The disc has no authored menu and a feature is playing; stop watching
     /// and let it play.
@@ -77,8 +119,13 @@ pub enum Decision {
     RetryMenu,
 }
 
-/// Decide the next step for poll number `poll` (0-based).
+/// Decide the next step for the poll at `now_ms` (milliseconds since the
+/// watch started).
 ///
+/// - A menu report ends the watch only after it has held without a gap for
+///   [`MENU_CONFIRM_MS`]; until then the watcher waits and sends no further
+///   menu requests. A report that disappears (the VM refused the request) is
+///   forgotten.
 /// - A feature title becoming active does not end the watch while the disc has
 ///   an authored menu that has not appeared yet; only a disc without a menu
 ///   title takes the plain-playback exit.
@@ -86,11 +133,18 @@ pub enum Decision {
 ///   [`first_play_skip_allowed`] says so.
 /// - Once the title has left First Play after that skip, the menu is requested
 ///   again right away (the menu call was masked only while First Play ran);
-///   otherwise requests repeat on the fixed cadence.
-pub fn decide(progress: &mut Progress, poll: u32, s: Sample) -> Decision {
+///   otherwise requests repeat on the fixed [`RETRY_EVERY_MS`] grid.
+pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     if s.at_menu {
-        return Decision::Reached;
+        let since = *progress.menu_since_ms.get_or_insert(now_ms);
+        return if now_ms.saturating_sub(since) >= MENU_CONFIRM_MS {
+            Decision::Reached
+        } else {
+            Decision::Wait
+        };
     }
+    progress.menu_since_ms = None;
+
     if !s.has_menu && s.feature_active {
         return Decision::PlainPlayback;
     }
@@ -98,9 +152,9 @@ pub fn decide(progress: &mut Progress, poll: u32, s: Sample) -> Decision {
         s.has_menu,
         s.kind,
         s.feature_active,
-        progress.skipped_first_play,
+        progress.skipped_at_ms.is_some(),
     ) {
-        progress.skipped_first_play = true;
+        progress.skipped_at_ms = Some(now_ms);
         progress.retry_after_skip_pending = true;
         return Decision::SkipFirstPlay;
     }
@@ -108,8 +162,8 @@ pub fn decide(progress: &mut Progress, poll: u32, s: Sample) -> Decision {
         progress.retry_after_skip_pending = false;
         return Decision::RetryMenu;
     }
-    if poll >= progress.next_cadence_poll {
-        progress.next_cadence_poll += RETRY_EVERY_POLLS;
+    if now_ms >= progress.next_cadence_ms {
+        progress.next_cadence_ms = (now_ms / RETRY_EVERY_MS + 1) * RETRY_EVERY_MS;
         return Decision::RetryMenu;
     }
     Decision::Wait
@@ -127,8 +181,8 @@ pub enum WindowEnd {
     DirectFeature,
 }
 
-/// Decide how the watcher ends once [`MAX_POLLS`] polls found no menu.
-/// `keep_playing` means a title is playing that is worth preserving (a
+/// Decide how the watcher ends once [`WINDOW_MS`] passed without a confirmed
+/// menu. `keep_playing` means a title is playing that is worth preserving (a
 /// feature, or a title long enough to be one); the caller defines it.
 ///
 /// `DirectFeature` is the only outcome that acts, and it needs the menu to be
@@ -153,6 +207,7 @@ mod tests {
     const FIRST_PLAY: TitleKind = TitleKind::FirstPlay {
         duration_ms: 36_035,
     };
+    const FIRST_PLAY_UNKNOWN: TitleKind = TitleKind::FirstPlay { duration_ms: 0 };
     const FEATURE: TitleKind = TitleKind::Other {
         duration_ms: 5_350_345,
     };
@@ -166,16 +221,22 @@ mod tests {
         }
     }
 
-    /// Run the watcher loop over a scripted disc: `script(poll)` is what the
-    /// player reports at that poll. Returns every non-`Wait` decision and
-    /// stops at the first terminal one, like the real thread does.
-    fn run(mut script: impl FnMut(u32) -> Sample) -> Vec<(u32, Decision)> {
+    /// Run the watcher loop over a scripted disc, the way the real thread
+    /// does: sleep [`Progress::next_poll_ms`], sample, decide. `script(t)` is
+    /// what the player reports `t` ms after the watch started. Returns every
+    /// non-`Wait` decision with its time and stops at the first terminal one.
+    fn run(mut script: impl FnMut(u64) -> Sample) -> Vec<(u64, Decision)> {
         let mut progress = Progress::default();
         let mut out = Vec::new();
-        for poll in 0..MAX_POLLS {
-            let d = decide(&mut progress, poll, script(poll));
+        let mut now = 0;
+        loop {
+            now += progress.next_poll_ms(now);
+            if now > WINDOW_MS {
+                break;
+            }
+            let d = decide(&mut progress, now, script(now));
             if d != Decision::Wait {
-                out.push((poll, d));
+                out.push((now, d));
             }
             if matches!(d, Decision::Reached | Decision::PlainPlayback) {
                 break;
@@ -184,22 +245,106 @@ mod tests {
         out
     }
 
+    fn decisions(events: &[(u64, Decision)]) -> Vec<Decision> {
+        events.iter().map(|e| e.1).collect()
+    }
+
+    fn times(events: &[(u64, Decision)]) -> Vec<u64> {
+        events.iter().map(|e| e.0).collect()
+    }
+
+    fn skips(events: &[(u64, Decision)]) -> usize {
+        events
+            .iter()
+            .filter(|e| e.1 == Decision::SkipFirstPlay)
+            .count()
+    }
+
+    /// B3 logs (Gundam Narrative, session 14): the false "menu" report from a
+    /// rejected `set_title` lived from +25 ms to +486 ms.
+    const OBSERVED_FALSE_REPORT_MS: u64 = 486 - 25;
+
+    // The confirmation must outlast the false report with a wide margin, and
+    // the fast cadence must really be faster.
+    const _: () = assert!(MENU_CONFIRM_MS >= 2 * OBSERVED_FALSE_REPORT_MS);
+    const _: () = assert!(FAST_POLL_MS < POLL_MS);
+
     #[test]
     fn timing_constants_match_the_documented_bounds() {
-        assert_eq!(POLL_MS * u64::from(MAX_POLLS), 15_000);
-        assert_eq!(POLL_MS * u64::from(RETRY_EVERY_POLLS), 2_000);
+        assert_eq!(WINDOW_MS, 15_000);
+        assert_eq!(RETRY_EVERY_MS, 2_000);
+        assert_eq!(WINDOW_MS % POLL_MS, 0);
+        assert_eq!(RETRY_EVERY_MS % POLL_MS, 0);
     }
 
     #[test]
-    fn reaching_the_menu_always_stops_the_watch() {
-        let mut p = Progress::default();
+    fn a_steady_menu_ends_the_watch_after_the_confirmation_time() {
+        let events = run(|_| sample(TitleKind::Menu));
+        assert_eq!(events, vec![(POLL_MS + MENU_CONFIRM_MS, Decision::Reached)]);
+    }
+
+    #[test]
+    fn reaching_the_menu_stops_the_watch_whatever_else_is_reported() {
         for kind in [TitleKind::Menu, TitleKind::Unknown, FIRST_PLAY, FEATURE] {
+            let mut p = Progress::default();
             let s = Sample {
                 at_menu: true,
                 ..sample(kind)
             };
-            assert_eq!(decide(&mut p, 5, s), Decision::Reached);
+            // The first report only starts the confirmation; one that has
+            // held long enough ends the watch.
+            assert_eq!(decide(&mut p, 5_000, s), Decision::Wait);
+            assert_eq!(
+                decide(&mut p, 5_000 + MENU_CONFIRM_MS, s),
+                Decision::Reached
+            );
         }
+    }
+
+    #[test]
+    fn a_rejected_set_title_that_reverts_to_first_play_is_not_reached() {
+        // Gundam Narrative as logged in B3 (session 14): the menu request is
+        // rejected while First Play masks it, yet libVLC reports the menu for
+        // about 450 ms. The old watcher ended on that first sample and left
+        // First Play running for 38 s. The claim must be forgotten, and First
+        // Play skipped once its length is known.
+        let events = run(|t| match t {
+            0..=599 => sample(TitleKind::Menu),
+            600..=799 => sample(FIRST_PLAY_UNKNOWN),
+            _ => sample(FIRST_PLAY),
+        });
+        assert!(!decisions(&events).contains(&Decision::Reached));
+        assert_eq!(events[0], (800, Decision::SkipFirstPlay));
+    }
+
+    #[test]
+    fn a_menu_report_that_flickers_never_accumulates_toward_the_confirmation() {
+        // Reported for 800 ms, gone for one poll, reported again: the second
+        // run starts from zero, so the watch is not ended by their sum.
+        let events = run(|t| {
+            if (1_000..1_200).contains(&t) {
+                sample(FIRST_PLAY_UNKNOWN)
+            } else {
+                sample(TitleKind::Menu)
+            }
+        });
+        assert_eq!(events, vec![(1_200 + MENU_CONFIRM_MS, Decision::Reached)]);
+    }
+
+    #[test]
+    fn no_menu_requests_are_sent_while_a_menu_report_is_being_confirmed() {
+        // A cadence tick that falls inside the confirmation window must not
+        // re-send the request; that would restart a menu that is showing.
+        let events = run(|t| {
+            if t >= 1_600 {
+                sample(TitleKind::Menu)
+            } else {
+                sample(FEATURE)
+            }
+        });
+        // The report starts at 1600 ms; the grid tick at 2000 ms falls inside
+        // the confirmation window and sends nothing.
+        assert_eq!(events, vec![(1_600 + MENU_CONFIRM_MS, Decision::Reached)]);
     }
 
     #[test]
@@ -209,7 +354,7 @@ mod tests {
             ..sample(FEATURE)
         };
         assert_eq!(
-            decide(&mut Progress::default(), 3, s),
+            decide(&mut Progress::default(), 600, s),
             Decision::PlainPlayback
         );
     }
@@ -217,49 +362,43 @@ mod tests {
     #[test]
     fn disc_with_a_menu_keeps_trying_while_a_feature_plays() {
         // The feature title is active and the menu has not appeared: no
-        // plain-playback exit, requests continue on the 2 s cadence.
+        // plain-playback exit, requests continue on the 2 s grid.
         let events = run(|_| sample(FEATURE));
-        let polls: Vec<u32> = events.iter().map(|e| e.0).collect();
-        assert_eq!(polls, vec![10, 20, 30, 40, 50, 60, 70]);
+        assert_eq!(
+            times(&events),
+            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+        );
         assert!(events.iter().all(|e| e.1 == Decision::RetryMenu));
     }
 
     #[test]
     fn first_play_is_skipped_exactly_once() {
         let events = run(|_| sample(FIRST_PLAY));
-        let skips = events
-            .iter()
-            .filter(|e| e.1 == Decision::SkipFirstPlay)
-            .count();
-        assert_eq!(skips, 1);
-        assert_eq!(events[0], (0, Decision::SkipFirstPlay));
+        assert_eq!(skips(&events), 1);
+        assert_eq!(events[0], (POLL_MS, Decision::SkipFirstPlay));
     }
 
     #[test]
     fn first_play_with_unknown_length_waits_then_skips_once_known() {
-        let events = run(|poll| {
+        let events = run(|t| {
             sample(TitleKind::FirstPlay {
-                duration_ms: if poll < 3 { 0 } else { 36_035 },
+                duration_ms: if t < 600 { 0 } else { 36_035 },
             })
         });
-        assert_eq!(events[0], (3, Decision::SkipFirstPlay));
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.1 == Decision::SkipFirstPlay)
-                .count(),
-            1
-        );
+        assert_eq!(events[0], (600, Decision::SkipFirstPlay));
+        assert_eq!(skips(&events), 1);
     }
 
     #[test]
     fn first_play_that_never_reports_a_length_is_never_skipped() {
         // Mary-type disc: the First Play length stays 0, so the seek would be
-        // a no-op. Only cadence requests run, then the caller's bounded exit.
-        let events = run(|_| sample(TitleKind::FirstPlay { duration_ms: 0 }));
+        // a no-op. Only grid requests run, then the caller's bounded exit.
+        let events = run(|_| sample(FIRST_PLAY_UNKNOWN));
         assert!(events.iter().all(|e| e.1 == Decision::RetryMenu));
-        let polls: Vec<u32> = events.iter().map(|e| e.0).collect();
-        assert_eq!(polls, vec![10, 20, 30, 40, 50, 60, 70]);
+        assert_eq!(
+            times(&events),
+            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+        );
     }
 
     #[test]
@@ -275,10 +414,7 @@ mod tests {
                 feature_active: false,
                 ..sample(kind)
             });
-            assert!(
-                events.iter().all(|e| e.1 != Decision::SkipFirstPlay),
-                "{kind:?} must not be skipped"
-            );
+            assert_eq!(skips(&events), 0, "{kind:?} must not be skipped");
         }
     }
 
@@ -288,81 +424,127 @@ mod tests {
             has_menu: false,
             ..sample(FIRST_PLAY)
         });
-        assert!(no_menu.iter().all(|e| e.1 != Decision::SkipFirstPlay));
+        assert_eq!(skips(&no_menu), 0);
         let feature = run(|_| Sample {
             feature_active: true,
             ..sample(FIRST_PLAY)
         });
-        assert!(feature.iter().all(|e| e.1 != Decision::SkipFirstPlay));
+        assert_eq!(skips(&feature), 0);
     }
 
     #[test]
     fn leaving_first_play_after_the_skip_requests_the_menu_promptly() {
-        // Gundam Narrative as logged: First Play, seek lands on the feature
-        // title, the menu call works once First Play is gone.
-        let events = run(|poll| match poll {
-            0..=1 => sample(FIRST_PLAY),
-            2..=11 => sample(FEATURE),
+        // Gundam Narrative as logged (session 16): First Play, the seek lands
+        // on the feature title, the menu call works once First Play is gone.
+        // The watcher polls fast after the skip, so the request goes out
+        // within FAST_POLL_MS of the title change.
+        let events = run(|t| match t {
+            0..=699 => sample(FIRST_PLAY),
+            700..=1_699 => sample(FEATURE),
             _ => sample(TitleKind::Menu),
         });
-        assert_eq!(
-            events,
-            vec![
-                (0, Decision::SkipFirstPlay),
-                (2, Decision::RetryMenu),
-                (10, Decision::RetryMenu),
-                (12, Decision::Reached),
-            ]
+        let skip_at = POLL_MS;
+        let retry = events
+            .iter()
+            .find(|e| e.1 == Decision::RetryMenu)
+            .expect("a prompt retry");
+        assert_eq!(events[0], (skip_at, Decision::SkipFirstPlay));
+        assert!(
+            retry.0 >= 700 && retry.0 < 700 + 2 * FAST_POLL_MS,
+            "retry at {} ms",
+            retry.0
         );
+        assert_eq!(events.last().map(|e| e.1), Some(Decision::Reached));
     }
 
     #[test]
-    fn prompt_retry_happens_once_per_skip_and_the_cadence_continues() {
-        let events = run(|poll| {
-            if poll == 0 {
+    fn the_wait_for_the_title_change_is_the_only_fast_polled_phase() {
+        let mut p = Progress::default();
+        // Before the skip: normal cadence.
+        assert_eq!(p.next_poll_ms(0), POLL_MS);
+        assert_eq!(
+            decide(&mut p, POLL_MS, sample(FIRST_PLAY)),
+            Decision::SkipFirstPlay
+        );
+        // Waiting for First Play to end: fast, until the window closes.
+        assert_eq!(p.next_poll_ms(POLL_MS), FAST_POLL_MS);
+        assert_eq!(
+            p.next_poll_ms(POLL_MS + FAST_POLL_WINDOW_MS - 1),
+            FAST_POLL_MS
+        );
+        assert_eq!(p.next_poll_ms(POLL_MS + FAST_POLL_WINDOW_MS), POLL_MS);
+        // Once the retry went out: back to the normal cadence.
+        assert_eq!(decide(&mut p, 900, sample(FEATURE)), Decision::RetryMenu);
+        assert_eq!(p.next_poll_ms(900), POLL_MS);
+    }
+
+    #[test]
+    fn prompt_retry_happens_once_per_skip_and_the_grid_continues() {
+        let events = run(|t| {
+            if t < 400 {
                 sample(FIRST_PLAY)
             } else {
                 sample(FEATURE)
             }
         });
-        let polls: Vec<u32> = events.iter().map(|e| e.0).collect();
-        assert_eq!(polls, vec![0, 1, 10, 20, 30, 40, 50, 60, 70]);
+        let kinds = decisions(&events);
+        assert_eq!(kinds[0], Decision::SkipFirstPlay);
+        assert_eq!(kinds[1], Decision::RetryMenu);
+        assert!(events[1].0 < 400 + 2 * FAST_POLL_MS);
+        // Everything after the prompt retry is on the 2 s grid.
+        assert_eq!(
+            times(&events[2..]),
+            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+        );
     }
 
     #[test]
     fn a_skip_that_does_not_leave_first_play_is_not_repeated() {
         // The seek had no effect: First Play keeps running for the whole
-        // bound. One skip, then only cadence requests; the caller's fallback
-        // takes over after MAX_POLLS.
+        // bound. One skip, then only grid requests; the caller's fallback
+        // takes over after WINDOW_MS.
         let events = run(|_| sample(FIRST_PLAY));
-        let kinds: Vec<Decision> = events.iter().map(|e| e.1).collect();
+        let kinds = decisions(&events);
         assert_eq!(kinds[0], Decision::SkipFirstPlay);
         assert!(kinds[1..].iter().all(|d| *d == Decision::RetryMenu));
-        let polls: Vec<u32> = events.iter().skip(1).map(|e| e.0).collect();
-        assert_eq!(polls, vec![10, 20, 30, 40, 50, 60, 70]);
+        assert_eq!(
+            times(&events[1..]),
+            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+        );
     }
 
     #[test]
     fn first_play_returning_after_the_skip_is_not_skipped_again() {
-        let events = run(|poll| match poll {
-            0 => sample(FIRST_PLAY),
-            1..=4 => sample(FEATURE),
+        let events = run(|t| match t {
+            0..=299 => sample(FIRST_PLAY),
+            300..=999 => sample(FEATURE),
             _ => sample(FIRST_PLAY),
         });
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.1 == Decision::SkipFirstPlay)
-                .count(),
-            1
-        );
+        assert_eq!(skips(&events), 1);
     }
 
     #[test]
     fn requests_never_exceed_the_bound() {
         let events = run(|_| sample(FEATURE));
-        assert!(events.iter().all(|e| e.0 < MAX_POLLS));
-        assert!(events.len() <= (MAX_POLLS / RETRY_EVERY_POLLS) as usize + 2);
+        assert!(events.iter().all(|e| e.0 <= WINDOW_MS));
+        assert!(events.len() <= (WINDOW_MS / RETRY_EVERY_MS) as usize + 2);
+    }
+
+    #[test]
+    fn the_grid_does_not_burst_after_a_long_confirmation() {
+        // A confirmation that hid several grid ticks must not make the next
+        // poll send one request per missed tick.
+        let mut p = Progress::default();
+        let menu = Sample {
+            at_menu: true,
+            ..sample(TitleKind::Menu)
+        };
+        assert_eq!(decide(&mut p, 1_900, menu), Decision::Wait);
+        assert_eq!(decide(&mut p, 2_100, menu), Decision::Wait);
+        assert_eq!(decide(&mut p, 2_300, sample(FEATURE)), Decision::RetryMenu);
+        assert_eq!(decide(&mut p, 2_500, sample(FEATURE)), Decision::Wait);
+        assert_eq!(decide(&mut p, 3_900, sample(FEATURE)), Decision::Wait);
+        assert_eq!(decide(&mut p, 4_000, sample(FEATURE)), Decision::RetryMenu);
     }
 
     #[test]
