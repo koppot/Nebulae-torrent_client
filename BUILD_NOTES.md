@@ -34,13 +34,16 @@ From the repository root:
 ./scripts/bundle-macos-transmission.sh               # engine/transmission: daemon, libraries, notices, smoke test
 ./scripts/bundle-macos-vlc.sh aarch64-apple-darwin   # vlc: build, stage, verify
 find src-tauri/resources -name .DS_Store -type f -print -delete
-pnpm tauri build
-./scripts/verify-macos-app.sh src-tauri/target/release/bundle/macos/Nebulae.app
+pnpm tauri build --bundles app
+./scripts/sign-macos-app.sh src-tauri/target/release/bundle/macos/Nebulae.app      # local candidates: ad-hoc seal
+NEBULAE_REQUIRE_SEALED=1 ./scripts/verify-macos-app.sh src-tauri/target/release/bundle/macos/Nebulae.app
 ```
 
 `beforeBuildCommand` in `tauri.conf.json` is only `pnpm build` (the frontend). It does **not** stage the runtime: run the two bundle scripts first, or the app is built with whatever is already in `src-tauri/resources/`. The `.DS_Store` line is there because `"resources": ["resources/**/*"]` copies hidden files into the app. The staging scripts delete them too, and `verify-macos-app.sh` fails if one reaches the bundle.
 
-The build may end with an updater-signing error when `TAURI_SIGNING_PRIVATE_KEY` is unset. The `.app` and `.dmg` are already produced at that point, so for a local build that error is expected.
+The build may end with an updater-signing error when `TAURI_SIGNING_PRIVATE_KEY` is unset. The `.app` is already produced at that point (the error comes after `Finished 1 bundle`), so for a local build that error is expected; the updater archive is simply not signed.
+
+**Signing.** `tauri build` seals the bundle only when a signing identity is configured. Without one the executable keeps just the linker's ad-hoc signature and the bundle is unsealed (`Sealed Resources=none`), so `codesign --verify --deep --strict` fails on it. `sign-macos-app.sh` seals a local build with an ad-hoc signature, inside out: it first requires every nested Mach-O image to verify on its own (the staging scripts sign what they rewrite), then runs `codesign --force --deep --sign -`, which signs the executables in `Contents/MacOS` and then the bundle and seals the hash of every file in `Contents/Resources`, and finally verifies the result. Signing changes the executable's SHA-256, so measure the executable after it. The release and candidate workflows configure no identity; their apps stay unsealed, and `verify-macos-app.sh` reports that as a note (`NEBULAE_REQUIRE_SEALED=1` turns it into a failure).
 
 `./scripts/bundle-macos-vlc.sh x86_64-apple-darwin` stages the **unmodified** official Intel VLC 3.0.23 instead. Nebulae's patches are not in it, because the patched runtime needs Homebrew libraries of the build machine's architecture and the x86_64 leg runs on an arm64 runner. The script says so in its log and as a workflow warning.
 
@@ -56,7 +59,9 @@ The build may end with an updater-signing error when `TAURI_SIGNING_PRIVATE_KEY`
 | `scripts/bundle-macos-transmission.sh` | Builds the identity-patched daemon from the pinned source, relocates its libraries, audits, writes the licenses and runs a loopback smoke test in a temporary profile. |
 | `scripts/relocate-macos-dylibs.py` | Copies a dependency closure into the bundle, rewrites each load command, signs what it changed and records `bundled-libraries.json`. |
 | `scripts/audit-macos-bundle.py` | Recursive Mach-O audit of a directory or an app (below). |
-| `scripts/verify-macos-app.sh APP` | Final gate for a built app: no `.DS_Store`, strict audit, minimum-macOS advice, `codesign --verify --deep --strict`, and every VLC and Transmission file equal to what the staging scripts recorded. |
+| `scripts/check-macos-signatures.py APP` | Verifies every nested Mach-O image of an app with `codesign --verify --strict`, one by one (the main executable is covered by the bundle verification). A seal records file hashes; it does not validate the signature of a Mach-O file inside it. |
+| `scripts/sign-macos-app.sh APP` | Ad-hoc seal of a local build, inside out (see Signing above). |
+| `scripts/verify-macos-app.sh APP` | Final gate for a built app: no `.DS_Store`, strict audit, minimum-macOS advice, the signature checks (every nested image; the bundle when it is sealed), and every VLC and Transmission file equal to what the staging scripts recorded. |
 
 ### The audit
 

@@ -661,9 +661,16 @@ workflows; the installed app was not edited by hand. No GitHub workflow was run.
   to a file first.
 * `scripts/verify-macos-app.sh APP` is the gate for a built app: no Finder or
   AppleDouble files, the strict audit with `--strict-strings`, an advice list of
-  images that need a newer macOS than the app declares, `codesign --verify
-  --deep --strict`, and the VLC and Transmission files compared with
-  `build-manifest.json` and `bundled-libraries.json`.
+  images that need a newer macOS than the app declares, the signature checks
+  (every nested image on its own through `scripts/check-macos-signatures.py`, and
+  `codesign --verify --deep --strict` when the bundle is sealed), and the VLC and
+  Transmission files compared with `build-manifest.json` and
+  `bundled-libraries.json`.
+* `scripts/sign-macos-app.sh APP` seals a local build with an ad-hoc signature,
+  inside out: every nested image must verify first, then `codesign --force --deep
+  --sign -` signs `Contents/MacOS` and the bundle and seals the hash of each file
+  in `Contents/Resources`, then the result is verified. It rewrites nothing in
+  `Contents/Resources` (checked by hashing the app before and after).
 * `bluray_meta.rs`: a release build loads only the libbluray in the bundle. The
   Homebrew and `/usr/local` fallback paths are compiled into debug builds only.
 
@@ -695,6 +702,15 @@ workflows; the installed app was not edited by hand. No GitHub workflow was run.
   with `libvlc.`, which includes both `libvlccore.9.dylib` and the copy named
   `libvlccore.dylib`. The B3 app did the same and played discs; it was not
   examined further here.
+* **Unsealed CI bundles.** Without a signing identity `tauri build` leaves the
+  bundle unsealed (`Sealed Resources=none`), so `codesign --verify --deep
+  --strict` fails on what the workflows build. The first real build of this
+  repair showed that the verification step added to the workflows would have
+  failed on it; `verify-macos-app.sh` now reports an unsealed bundle as a note
+  (`NEBULAE_REQUIRE_SEALED=1` makes it fatal) and still checks every nested
+  image. The workflows' artifacts are unchanged by this repair, still unsealed.
+* **The JRE.** The workflows still fetch the Temurin 21 JRE from the Adoptium
+  `latest/21/ga` endpoint, which no hash pins. This repair did not change that.
 * **Notices.** `THIRD-PARTY-NOTICES.md` is not shipped inside the app. The license
   texts of the components that this repair bundles are in `vlc/licenses/` and
   `engine/transmission/licenses/`; the Tailscale license text and the notices file

@@ -15,7 +15,12 @@
 #      cannot be resolved inside it, one architecture throughout. Images that
 #      declare a newer minimum macOS than the app are reported as advice only
 #      (NEBULAE_ENFORCE_MINOS=1 makes them fatal).
-#   3. An intact code signature (codesign --verify --deep --strict).
+#   3. Code signatures: every nested Mach-O image verifies on its own
+#      (scripts/check-macos-signatures.py), and a sealed bundle verifies as a
+#      whole (codesign --verify --deep --strict). "tauri build" without a signing
+#      identity leaves the bundle unsealed; that is reported as a note, and
+#      scripts/sign-macos-app.sh seals a local build. NEBULAE_REQUIRE_SEALED=1
+#      makes an unsealed bundle fatal.
 #   4. The VLC runtime and the Transmission libraries inside the app are exactly
 #      the files recorded in build-manifest.json and bundled-libraries.json when
 #      they were staged: same hashes, nothing missing, nothing extra.
@@ -81,12 +86,28 @@ else
     fi
 fi
 
-echo "--- Code signature"
-if codesign --verify --deep --strict "$APP" 2>&1; then
-    echo "OK: signature valid"
+echo "--- Code signatures"
+if python3 -B "$SCRIPT_DIR/check-macos-signatures.py" "$APP"; then
+    echo "OK: every nested image verifies on its own"
 else
-    echo "FAIL: code signature does not verify"
+    echo "FAIL: nested images without a valid signature (above)"
     status=1
+fi
+if [ -f "$APP/Contents/_CodeSignature/CodeResources" ]; then
+    if codesign --verify --deep --strict "$APP" 2>&1; then
+        echo "OK: the bundle is sealed and its signature is valid"
+    else
+        echo "FAIL: the bundle's code signature does not verify"
+        status=1
+    fi
+else
+    echo "NOTE: the bundle is not sealed. Without a signing identity, tauri build leaves the executable with"
+    echo "      the linker's ad-hoc signature only, so codesign --verify --deep cannot pass. scripts/sign-macos-app.sh"
+    echo "      seals a local build; the comparison against the staged files below still applies."
+    if [ "${NEBULAE_REQUIRE_SEALED:-0}" = "1" ]; then
+        echo "FAIL: NEBULAE_REQUIRE_SEALED=1"
+        status=1
+    fi
 fi
 
 echo "--- Staged files against their manifests"

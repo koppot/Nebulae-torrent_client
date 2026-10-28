@@ -365,11 +365,14 @@ jobs:
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}
 
-      # Dependency audit of every Mach-O image in the built app, signature check,
-      # and a comparison of the bundled VLC and Transmission files with what the
-      # staging scripts recorded. The x86_64 leg runs on an arm64 runner and
-      # bundles helpers built for the runner, so its findings are reported but do
-      # not stop the release (see scripts/bundle-macos-vlc.sh).
+      # Dependency audit of every Mach-O image in the built app, a signature
+      # check of each nested image, and a comparison of the bundled VLC and
+      # Transmission files with what the staging scripts recorded. No signing
+      # identity is configured here, so tauri build leaves the bundle itself
+      # unsealed; the script reports that as a note, it is not a failure. The
+      # x86_64 leg runs on an arm64 runner and bundles helpers built for the
+      # runner, so its findings are reported but do not stop the release (see
+      # scripts/bundle-macos-vlc.sh).
       - name: Verify the macOS app bundle
         if: runner.os == 'macOS'
         continue-on-error: ${{ matrix.target != 'aarch64-apple-darwin' }}

@@ -268,8 +268,10 @@ jobs:
         if: runner.os != 'Linux'
         run: pnpm tauri build ${{ matrix.args }}
 
-      # The x86_64 leg runs on an arm64 runner and bundles helpers built for the
-      # runner, so its findings are reported but do not fail the candidate (see
+      # No signing identity is configured, so the bundle itself stays unsealed
+      # (reported as a note); each nested image is still checked. The x86_64 leg
+      # runs on an arm64 runner and bundles helpers built for the runner, so its
+      # findings are reported but do not fail the candidate (see
       # scripts/bundle-macos-vlc.sh).
       - name: Verify the macOS app bundle
         if: runner.os == 'macOS'
