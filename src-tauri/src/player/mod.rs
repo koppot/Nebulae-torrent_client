@@ -24,6 +24,7 @@ pub use embed_macos::{
 pub mod bluray_meta;
 pub mod dvd_meta;
 pub mod letterbox;
+pub mod menu_watch;
 
 #[cfg(target_os = "windows")]
 pub use embed_windows::{

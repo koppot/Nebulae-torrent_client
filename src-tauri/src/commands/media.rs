@@ -5,6 +5,7 @@ use crate::player::embed_macos::{force_apply_edr, maybe_apply_edr, overlay_app_h
 use crate::player::embed_windows::{force_apply_edr, maybe_apply_edr, overlay_app_handle};
 use crate::player::engine;
 use crate::player::engine::{is_menu_title, VlcSession};
+use crate::player::menu_watch;
 use crate::player::PlayerState;
 use crate::utils::disc_detector::{DiscDetector, DiscStructureInfo};
 use crate::utils::media_parser::{MediaTitleParser, ParsedMediaMetadata};
@@ -717,7 +718,7 @@ fn start_playback_inner(
                         resolved.is_disc
                     );
                     if resolved.is_disc && !resume {
-                        if !bypass_menu {
+                        if menu_watch::startup_watchers_enabled(bypass_menu) {
                             // AUTHORED MENU WATCHER:
                             // On normal disc Open, commercial Blu-rays/UHDs often execute First Play
                             // which chains directly into Title 1 (Play All: e.g. Fuuka D1 13,546s)
@@ -725,7 +726,9 @@ fn start_playback_inner(
                             // We poll at a tight 20ms cadence for demuxer readiness, dispatch
                             // navigate_menu immediately, and if First Play masks menu calls
                             // (menu_call_mask=1, e.g. Patlabor 2 UHD 76s logo chain), seek to the
-                            // end of First Play (0.99) so it triggers its authored JumpTitle 0 into Top Menu.
+                            // end of First Play (0.99) once so it triggers its authored JumpTitle 0
+                            // into Top Menu. The seek is gated by menu_watch::decide: a positively
+                            // identified First Play with a known length on a disc that has a menu.
                             let app_menu = app.clone();
                             let menu_gen =
                                 state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
@@ -899,9 +902,18 @@ fn start_playback_inner(
                                     }
                                 }
 
-                                // Poll up to 15s (75 * 200ms) for authored menu or confirmed feature.
-                                for i in 0..75 {
-                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                // Poll for up to 15s (MAX_POLLS * POLL_MS). menu_watch::decide
+                                // says each poll whether to wait, repeat the menu request
+                                // (every 2s) or seek First Play to its end once. The watch
+                                // ends at the authored menu, or on a disc without a menu once
+                                // a feature plays; a feature that starts on a disc WITH a
+                                // menu does not end it.
+                                let mut progress = menu_watch::Progress::default();
+                                let mut logged_kind = None;
+                                for i in 0..menu_watch::MAX_POLLS {
+                                    std::thread::sleep(std::time::Duration::from_millis(
+                                        menu_watch::POLL_MS,
+                                    ));
                                     let gen_now =
                                         state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                                     if gen_now != menu_gen || !*poison(&state.started) {
@@ -915,38 +927,74 @@ fn start_playback_inner(
                                         return;
                                     }
 
-                                    // Outcome A: Authored menu reached safely
-                                    if unsafe { engine::is_menu_title(&lib, mp) } {
+                                    let t_ms = u64::from(i) * menu_watch::POLL_MS;
+                                    let kind = unsafe { engine::current_title_kind(&lib, mp) };
+                                    if logged_kind != Some(kind) {
                                         tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{}ms) [Outcome A]",
-                                        i * 200
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): iteration {i} (T+{t_ms}ms): current title {kind:?}, has_menu={has_menu}"
                                     );
-                                        return;
+                                        logged_kind = Some(kind);
                                     }
-
-                                    // Outcome B: Confirmed active feature playback engaged on discs without a menu
-                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
-                                        let cur = unsafe {
-                                            (lib.libvlc_media_player_get_title)(mp as *mut c_void)
-                                        };
-                                        let len = unsafe {
-                                            (lib.libvlc_media_player_get_length)(mp as *mut c_void)
-                                        };
-                                        tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at iteration {i} (T+{}ms) [Outcome B]; stopping startup watcher",
-                                        i * 200
-                                    );
-                                        return;
-                                    }
-
-                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU / set_title every 2s.
-                                    if i > 0 && i % 10 == 0 {
-                                        tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at iteration {i}"
-                                    );
-                                        nav_menu();
+                                    let sample = menu_watch::Sample {
+                                        at_menu: kind == engine::TitleKind::Menu,
+                                        has_menu,
+                                        kind,
+                                        feature_active: unsafe {
+                                            engine::is_active_feature_playback(&lib, mp)
+                                        },
+                                    };
+                                    match menu_watch::decide(&mut progress, i, sample) {
+                                        menu_watch::Decision::Wait => {}
+                                        menu_watch::Decision::Reached => {
+                                            // Outcome A: Authored menu reached safely
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at iteration {i} (T+{t_ms}ms) [Outcome A]"
+                                        );
+                                            return;
+                                        }
+                                        menu_watch::Decision::PlainPlayback => {
+                                            // Outcome B: Confirmed active feature playback engaged on discs without a menu
+                                            let cur = unsafe {
+                                                (lib.libvlc_media_player_get_title)(
+                                                    mp as *mut c_void,
+                                                )
+                                            };
+                                            let len = unsafe {
+                                                (lib.libvlc_media_player_get_length)(
+                                                    mp as *mut c_void,
+                                                )
+                                            };
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback confirmed active on title {cur} (length_ms={len}) at iteration {i} (T+{t_ms}ms) [Outcome B]; stopping startup watcher"
+                                        );
+                                            return;
+                                        }
+                                        menu_watch::Decision::SkipFirstPlay => {
+                                            // First Play masks menu calls (menu_call_mask=1); finishing it
+                                            // lets the disc run its own jump to the menu. Decided at most
+                                            // once per watcher run.
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): First Play identified ({kind:?}) at iteration {i} (T+{t_ms}ms); seeking near its end (0.99) once to reach the menu"
+                                        );
+                                            unsafe {
+                                                (lib.libvlc_media_player_set_position)(
+                                                    mp as *mut c_void,
+                                                    0.99,
+                                                );
+                                            }
+                                        }
+                                        menu_watch::Decision::RetryMenu => {
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at iteration {i} (T+{t_ms}ms)"
+                                        );
+                                            nav_menu();
+                                        }
                                     }
                                 }
+                                tracing::info!(
+                                "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms",
+                                menu_watch::POLL_MS * u64::from(menu_watch::MAX_POLLS)
+                            );
 
                                 // Bounded startup window (15s) elapsed.
                                 let gen_now =
@@ -968,51 +1016,66 @@ fn start_playback_inner(
                                 let cur_len = unsafe {
                                     (lib.libvlc_media_player_get_length)(mp as *mut c_void)
                                 };
-
-                                if unsafe { engine::is_menu_title(&lib, mp) } {
-                                    tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc at authored menu at 15s exit [Outcome A]"
-                                );
-                                    return;
-                                }
-
-                                if is_playing
+                                let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                let keep_playing = is_playing
                                     && (cur_len >= 120_000
-                                        || unsafe { engine::is_active_feature_playback(&lib, mp) })
-                                {
-                                    tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur_title} (length_ms={cur_len}) at 15s exit [Outcome B]; preserving playback"
-                                );
-                                    return;
-                                }
+                                        || unsafe { engine::is_active_feature_playback(&lib, mp) });
 
-                                // Outcome C: Menu startup did not complete and no usable playback is active.
-                                // Use safe bounded main-feature fallback: reopen the disc with bypass_menu=true.
-                                let disc_path = poison(&state.current_resolved)
-                                    .clone()
-                                    .or_else(|| poison(&state.current_path).clone());
-                                if let Some(path) = disc_path {
-                                    tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete on static/intro title {cur_title}; falling back to direct main-feature playback [Outcome C]"
-                                );
-                                    let app_fallback = app_menu.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        use tauri::Manager;
-                                        let s = app_fallback.state::<PlayerState>();
-                                        let _ = player_open_inner(
-                                            &app_fallback,
-                                            &s,
-                                            path,
-                                            false,
-                                            None,
-                                            true,
-                                        )
-                                        .await;
-                                    });
-                                } else {
-                                    tracing::warn!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no disc path found [Outcome None]; leaving recoverable player state"
-                                );
+                                match menu_watch::window_end(at_menu, keep_playing) {
+                                    menu_watch::WindowEnd::AtMenu => {
+                                        tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc at authored menu at 15s exit [Outcome A]"
+                                    );
+                                    }
+                                    menu_watch::WindowEnd::KeepPlaying => {
+                                        tracing::info!(
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): feature playback active on title {cur_title} (length_ms={cur_len}) at 15s exit [Outcome B]; preserving playback"
+                                    );
+                                    }
+                                    menu_watch::WindowEnd::DirectFeature => {
+                                        // Outcome C: Menu startup did not complete and no usable playback is active.
+                                        // Safe bounded main-feature fallback: reopen the disc ONCE with
+                                        // bypass_menu=true. That session starts no menu or warning
+                                        // watcher (menu_watch::startup_watchers_enabled), so this
+                                        // fallback cannot trigger itself again.
+                                        let disc_path = poison(&state.current_resolved)
+                                            .clone()
+                                            .or_else(|| poison(&state.current_path).clone());
+                                        if let Some(path) = disc_path {
+                                            tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete on static/intro title {cur_title}; falling back to direct main-feature playback [Outcome C]"
+                                        );
+                                            let app_fallback = app_menu.clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                use tauri::Manager;
+                                                let s = app_fallback.state::<PlayerState>();
+                                                // Something else may have been opened while this task was queued;
+                                                // never replace it with the disc that timed out.
+                                                if s.session_gen
+                                                    .load(std::sync::atomic::Ordering::SeqCst)
+                                                    != menu_gen
+                                                {
+                                                    tracing::info!(
+                                                    "[menu-diag] menu watcher (session_gen={menu_gen}): session changed before the fallback reopen; dropping it"
+                                                );
+                                                    return;
+                                                }
+                                                let _ = player_open_inner(
+                                                    &app_fallback,
+                                                    &s,
+                                                    path,
+                                                    false,
+                                                    None,
+                                                    menu_watch::FALLBACK_BYPASS_MENU,
+                                                )
+                                                .await;
+                                            });
+                                        } else {
+                                            tracing::warn!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no disc path found [Outcome None]; leaving recoverable player state"
+                                        );
+                                        }
+                                    }
                                 }
                             });
 

@@ -199,37 +199,119 @@ pub unsafe fn has_menu_title(lib: &VlcLib, mp: usize) -> bool {
     find_menu_title(lib, mp).is_some()
 }
 
-/// Return true if the currently active title is First Play or a short intro clip (<= 300s).
+/// One entry of libvlc's title list, copied out of FFI-owned memory so the
+/// classification below can be unit-tested without a live player.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleSnapshot {
+    pub duration_ms: i64,
+    pub flags: u32,
+    pub name: Option<String>,
+}
+
+/// What VLC's own title list says the current title is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleKind {
+    /// No title list yet, or the demuxer has not selected a title.
+    Unknown,
+    /// The authored Top Menu (INPUT_TITLE_MENU).
+    Menu,
+    /// The Blu-ray First Play title. `duration_ms` is 0 until its playlist
+    /// has started.
+    FirstPlay { duration_ms: i64 },
+    /// Any other title: feature, intro clip, extra, DVD title.
+    Other { duration_ms: i64 },
+}
+
+/// Classify the current title from VLC's title list.
+///
+/// First Play is identified positively, and only for the layout that VLC's
+/// bluray demux builds with menus enabled (3.0.x modules/access/bluray.c,
+/// blurayInitTitles and BD_EVENT_TITLE): entry 0 is the Top Menu flagged
+/// INPUT_TITLE_MENU, the LAST entry is named "First Play", and the current
+/// title index is that last entry while First Play runs. A title number or a
+/// short duration never qualifies on its own, and a name that VLC has
+/// localized fails closed (the title is reported as `Other`).
+pub fn classify_current_title(titles: &[TitleSnapshot], current: i32) -> TitleKind {
+    let Some(t) = usize::try_from(current).ok().and_then(|i| titles.get(i)) else {
+        return TitleKind::Unknown;
+    };
+    if t.flags & INPUT_TITLE_MENU != 0 {
+        return TitleKind::Menu;
+    }
+    let is_last = current as usize + 1 == titles.len();
+    let menu_layout = titles.len() >= 2 && titles[0].flags & INPUT_TITLE_MENU != 0;
+    let named_first_play = t
+        .name
+        .as_deref()
+        .is_some_and(|n| n.trim().eq_ignore_ascii_case("first play"));
+    if is_last && menu_layout && named_first_play {
+        TitleKind::FirstPlay {
+            duration_ms: t.duration_ms,
+        }
+    } else {
+        TitleKind::Other {
+            duration_ms: t.duration_ms,
+        }
+    }
+}
+
+/// May the startup menu watcher skip to the end of First Play?
+///
+/// Requires an authored menu, a positively identified First Play whose
+/// playlist length is already known (before that the seek is a no-op and
+/// would waste the single attempt), no active feature playback, and no
+/// earlier skip in this session.
+pub fn first_play_skip_allowed(
+    has_menu: bool,
+    kind: TitleKind,
+    feature_active: bool,
+    already_skipped: bool,
+) -> bool {
+    has_menu
+        && !feature_active
+        && !already_skipped
+        && matches!(kind, TitleKind::FirstPlay { duration_ms } if duration_ms > 0)
+}
+
+/// Copy libvlc's title list and the current title index.
 ///
 /// # Safety
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
-pub unsafe fn is_first_play_or_intro(lib: &VlcLib, mp: usize) -> bool {
+pub unsafe fn snapshot_titles(lib: &VlcLib, mp: usize) -> Option<(Vec<TitleSnapshot>, i32)> {
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
     if n <= 0 || titles.is_null() {
-        return false;
+        return None;
     }
     let current = (lib.libvlc_media_player_get_title)(m);
-    if current < 0 || current >= n {
-        (lib.libvlc_title_descriptions_release)(titles, n);
-        return false;
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let t = &**titles.add(i as usize);
+        let name = if t.psz_name.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr(t.psz_name).to_string_lossy().into_owned())
+        };
+        out.push(TitleSnapshot {
+            duration_ms: t.i_duration,
+            flags: t.i_flags,
+            name,
+        });
     }
-    let t = &**titles.add(current as usize);
-    let cur_len = (lib.libvlc_media_player_get_length)(m);
-    let effective_dur = cur_len.max(t.i_duration);
-    let dur_s = effective_dur / 1000;
-    let is_short = dur_s <= 300;
-    let is_named_fp = if !t.psz_name.is_null() {
-        let cstr = std::ffi::CStr::from_ptr(t.psz_name);
-        cstr.to_string_lossy()
-            .to_ascii_lowercase()
-            .contains("first play")
-    } else {
-        false
-    };
     (lib.libvlc_title_descriptions_release)(titles, n);
-    is_named_fp || (effective_dur > 0 && is_short)
+    Some((out, current))
+}
+
+/// Classify the player's current title. `Unknown` when libvlc has no list.
+///
+/// # Safety
+/// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
+pub unsafe fn current_title_kind(lib: &VlcLib, mp: usize) -> TitleKind {
+    match snapshot_titles(lib, mp) {
+        Some((titles, current)) => classify_current_title(&titles, current),
+        None => TitleKind::Unknown,
+    }
 }
 
 /// Return true if the player is actively playing a confirmed feature title
@@ -1203,5 +1285,161 @@ mod tests {
         let path = "/Volumes/Media/Fuuka (2017)/FUUKA_CS_D1";
         let encoded = encode_mrl_path(path);
         assert_eq!(encoded, "/Volumes/Media/Fuuka%20%282017%29/FUUKA_CS_D1");
+    }
+
+    fn snap(name: Option<&str>, flags: u32, duration_ms: i64) -> TitleSnapshot {
+        TitleSnapshot {
+            duration_ms,
+            flags,
+            name: name.map(String::from),
+        }
+    }
+
+    /// Title list VLC's bluray demux builds with menus enabled for a disc with
+    /// one HDMV title (Gundam Narrative as logged: First Play 36 s, interactive).
+    fn bd_menu_layout(first_play_ms: i64) -> Vec<TitleSnapshot> {
+        vec![
+            snap(
+                Some("Top Menu"),
+                INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE,
+                0,
+            ),
+            snap(None, INPUT_TITLE_INTERACTIVE, 0),
+            snap(Some("First Play"), INPUT_TITLE_INTERACTIVE, first_play_ms),
+        ]
+    }
+
+    #[test]
+    fn first_play_is_identified_from_the_menu_layout() {
+        let titles = bd_menu_layout(36_000);
+        assert_eq!(
+            classify_current_title(&titles, 2),
+            TitleKind::FirstPlay {
+                duration_ms: 36_000
+            }
+        );
+        // Length unknown until the First Play playlist starts.
+        assert_eq!(
+            classify_current_title(&bd_menu_layout(0), 2),
+            TitleKind::FirstPlay { duration_ms: 0 }
+        );
+    }
+
+    #[test]
+    fn menu_and_feature_titles_are_not_first_play() {
+        let titles = bd_menu_layout(36_000);
+        assert_eq!(classify_current_title(&titles, 0), TitleKind::Menu);
+        assert_eq!(
+            classify_current_title(&titles, 1),
+            TitleKind::Other { duration_ms: 0 }
+        );
+    }
+
+    #[test]
+    fn duration_or_position_alone_never_identifies_first_play() {
+        // A short intro clip and the last entry of a list without the
+        // Top Menu / "First Play" layout stay `Other`.
+        let mut titles = bd_menu_layout(36_000);
+        titles[1] = snap(None, INPUT_TITLE_INTERACTIVE, 60_000);
+        assert_eq!(
+            classify_current_title(&titles, 1),
+            TitleKind::Other {
+                duration_ms: 60_000
+            }
+        );
+        let dvd_like = vec![snap(None, 0, 5_400_000), snap(None, 0, 90_000)];
+        assert_eq!(
+            classify_current_title(&dvd_like, 1),
+            TitleKind::Other {
+                duration_ms: 90_000
+            }
+        );
+    }
+
+    #[test]
+    fn first_play_name_without_the_menu_layout_is_not_enough() {
+        let mut titles = bd_menu_layout(36_000);
+        titles[0] = snap(Some("Title 0"), INPUT_TITLE_INTERACTIVE, 0);
+        assert_eq!(
+            classify_current_title(&titles, 2),
+            TitleKind::Other {
+                duration_ms: 36_000
+            }
+        );
+        // "First Play" on a title that is not the last entry.
+        let mut titles = bd_menu_layout(36_000);
+        titles[1] = snap(Some("First Play"), INPUT_TITLE_INTERACTIVE, 36_000);
+        assert_eq!(
+            classify_current_title(&titles, 1),
+            TitleKind::Other {
+                duration_ms: 36_000
+            }
+        );
+    }
+
+    #[test]
+    fn localized_or_missing_first_play_name_fails_closed() {
+        let mut titles = bd_menu_layout(36_000);
+        titles[2] = snap(Some("Premier lancement"), INPUT_TITLE_INTERACTIVE, 36_000);
+        assert_eq!(
+            classify_current_title(&titles, 2),
+            TitleKind::Other {
+                duration_ms: 36_000
+            }
+        );
+        titles[2] = snap(None, INPUT_TITLE_INTERACTIVE, 36_000);
+        assert_eq!(
+            classify_current_title(&titles, 2),
+            TitleKind::Other {
+                duration_ms: 36_000
+            }
+        );
+        // VLC's own spelling is matched case-insensitively and trimmed.
+        titles[2] = snap(Some(" first PLAY "), INPUT_TITLE_INTERACTIVE, 36_000);
+        assert_eq!(
+            classify_current_title(&titles, 2),
+            TitleKind::FirstPlay {
+                duration_ms: 36_000
+            }
+        );
+    }
+
+    #[test]
+    fn unavailable_title_state_is_unknown() {
+        let titles = bd_menu_layout(36_000);
+        assert_eq!(classify_current_title(&titles, -1), TitleKind::Unknown);
+        assert_eq!(classify_current_title(&titles, 3), TitleKind::Unknown);
+        assert_eq!(classify_current_title(&[], 0), TitleKind::Unknown);
+    }
+
+    #[test]
+    fn first_play_skip_requires_every_condition() {
+        let fp = TitleKind::FirstPlay {
+            duration_ms: 36_000,
+        };
+        assert!(first_play_skip_allowed(true, fp, false, false));
+        // No authored menu to reach.
+        assert!(!first_play_skip_allowed(false, fp, false, false));
+        // Feature playback is active.
+        assert!(!first_play_skip_allowed(true, fp, true, false));
+        // One skip per session.
+        assert!(!first_play_skip_allowed(true, fp, false, true));
+        // First Play playlist not started: the seek would be a no-op.
+        assert!(!first_play_skip_allowed(
+            true,
+            TitleKind::FirstPlay { duration_ms: 0 },
+            false,
+            false
+        ));
+        // Anything that is not positively First Play.
+        for kind in [
+            TitleKind::Unknown,
+            TitleKind::Menu,
+            TitleKind::Other {
+                duration_ms: 36_000,
+            },
+        ] {
+            assert!(!first_play_skip_allowed(true, kind, false, false));
+        }
     }
 }
