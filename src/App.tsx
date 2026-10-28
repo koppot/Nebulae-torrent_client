@@ -81,7 +81,14 @@ export const App: React.FC = () => {
       invoke('log_frontend', {
         message: `[frontend-diag] playerStore.open invoked from player-opened: gen=${e.payload.gen} path=${e.payload.resolved_path}`,
       }).catch(() => {});
-      playerStore.open(e.payload, featureLabelForPath(e.payload.resolved_path));
+      const isSamePath = cur.open && (
+        cur.resolvedPath === e.payload.resolved_path ||
+        cur.resolvedPath.startsWith(e.payload.resolved_path) ||
+        e.payload.resolved_path.startsWith(cur.resolvedPath)
+      );
+      const titleToPass = featureLabelForPath(e.payload.resolved_path) || (isSamePath ? cur.title : undefined);
+      const yearToPass = isSamePath ? cur.year : undefined;
+      playerStore.open(e.payload, titleToPass, yearToPass);
     });
     const unClosed1 = listen('player-closed', () => {
       invoke('log_frontend', { message: `[frontend-diag] player-closed received` }).catch(() => {});
@@ -110,6 +117,12 @@ export const App: React.FC = () => {
             invoke('log_frontend', {
               message: `[frontend-diag] playerStore.open adopted via engine poll: gen=${s.gen} path=${s.resolved_path}`,
             }).catch(() => {});
+            const cur = playerStore.get();
+            const isSamePath = cur.open && (
+              cur.resolvedPath === s.resolved_path ||
+              cur.resolvedPath.startsWith(s.resolved_path) ||
+              s.resolved_path.startsWith(cur.resolvedPath)
+            );
             playerStore.open(
               {
                 resolved_path: s.resolved_path,
@@ -118,7 +131,8 @@ export const App: React.FC = () => {
                 external: false,
                 gen: s.gen,
               },
-              featureLabelForPath(s.resolved_path),
+              featureLabelForPath(s.resolved_path) || (isSamePath ? cur.title : undefined),
+              isSamePath ? cur.year : undefined,
             );
           }
         })

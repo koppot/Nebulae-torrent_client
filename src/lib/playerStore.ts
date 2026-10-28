@@ -41,10 +41,22 @@ function emit() {
 
 export const playerStore = {
   open(info: PlayerOpenInfo, displayTitle?: string, year?: number | string | null) {
+    const isSameMedia = state.open && (
+      state.resolvedPath === info.resolved_path ||
+      (state.resolvedPath && info.resolved_path && (
+        state.resolvedPath.startsWith(info.resolved_path) ||
+        info.resolved_path.startsWith(state.resolvedPath)
+      ))
+    );
+    const resolvedTitle = displayTitle || (isSameMedia && state.title ? state.title : '') || info.title;
+    const resolvedYear = (year !== undefined && year !== null)
+      ? year
+      : (isSameMedia ? state.year : null);
+
     state = {
       open: true,
-      title: displayTitle || info.title,
-      year: year ?? null,
+      title: resolvedTitle,
+      year: resolvedYear,
       resolvedPath: info.resolved_path,
       isDisc: info.is_disc,
       gen: info.gen ?? null,
@@ -271,15 +283,12 @@ async function seekWhenFeatureStarts(timeMs: number): Promise<void> {
  *  When `title` is 0 or undefined, reads the path-only / title:0 key. */
 export function savedPositionMs(discPath: string, title?: number): number {
   try {
-    if (title !== undefined) {
-      if (title > 0) {
-        const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
-        return v !== null ? (Number(v) || 0) : 0;
-      }
-      const v0 = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:0`);
-      if (v0 !== null) return Number(v0) || 0;
-      return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
+    if (title !== undefined && title > 0) {
+      const v = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:${title}`);
+      if (v !== null && Number(v) > 0) return Number(v);
     }
+    const v0 = localStorage.getItem(`nebulae_resume_pos:${discPath}:title:0`);
+    if (v0 !== null && Number(v0) > 0) return Number(v0);
     return Number(localStorage.getItem(`nebulae_resume_pos:${discPath}`) || 0);
   } catch {
     return 0;

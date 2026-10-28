@@ -852,7 +852,11 @@ export const TorrentManagerView: React.FC = () => {
               type="button"
               onClick={() => {
                 const fullPath = `${selectedTorrent!.save_path}/${file.name}`;
-                openInPlayer(fullPath).catch(() => {});
+                const t = selectedTorrent!;
+                openInPlayer(fullPath, {
+                  displayTitle: t.media_meta?.clean_title || t.name,
+                  year: t.media_meta?.year,
+                }).catch(() => {});
               }}
               className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
               title={`Play "${node.name}" in media player`}
@@ -1639,7 +1643,10 @@ export const TorrentManagerView: React.FC = () => {
                                   type="button"
                                   onClick={() => {
                                     const fullPath = `${selectedTorrent.save_path}/${file.name}`;
-                                    openInPlayer(fullPath).catch(() => {});
+                                    openInPlayer(fullPath, {
+                                      displayTitle: selectedTorrent.media_meta?.clean_title || selectedTorrent.name,
+                                      year: selectedTorrent.media_meta?.year,
+                                    }).catch(() => {});
                                   }}
                                   className="px-2 py-0.5 rounded bg-[#141414] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white flex items-center gap-1 text-[10px] transition"
                                   title="Play in media player"

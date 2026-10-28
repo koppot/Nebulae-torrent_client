@@ -36,6 +36,7 @@ import {
   Zap,
   AlertCircle,
   Fingerprint,
+  Info,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -1237,10 +1238,18 @@ export const SettingsModal: React.FC = () => {
                         onChange={(e) => saveSettings({ racing_mode_enabled: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
-                      <div>
-                        <span className="text-white font-medium text-xs">Enable racing mode</span>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white font-medium text-xs">Enable racing mode</span>
+                          <span
+                            title="Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents."
+                            className="cursor-help text-[#666666] hover:text-[#a3a3a3] transition"
+                          >
+                            <Info className="w-3 h-3" />
+                          </span>
+                        </div>
                         <p className="text-[11px] text-[#a3a3a3] mt-0.5">
-                          Aggressive swarm and cache tuning preset — allocates a 256 MiB disk cache, increases per-torrent peer limit to 150 (1000 global), sets 14 unchoke slots, shortens queue stall detection to 2 minutes, and assigns high torrent bandwidth priority to downloading torrents.
+                          Apply session-wide performance tuning.
                         </p>
                       </div>
                     </label>
@@ -1252,13 +1261,18 @@ export const SettingsModal: React.FC = () => {
                         onChange={(e) => saveSettings({ auto_racing_new_downloads: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
-                      <div>
-                        <span className="text-white font-medium text-xs">Automatically enable racing mode for new downloads</span>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white font-medium text-xs">Automatically enable racing mode for new downloads</span>
+                          <span
+                            title="Applies the per-torrent preset (peer limit 150, high bandwidth priority) to newly added torrents. Session-wide tuning (disk cache, global peer limit, unchoke slots) is controlled by Enable racing mode. A torrent's own racing setting wins over global mode in both directions."
+                            className="cursor-help text-[#666666] hover:text-[#a3a3a3] transition"
+                          >
+                            <Info className="w-3 h-3" />
+                          </span>
+                        </div>
                         <p className="text-[11px] text-[#a3a3a3] mt-0.5">
-                          Applies to torrents you add from now on (files, magnet links, and adds that start paused); existing torrents are never changed by this option. Only the per-torrent preset is applied (peer limit 150, high bandwidth priority). Session-wide tuning (disk cache, global peer limit, unchoke slots) stays controlled by Enable racing mode above. Racing can still be switched on or off for any single torrent from its context menu, and that choice is kept.
-                        </p>
-                        <p className="text-[11px] text-[#a3a3a3] mt-1">
-                          Per-torrent vs global: a torrent's own racing setting (applied automatically by this option when it is added, or chosen from its context menu) wins over Enable racing mode in both directions. Turning Enable racing mode off does not strip a torrent that has its own racing setting, and a torrent switched off stays off while Enable racing mode is on.
+                          Apply the per-torrent racing preset to newly added torrents. Existing torrents are unchanged; manual choices are preserved.
                         </p>
                       </div>
                     </label>

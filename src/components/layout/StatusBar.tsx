@@ -205,13 +205,13 @@ export const StatusBar: React.FC = () => {
           className="flex items-center gap-1.5"
           title={
             tailscale?.connected
-              ? !tailscale.adc_node && tailscale.adc_reachable == null
-                ? 'Tailnet connected — ADC host not found in netmap'
+              ? tailscale.adc_reachable === true
+                ? `Tailnet connected · ADC verified reachable (${tailscale.tailnet_ip ?? ''})`
                 : tailscale.adc_reachable === false
-                  ? 'Tailnet connected, but the ADC host is not answering — private ADC traffic cannot get through right now'
-                  : tailscale.adc_reachable === true
-                    ? `Tailnet connected — ADC host verified reachable — IP ${tailscale.tailnet_ip ?? ''}`
-                    : 'Tailnet connected — ADC host not yet verified (probe pending)'
+                  ? 'Tailnet connected · ADC service endpoint unreachable over mesh'
+                  : !tailscale.adc_node
+                    ? 'Tailnet connected · ADC node not found in netmap'
+                    : 'Tailnet connected · verifying ADC reachability…'
               : 'Tailnet is not connected'
           }
         >
@@ -230,13 +230,13 @@ export const StatusBar: React.FC = () => {
           />
           <span className={tailscale?.connected ? 'text-white' : ''}>Tailnet</span>
           {tailscale?.connected && tailscale.adc_reachable === false && (
-            <span className="text-amber-500">· ADC host offline</span>
+            <span className="text-amber-500">· ADC unreachable</span>
           )}
           {tailscale?.connected && tailscale.adc_reachable == null && !tailscale.adc_node && (
-            <span className="text-amber-500/80">· ADC unavailable</span>
+            <span className="text-amber-500/80">· ADC unmapped</span>
           )}
           {tailscale?.connected && tailscale.adc_reachable == null && tailscale.adc_node && (
-            <span className="text-[#a3a3a3]">· ADC unverified</span>
+            <span className="text-[#a3a3a3]">· ADC verifying…</span>
           )}
         </div>
 

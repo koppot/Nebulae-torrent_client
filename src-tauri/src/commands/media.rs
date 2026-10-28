@@ -153,6 +153,44 @@ pub struct PlayerOpenResult {
     pub gen: u64,
 }
 
+/// Derive the best user-facing title and year for a disc release.
+/// Generic folder or disc names (e.g. "FUUKA_CS_D1", "DISC_1", "VIDEO_TS")
+/// look up the release's parent directory name to extract clean title & year.
+fn best_display_title_for_disc(path: &Path, default_title: &str) -> String {
+    let is_generic_disc = {
+        let lower = default_title.to_lowercase();
+        lower.starts_with("disc")
+            || lower.contains("_d1")
+            || lower.contains("_d2")
+            || lower.contains("_d3")
+            || lower.contains("_disc")
+            || lower == "video_ts"
+            || lower == "bdmv"
+    };
+    if is_generic_disc {
+        if let Some(parent) = path.parent() {
+            if let Some(parent_name) = parent.file_name().and_then(|n| n.to_str()) {
+                let parsed = MediaTitleParser::parse(parent_name);
+                if !parsed.clean_title.is_empty() {
+                    return if let Some(y) = parsed.year {
+                        format!("{} ({})", parsed.clean_title, y)
+                    } else {
+                        parsed.clean_title
+                    };
+                }
+            }
+        }
+    }
+    let parsed = MediaTitleParser::parse(default_title);
+    if let Some(y) = parsed.year {
+        format!("{} ({})", parsed.clean_title, y)
+    } else if !parsed.clean_title.is_empty() {
+        parsed.clean_title
+    } else {
+        default_title.to_string()
+    }
+}
+
 /// Resolve what to play for a save path / file / folder. A disc image or
 /// disc folder ALWAYS wins over loose episode files; a disc-less folder
 /// plays its largest video file (the main feature).
@@ -162,7 +200,7 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         return Err(format!("Media path does not exist: {file_path}"));
     }
     if let Some(disc) = DiscDetector::inspect(path) {
-        let title = disc.title.clone();
+        let title = best_display_title_for_disc(path, &disc.title);
         return Ok(ResolvedPlayback {
             resolved_path: disc.root_path.clone(),
             title,
@@ -180,11 +218,11 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
             .to_ascii_lowercase();
         if dir_name == "bdmv" || dir_name == "video_ts" {
             if let Some(disc_root) = path.parent() {
-                let title = disc_root
+                let raw_title = disc_root
                     .file_name()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("Video")
-                    .to_string();
+                    .unwrap_or("Video");
+                let title = best_display_title_for_disc(disc_root, raw_title);
                 return Ok(ResolvedPlayback {
                     resolved_path: disc_root.display().to_string(),
                     title,
@@ -195,7 +233,7 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         }
         if let Some(target) = resolve_disc_target(path) {
             if let Some(disc) = DiscDetector::inspect(&target) {
-                let title = disc.title.clone();
+                let title = best_display_title_for_disc(&target, &disc.title);
                 return Ok(ResolvedPlayback {
                     resolved_path: disc.root_path.clone(),
                     title,
@@ -787,8 +825,11 @@ fn start_playback_inner(
                                     return;
                                 }
 
-                                // Outcome B: If already at confirmed active feature playback, preserve it and done.
-                                if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+
+                                // Outcome B: Only for discs WITHOUT an authored menu (e.g. episodic discs without a top menu).
+                                // If the disc has an authored menu, we must never abort menu navigation early.
+                                if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
                                     let cur = unsafe {
                                         (lib.libvlc_media_player_get_title)(mp as *mut c_void)
                                     };
@@ -796,7 +837,7 @@ fn start_playback_inner(
                                         (lib.libvlc_media_player_get_length)(mp as *mut c_void)
                                     };
                                     tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at active feature playback on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): disc without authored menu active on title {cur} (length_ms={len}) [Outcome B]; preserving playback and exiting"
                                 );
                                     return;
                                 }
@@ -808,20 +849,22 @@ fn start_playback_inner(
                                             lib_clone.libvlc_media_player_navigate_menu
                                         {
                                             navigate_menu(mp as *mut c_void);
-                                        } else {
-                                            tracing::warn!(
-                                            "[menu-diag] navigate_menu symbol unavailable on this libvlc build"
-                                        );
+                                        }
+                                        if let Some(mt) = engine::find_menu_title(&lib_clone, mp) {
+                                            (lib_clone.libvlc_media_player_set_title)(
+                                                mp as *mut c_void,
+                                                mt,
+                                            );
                                         }
                                     }
                                 };
 
                                 tracing::info!(
-                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU"
+                                "[menu-diag] menu watcher (session_gen={menu_gen}): dispatching initial INPUT_NAV_MENU / set_title"
                             );
                                 nav_menu();
 
-                                // Check if navigate_menu or natural flow reached menu or feature within 200ms (10 * 20ms)
+                                // Check if navigate_menu or set_title reached menu within 200ms (10 * 20ms)
                                 for _ in 0..10 {
                                     std::thread::sleep(std::time::Duration::from_millis(20));
                                     let gen_now =
@@ -838,11 +881,11 @@ fn start_playback_inner(
                                     }
                                     if unsafe { engine::is_menu_title(&lib, mp) } {
                                         tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu within 200ms [Outcome A]"
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu via navigate_menu / set_title within 200ms [Outcome A]"
                                     );
                                         return;
                                     }
-                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
                                         let cur = unsafe {
                                             (lib.libvlc_media_player_get_title)(mp as *mut c_void)
                                         };
@@ -856,31 +899,7 @@ fn start_playback_inner(
                                     }
                                 }
 
-                                // On discs where First Play masks menu calls (menu_call_mask=1, e.g. Patlabor 2 UHD),
-                                // navigate_menu is rejected by libbluray. If the disc has an authored menu title
-                                // and we are currently in First Play / short intro (<= 300s), seek to the end of
-                                // First Play (0.99) so it finishes and triggers its authored JumpTitle 0 into Top Menu.
-                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
-                                let is_fp = unsafe { engine::is_first_play_or_intro(&lib, mp) };
-                                let is_feat =
-                                    unsafe { engine::is_active_feature_playback(&lib, mp) };
-                                if has_menu && is_fp && !is_feat {
-                                    tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 APPLIED (has_menu=true, is_fp=true)"
-                                );
-                                    unsafe {
-                                        (lib.libvlc_media_player_set_position)(
-                                            mp as *mut c_void,
-                                            0.99,
-                                        );
-                                    }
-                                } else {
-                                    tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): First Play seek 0.99 SKIPPED (has_menu={has_menu}, is_fp={is_fp}, is_feat={is_feat})"
-                                );
-                                }
-
-                                // Poll up to 15s (75 * 200ms).
+                                // Poll up to 15s (75 * 200ms) for authored menu or confirmed feature.
                                 for i in 0..75 {
                                     std::thread::sleep(std::time::Duration::from_millis(200));
                                     let gen_now =
@@ -905,8 +924,8 @@ fn start_playback_inner(
                                         return;
                                     }
 
-                                    // Outcome B: Confirmed active feature playback engaged
-                                    if unsafe { engine::is_active_feature_playback(&lib, mp) } {
+                                    // Outcome B: Confirmed active feature playback engaged on discs without a menu
+                                    if !has_menu && unsafe { engine::is_active_feature_playback(&lib, mp) } {
                                         let cur = unsafe {
                                             (lib.libvlc_media_player_get_title)(mp as *mut c_void)
                                         };
@@ -920,11 +939,10 @@ fn start_playback_inner(
                                         return;
                                     }
 
-                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU every 2s.
-                                    // NOTE: Do NOT repeatedly force set_title(menu_title) over active content.
+                                    // If introductory logos mask menu calls, retry INPUT_NAV_MENU / set_title every 2s.
                                     if i > 0 && i % 10 == 0 {
                                         tracing::info!(
-                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU at iteration {i}"
+                                        "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at iteration {i}"
                                     );
                                         nav_menu();
                                     }
@@ -1143,20 +1161,22 @@ fn start_playback_inner(
                                             entry.warn_mpls_id,
                                             entry.warn_mpls_size
                                         );
-                                        // Poll up to 30 s (600 × 50 ms) for the warning playlist.
-                                        let mut skipped = false;
-                                        for _ in 0..600 {
-                                            std::thread::sleep(std::time::Duration::from_millis(
-                                                50,
-                                            ));
+                                        let mut lifecycle = WarnSkipLifecycle::new();
+
+                                        loop {
+                                            std::thread::sleep(std::time::Duration::from_millis(50));
                                             let mp = mp_or_return!();
-                                            let playlist_id = unsafe {
-                                                get_playlist_id(mp as *mut c_void) as i32
+
+                                            let at_menu = unsafe { engine::is_menu_title(&lib, mp) };
+                                            let playlist_id = if at_menu {
+                                                -1
+                                            } else {
+                                                unsafe { get_playlist_id(mp as *mut c_void) as i32 }
                                             };
-                                            if playlist_id == entry.warn_mpls_id as i32 {
+
+                                            if lifecycle.tick(at_menu, playlist_id, entry.warn_mpls_id) {
                                                 tracing::info!(
-                                                    "[warn-watcher] skip: warning playlist {:05} \
-                                                 active — seeking to 0.99",
+                                                    "[warn-watcher] skip: warning playlist {:05} active — seeking to 0.99",
                                                     entry.warn_mpls_id
                                                 );
                                                 unsafe {
@@ -1165,16 +1185,7 @@ fn start_playback_inner(
                                                         0.99,
                                                     );
                                                 }
-                                                skipped = true;
-                                                break;
                                             }
-                                        }
-                                        if !skipped {
-                                            tracing::info!(
-                                            "[warn-watcher] skip: warning playlist {:05} never \
-                                             became active within 30 s",
-                                            entry.warn_mpls_id
-                                        );
                                         }
                                     } else {
                                         // ---- RECORD MODE ----
@@ -1339,6 +1350,11 @@ fn start_playback_inner(
                         let spawn_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                         let spawn_mp = session.media_player;
                         let spawn_time = std::time::Instant::now();
+                        let is_bluray = {
+                            let r = std::path::Path::new(&resolved.resolved_path);
+                            r.join("BDMV").exists() || r.join("bdmv").exists()
+                        };
+                        let is_bypass = bypass_menu;
                         std::thread::spawn(move || {
                             use tauri::{Emitter, Manager};
                             std::thread::sleep(std::time::Duration::from_secs(6));
@@ -1428,6 +1444,10 @@ fn start_playback_inner(
                                 if at_menu {
                                     tracing::info!(
                                         "[liveness-diag] session_gen={spawn_gen}: at disc menu, get_time=-1 is expected (player-error NOT emitted)"
+                                    );
+                                } else if !is_bluray || is_bypass {
+                                    tracing::info!(
+                                        "[liveness-diag] session_gen={spawn_gen}: get_time=-1 during bypass_menu or DVD playback; suppressing spurious decryption warning"
                                     );
                                 } else {
                                     tracing::error!(
@@ -3485,6 +3505,54 @@ mod tests {
         assert!(!status.player_name.is_empty());
         assert!(!status.player_type.is_empty());
     }
+
+    #[test]
+    fn test_warn_skip_lifecycle_menu_dwell_and_rearm() {
+        let mut lifecycle = WarnSkipLifecycle::new();
+        let warn_mpls = 100u32;
+
+        // 1. Initial first-play before menu: does not seek arbitrary content (playlist 2)
+        assert!(!lifecycle.tick(false, 2, warn_mpls));
+
+        // 2. Disc reaches authored menu
+        assert!(!lifecycle.tick(true, -1, warn_mpls));
+
+        // 3. Menu dwell > 30 seconds (800 ticks * 50ms = 40 seconds)
+        for _ in 0..800 {
+            assert!(!lifecycle.tick(true, -1, warn_mpls));
+        }
+
+        // 4. User selects Play: menu -> playback transition, warning playlist 100 becomes active
+        // MUST seek to 0.99!
+        assert!(lifecycle.tick(false, 100, warn_mpls));
+
+        // 5. While warning playlist 100 remains active, do NOT repeatedly seek
+        assert!(!lifecycle.tick(false, 100, warn_mpls));
+        assert!(!lifecycle.tick(false, 100, warn_mpls));
+
+        // 6. Transition to main feature playlist (playlist 1)
+        assert!(!lifecycle.tick(false, 1, warn_mpls));
+
+        // 7. Feature plays for >30 seconds (700 ticks = 35 seconds)
+        for _ in 0..700 {
+            assert!(!lifecycle.tick(false, 1, warn_mpls));
+        }
+
+        // 8. User returns to menu (without reopening the disc)
+        assert!(!lifecycle.tick(true, -1, warn_mpls));
+
+        // 9. Dwell at menu again
+        for _ in 0..100 {
+            assert!(!lifecycle.tick(true, -1, warn_mpls));
+        }
+
+        // 10. User selects Play again: warning playlist becomes active again
+        // MUST seek to 0.99 again!
+        assert!(lifecycle.tick(false, 100, warn_mpls));
+
+        // 11. Again, no repeated seek while active
+        assert!(!lifecycle.tick(false, 100, warn_mpls));
+    }
 }
 
 /// One externally-opened media item in the persistent collection.
@@ -3748,6 +3816,58 @@ pub async fn player_always_on_top(app: tauri::AppHandle) -> Result<bool, String>
 // ---------------------------------------------------------------------------
 // Disc-warning persistence helpers
 // ---------------------------------------------------------------------------
+
+/// Pure lifecycle state machine for disc warning skipping.
+/// Decides whether a skip seek (to 0.99) should fire on each poll tick (50ms).
+#[derive(Clone, Debug, Default)]
+pub struct WarnSkipLifecycle {
+    pub ticks_remaining: u32,
+    pub was_at_menu: bool,
+    pub already_skipped_active: bool,
+}
+
+impl WarnSkipLifecycle {
+    pub fn new() -> Self {
+        Self {
+            ticks_remaining: 600, // 30 s initial window for first-play warning
+            was_at_menu: false,
+            already_skipped_active: false,
+        }
+    }
+
+    /// Process one tick (50ms). Returns true if a seek to 0.99 should be executed.
+    pub fn tick(&mut self, at_menu: bool, playlist_id: i32, warn_mpls_id: u32) -> bool {
+        if at_menu {
+            if !self.was_at_menu {
+                self.was_at_menu = true;
+                self.already_skipped_active = false;
+            }
+            return false;
+        }
+
+        // !at_menu:
+        if self.was_at_menu {
+            self.was_at_menu = false;
+            self.ticks_remaining = 600; // Arm / rearm 30 s window on menu -> playback
+            self.already_skipped_active = false;
+        }
+
+        let mut should_seek = false;
+        if self.ticks_remaining > 0 {
+            self.ticks_remaining -= 1;
+            if playlist_id == warn_mpls_id as i32 {
+                if !self.already_skipped_active {
+                    should_seek = true;
+                    self.already_skipped_active = true;
+                }
+            } else if playlist_id > 0 {
+                self.already_skipped_active = false;
+            }
+        }
+        should_seek
+    }
+}
+
 // Stores a per-disc flag recording that the post-menu warning clip has been
 // shown at least once. On subsequent sessions the watcher uses this flag to
 // seek past the warning automatically.

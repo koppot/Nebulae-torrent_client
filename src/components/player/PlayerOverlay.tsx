@@ -223,6 +223,9 @@ export default function PlayerOverlay() {
   // Allows the arm to retry across multiple ticks when dvdnav reports
   // length_ms=0 on the first non-menu tick (common on DVD).
   const justLeftMenuRef = useRef(false);
+  // Latches initial resume arming on feature start so direct-feature and menu-less
+  // playback check saved position as soon as length is reported.
+  const initialResumeArmedRef = useRef(false);
   // Tracks titles that have reached natural completion so that subsequent
   // pause, close, teardown, or periodic saves do not recreate their resume records.
   const completedTitlesRef = useRef<Set<number>>(new Set());
@@ -279,6 +282,7 @@ export default function PlayerOverlay() {
     pendingResumeRef.current = null;
     pendingResumeTitleRef.current = null;
     justLeftMenuRef.current = false;
+    initialResumeArmedRef.current = false;
     completedTitlesRef.current.clear();
     manualSeekingRef.current = false;
     if (manualSeekingTimerRef.current !== null) {
@@ -402,7 +406,9 @@ export default function PlayerOverlay() {
         justLeftMenuRef.current = true;
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
-      if (justLeftMenuRef.current && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null) {
+      const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null;
+      if (shouldAttemptResume) {
+        initialResumeArmedRef.current = true;
         if (completedTitlesRef.current.has(p.title)) {
           justLeftMenuRef.current = false;
         } else {
@@ -458,6 +464,7 @@ export default function PlayerOverlay() {
         pendingResumeRef.current = null;
         pendingResumeTitleRef.current = null;
         justLeftMenuRef.current = false;
+        initialResumeArmedRef.current = true;
       }
 
       wasAtMenuRef.current = p.at_menu;
@@ -579,7 +586,7 @@ export default function PlayerOverlay() {
           // Close (owner): persist the resume point, then close.
           {
             const p = pollRef.current;
-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
+            if (!p.at_menu && (p.length_ms > 300_000 || !player.isDisc) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE Q/X-close path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }
@@ -907,20 +914,30 @@ export default function PlayerOverlay() {
   }, [popoverOpen, poll.playing, poll.at_menu, player.isDisc, ended]);
 
   // Subtitle track list for the current title: fetched as soon as the
-  // feature engages so the bar can hide the Subtitles pill entirely when
-  // the title has no subtitle streams (owner).
+  // feature engages with periodic retry during early playback while LibVLC demuxes SPU streams.
   useEffect(() => {
     if (!player.open || (poll.at_menu && player.isDisc)) return;
     let alive = true;
-    invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
-      .then((tracks) => {
-        if (alive) setSubTracks(tracks.map((t) => ({ ...t, active: false })));
-      })
-      .catch(() => {});
+    const fetchSubs = () => {
+      invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
+        .then((tracks) => {
+          if (alive && tracks && tracks.length > 0) {
+            setSubTracks(tracks.map((t) => ({ ...t, active: false })));
+          }
+        })
+        .catch(() => {});
+    };
+    fetchSubs();
+    const iv = window.setInterval(() => {
+      if (alive && subTracks.length === 0 && poll.playing && !poll.at_menu) {
+        fetchSubs();
+      }
+    }, 1000);
     return () => {
       alive = false;
+      window.clearInterval(iv);
     };
-  }, [player.open, poll.title, poll.at_menu, player.isDisc]);
+  }, [player.open, poll.title, poll.at_menu, player.isDisc, poll.playing, subTracks.length]);
 
   // Preferred audio/subtitle languages (owner, "media player preferences"
   // on the media screen): stored by SimpleMediaView, applied automatically
@@ -1591,9 +1608,8 @@ export default function PlayerOverlay() {
 
         {/* Subtitles / Audio (owner): pill buttons styled like the disc
             button, with the popover listing the disc's tracks. The
-            Subtitles pill is hidden entirely when the current title has
-            no subtitle streams. */}
-        {subTracks.length > 0 && (
+            Subtitles pill is visible during feature playback (!poll.at_menu). */}
+        {!poll.at_menu && (
         <div
           className="relative shrink-0"
           onMouseEnter={async () => {
@@ -1756,7 +1772,7 @@ export default function PlayerOverlay() {
             // Persist the final position no matter the throttle/pause state:
             // quitting mid-feature must always leave a resume point.
             const p = pollRef.current;
-            if (!(player.isDisc && (p.at_menu || (p.title === 0 && p.title_count > 1))) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
+            if (!p.at_menu && (p.length_ms > 300_000 || !player.isDisc) && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
               savePositionMs(player.resolvedPath, p.time_ms, p.title);
               invoke('log_frontend', { message: `[resume-diag] SAVE X-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
             }

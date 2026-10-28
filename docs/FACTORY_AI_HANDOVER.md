@@ -37,6 +37,9 @@ All agents, models, and workflows operating on this repository must strictly adh
 5. **Windows Deployment & Verification:**
    - The interactive desktop user on `supermicro.local` is `supermicro\administrator` (session ID 2), not `dev`.
    - Never claim an update is installed on Windows without inspecting `LastWriteTime`, `FileVersionInfo`, and verifying the running instance via CDP at `http://127.0.0.1:9222`.
+6. **Mandatory Bundled Dependency Retention:**
+   - Never remove, omit, or replace bundled dependencies that belong in the application (patched Transmission daemon and its required libraries, Tailscale daemon and CLI, Temurin JRE for BD-J menus, verified custom VLC runtime and plugins).
+   - All bundled dependencies must be packaged and installed in the application bundle.
 
 ---
 
