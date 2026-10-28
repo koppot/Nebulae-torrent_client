@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # scripts/bundle-macos-transmission.sh
-# Bundles transmission-daemon binary + all non-system dylibs for macOS.
-# Locates daemon on the build host (via Homebrew formula transmission-cli or PATH),
-# or builds from pinned source tarball if missing. Walks otool -L, copies and
-# rewrites install names to @rpath, ad-hoc or identity code-signs all binaries.
-# Exact pattern as bundle-macos-mpv.sh.
+#
+# Stages transmission-daemon 4.1.3 (with the Nebulae identity-override patch) and
+# every non-system dynamic library it needs, so that the app bundle never reads a
+# library from the build machine's Homebrew prefix.
+#
+#   1. Locate a patched daemon (staging dir, or the host) or build one from the
+#      pinned, SHA-256 verified source tarball with
+#      scripts/patches/transmission-4.1.3-identity-override.patch.
+#   2. scripts/relocate-macos-dylibs.py copies the dependency closure into lib/,
+#      rewrites every load command using the exact string stored in the binary,
+#      and signs what it changed (ad-hoc, or APPLE_SIGNING_IDENTITY when set).
+#   3. scripts/audit-macos-bundle.py --strict --strict-strings must find nothing
+#      that points outside the bundle. The script fails here otherwise.
+#   4. Licence texts, the identity patch and bundled-libraries.json are written
+#      next to the daemon.
+#   5. Smoke test in an isolated temporary profile (loopback only, no port
+#      forwarding, its own RPC and peer port).
 #
 # Pinned artifact (Transmission 4.1.3, 2026-06-30):
 #   Source: https://github.com/transmission/transmission/releases/download/4.1.3/transmission-4.1.3.tar.xz
@@ -12,6 +24,8 @@
 #   Peer-id prefix: -TR4130-
 #
 # AGENT-COORDINATION.md records the pinned hash above.
+#
+# Run from the repository root. Usage: bundle-macos-transmission.sh [TARGET_DIR]
 
 set -euo pipefail
 
@@ -21,16 +35,36 @@ EXPECTED_SHA256="ce7d2d8b101f7eb54bc3cf0bc55f52f7ebd4a25fa48e00bdca9a7e0fc02617d
 
 TARGET_DIR="${1:-src-tauri/resources/engine/transmission}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATCH_FILE="$SCRIPT_DIR/patches/transmission-${VERSION}-identity-override.patch"
 
 # Staging dir OUTSIDE target/ (rust-cache nesting precedent).
 STAGING_DIR="src-tauri/transmission-staging"
+TARBALL="$STAGING_DIR/transmission-${VERSION}.tar.xz"
 
 echo "=========================================================="
 echo " Nebulae macOS Transmission-Daemon Bundling (v${VERSION}) "
 echo "=========================================================="
 echo "Target directory: $TARGET_DIR"
 
-mkdir -p "$STAGING_DIR" "$TARGET_DIR/lib"
+mkdir -p "$STAGING_DIR"
+
+# The source tarball is needed to build the daemon and, either way, for the
+# licence texts that ship with it. Never use an unverified copy.
+ensure_verified_tarball() {
+    if [ ! -f "$TARBALL" ]; then
+        curl -fsSL "$TARBALL_URL" -o "$TARBALL"
+    fi
+    local actual
+    actual=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
+    if [ "$actual" != "$EXPECTED_SHA256" ]; then
+        echo "ERROR: SHA-256 MISMATCH on source tarball"
+        echo "  Expected: $EXPECTED_SHA256"
+        echo "  Actual:   $actual"
+        exit 1
+    fi
+    echo "    Source SHA-256 verified: $actual"
+}
 
 # --- 1. Locate or obtain transmission-daemon ---
 is_patched_daemon() {
@@ -74,31 +108,22 @@ fi
 
 if [ -z "$DAEMON_BIN" ]; then
     echo "==> Building transmission-daemon v${VERSION} from pinned source tarball with identity patch..."
-    TARBALL="$STAGING_DIR/transmission-${VERSION}.tar.xz"
-    if [ ! -f "$TARBALL" ]; then
-        curl -fsSL "$TARBALL_URL" -o "$TARBALL"
-    fi
-    ACTUAL_SHA256=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
-    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-        echo "ERROR: SHA-256 MISMATCH on source tarball"
-        echo "  Expected: $EXPECTED_SHA256"
-        echo "  Actual:   $ACTUAL_SHA256"
-        exit 1
-    fi
-    echo "    Source SHA-256 verified: $ACTUAL_SHA256"
+    ensure_verified_tarball
     BUILD_ROOT="$STAGING_DIR/build"
     INSTALL_ROOT="$STAGING_DIR/install"
-    rm -rf "$BUILD_ROOT" "$INSTALL_ROOT"
+    SOURCE_ROOT="$STAGING_DIR/transmission-${VERSION}"
+    # A previously patched tree would make patch(1) ask whether to reverse the
+    # patch, so always start from a pristine extraction.
+    rm -rf "$BUILD_ROOT" "$INSTALL_ROOT" "$SOURCE_ROOT"
     mkdir -p "$BUILD_ROOT" "$INSTALL_ROOT"
     tar -xJf "$TARBALL" -C "$STAGING_DIR"
-    PATCH_FILE="$(pwd)/scripts/patches/transmission-${VERSION}-identity-override.patch"
     if [ ! -f "$PATCH_FILE" ]; then
         echo "ERROR: Identity override patch not found at: $PATCH_FILE"
         exit 1
     fi
     echo "==> Applying identity override patch..."
-    patch -d "$STAGING_DIR/transmission-${VERSION}" -p1 < "$PATCH_FILE"
-    cmake -S "$STAGING_DIR/transmission-${VERSION}" -B "$BUILD_ROOT" \
+    patch -d "$SOURCE_ROOT" -p1 < "$PATCH_FILE"
+    cmake -S "$SOURCE_ROOT" -B "$BUILD_ROOT" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_ROOT" \
         -DENABLE_DAEMON=ON \
@@ -128,101 +153,169 @@ if ! is_patched_daemon "$DAEMON_BIN"; then
 fi
 echo "Source transmission-daemon binary (verified patched): $DAEMON_BIN"
 
-# Copy daemon binary
+# Remove what an earlier run produced (for example libraries the previous
+# bundling logic copied but never linked) so nothing stale ends up in the app.
+# The binary is removed before it is copied: overwriting a signed executable in
+# place keeps the old code-signature cache entry and the kernel then kills the
+# new file at launch.
+mkdir -p "$TARGET_DIR"
+rm -rf "$TARGET_DIR/lib" "$TARGET_DIR/licenses"
+rm -f "$TARGET_DIR/transmission-daemon" "$TARGET_DIR/bundled-libraries.json"
+mkdir -p "$TARGET_DIR/lib"
 cp -L "$DAEMON_BIN" "$TARGET_DIR/transmission-daemon"
 chmod 755 "$TARGET_DIR/transmission-daemon"
 
-# --- 2. Walk otool -L, copy non-system dylibs, rewrite install names ---
-export TARGET_DIR_PY="$TARGET_DIR"
-export SIGNING_IDENTITY_PY="$SIGNING_IDENTITY"
+# --- 2. Bundle every non-system dependency and rewrite the load commands ---
+ARCH="$(uname -m)"
+RELOCATE_ARGS=(
+    --lib-dir "$TARGET_DIR/lib"
+    --add-rpath "@executable_path/lib"
+    --arch "$ARCH"
+    --manifest "$TARGET_DIR/bundled-libraries.json"
+    --licenses-dir "$TARGET_DIR/licenses"
+)
+if [ -n "$SIGNING_IDENTITY" ]; then
+    RELOCATE_ARGS+=(--sign "$SIGNING_IDENTITY")
+fi
+python3 "$SCRIPT_DIR/relocate-macos-dylibs.py" "${RELOCATE_ARGS[@]}" "$TARGET_DIR/transmission-daemon"
 
-python3 - <<'EOF'
+# macOS Finder litter must never reach the app bundle.
+find "$TARGET_DIR" -name .DS_Store -delete
+
+# --- 3. Recursive closure audit: nothing may point outside the bundle ---
+echo "==> Auditing the staged component (strict)..."
+python3 "$SCRIPT_DIR/audit-macos-bundle.py" --strict --strict-strings --arch "$ARCH" "$TARGET_DIR"
+
+# A bundled library keeps the deployment target it was built with. Homebrew
+# bottles target the macOS of the machine that built them, which can be newer
+# than the minimum the app declares, and the daemon then cannot start on the
+# older systems the app claims to support. Report it; NEBULAE_ENFORCE_MINOS=1
+# turns it into a failure.
+DECLARED_MIN_MACOS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bundle"]["macOS"]["minimumSystemVersion"])' "$SCRIPT_DIR/../src-tauri/tauri.conf.json" 2>/dev/null || true)"
+if [ -n "$DECLARED_MIN_MACOS" ]; then
+    MINOS_REPORT="$(python3 "$SCRIPT_DIR/audit-macos-bundle.py" --arch "$ARCH" --max-minos "$DECLARED_MIN_MACOS" "$TARGET_DIR" | grep -E '^MINOS' || true)"
+    if [ -n "$MINOS_REPORT" ]; then
+        echo "WARNING: some bundled images need a newer macOS than the declared minimum (${DECLARED_MIN_MACOS}):"
+        printf '%s\n' "$MINOS_REPORT"
+        if [ "${NEBULAE_ENFORCE_MINOS:-0}" = "1" ]; then
+            echo "ERROR: NEBULAE_ENFORCE_MINOS=1"
+            exit 1
+        fi
+    else
+        echo "    Every bundled image runs on the declared minimum macOS (${DECLARED_MIN_MACOS})."
+    fi
+fi
+
+# --- 4. Licences and corresponding-source information ---
+ensure_verified_tarball
+LICENSE_DIR="$TARGET_DIR/licenses/transmission-${VERSION}"
+mkdir -p "$LICENSE_DIR"
+python3 - "$TARBALL" "$LICENSE_DIR" "$VERSION" <<'PY'
 import os
+import re
 import sys
-import shutil
-import subprocess
+import tarfile
 
-target_dir = os.environ.get("TARGET_DIR_PY")
-lib_dir = os.path.join(target_dir, "lib")
-daemon_path = os.path.join(target_dir, "transmission-daemon")
-signing_identity = os.environ.get("SIGNING_IDENTITY_PY", "")
+tarball, dest, version = sys.argv[1:4]
+top = "transmission-%s/" % version
+# googletest and the CMake modules are test / build-time only and never ship.
+skipped_third_party = {"googletest", "rpavlik-cmake-modules"}
+notice = re.compile(r"^(COPYING|LICEN[CS]E|AUTHORS|COPYRIGHT)([._-].*)?$", re.I)
 
-def get_direct_deps(binary_path):
-    try:
-        out = subprocess.check_output(['otool', '-L', binary_path], stderr=subprocess.DEVNULL).decode('utf-8')
-    except subprocess.CalledProcessError:
-        return []
-    deps = []
-    for line in out.splitlines()[1:]:
-        line = line.strip()
-        if not line:
+copied = []
+with tarfile.open(tarball) as tf:
+    for member in tf.getmembers():
+        if not member.isfile() or not member.name.startswith(top):
             continue
-        dep = line.split(' (compatibility')[0].split(' (')[0].strip()
-        if dep.startswith('/System/') or dep.startswith('/usr/lib/') or dep.startswith('@'):
+        rel = member.name[len(top):]
+        parts = rel.split("/")
+        if len(parts) == 1:
+            wanted = parts[0] in ("COPYING", "AUTHORS")
+        elif len(parts) == 2 and parts[0] == "licenses":
+            wanted = parts[1].endswith(".txt")
+        elif len(parts) == 3 and parts[0] == "third-party":
+            wanted = parts[1] not in skipped_third_party and bool(notice.match(parts[2]))
+        else:
+            wanted = False
+        if not wanted:
             continue
-        if os.path.exists(dep):
-            deps.append(os.path.realpath(dep))
-    return deps
+        out = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with tf.extractfile(member) as src, open(out, "wb") as dst:
+            dst.write(src.read())
+        copied.append(rel)
 
-def codesign_binary(path):
-    if signing_identity:
-        cmd = ['codesign', '--force', '--sign', signing_identity,
-               '--options', 'runtime', '--timestamp', path]
-    else:
-        cmd = ['codesign', '--force', '--sign', '-', path]
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode != 0:
-        print(f"    codesign warning on {os.path.basename(path)}: {result.stderr.decode().strip()}")
+if "COPYING" not in copied or not any(r.startswith("licenses/") for r in copied):
+    sys.exit("ERROR: the Transmission licence files were not found in the source tarball")
+print("    Transmission licence files copied: %d" % len(copied))
+PY
+cp "$PATCH_FILE" "$LICENSE_DIR/"
+cat > "$LICENSE_DIR/SOURCE.txt" <<SOURCE_TXT
+Transmission ${VERSION} as shipped in Nebulae
+==============================================
 
-queue = get_direct_deps(daemon_path)
-visited = set(queue)
+Upstream source : ${TARBALL_URL}
+SHA-256         : ${EXPECTED_SHA256}
 
-while queue:
-    curr = queue.pop(0)
-    for d in get_direct_deps(curr):
-        if d not in visited:
-            visited.add(d)
-            queue.append(d)
+Local change    : transmission-${VERSION}-identity-override.patch (in this directory)
+                  is applied to the unpacked upstream source before building. It lets
+                  the host application set the peer-id prefix and user agent through
+                  TRANSMISSION_PEER_ID_PREFIX and TRANSMISSION_USER_AGENT.
 
-print(f"Discovered {len(visited)} non-system dynamic libraries to bundle.")
+Licence         : COPYING (GPLv2, GPLv3, or a later licence endorsed by Mnemosyne LLC)
+                  with the full texts in licenses/. Third-party code that Transmission
+                  carries in its source tree is covered by third-party/*.
 
-path_map = {}
-for orig in visited:
-    base = os.path.basename(orig)
-    dest = os.path.join(lib_dir, base)
-    shutil.copy2(orig, dest)
-    os.chmod(dest, 0o755)
-    path_map[orig] = base
-    path_map[os.path.realpath(orig)] = base
+Libraries       : the dynamic libraries in ../lib are listed, with their versions and
+                  SHA-256 sums, in ../bundled-libraries.json. Their licence files are in
+                  the sibling directories of this one.
+SOURCE_TXT
 
-for orig in visited:
-    base = os.path.basename(orig)
-    dest = os.path.join(lib_dir, base)
-    subprocess.run(['install_name_tool', '-id', f'@rpath/{base}', dest], check=True)
+# --- 5. Smoke test (isolated: own profile, loopback only, no port forwarding) ---
+ABS_TARGET_DIR="$(cd "$TARGET_DIR" && pwd -P)"
+echo "==> Checking which libraries the daemon loads..."
+DYLD_TRACE="$(DYLD_PRINT_LIBRARIES=1 "$ABS_TARGET_DIR/transmission-daemon" --version 2>&1 || true)"
+LOADED_IMAGES="$(printf '%s\n' "$DYLD_TRACE" | sed -n -E 's/^dyld.*<[0-9A-Fa-f-]{36}> +(\/.*)$/\1/p' | sort -u)"
+if [ -z "$LOADED_IMAGES" ]; then
+    echo "    dyld tracing is not available for this binary (hardened runtime); relying on the static audit."
+else
+    STRAY_IMAGES=""
+    BUNDLED_LOADED=0
+    while IFS= read -r image; do
+        case "$image" in
+            "$ABS_TARGET_DIR"/lib/*) BUNDLED_LOADED=$((BUNDLED_LOADED + 1)) ;;
+            "$ABS_TARGET_DIR"/*|/usr/lib/*|/System/*|/Library/Apple/*) ;;
+            *) STRAY_IMAGES="${STRAY_IMAGES}${image}"$'\n' ;;
+        esac
+    done <<EOF_IMAGES
+$LOADED_IMAGES
+EOF_IMAGES
+    if [ -n "$STRAY_IMAGES" ]; then
+        echo "ERROR: the daemon loaded libraries from outside the bundle:"
+        printf '%s' "$STRAY_IMAGES"
+        exit 1
+    fi
+    echo "    ${BUNDLED_LOADED} bundled libraries loaded, none from outside the bundle."
+fi
 
-all_binaries = [daemon_path] + [os.path.join(lib_dir, os.path.basename(d)) for d in visited]
-for b in all_binaries:
-    deps = get_direct_deps(b)
-    for dep in deps:
-        if dep in path_map:
-            target_base = path_map[dep]
-            subprocess.run(['install_name_tool', '-change', dep, f'@rpath/{target_base}', b], check=False)
-
-subprocess.run(['install_name_tool', '-add_rpath', '@executable_path/lib', daemon_path], stderr=subprocess.DEVNULL)
-subprocess.run(['install_name_tool', '-add_rpath', '@loader_path/lib', daemon_path], stderr=subprocess.DEVNULL)
-
-for b in all_binaries:
-    if os.path.isfile(b):
-        codesign_binary(b)
-        print(f"    signed: {os.path.basename(b)}")
-
-print("==> macOS dylib rewrite and codesign complete.")
-EOF
-
-# --- 3. Smoke test ---
-echo "==> Running smoke test: spawn daemon, verify RPC 409, kill..."
-SMOKE_CONFIG="$(mktemp -d)"
+echo "==> Running smoke test: spawn daemon in an isolated profile, verify RPC, stop it..."
 SMOKE_PORT=19092
+SMOKE_PEER_PORT=19093
+if lsof -nP -iTCP:"${SMOKE_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "ERROR: port ${SMOKE_PORT} is already in use; refusing to talk to a different daemon."
+    exit 1
+fi
+
+SMOKE_CONFIG="$(mktemp -d)"
+SMOKE_PID=""
+cleanup_smoke() {
+    if [ -n "$SMOKE_PID" ]; then
+        kill "$SMOKE_PID" 2>/dev/null || true
+        wait "$SMOKE_PID" 2>/dev/null || true
+    fi
+    rm -rf "$SMOKE_CONFIG"
+}
+trap cleanup_smoke EXIT
 
 cat > "$SMOKE_CONFIG/settings.json" <<SETTINGS_JSON
 {
@@ -232,6 +325,11 @@ cat > "$SMOKE_CONFIG/settings.json" <<SETTINGS_JSON
     "rpc-whitelist-enabled": true,
     "rpc-whitelist": "127.0.0.1",
     "rpc-authentication-required": false,
+    "peer-port": ${SMOKE_PEER_PORT},
+    "peer-port-random-on-start": false,
+    "bind-address-ipv4": "127.0.0.1",
+    "bind-address-ipv6": "::1",
+    "port-forwarding-enabled": false,
     "dht-enabled": false,
     "pex-enabled": false,
     "lpd-enabled": false,
@@ -239,21 +337,37 @@ cat > "$SMOKE_CONFIG/settings.json" <<SETTINGS_JSON
 }
 SETTINGS_JSON
 
-"$TARGET_DIR/transmission-daemon" --config-dir "$SMOKE_CONFIG" --foreground &
-DAEMON_PID=$!
-sleep 4
+"$ABS_TARGET_DIR/transmission-daemon" --config-dir "$SMOKE_CONFIG" --foreground >"$SMOKE_CONFIG/daemon.log" 2>&1 &
+SMOKE_PID=$!
 
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${SMOKE_PORT}/transmission/rpc 2>/dev/null || true)
-kill "$DAEMON_PID" 2>/dev/null || true
-wait "$DAEMON_PID" 2>/dev/null || true
-rm -rf "$SMOKE_CONFIG"
+RPC_URL="http://127.0.0.1:${SMOKE_PORT}/transmission/rpc"
+HTTP_STATUS=""
+for _ in $(seq 1 30); do
+    HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$RPC_URL" 2>/dev/null || true)
+    [ "$HTTP_STATUS" = "409" ] && break
+    kill -0 "$SMOKE_PID" 2>/dev/null || break
+    sleep 0.5
+done
 
-if [ "$HTTP_STATUS" = "409" ]; then
-    echo "    Smoke: received 409 + Session-Id header — daemon is live."
-else
-    echo "ERROR: Smoke test FAILED — expected HTTP 409, got: $HTTP_STATUS"
+if [ "$HTTP_STATUS" != "409" ]; then
+    echo "ERROR: Smoke test FAILED — expected HTTP 409, got: ${HTTP_STATUS:-none}"
+    sed -n '1,20p' "$SMOKE_CONFIG/daemon.log" || true
     exit 1
 fi
+echo "    Smoke: received 409 + Session-Id header — daemon is live."
+
+SESSION_ID=$(curl -s -D - -o /dev/null "$RPC_URL" | awk 'tolower($1)=="x-transmission-session-id:" {print $2}' | tr -d '\r')
+SESSION_JSON=$(curl -s -H "X-Transmission-Session-Id: ${SESSION_ID}" \
+    -d '{"method":"session-get","arguments":{"fields":["version"]}}' "$RPC_URL" || true)
+if ! printf '%s' "$SESSION_JSON" | grep -q "\"version\":\"${VERSION}"; then
+    echo "ERROR: Smoke test FAILED — session-get did not report version ${VERSION}: ${SESSION_JSON}"
+    exit 1
+fi
+echo "    Smoke: session-get reports ${VERSION}."
+
+cleanup_smoke
+SMOKE_PID=""
+trap - EXIT
 
 echo ""
 echo "Resource directory contents:"

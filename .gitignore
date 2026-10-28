@@ -33,6 +33,10 @@ src-tauri/gen/
 .AppleDouble
 .LSOverride
 
+# Python bytecode (packaging scripts under scripts/)
+__pycache__/
+*.pyc
+
 # Windows system files
 Thumbs.db
 ehthumbs.db
