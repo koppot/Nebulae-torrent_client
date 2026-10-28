@@ -482,3 +482,96 @@ The tarball and its `.sig` must always be replaced together.
 5. `0.2.3` installed directly reports
    `Nebulae is up to date; no update available.`
 
+
+## 13. B4 regression repair — disc startup watch and automatic crop (2026-10-28)
+
+Baseline for the user's observations: the rollback build with executable
+SHA-256 `c27c16b67cf8…e55f64` ("c27c16b6") and the B3 candidate
+`054d97c9bcb2…c15819`. In c27c16b6 the crop jumping was "not noticeable" and
+no flash appeared before the disc menu. B3 showed both. Items B, D and E were
+already present in c27c16b6.
+
+Everything below is **implemented but runtime-unverified** until the user plays
+the discs named in the verification list.
+
+### 13.1 Disc startup watch (B, C) — `menu_watch.rs`, commit `ecfb084`
+
+* Cause. `libvlc_media_player_set_title` makes the input thread announce the
+  requested title whether or not the Blu-ray VM accepted it, so the watcher
+  took that false "menu" report as success and stopped while First Play (the
+  FBI warnings on Gundam Narrative and Patlabor 2) was still running. The
+  First Play skip also had no guard for a First Play that has not reported a
+  length yet.
+* Fix. A menu report only ends the watch after it has held for 1 s; the skip is
+  taken once and only for a First Play with a known length; the menu request is
+  repeated on a 25 ms grid for 4 s after the skip so the feature that First Play
+  jumps to is on screen for as little time as possible. The bounded fallback
+  (one reopen with `bypass_menu = true`, 15 s window) is unchanged.
+* Residual risk. A First Play whose length never becomes known is not skipped;
+  the watch then retries every 2 s until the 15 s window ends and the fallback
+  runs.
+
+### 13.2 Automatic crop (A, E, F) — `letterbox.rs`, `FramingState`, `framing_tick`
+
+Findings (all from the code and from `nebulae_session.log`):
+
+* **A — flipping.** LibVLC 3.0 takes snapshots from the *cropped* display
+  format: `vout_snapshot_Set(&vout->p->snapshot, &vd->source, snap_pic)`
+  (`video_output.c:1128`), and `vd->source` carries the user crop
+  (`display.c`, `ch_crop`). Once a crop was applied the next snapshots showed no
+  bars, the tracker read two "no bars" samples as "full frame picture" and
+  cleared the crop, the bars came back, and the cycle repeated. On
+  2026-10-28 between 08:28:03 and 08:29:14 the log shows 8 confirmations and 7
+  clears of `0+44+0+40` / `0+40+0+40`; each cycle also re-fitted the window
+  between aspect 1.850 and 1.778. The crop code has not changed since
+  `0703023`; which snapshots were cropped varies with timing, which is why
+  c27c16b6 did not show it every time.
+* **F — black-dominant frames.** The detector scanned borders inward and
+  returned the bounding box of whatever was not black. Title cards, warnings
+  and menus produced crops such as `226+276+234+330` (active 1460x474 of
+  1920x1080), `884+640+884+648` (2072x872 of 3840x2160) and `144+96+150+104`
+  (426x280 of 720x480, Banner of Stars). The only thing that removed them again
+  was the clearing loop above.
+* **E — Banner of Stars side bars.** The 720x480 anamorphic frames carry 3-6 px
+  on the left and 1-4 px on the right (0.4%-0.8%); the 1% minimum bar size hid
+  them.
+
+Correction:
+
+* A frame is only evidence when it shows a picture: the active rectangle must be
+  at least 50% of the frame, no edge may exceed 35%, bars on one axis only,
+  large bars roughly symmetric, and at least 35% of the active pixels must be
+  visible (luma >= 40). Anything else, including full-frame readings of
+  black-dominant frames, is `Unknown` and never changes crop state or counts
+  towards "full frame confirmed".
+* The minimum bar is 0.4% (3 px on a 720 px frame). Two samples must agree, and
+  the applied crop is the per-edge minimum of the confirming samples.
+* An applied crop is held. "No bars" in a cropped snapshot is the normal
+  reading, differing bars inside a cropped picture are never used to tighten it,
+  and sampling stops once a crop is applied. It is released on a menu, title or
+  media change, or when the video track changes size inside a title.
+* The unchanged 4:3 rule still keeps a 4:3 picture's normal side bars.
+
+Evidence:
+
+* Offline, real frames (not committed): the detector run on 12 Mary frames,
+  8 Banner of Stars frames and 57 Gundam Narrative / Patlabor 2 frames gives
+  `0+40+0+40`/`0+44+0+40` on every Mary frame, `4+0+0+0` / `6+0+2+0` on the
+  five genuine Banner frames, `0+20+0+20` on the Patlabor 2 feature frames, and
+  no crop for any title card, warning, menu or credit frame.
+* Unit tests in `letterbox.rs` and `player/mod.rs` assert the applied crop for:
+  centered text, text and credits near the edges, sparse objects, fades and
+  fully black frames, dark scenes without bars, 2.39:1 letterbox, narrow
+  pillarbox, a cropped scene followed by a title card, repeated ambiguous frames,
+  cropped and uncropped snapshot behaviour, and media/title reset. With the
+  evidence gate disabled 13 of them fail; with the old clear-on-no-bars rule 4
+  fail; with the 1% minimum 3 fail.
+
+Not covered by automated tests and needing real playback: the visual result on
+Mary and the Witch's Flower, Banner of Stars (side bars, with the window fitted
+to 1.76:1) and Gundam Narrative / Patlabor 2 (no crop while the warnings run).
+
+Limitation. With a crop applied the snapshot cannot show the full frame, so
+content whose framing changes inside one title (for example full-frame scenes
+following letterboxed ones) is not re-measured; the crop is released at the next
+title, menu or stream-size change.

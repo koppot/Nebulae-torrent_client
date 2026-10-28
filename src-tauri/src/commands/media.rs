@@ -2289,58 +2289,59 @@ fn framing_tick(
         fs.forget_measurements();
     }
 
+    // 2b. A crop is measured on one stream geometry. When the video track changes size
+    //     inside the same title (clip or playlist switch) it no longer applies: release
+    //     it and measure the new stream from scratch.
+    if let (Some(bars), Some(get_size)) = (fs.applied, lib.libvlc_video_get_size) {
+        let mut w: std::ffi::c_uint = 0;
+        let mut h: std::ffi::c_uint = 0;
+        if unsafe { get_size(mp as *mut c_void, 0, &mut w, &mut h) } == 0
+            && bars.stream_changed(w, h)
+        {
+            tracing::info!(
+                "[framing] stream size changed from {}x{} to {w}x{h}: releasing crop",
+                bars.frame_width,
+                bars.frame_height
+            );
+            apply_crop_spec(lib, mp, "");
+            fs.source = (w, h);
+            fs.sar = unsafe { engine::video_track_sar(lib, mp) };
+            if fs.window_fitted_aspect.is_some() {
+                let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+                let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+                fs.window_fitted_aspect = None;
+            }
+            fs.forget_measurements();
+        }
+    }
+
     // 3. Process pending observation from helper thread
     if let Some(obs) = fs.pending.take() {
-        match fs.tracker.observe(obs) {
-            player::letterbox::CropAction::Set(bars) => {
-                tracing::info!(
-                    "[framing] crop confirmed: {} (active {}x{} in {}x{})",
-                    bars.crop_spec(),
-                    bars.active_width(),
-                    bars.active_height(),
-                    bars.frame_width,
-                    bars.frame_height
-                );
-                fs.applied = Some(bars);
-                fs.stable_samples = 0;
-                fs.settled = false;
-                apply_crop_spec(lib, mp, &bars.crop_spec());
+        if let Some(bars) = fs.accept(obs) {
+            tracing::info!(
+                "[framing] crop confirmed: {} (active {}x{} in {}x{})",
+                bars.crop_spec(),
+                bars.active_width(),
+                bars.active_height(),
+                bars.frame_width,
+                bars.frame_height
+            );
+            apply_crop_spec(lib, mp, &bars.crop_spec());
 
-                // Fit window to confirmed cropped display aspect ratio (4:3 exception preserved)
-                let active_aspect = bars.active_aspect();
-                if active_aspect > 1.45 {
-                    let should_fit = match fs.window_fitted_aspect {
-                        Some(last) => (last - active_aspect).abs() > 0.02,
-                        None => true,
-                    };
-                    if should_fit {
-                        fs.window_fitted_aspect = Some(active_aspect);
-                        if let Err(e) = player::fit_player_window_to_aspect(&app, active_aspect) {
-                            tracing::warn!("[framing] window fit failed: {e}");
-                        }
+            // Fit window to confirmed cropped display aspect ratio (4:3 exception preserved)
+            let active_aspect = bars.active_aspect();
+            if active_aspect > 1.45 {
+                let should_fit = match fs.window_fitted_aspect {
+                    Some(last) => (last - active_aspect).abs() > 0.02,
+                    None => true,
+                };
+                if should_fit {
+                    fs.window_fitted_aspect = Some(active_aspect);
+                    if let Err(e) = player::fit_player_window_to_aspect(&app, active_aspect) {
+                        tracing::warn!("[framing] window fit failed: {e}");
                     }
                 }
             }
-            player::letterbox::CropAction::Clear => {
-                tracing::info!("[framing] crop cleared (full frame picture detected)");
-                fs.applied = None;
-                fs.stable_samples = 0;
-                fs.settled = false;
-                apply_crop_spec(lib, mp, "");
-
-                if fs.window_fitted_aspect.is_some() {
-                    let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
-                    let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
-                    fs.window_fitted_aspect = None;
-                }
-            }
-            player::letterbox::CropAction::Stable => {
-                fs.stable_samples += 1;
-                if fs.stable_samples >= 2 {
-                    fs.settled = true;
-                }
-            }
-            player::letterbox::CropAction::None => {}
         }
     }
 

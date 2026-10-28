@@ -118,6 +118,9 @@ pub struct PlayerState {
     pub last_logged_poll_state: Mutex<Option<(u64, i32, bool, bool)>>,
 }
 
+/// Consecutive agreeing samples after which framing sampling stops.
+const STABLE_SAMPLES_TO_SETTLE: u32 = 2;
+
 /// Black-bar measurement and crop tracking state for the active session.
 pub struct FramingState {
     pub tracker: letterbox::CropTracker,
@@ -160,6 +163,31 @@ impl FramingState {
         self.polls_since_reassert = 0;
     }
 
+    /// Feeds one snapshot observation to the tracker and returns the crop to apply,
+    /// if this observation confirmed one.
+    ///
+    /// Sampling stops as soon as a crop is applied: later snapshots show the cropped
+    /// picture and cannot say anything new about the encoded bars. Without a crop,
+    /// sampling stops once the full frame is confirmed.
+    pub fn accept(&mut self, obs: letterbox::BarObservation) -> Option<letterbox::Bars> {
+        match self.tracker.observe(obs) {
+            letterbox::CropAction::Set(bars) => {
+                self.applied = Some(bars);
+                self.stable_samples = 0;
+                self.settled = true;
+                Some(bars)
+            }
+            letterbox::CropAction::Stable => {
+                self.stable_samples += 1;
+                if self.stable_samples >= STABLE_SAMPLES_TO_SETTLE {
+                    self.settled = true;
+                }
+                None
+            }
+            letterbox::CropAction::None => None,
+        }
+    }
+
     pub fn source_display_aspect(&self) -> Option<f64> {
         let (w, h) = self.source;
         if w == 0 || h == 0 {
@@ -186,5 +214,115 @@ impl Default for FramingState {
             stable_samples: 0,
             polls_since_reassert: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod framing_state_tests {
+    use super::letterbox::{BarObservation, Bars};
+    use super::FramingState;
+
+    fn uhd_bars(top: u32, bottom: u32) -> Bars {
+        Bars {
+            top,
+            bottom,
+            left: 0,
+            right: 0,
+            frame_width: 3840,
+            frame_height: 2160,
+            sar: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_confirmed_crop_is_applied_once_and_sampling_stops() {
+        let mut fs = FramingState::default();
+        let crop = uhd_bars(44, 40);
+
+        assert_eq!(fs.accept(BarObservation::Bars(crop)), None);
+        assert!(!fs.settled, "one sample is not a confirmation");
+
+        assert_eq!(fs.accept(BarObservation::Bars(crop)), Some(crop));
+        assert_eq!(fs.applied, Some(crop));
+        assert!(fs.settled, "no further snapshots once the crop is applied");
+    }
+
+    #[test]
+    fn cropped_snapshots_leave_the_applied_crop_alone() {
+        let mut fs = FramingState::default();
+        let crop = uhd_bars(44, 40);
+        fs.accept(BarObservation::Bars(crop));
+        fs.accept(BarObservation::Bars(crop));
+
+        for _ in 0..30 {
+            assert_eq!(fs.accept(BarObservation::NoBars), None);
+            assert_eq!(fs.accept(BarObservation::Unknown), None);
+        }
+        assert_eq!(fs.applied, Some(crop));
+        assert_eq!(fs.tracker.applied(), Some(crop));
+        assert!(fs.settled);
+    }
+
+    #[test]
+    fn ambiguous_observations_never_apply_or_settle() {
+        let mut fs = FramingState::default();
+        for _ in 0..50 {
+            assert_eq!(fs.accept(BarObservation::Unknown), None);
+        }
+        assert_eq!(fs.applied, None);
+        assert!(!fs.settled);
+    }
+
+    #[test]
+    fn a_confirmed_full_frame_settles_without_a_crop() {
+        let mut fs = FramingState::default();
+        for _ in 0..3 {
+            assert_eq!(fs.accept(BarObservation::NoBars), None);
+        }
+        assert_eq!(fs.applied, None);
+        assert!(fs.settled);
+    }
+
+    #[test]
+    fn a_title_or_menu_change_forgets_the_crop() {
+        let mut fs = FramingState::default();
+        let crop = uhd_bars(44, 40);
+        fs.accept(BarObservation::Bars(crop));
+        fs.accept(BarObservation::Bars(crop));
+        fs.window_fitted_aspect = Some(1.85);
+
+        fs.forget_measurements();
+        assert_eq!(fs.applied, None);
+        assert_eq!(fs.tracker.applied(), None);
+        assert!(!fs.settled);
+        assert!(fs.pending.is_none());
+
+        // The next title is measured from scratch: one sample confirms nothing.
+        let other = uhd_bars(0, 0);
+        assert_eq!(fs.accept(BarObservation::Bars(other)), None);
+        assert_eq!(fs.applied, None);
+    }
+
+    #[test]
+    fn media_change_resets_all_framing_state() {
+        let mut fs = FramingState::default();
+        let crop = uhd_bars(44, 40);
+        fs.title = 2;
+        fs.source = (3840, 2160);
+        fs.sar = 1.0;
+        fs.accept(BarObservation::Bars(crop));
+        fs.accept(BarObservation::Bars(crop));
+        fs.window_fitted_aspect = Some(1.85);
+        fs.polls_since_reassert = 12;
+
+        fs.reset();
+
+        assert_eq!(fs.title, -1);
+        assert_eq!(fs.applied, None);
+        assert_eq!(fs.tracker.applied(), None);
+        assert_eq!(fs.source, (0, 0));
+        assert_eq!(fs.window_fitted_aspect, None);
+        assert_eq!(fs.polls_since_reassert, 0);
+        assert!(!fs.settled && !fs.sampling && fs.pending.is_none());
     }
 }
