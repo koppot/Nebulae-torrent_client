@@ -82,6 +82,7 @@
 - Verifies `navigate_menu` export in libvlc.5.dylib via `nm`.
 - Overwrites any stale runtime files.
 - Integrated into `tauri.conf.json` `beforeBuildCommand`: `pnpm build && sh scripts/stage-vlc-runtime.sh`.
+- **Superseded 2026-10-28:** `beforeBuildCommand` is `pnpm build` only, and the script no longer copies from `/tmp`. The runtime is built and staged by `scripts/bundle-macos-vlc.sh` (which runs `build-vlc-runtime.sh` and then this script) before `pnpm tauri build`; see `BUILD_NOTES.md`.
 
 **`scripts/verify-vlc-runtime.sh`** — Pre-build verification:
 - Checks core libraries and plugins are present.

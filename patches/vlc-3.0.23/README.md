@@ -1,30 +1,43 @@
 # VLC 3.0.23 Runtime Patches
 
-Nebulae ships a **hybrid** VLC 3.0.23 runtime (assembled by
-`scripts/stage-vlc-runtime.sh`): every library and plugin comes from the
-official VideoLAN VLC 3.0.23 app bundle, except the artifacts carrying
-the patches in this directory, which are built locally from the VLC 3.0.23
-release tarball.
+Nebulae ships a **hybrid** VLC 3.0.23 runtime for macOS Apple silicon (assembled by
+`scripts/stage-vlc-runtime.sh`): every library and plugin comes from the official
+VideoLAN VLC 3.0.23 app, except the artifacts carrying the patches in this
+directory, which `scripts/build-vlc-runtime.sh` builds from the VLC 3.0.23 release
+tarball, and libbluray, which it builds from its own pinned tarball.
 
 | Artifact | Source | Patch(es) |
 |----------|--------|----------|
-| `lib/libvlccore.9.dylib` | official `/Applications/VLC.app` | none |
-| `plugins/*` (338 files) | official `/Applications/VLC.app` | none |
-| `lib/libvlc.5.dylib` | local build | `navigate-menu.patch`, `bluray-playlist-id.patch` |
-| `plugins/libvideotoolbox_plugin.dylib` | local build | `vt-305.patch` |
-| `plugins/libcaopengllayer_plugin.dylib` | local build | `hdr-tonemap.patch` |
-| `plugins/liblibbluray_plugin.dylib` | local build | `bluray-playlist-id.patch` |
+| `lib/libvlccore.9.dylib` | official VLC 3.0.23 app | none |
+| `plugins/*` (331 files) | official VLC 3.0.23 app | none |
+| `lib/libvlc.5.dylib` | built from the patched source | `navigate-menu.patch`, `bluray-playlist-id.patch` |
+| `plugins/libvideotoolbox_plugin.dylib` | built from the patched source | `vt-305.patch` |
+| `plugins/libcaopengllayer_plugin.dylib` | built from the patched source | `hdr-tonemap.patch` |
+| `plugins/libglconv_cvpx_plugin.dylib` | built from the patched source | none of its own: it must match the converter struct that `hdr-tonemap.patch` changes |
+| `plugins/liblibbluray_plugin.dylib` | built from the patched source | `bluray-playlist-id.patch` |
+| `lib/libbluray.4.dylib`, `lib/libbluray-j2se-1.5.0.jar`, `lib/libbluray-awt-j2se-1.5.0.jar` | libbluray 1.5.0, built unmodified | none |
+
+The Blu-ray plugin is linked to this libbluray 1.5.0, not to the libbluray 1.4.0
+that is built into VideoLAN's own Blu-ray plugin, so the 1.4.0 jars of the
+official plugin set are not shipped (libbluray only accepts jars of its own
+version). The libraries libbluray needs (libudfread, fontconfig, freetype,
+libpng, libintl) are copied from Homebrew next to it and relocated; they are
+listed in `vlc/bundled-libraries.json` inside the app.
 
 ## Source identity
 
-- VLC 3.0.23 "Vetinari" release tarball (videolan.org), unpacked at
-  `/tmp/vlc-3.0.23`, built in `/tmp/vlc-3.0.23-build` (see BUILD_NOTES.md).
-- Official binaries: `/Applications/VLC.app`,
-  `CFBundleShortVersionString` = 3.0.23.
+- VLC 3.0.23 "Vetinari" release tarball (videolan.org), SHA-256
+  `e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0`, unpacked and
+  patched by `scripts/build-vlc-runtime.sh` under `src-tauri/vlc-runtime-build/`
+  (git-ignored). See `BUILD_NOTES.md`.
+- libbluray 1.5.0 release tarball, SHA-256
+  `f676408e91a5d321abf8b8d4dfdae36205c297dab5c54c3ec519639025f474a2`.
+- Official binaries: the VLC 3.0.23 disk image of VideoLAN, whose SHA-256 is pinned
+  in `scripts/bundle-macos-vlc.sh`; `CFBundleShortVersionString` = 3.0.23.
 - ABI contract: install name `@rpath/libvlccore.dylib`, compatibility
   version 10.0.0, current version 10.1.0 — identical between the official
   and locally built artifacts, and enforced by
-  `scripts/verify-vlc-runtime.sh` together with full VLC-namespaced symbol
+  `scripts/stage-vlc-runtime.sh` together with full VLC-namespaced symbol
   coverage of the custom libvlc against the official core.
 
 ## vt-305.patch — `modules/codec/videotoolbox.m`
@@ -126,12 +139,9 @@ plus the byte-size of the identified warning MPLS file.
 Status: **compiled** into both `lib/libvlc.5.dylib` (new export) and
 `plugins/liblibbluray_plugin.dylib` (the `bluray.c` change).
 
-Note: `liblibbluray_plugin.la` requires `-lintl` during linking (GNU gettext,
-used for `_("Top Menu")` strings in `bluray.c`). When the configure-generated
-`LTLIBINTL` is empty (no system libintl found), build with:
-```
-make -C modules liblibbluray_plugin.la LDFLAGS="-L/opt/homebrew/lib" LIBS="-lintl"
-```
+Note: `liblibbluray_plugin.la` needs `-lintl` when it is linked (GNU gettext, used for
+`_("Top Menu")` strings in `bluray.c`). `scripts/build-vlc-runtime.sh` passes the
+Homebrew gettext link flags itself.
 
 ## Applying the patches
 
@@ -163,10 +173,12 @@ pristine tarball now yields all nine patched files byte-identical to it.
 
 ## Build requirements
 
-- Xcode CLT; Homebrew bison 3.8.2 (system bison 2.3 cannot build webvtt's
-  grammar); Homebrew gettext for libintl (required by bluray.c in menu mode).
-- Only `libvlc.la`, `libvideotoolbox_plugin.la`, `libcaopengllayer_plugin.la`,
-  `libglconv_cvpx_plugin.la`, and `liblibbluray_plugin.la` are built locally.
+See `BUILD_NOTES.md`: Xcode command line tools, the Homebrew packages that the
+workflows install (Homebrew bison replaces the system bison 2.3, which cannot build
+webvtt's grammar; Homebrew gettext supplies libintl), and a JDK for the BD-J jars.
+Only `libvlc.la`, `libvideotoolbox_plugin.la`, `libcaopengllayer_plugin.la`,
+`libglconv_cvpx_plugin.la`, and `liblibbluray_plugin.la` are built; a full module
+build is unnecessary.
 
 ## Historical note
 

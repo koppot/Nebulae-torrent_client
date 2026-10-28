@@ -624,3 +624,85 @@ All" keep their authored meaning and are not touched.
 * Residual risks. On any other DVD, Play Main Feature now stops at the end of
   the title it plays instead of following the disc's chain. A localized VLC
   string for "DVD Menu" fails closed (no lock; the old First Play behavior).
+
+## 14. B4 packaging repair — dependencies, libbluray, Transmission, geo, Finder files (2026-10-28)
+
+Starting point: the B3 candidate (`054d97c9bcb2…c15819`) as installed. A recursive
+audit of that app (`scripts/audit-macos-bundle.py`, written for this repair) found
+11 load commands that name the build machine's Homebrew (5 in the Transmission
+daemon, 6 in the Blu-ray plugin), 2 dependencies that resolve nowhere (the Sparkle
+and Growl plugins copied from VLC.app), one `.DS_Store`, and 13 compiled-in
+Homebrew or `/usr/local` library paths (2 in the main executable, 5 in the daemon,
+6 in the Blu-ray plugin). Every fix below lives in repository scripts and
+workflows; the installed app was not edited by hand. No GitHub workflow was run.
+
+### 14.1 Causes and fixes
+
+| # | Problem | Cause | Fix |
+|---|---|---|---|
+| P1 | The Blu-ray plugin loaded libbluray, fontconfig, freetype, libpng, libudfread and libintl from `/opt/homebrew`; the BD-J jars shipped were the 1.4.0 jars of the official plugin, while the library was the Homebrew 1.5.0 (libbluray only accepts jars of its own version). `bluray-playlist-id.patch` could not be applied to a pristine VLC tree. | `bluray-playlist-id.patch` was malformed (`patch` stopped with "malformed patch at line 24"); the header hunk of `navigate-menu.patch` only matched with fuzz and put its declaration above the typedef it needs. The artifacts had been built from a hand-edited tree. `release.yml` never applied the playlist patch or built the Blu-ray plugin, and its failures were swallowed by `\|\| echo "Notice…"`. | Both patches regenerated; `scripts/apply-vlc-patches.sh` (zero fuzz, order fixed, refuses a patched tree, checks nine sources against `patched-sources.sha256`). `scripts/build-vlc-runtime.sh` builds libbluray 1.5.0 with its jars and VLC with all four patches from SHA-256-pinned tarballs. `scripts/stage-vlc-runtime.sh` ships `libbluray.4.dylib`, both 1.5.0 jars and the relocated libraries, and leaves out the 1.4.0 jars, `plugins.dat`, and the Sparkle and Growl plugins. |
+| P2 | The Transmission daemon named five libraries in `/opt/homebrew/opt/…`. | The bundle held copies of the libraries in `lib/`, but the daemon's own load commands were never rewritten, so a Mac without those Homebrew paths could not start it, and this Mac silently used Homebrew's copies. | `scripts/relocate-macos-dylibs.py` rewrites the closure; `scripts/bundle-macos-transmission.sh` builds the identity-patched 4.1.3 from the pinned tarball, audits strictly, writes licenses and runs a loopback smoke test. No version was changed. |
+| P3 | CI would not have produced the same runtime. | The three macOS workflow legs installed `transmission-cli` and fetched VLC with their own inline steps, with `\|\| true`, and differed (3.0.21 and 3.0.23). | All three call `scripts/bundle-macos-transmission.sh` and `scripts/bundle-macos-vlc.sh`, install a fixed Homebrew list without `\|\| true`, and use VLC 3.0.23. |
+| P4 | 334 log lines `[geo] …/Contents/Resources/geo/… not found`. | The code looked in `<resources>/geo`, Tauri bundles the glob at `<resources>/resources/geo`. The databases are not in the repository and the CI never runs `scripts/download_geo_db.sh` (it needs a MaxMind key), so the directory ships empty. | `utils/geo.rs` looks in both places, logs absence once and carries on without geo data. No database was invented or bundled. |
+| P5 | `Contents/Resources/resources/.DS_Store`. | Finder wrote it into `src-tauri/resources`, and `"resources/**/*"` copies hidden files. | The staging scripts and the release and candidate workflows delete `.DS_Store` before `tauri build`; `scripts/verify-macos-app.sh` fails if one reaches the app. |
+
+### 14.2 Build and verification tooling
+
+* `scripts/bundle-macos-vlc.sh TARGET` is the one entry point of the three
+  workflows. arm64: pinned official DMG, `build-vlc-runtime.sh`,
+  `stage-vlc-runtime.sh`. x86_64: the unmodified official Intel VLC 3.0.23.
+* `build-vlc-runtime.sh` compiles with `-ffile-prefix-map` and `-g0` and then fails
+  when a build-machine path is still inside libbluray, libvlc or a plugin (strings
+  and debug-map entries). Without those flags the artifacts carried the source
+  and build directories of the machine. The deployment target is the app's own
+  11.0, so the artifacts built here no longer demand a newer macOS than the app.
+* Shell lesson: `strings … | grep -q` fails under `pipefail` because `grep` quits
+  at the first match and `strings` dies of SIGPIPE; the scripts write the listing
+  to a file first.
+* `scripts/verify-macos-app.sh APP` is the gate for a built app: no Finder or
+  AppleDouble files, the strict audit with `--strict-strings`, an advice list of
+  images that need a newer macOS than the app declares, `codesign --verify
+  --deep --strict`, and the VLC and Transmission files compared with
+  `build-manifest.json` and `bundled-libraries.json`.
+* `bluray_meta.rs`: a release build loads only the libbluray in the bundle. The
+  Homebrew and `/usr/local` fallback paths are compiled into debug builds only.
+
+### 14.3 Findings that remain true after the repair
+
+* **Minimum macOS.** The app declares 11.0. The Homebrew libraries copied beside
+  libbluray (5) and beside the Transmission daemon (5) declare 26.0, because a
+  Homebrew bottle keeps the deployment target of the Mac that built it, and the
+  Tailscale binaries declare 13.0. Lowering that needs those libraries built from
+  source. Until then the app is not known to run on a clean Mac or on an older
+  macOS. This was not tested.
+* **Compiled-in data paths.** Homebrew's fontconfig and libintl contain default
+  data directories under `/opt/homebrew` (`/opt/homebrew/etc/fonts`, the keg's
+  `share/locale`). They are strings for data, not libraries the loader opens, and
+  the audit does not count them. libbluray's BD-J text drawing initializes
+  fontconfig with `FcInitLoadConfigAndFonts()`, which falls back to its defaults;
+  whether BD-J menu text renders on a Mac without Homebrew's configuration has
+  not been tested (it needs a BD-J disc).
+* **VideoLAN's binaries.** About 300 official plugins contain VideoLAN's own build
+  host paths as debug strings. They are not library paths and cannot be changed
+  without rebuilding VLC.
+* **x86_64.** The workflow leg runs on an arm64 runner and cannot build the
+  patched runtime, so it ships the unmodified Intel VLC without Nebulae's patches
+  (a workflow warning says so), and its Transmission helpers are built for the
+  runner's architecture. This is reported, not fixed.
+* **Tauri and symlinks.** The bundler copies the symlinks `lib/libvlc.dylib` and
+  `lib/libvlccore.dylib` as regular files, so the built app holds two real copies
+  of each. `engine.rs` preloads every dylib in `vlc/lib` whose name does not start
+  with `libvlc.`, which includes both `libvlccore.9.dylib` and the copy named
+  `libvlccore.dylib`. The B3 app did the same and played discs; it was not
+  examined further here.
+* **Notices.** `THIRD-PARTY-NOTICES.md` is not shipped inside the app. The license
+  texts of the components that this repair bundles are in `vlc/licenses/` and
+  `engine/transmission/licenses/`; the Tailscale license text and the notices file
+  itself are not in the app.
+
+### 14.4 Needs real use
+
+Static checks and isolated smoke tests cannot show these: a BD-J disc with the
+bundled libbluray 1.5.0 and its jars (menus, text), a Blu-ray with the patched
+plugin (playlist id, warning skip), Transmission against the live profile, and the
+workflows on GitHub (never triggered from here).

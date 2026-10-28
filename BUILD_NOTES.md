@@ -2,116 +2,101 @@
 
 ## Overview
 
-Nebulae bundles a **hybrid VLC 3.0.23 runtime**:
+The macOS (Apple silicon) app bundles a **hybrid VLC 3.0.23 runtime**, the libraries that libbluray needs, and a Transmission daemon with its libraries. Repository scripts build or stage every one of them. The three macOS workflow legs (`release.yml`, `candidate-build.yml`, `build-test.yml`) call those same scripts, so a local build and a CI build produce the same payload.
 
-- **Official VideoLAN binaries** (from `/Applications/VLC.app`, version
-  exactly 3.0.23) provide `libvlccore.9.dylib` and the complete plugin set —
-  the same binaries the reference VLC player uses, linking only system
-  libraries.
-- **Four locally built artifacts** carry Nebulae's patches (see
-  `patches/vlc-3.0.23/`):
-  - `lib/libvlc.5.dylib` — adds the `libvlc_media_player_navigate_menu()`
-    export (`navigate-menu.patch`).
-  - `plugins/libvideotoolbox_plugin.dylib` — VideoToolbox session-reuse fix
-    (`vt-305.patch`).
-  - `plugins/libcaopengllayer_plugin.dylib` — GLSL ITU-R BT.2390 tone mapping
-    and BT.709 gamut mapping (`hdr-tonemap.patch`).
-  - `plugins/libglconv_cvpx_plugin.dylib` — CVPX texture converter matched to
-    patched OpenGL converter struct layout.
+- **Official VideoLAN binaries** (from the official VLC 3.0.23 disk image, whose SHA-256 is pinned in `scripts/bundle-macos-vlc.sh`) provide `libvlccore.9.dylib` and the plugin set. They link only system libraries.
+- **Five files built by Nebulae** from the VLC 3.0.23 source tarball carry its patches (`patches/vlc-3.0.23/`, applied by `scripts/apply-vlc-patches.sh`):
+  - `lib/libvlc.5.dylib` — adds `libvlc_media_player_navigate_menu()` (`navigate-menu.patch`) and `libvlc_media_player_get_bluray_playlist_id()` (`bluray-playlist-id.patch`).
+  - `plugins/libvideotoolbox_plugin.dylib` — VideoToolbox session-reuse fix (`vt-305.patch`).
+  - `plugins/libcaopengllayer_plugin.dylib` — GLSL ITU-R BT.2390 tone mapping and BT.709 gamut mapping (`hdr-tonemap.patch`).
+  - `plugins/libglconv_cvpx_plugin.dylib` — CVPX texture converter matched to the patched OpenGL converter struct layout.
+  - `plugins/liblibbluray_plugin.dylib` — publishes the active Blu-ray playlist number (`bluray-playlist-id.patch`); linked to libbluray 1.5.0.
+- **libbluray 1.5.0 and its BD-J jars**, built from the pinned upstream tarball. libbluray only accepts jars of its own version, so the library and the two jars are built and shipped together. The Homebrew libraries it needs (libudfread, fontconfig, freetype, libpng, libintl) are copied next to it in `vlc/lib` and rewritten to load from inside the bundle.
+- **Transmission 4.1.3** with the identity-override patch, built from the pinned source tarball, with its five Homebrew libraries, in `engine/transmission/`.
+
+No step falls back to an unpatched or differently versioned component. A download whose checksum does not match, a patch that does not apply, a missing artifact, or a reference to the build machine in a shipped file stops the build.
 
 ## Prerequisites
 
-- macOS with Xcode CLT.
-- Official **VLC 3.0.23** installed at `/Applications/VLC.app`
-  (override with `VLC_OFFICIAL_APP`; any other version fails the ABI check).
-- Rust + pnpm + Node.js for the app itself.
-- Only for rebuilding the patched artifacts: Homebrew bison 3.8.2
-  (`/opt/homebrew/opt/bison/bin/bison`).
+- macOS on Apple silicon with the Xcode command line tools. The patched runtime links Homebrew libraries that exist only for the architecture of the build machine, so it is built on an arm64 Mac.
+- Homebrew packages (the workflows install the same list):
+  `brew install cmake meson ninja pkgconf bison libevent libdeflate libpsl miniupnpc gettext libudfread fontconfig freetype`
+  Homebrew bison replaces the system bison 2.3, which cannot build the webvtt grammar of VLC. Run the scripts with `/opt/homebrew/bin` in `PATH`.
+- A JDK 18 or newer (`javac`) for the BD-J jars: `JAVA_HOME`, or the newest one that `/usr/libexec/java_home` knows. Apache Ant is fetched by the script as a checksum-verified upstream release; it is a build tool and is not shipped.
+- Network access to `download.videolan.org`, `archive.apache.org` and `github.com`. Every download is pinned by SHA-256 (SHA-512 for Ant) in the script that fetches it.
+- Rust, Node.js and pnpm for the app itself.
 
-## Building the patched artifacts (one-time / when patches change)
+## Building the runtime and the app
 
-```bash
-# 1. Unpack the VLC 3.0.23 release tarball
-cd /tmp && tar xf vlc-3.0.23.tar.xz   # from videolan.org
-
-# 2. Apply the patches
-cd /tmp/vlc-3.0.23
-patch -p1 < <repo>/patches/vlc-3.0.23/vt-305.patch
-patch -p1 < <repo>/patches/vlc-3.0.23/navigate-menu.patch
-patch -p1 < <repo>/patches/vlc-3.0.23/hdr-tonemap.patch
-#    (navigate-menu.patch covers lib/media_player.c, lib/libvlc.sym, and the
-#    public declaration in include/vlc/libvlc_media_player.h)
-
-# 3. Configure + build ONLY the three artifacts (a full module build is
-#    unnecessary and currently fails on webvtt's bison grammar)
-mkdir -p /tmp/vlc-3.0.23-build && cd /tmp/vlc-3.0.23-build
-../vlc-3.0.23/configure --prefix=/tmp/vlc-3.0.23-install \
-    --disable-qt --disable-lua --disable-python --disable-test \
-    --disable-doc --enable-vlc --enable-plugins \
-    --disable-vdpau --disable-wayland
-export PATH="/opt/homebrew/opt/bison/bin:$PATH"
-make -j"$(sysctl -n hw.ncpu)" libvlc.la
-make -j"$(sysctl -n hw.ncpu)" libvideotoolbox_plugin.la
-make -j"$(sysctl -n hw.ncpu)" -C modules libcaopengllayer_plugin.la libglconv_cvpx_plugin.la
-# Artifacts:
-#   lib/.libs/libvlc.5.dylib
-#   modules/.libs/libvideotoolbox_plugin.dylib
-#   modules/.libs/libcaopengllayer_plugin.dylib
-#   modules/.libs/libglconv_cvpx_plugin.dylib
-```
-
-## Staging the runtime
+From the repository root:
 
 ```bash
-./scripts/stage-vlc-runtime.sh     # env: VLC_OFFICIAL_APP, VLC_BUILD_DIR
-```
-
-The script:
-
-1. Verifies the official app is exactly 3.0.23.
-2. Verifies the custom artifacts carry their patch symbols
-   (`VTDecompressionSessionCanAcceptFormatDescription`,
-   `_libvlc_media_player_navigate_menu` in the export trie).
-3. Verifies the ABI contract: the custom libvlc's `@rpath/libvlccore.dylib`
-   compatibility version equals the official core's, and every
-   VLC-namespaced symbol the custom libvlc imports is exported by the
-   official core.
-4. Replaces `src-tauri/resources/vlc/{lib,plugins}`: official core +
-   plugins, custom libvlc + videotoolbox plugin. No `Frameworks`, no
-   `plugins.dat` (the cache is validated by mtime+size in
-   `src/modules/bank.c`; bundling rewrites mtimes, so a shipped cache is
-   always stale — the first launch does one clean full plugin scan and VLC
-   writes a fresh cache itself).
-5. Writes `src-tauri/resources/build-manifest.json` (per-file SHA-256 +
-   source attribution + git rev).
-6. Runs `scripts/verify-vlc-runtime.sh` (also runnable standalone).
-
-`pnpm tauri build` re-runs staging automatically via `beforeBuildCommand`,
-so every packaged build restages and re-verifies from the two sources.
-
-## Building the app
-
-```bash
+./scripts/bundle-macos-transmission.sh               # engine/transmission: daemon, libraries, notices, smoke test
+./scripts/bundle-macos-vlc.sh aarch64-apple-darwin   # vlc: build, stage, verify
+find src-tauri/resources -name .DS_Store -type f -print -delete
 pnpm tauri build
+./scripts/verify-macos-app.sh src-tauri/target/release/bundle/macos/Nebulae.app
 ```
 
-Outputs under `src-tauri/target/release/bundle/` (`macos/Nebulae.app`,
-`dmg/Nebulae_<ver>_aarch64.dmg`). The build may end with an updater-signing
-error when `TAURI_SIGNING_PRIVATE_KEY` is unset — the .app and .dmg are
-already produced at that point; that failure is expected in local builds.
+`beforeBuildCommand` in `tauri.conf.json` is only `pnpm build` (the frontend). It does **not** stage the runtime: run the two bundle scripts first, or the app is built with whatever is already in `src-tauri/resources/`. The `.DS_Store` line is there because `"resources": ["resources/**/*"]` copies hidden files into the app. The staging scripts delete them too, and `verify-macos-app.sh` fails if one reaches the bundle.
+
+The build may end with an updater-signing error when `TAURI_SIGNING_PRIVATE_KEY` is unset. The `.app` and `.dmg` are already produced at that point, so for a local build that error is expected.
+
+`./scripts/bundle-macos-vlc.sh x86_64-apple-darwin` stages the **unmodified** official Intel VLC 3.0.23 instead. Nebulae's patches are not in it, because the patched runtime needs Homebrew libraries of the build machine's architecture and the x86_64 leg runs on an arm64 runner. The script says so in its log and as a workflow warning.
+
+## What each script does
+
+| Script | Purpose |
+|---|---|
+| `scripts/bundle-macos-vlc.sh TARGET` | The single entry point for the VLC runtime. Downloads the official VLC 3.0.23 disk image (pinned SHA-256) and mounts it read-only. For `aarch64-apple-darwin` it runs `build-vlc-runtime.sh` and then `stage-vlc-runtime.sh`; for `x86_64-apple-darwin` it stages the unmodified official Intel runtime. |
+| `scripts/build-vlc-runtime.sh` | Builds libbluray 1.5.0 (Meson) with its BD-J jars (Ant 1.10.18), then VLC 3.0.23 with the patches. The deployment target is `bundle.macOS.minimumSystemVersion` of `tauri.conf.json` (11.0). It compiles with `-ffile-prefix-map` and `-g0`, then fails if a build-machine path is still inside an artifact (strings or debug-map entries). Work directory: `src-tauri/vlc-runtime-build/` (git-ignored; `NEBULAE_VLC_WORK` overrides it). |
+| `scripts/apply-vlc-patches.sh` | Applies the four patches in order with zero fuzz, then checks the nine patched sources against `patches/vlc-3.0.23/patched-sources.sha256`. |
+| `scripts/stage-vlc-runtime.sh` | Combines the official files with the built ones in `src-tauri/resources/vlc/`, relocates the libraries libbluray needs, writes `licenses/`, `bundled-libraries.json` and `src-tauri/resources/build-manifest.json`, and runs the verification. |
+| `scripts/verify-vlc-runtime.sh [DIR]` | Checks a staged runtime: files, patch symbols, one libbluray version, a strict recursive Mach-O audit, signatures, and a load test in a separate process. |
+| `scripts/bundle-macos-transmission.sh` | Builds the identity-patched daemon from the pinned source, relocates its libraries, audits, writes the licenses and runs a loopback smoke test in a temporary profile. |
+| `scripts/relocate-macos-dylibs.py` | Copies a dependency closure into the bundle, rewrites each load command, signs what it changed and records `bundled-libraries.json`. |
+| `scripts/audit-macos-bundle.py` | Recursive Mach-O audit of a directory or an app (below). |
+| `scripts/verify-macos-app.sh APP` | Final gate for a built app: no `.DS_Store`, strict audit, minimum-macOS advice, `codesign --verify --deep --strict`, and every VLC and Transmission file equal to what the staging scripts recorded. |
+
+### The audit
+
+`python3 scripts/audit-macos-bundle.py [--strict] [--strict-strings] [--arch ARCH] [--max-minos X.Y] [--json FILE] [-v] PATH` walks every Mach-O image under `PATH` and reports:
+
+| Finding | Meaning |
+|---|---|
+| `EXTERNAL` | a load command, rpath or install name outside the bundle and the system (Homebrew, `/usr/local`, a build directory) |
+| `UNRESOLVED` | a dependency that does not resolve to a file inside the bundle or to a system library |
+| `ARCH`, `ID` | a wrong architecture; an install name that is an absolute path outside the bundle |
+| `DSSTORE`, `SYMLINK` | Finder litter; a symlink that is absolute, dangling or leaves the bundle |
+| `STRING` | an absolute external `.dylib` path compiled into an executable (`--strict-strings`) |
+| `MINOS` | an image that needs a newer macOS than `--max-minos` (advice; `NEBULAE_ENFORCE_MINOS=1` makes it fatal in the scripts that report it) |
+
+`--strict` exits 1 on any finding.
+
+**Known advice.** The five Homebrew libraries beside libbluray and the five beside the Transmission daemon declare a minimum macOS of 26.0 (a Homebrew bottle keeps the deployment target of the Mac that built it), and the bundled Tailscale binaries declare 13.0, while the app declares 11.0. That cannot be lowered without building those libraries from source. The runtime is therefore not known to run on a clean Mac or on an older macOS than the one it was built on. The artifacts that Nebulae builds itself (libvlc, the four plugins, libbluray) target 11.0. The VideoLAN plugin binaries are untouched and contain VideoLAN's own build-host paths as debug strings.
+
+## What `stage-vlc-runtime.sh` stages
+
+1. It verifies that the official app is exactly 3.0.23 and that the built artifacts carry their patches (`VTDecompressionSessionCanAcceptFormatDescription`, `_libvlc_media_player_navigate_menu`, `_libvlc_media_player_get_bluray_playlist_id`, and the `bluray-playlist-id` string in the Blu-ray plugin).
+2. It verifies the ABI contract: the custom libvlc's `@rpath/libvlccore.dylib` compatibility version equals the official core's, and every VLC-namespaced symbol the custom libvlc imports is exported by the official core.
+3. It replaces `src-tauri/resources/vlc/{lib,plugins,licenses}`: the official core and plugins, the five built files, `libbluray.4.dylib` with the two 1.5.0 jars, and the relocated Homebrew libraries.
+   Left out of the official set: `plugins.dat` (VLC validates it by mtime and size and bundling rewrites mtimes, so a shipped cache is always stale; the first launch writes a fresh one), the 1.4.0 jars that belong to the official Blu-ray plugin, and the two plugins of VLC.app that need Sparkle and Growl, which only VLC.app ships. There is no `Frameworks` directory.
+4. It writes `src-tauri/resources/build-manifest.json` (per-file SHA-256, source attribution, symlinks, git revision, target architecture) and runs `scripts/verify-vlc-runtime.sh`.
+
+`lib/libvlc.dylib` and `lib/libvlccore.dylib` are symlinks in the staged tree and are listed under `links` in the manifest. Tauri's bundler copies symlinks as regular files, so the built app has real files there; `verify-macos-app.sh` accepts both.
 
 ## Verifying a produced bundle
 
 ```bash
-./scripts/verify-vlc-runtime.sh           # staged tree
-diff <(shasum -a 256 src-tauri/resources/vlc/lib/libvlc.5.dylib | awk '{print $1}') \
-     <(shasum -a 256 src-tauri/target/release/bundle/macos/Nebulae.app/Contents/Resources/vlc/lib/libvlc.5.dylib | awk '{print $1}')
+./scripts/verify-vlc-runtime.sh        # the staged tree
+./scripts/verify-macos-app.sh src-tauri/target/release/bundle/macos/Nebulae.app
 ```
 
-`src-tauri/resources/build-manifest.json` records the exact hashes that were
-staged for each build.
+`src-tauri/resources/build-manifest.json` records the exact hashes that were staged for each build; `verify-macos-app.sh` compares the built app with it, and the Transmission libraries with `engine/transmission/bundled-libraries.json`.
 
 ## The reference release DMG (v0.2.3, the last known-good macOS build)
+
+_This section is a record of the v0.2.3 reference artifact, built before the packaging repair of 2026-10-28. Its VLC runtime is the one in the table below (four patched artifacts, the official Blu-ray plugin); the runtime that the scripts above build differs from it. Build instructions are in the sections above._
 
 `Nebulae-macOS-arm64.dmg` (repository root) is the **canonical reference
 artifact** for the macOS bundle.
