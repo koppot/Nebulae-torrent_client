@@ -72,6 +72,7 @@ ADC/
 src-tauri/player-staging/
 src-tauri/transmission-staging/
 src-tauri/transmission-staging-appimage/
+src-tauri/vlc-runtime-build/
 src-tauri/resources/player/lib/
 src-tauri/resources/engine/transmission/
 src-tauri/resources/engine/tailscale/
