@@ -75,18 +75,9 @@ ${UnStrLoc}
     nsExec::ExecToStack `netsh.exe advfirewall firewall show rule name="${RULENAME}"`
     Pop $R7
     ${If} $R7 == 0
-      StrCpy $R6 0
-      ${Do}
-        Pop $R5
-        ${If} $R5 == "error"
-          ${ExitDo}
-        ${EndIf}
-        ${UnStrLoc} $R4 $R5 "${EXEPATH}" ">"
-        ${If} $R4 != ""
-          StrCpy $R6 1
-        ${EndIf}
-      ${Loop}
-      ${If} $R6 == 1
+      Pop $R5
+      ${UnStrLoc} $R4 $R5 "${EXEPATH}" ">"
+      ${If} $R4 != ""
         nsExec::Exec `netsh.exe advfirewall firewall delete rule name="${RULENAME}"`
         DetailPrint "Removed firewall rule '${RULENAME}'."
       ${EndIf}
