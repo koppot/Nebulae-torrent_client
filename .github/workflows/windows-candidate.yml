@@ -1,0 +1,190 @@
+name: Windows Candidate Build
+
+# Build-only candidate packaging for the Windows x64 0.2.4 release candidate.
+# Dispatched manually (workflow_dispatch). Builds the MSVC release, stages the
+# pinned runtime tree, produces the NSIS installer, runs the PE audit and a
+# silent install smoke test, and uploads everything as workflow artifacts only.
+# It never creates a release, never moves or creates tags, never touches
+# latest.json or any updater asset, and never publishes anything.
+#
+# Authorized by the owner: one scratch branch, one artifacts-only workflow.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-candidate:
+    runs-on: windows-latest
+    env:
+      # Pinned toolchain, matching the CI Windows job (rustc 1.99.1).
+      RUSTUP_TOOLCHAIN: 1.99.1
+      # Cache and staging directories on the runner.
+      NEBULAE_CACHE: ${{ runner.temp }}/nebulae-cache
+      NEBULAE_STAGE: ${{ runner.temp }}/nebulae-stage
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Setup Rust toolchain (pinned 1.99.1, MSVC target)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          target: x86_64-pc-windows-msvc
+
+      - name: Setup Node.js & pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Cache cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install 7-Zip (for MSI/cab extraction during staging)
+        shell: pwsh
+        run: |
+          winget install 7zip.7zip --accept-package-agreements --accept-source-agreements || true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download and verify pinned inputs
+        shell: bash
+        run: |
+          mkdir -p "$NEBULAE_CACHE"
+          python3 scripts/windows/fetch_inputs.py \
+            --cache "$NEBULAE_CACHE"
+
+      - name: Record source identity
+        shell: bash
+        run: |
+          {
+            echo "CANDIDATE_SHA=$(git rev-parse HEAD)"
+            git log -1 --format='%H%n%ci%n%s'
+          } > candidate-source.txt
+          cat candidate-source.txt
+
+      - name: Build nebulae.exe (MSVC release)
+        shell: bash
+        run: |
+          cargo build --release --locked --target x86_64-pc-windows-msvc --bin nebulae
+
+      - name: Stage runtime resources (pinned inputs; exe included for PE audit; stock VLC, no --require-geo for candidate)
+        shell: bash
+        run: |
+          python3 scripts/windows/stage_runtime.py \
+            --cache "$NEBULAE_CACHE" \
+            --out "$NEBULAE_STAGE/resources" \
+            --exe "target/x86_64-pc-windows-msvc/release/nebulae.exe" \
+            --manifest "$NEBULAE_STAGE/build-manifest.json" \
+            --no-audit
+
+      - name: Copy staged resources (exe excluded — Tauri adds it from the build output) to src-tauri/resources
+        shell: bash
+        run: |
+          rm -rf src-tauri/resources
+          cp -r "$NEBULAE_STAGE/resources" src-tauri/resources
+          rm -f src-tauri/resources/nebulae.exe
+
+      - name: Build NSIS installer (Tauri bundler 2.10.2)
+        shell: bash
+        run: |
+          pnpm tauri build --bundles nsis
+
+      - name: Run PE audit on staged tree
+        shell: bash
+        run: |
+          python3 scripts/windows/pe_audit.py "$NEBULAE_STAGE/resources" nebulae
+
+      - name: Silent install smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Find the NSIS installer produced by the Tauri bundler.
+          $installer = Get-ChildItem -Path "src-tauri\target\release\bundle\nsis\*.exe" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) {
+            throw "FATAL: NSIS installer not found in src-tauri\target\release\bundle\nsis"
+          }
+          Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+
+          # Silent install.
+          Write-Host "Running silent install (/S)..."
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "FATAL: silent install failed with exit code $($install.ExitCode)"
+          }
+          Write-Host "Silent install succeeded."
+
+          # Locate the installed nebulae.exe.
+          $nebulaePaths = @(
+            Join-Path $env:ProgramFiles 'Nebulae\nebulae.exe',
+            Join-Path ${env:LOCALAPPDATA} 'Programs\Nebulae\nebulae.exe',
+            Join-Path ${env:ProgramFiles(x86)} 'Nebulae\nebulae.exe'
+          )
+          $nebulae = $null
+          foreach ($p in $nebulaePaths) {
+            if (Test-Path $p) { $nebulae = $p; break }
+          }
+          if (-not $nebulae) {
+            throw "FATAL: nebulae.exe not found after install"
+          }
+          Write-Host "Found nebulae.exe at: $nebulae"
+
+          # Launch and verify it starts (single-instance, so a second launch
+          # should quit immediately via the --quit IPC path).
+          Write-Host "Launching nebulae.exe..."
+          $proc = Start-Process -FilePath $nebulae -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc.HasExited) {
+            Write-Host "First instance exited (expected if a previous instance is running or --quit IPC fired)."
+          } else {
+            Write-Host "SUCCESS: nebulae.exe is running (PID $($proc.Id))."
+            $proc.Kill()
+          }
+
+          # Silent uninstall.
+          $uninstaller = Join-Path (Split-Path $nebulae -Parent) 'uninstall.exe'
+          if (Test-Path $uninstaller) {
+            Write-Host "Running silent uninstall (/S)..."
+            $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+            if ($uninstall.ExitCode -ne 0) {
+              Write-Host "WARNING: silent uninstall exited with code $($uninstall.ExitCode) (non-fatal for candidate)."
+            } else {
+              Write-Host "Silent uninstall succeeded."
+            }
+          } else {
+            Write-Host "WARNING: uninstall.exe not found (non-fatal for candidate)."
+          }
+
+      - name: Prepare artifact directory
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp candidate-source.txt artifacts/
+          cp "$NEBULAE_STAGE/build-manifest.json" artifacts/build-manifest.json
+          cp src-tauri/target/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
+          # Sidecar exe checksums.
+          for exe in artifacts/*.exe; do
+            [ -f "$exe" ] || continue
+            sha256sum "$exe" > "$exe.sha256"
+          done
+          # Aggregate SHA256SUMS.
+          (cd artifacts && sha256sum *.exe > SHA256SUMS.txt) 2>/dev/null || true
+
+      - name: Upload candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-candidate-${{ github.run_id }}
+          path: |
+            artifacts/**
+            candidate-source.txt
+          retention-days: 14
