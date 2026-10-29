@@ -49,12 +49,13 @@ VLC_PREFIX = "vlc-3.0.23/"
 VLC_DENY_DIRS = ("msi/", "skins/")
 VLC_DENY_FILES = {"axvlc.dll", "npvlc.dll", "vlc.exe", "vlc-cache-gen.exe", "vlc.ico"}
 
-STOCK_BD_JARS = ("libbluray-j2se-1.4.0.jar", "libbluray-awt-j2se-1.4.0.jar")
-PATCHED_OVERLAY = (
-    "libvlc.dll",
-    "liblibbluray_plugin.dll",
+REQUIRED_BD_JARS = (
     "libbluray-j2se-1.5.0.jar",
     "libbluray-awt-j2se-1.5.0.jar",
+)
+FORBIDDEN_BD_JARS = (
+    "libbluray-j2se-1.4.0.jar",
+    "libbluray-awt-j2se-1.4.0.jar",
 )
 CUSTOM_EXPORTS = (
     "libvlc_media_player_navigate_menu",
@@ -193,66 +194,137 @@ def extract_tar_members(tar_path: Path, wanted: dict[str, str], rec: Recorder, s
 
 # --- component staging ---------------------------------------------------------
 
-def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None, patches_dir: Path | None) -> bool:
-    src = fetch_inputs.ensure("vlc-win64", inputs["vlc-win64"], cache)
+def _vlc_provenance(patched: Path) -> str:
+    for name in ("patched-vlc-manifest.json", "build-manifest.json", "vlc-manifest.json"):
+        note = patched / name
+        if note.is_file():
+            try:
+                meta = json.loads(note.read_text(encoding="utf-8"))
+                patches = meta.get("patches", [])
+                p_str = ", ".join(patches) if isinstance(patches, list) else str(patches)
+                return (f"complete-modified-build: VLC {meta.get('vlc_version', '?')} + patches "
+                        f"{p_str} ({meta.get('toolchain', 'toolchain unknown')})")
+            except (json.JSONDecodeError, OSError):
+                pass
+    return f"custom-build from {patched} (provenance manifest incomplete)"
+
+
+def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
+              patches_dir: Path | None, require_modified: bool = False) -> bool:
     dest = rec.root / "resources" / "vlc"
-    n = extract_zip(src, dest, VLC_PREFIX, rec, "vlc-3.0.23-win64.zip (official, SHA-256 pinned)",
-                    VLC_DENY_DIRS, VLC_DENY_FILES)
-    if n < 500:
-        fail(f"suspiciously few VLC files staged: {n}")
-    for need in ("libvlc.dll", "libvlccore.dll", "plugins/access/liblibbluray_plugin.dll", "COPYING.txt"):
-        if not (dest / need).is_file():
-            fail(f"staged VLC tree lacks {need}")
-    if not patched:
+
+    if patched is None:
+        if require_modified:
+            fail("--require-patched / --require-modified: complete modified VLC runtime tree must be "
+                 "provided via --modified-vlc / --patched-vlc; stock VLC runtime substitution is strictly prohibited.")
+        # Stock staging fallback for offline/test builds only
+        src = fetch_inputs.ensure("vlc-win64", inputs["vlc-win64"], cache)
+        n = extract_zip(src, dest, VLC_PREFIX, rec, "vlc-3.0.23-win64.zip (official, SHA-256 pinned)",
+                        VLC_DENY_DIRS, VLC_DENY_FILES)
+        if n < 500:
+            fail(f"suspiciously few VLC files staged: {n}")
+        for need in ("libvlc.dll", "libvlccore.dll", "plugins/access/liblibbluray_plugin.dll", "COPYING.txt"):
+            if not (dest / need).is_file():
+                fail(f"staged VLC tree lacks {need}")
         return False
 
-    for name in PATCHED_OVERLAY:
-        if not (patched / name).is_file():
-            fail(f"patched VLC overlay {patched} lacks {name}")
-    access = dest / "plugins" / "access"
+    if not patched.is_dir():
+        fail(f"modified VLC runtime tree {patched} is not a directory")
 
-    def unstage(path: Path) -> None:
-        rel = rec.rel(path)
-        rec.seen.discard(rel)
-        rec.files = [f for f in rec.files if f["path"] != rel]
-        path.unlink()
+    # A complete modified VLC tree MUST include libvlccore.dll.
+    # A 2-DLL overlay lacking libvlccore.dll is strictly rejected.
+    if not (patched / "libvlccore.dll").is_file():
+        fail(f"partial overlay rejected at {patched}: stock VLC substitution is prohibited. "
+             f"The modified runtime tree must include libvlccore.dll alongside libvlc.dll.")
 
-    for jar in STOCK_BD_JARS:
-        if not (access / jar).is_file():
-            fail(f"stock jar {jar} not found; the official zip layout changed")
-    unstage(access / STOCK_BD_JARS[0])
-    unstage(access / STOCK_BD_JARS[1])
-    unstage(dest / "libvlc.dll")
-    unstage(access / "liblibbluray_plugin.dll")
-    replaced = dest / "libvlc.dll"
-    plugin = access / "liblibbluray_plugin.dll"
+    if not (patched / "libvlc.dll").is_file():
+        fail(f"modified VLC runtime tree at {patched} lacks libvlc.dll")
 
-    provenance = _overlay_provenance(patched)
-    rec.copy(patched / "libvlc.dll", replaced, provenance)
-    rec.copy(patched / "liblibbluray_plugin.dll", plugin, provenance)
-    for jar in PATCHED_OVERLAY[2:]:
-        rec.copy(patched / jar, access / jar, provenance)
+    # Locate liblibbluray_plugin.dll
+    lb_plugin = patched / "plugins" / "access" / "liblibbluray_plugin.dll"
+    if not lb_plugin.is_file():
+        lb_plugin = patched / "liblibbluray_plugin.dll"
+        if not lb_plugin.is_file():
+            fail(f"modified VLC runtime tree at {patched} lacks liblibbluray_plugin.dll")
+
+    # Validate provenance manifest in require_modified mode
+    prov_file = None
+    for name in ("patched-vlc-manifest.json", "build-manifest.json", "vlc-manifest.json"):
+        if (patched / name).is_file():
+            prov_file = patched / name
+            break
+    if prov_file is None:
+        if require_modified:
+            fail(f"modified VLC runtime tree at {patched} lacks build provenance manifest (patched-vlc-manifest.json)")
+    else:
+        try:
+            p_data = json.loads(prov_file.read_text(encoding="utf-8"))
+            patches_list = p_data.get("patches", [])
+            if require_modified and not patches_list:
+                fail(f"{prov_file.name} does not record applied patches; build evidence incomplete")
+        except json.JSONDecodeError as exc:
+            fail(f"{prov_file.name} is not valid JSON: {exc}")
+
+    # Check for forbidden stock jars anywhere in patched tree
+    for jar in FORBIDDEN_BD_JARS:
+        matches = list(patched.rglob(jar))
+        if matches:
+            fail(f"modified VLC runtime tree contains forbidden stock BD-J jar: {matches[0].name}")
+
+    # Check that required 1.5.0 jars are present
+    jar_missing = []
+    for jar in REQUIRED_BD_JARS:
+        if not (patched / "plugins" / "access" / jar).is_file() and not (patched / jar).is_file():
+            jar_missing.append(jar)
+    if jar_missing:
+        fail(f"modified VLC runtime tree lacks required BD-J 1.5.0 jar(s): {', '.join(jar_missing)}")
+
+    # Verify custom exports on libvlc.dll
+    libvlc_pe = pe_audit.parse_pe((patched / "libvlc.dll").read_bytes())
+    if libvlc_pe.machine != 0x8664:
+        fail(f"libvlc.dll in {patched} is not x64 architecture (machine {libvlc_pe.machine:#x})")
+    missing_custom = [s for s in CUSTOM_EXPORTS if s not in libvlc_pe.exports]
+    if missing_custom:
+        fail(f"libvlc.dll in {patched} lacks required custom export(s): {missing_custom}")
+
+    # Verify libvlccore.dll architecture
+    core_pe = pe_audit.parse_pe((patched / "libvlccore.dll").read_bytes())
+    if core_pe.machine != 0x8664:
+        fail(f"libvlccore.dll in {patched} is not x64 architecture (machine {core_pe.machine:#x})")
+
+    # Stage the complete modified tree
+    provenance = _vlc_provenance(patched)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    has_plugins_dir = (patched / "plugins").is_dir()
+    if has_plugins_dir:
+        for f in sorted(patched.rglob("*")):
+            if f.is_file():
+                rel = f.relative_to(patched)
+                if rel.name in ("patched-vlc-manifest.json", "build-manifest.json"):
+                    continue
+                if rel.name in VLC_DENY_FILES:
+                    continue
+                target = dest / rel
+                rec.copy(f, target, provenance)
+    else:
+        # Structured single-directory modified packaging
+        rec.copy(patched / "libvlc.dll", dest / "libvlc.dll", provenance)
+        rec.copy(patched / "libvlccore.dll", dest / "libvlccore.dll", provenance)
+        access_dir = dest / "plugins" / "access"
+        rec.copy(lb_plugin, access_dir / "liblibbluray_plugin.dll", provenance)
+        for jar in REQUIRED_BD_JARS:
+            jar_src = patched / "plugins" / "access" / jar if (patched / "plugins" / "access" / jar).is_file() else patched / jar
+            rec.copy(jar_src, access_dir / jar, provenance)
 
     if patches_dir and patches_dir.is_dir():
-        lic = "resources/licenses/vlc-3.0.23/patches"
+        lic = rec.root / "resources" / "licenses" / "vlc-3.0.23" / "patches"
         for patch in sorted(patches_dir.glob("*.patch")):
-            rec.copy(patch, rec.root / lic / patch.name, "Nebulae patch (this repository)")
+            rec.copy(patch, lic / patch.name, "Nebulae patch (this repository)")
         readme = patches_dir / "README.md"
         if readme.is_file():
-            rec.copy(readme, rec.root / lic / readme.name, "Nebulae patch (this repository)")
+            rec.copy(readme, lic / readme.name, "Nebulae patch (this repository)")
     return True
-
-
-def _overlay_provenance(patched: Path) -> str:
-    note = patched / "patched-vlc-manifest.json"
-    if note.is_file():
-        try:
-            meta = json.loads(note.read_text(encoding="utf-8"))
-            return (f"custom-build: VLC {meta.get('vlc_version', '?')} + patches "
-                    f"{', '.join(meta.get('patches', []))} ({meta.get('toolchain', 'toolchain unknown')})")
-        except (json.JSONDecodeError, OSError):
-            pass
-    return f"custom-build from {patched} (no patched-vlc-manifest.json; provenance incomplete)"
 
 
 def stage_jre(cache: Path, inputs: dict, rec: Recorder) -> None:
@@ -462,6 +534,11 @@ def audit_tree(rec: Recorder, patched: bool) -> dict:
         problems.append("not x64: " + ", ".join(w["path"] for w in report["wrong_arch"]))
     if report["unreadable"]:
         problems.append("unreadable PE: " + ", ".join(u["path"] for u in report["unreadable"]))
+    if (rec.root / "resources" / "resources").exists():
+        problems.append("incorrect double 'resources/resources' nesting detected")
+    for f in rec.files:
+        if "resources/resources" in f["path"]:
+            problems.append(f"file staged under double resources nesting: {f['path']}")
 
     libvlc = rec.root / "resources" / "vlc" / "libvlc.dll"
     exports = pe_audit.parse_pe(libvlc.read_bytes()).exports if libvlc.is_file() else []
@@ -515,12 +592,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cache", type=Path, required=True, help="pinned-input cache (see fetch_inputs.py)")
     ap.add_argument("--out", type=Path, required=True, help="staging root; must not exist or be empty")
     ap.add_argument("--lock", type=Path, default=fetch_inputs.DEFAULT_LOCK)
-    ap.add_argument("--patched-vlc", type=Path, help="directory with the patched libvlc.dll, "
-                    "liblibbluray_plugin.dll and the two libbluray 1.5.0 jars")
-    ap.add_argument("--require-patched", action="store_true", help="fail instead of warning on a stock runtime")
+    ap.add_argument("--modified-vlc", "--patched-vlc", dest="patched_vlc", type=Path,
+                    help="directory containing the complete modified VLC runtime tree "
+                         "(libvlc.dll, libvlccore.dll, plugins/, and patched-vlc-manifest.json)")
+    ap.add_argument("--require-patched", "--require-modified", dest="require_patched", action="store_true",
+                    help="fail instead of warning on a stock runtime or incomplete overlay")
     ap.add_argument("--patches-dir", type=Path,
                     default=Path(__file__).resolve().parents[2] / "patches" / "vlc-3.0.23",
-                    help="copied into the licence tree when a patched overlay is staged")
+                    help="copied into the licence tree when a modified runtime is staged")
     ap.add_argument("--exe", type=Path, action="append", default=[],
                     help="app executable to include in the tree and the audit (e.g. nebulae.exe)")
     ap.add_argument("--manifest", type=Path, help="defaults to <out>/resources/build-manifest.json")
@@ -544,15 +623,15 @@ def main(argv: list[str] | None = None) -> int:
     rec = Recorder(out)
 
     if args.patched_vlc is None and args.require_patched:
-        fail("--require-patched was given but no --patched-vlc overlay")
+        fail("--require-patched: complete modified VLC runtime tree must be provided via --modified-vlc; stock VLC runtime substitution is strictly prohibited.")
     for exe in args.exe:
         if not exe.is_file():
             fail(f"--exe {exe} not found")
         rec.copy(exe, out / exe.name, "Nebulae build output (this repository)")
 
-    patched = stage_vlc(args.cache, inputs, rec, args.patched_vlc, args.patches_dir)
+    patched = stage_vlc(args.cache, inputs, rec, args.patched_vlc, args.patches_dir, require_modified=args.require_patched)
     if not patched:
-        warnings.append("stock VLC staged: the Blu-ray menu repairs (M-01..M-03) are INACTIVE in this tree")
+        warnings.append("stock VLC staged: the Blu-ray menu repairs (M-01..M-03) are INACTIVE in this tree (NOT RELEASE-READY)")
     stage_jre(args.cache, inputs, rec)
     stage_transmission(args.cache, inputs, rec, cab_tool)
     stage_tailscale(args.cache, inputs, rec, cab_tool)
@@ -564,6 +643,8 @@ def main(argv: list[str] | None = None) -> int:
         for name in ("GeoLite2-Country.mmdb", "GeoLite2-ASN.mmdb"):
             src = args.geo_dir / name
             if src.is_file():
+                if src.stat().st_size == 0:
+                    fail(f"GeoLite2 database {name} is empty (0 bytes)")
                 rec.copy(src, geo_out / name, "MaxMind GeoLite2 database (downloaded by scripts/download_geo_db.sh)")
             elif args.require_geo:
                 fail(f"--require-geo: {name} not found in --geo-dir {args.geo_dir}")
@@ -575,6 +656,13 @@ def main(argv: list[str] | None = None) -> int:
         warnings.append("resources/geo holds no GeoLite2-ASN.mmdb (a MaxMind licence key is required at build time)")
     if not args.exe:
         warnings.append("no --exe given: the audit covers resources only, not nebulae.exe")
+
+    # Anti-regression check: fail immediately if incorrect double nesting was created
+    if (out / "resources" / "resources").exists():
+        fail("corrupt layout: incorrect double 'resources/resources' nesting detected")
+    for f in rec.files:
+        if "resources/resources" in f["path"]:
+            fail(f"corrupt layout: file staged under double resources nesting: {f['path']}")
 
     report = None if args.no_audit else audit_tree(rec, patched)
     manifest_path = args.manifest or (out / "resources" / "build-manifest.json")

@@ -295,5 +295,98 @@ class MsiHelperTests(unittest.TestCase):
                 msi_reader.safe_rel(bad)
 
 
+class StageVlcContractTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.vlc_dir = self.scratch / "vlc-modified"
+        self.vlc_dir.mkdir(parents=True, exist_ok=True)
+        self.rec = stage_runtime.Recorder(self.root)
+
+    def _create_complete_modified_tree(self, custom_exports=stage_runtime.CUSTOM_EXPORTS,
+                                       with_core=True, with_plugin=True, with_jars=True,
+                                       with_manifest=True, machine=0x8664, stock_jars=False):
+        (self.vlc_dir / "libvlc.dll").write_bytes(make_pe(exports=list(custom_exports), machine=machine))
+        if with_core:
+            (self.vlc_dir / "libvlccore.dll").write_bytes(make_pe(machine=machine))
+        access = self.vlc_dir / "plugins" / "access"
+        access.mkdir(parents=True, exist_ok=True)
+        if with_plugin:
+            (access / "liblibbluray_plugin.dll").write_bytes(make_pe(machine=machine))
+        if with_jars:
+            (access / "libbluray-j2se-1.5.0.jar").write_bytes(b"PK\x03\x04jar15")
+            (access / "libbluray-awt-j2se-1.5.0.jar").write_bytes(b"PK\x03\x04awtjar15")
+        if stock_jars:
+            (access / "libbluray-j2se-1.4.0.jar").write_bytes(b"PK\x03\x04stock14")
+        if with_manifest:
+            manifest = {
+                "vlc_version": "3.0.23",
+                "libbluray_version": "1.5.0",
+                "toolchain": "x86_64-w64-mingw32-gcc (GCC) 16.1.0 (UCRT)",
+                "build_date": "2026-10-29",
+                "patches": [
+                    "navigate-menu.patch",
+                    "bluray-playlist-id.patch",
+                    "bluray-menu-first.patch"
+                ],
+                "exports": list(custom_exports)
+            }
+            (self.vlc_dir / "patched-vlc-manifest.json").write_text(json.dumps(manifest))
+
+    def test_complete_modified_tree_succeeds(self):
+        self._create_complete_modified_tree()
+        res = stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertTrue(res)
+        self.assertTrue((self.root / "resources" / "vlc" / "libvlc.dll").is_file())
+        self.assertTrue((self.root / "resources" / "vlc" / "libvlccore.dll").is_file())
+        self.assertTrue((self.root / "resources" / "vlc" / "plugins" / "access" / "liblibbluray_plugin.dll").is_file())
+        self.assertTrue((self.root / "resources" / "vlc" / "plugins" / "access" / "libbluray-j2se-1.5.0.jar").is_file())
+
+    def test_rejects_missing_tree_when_require_modified(self):
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, None, None, require_modified=True)
+        self.assertIn("stock VLC runtime substitution is strictly prohibited", str(ctx.exception))
+
+    def test_rejects_partial_overlay_lacking_vlccore(self):
+        self._create_complete_modified_tree(with_core=False)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("partial overlay rejected", str(ctx.exception))
+        self.assertIn("must include libvlccore.dll", str(ctx.exception))
+
+    def test_rejects_missing_bd_jars(self):
+        self._create_complete_modified_tree(with_jars=False)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("lacks required BD-J 1.5.0 jar", str(ctx.exception))
+
+    def test_rejects_forbidden_stock_jars(self):
+        self._create_complete_modified_tree(stock_jars=True)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("forbidden stock BD-J jar", str(ctx.exception))
+
+    def test_rejects_missing_provenance_manifest(self):
+        self._create_complete_modified_tree(with_manifest=False)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("lacks build provenance manifest", str(ctx.exception))
+
+    def test_rejects_non_x64_dll(self):
+        self._create_complete_modified_tree(machine=0x14c)  # 32-bit x86
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("not x64 architecture", str(ctx.exception))
+
+    def test_audit_rejects_double_resources_nesting(self):
+        rec = stage_runtime.Recorder(self.root)
+        bad_dir = self.root / "resources" / "resources" / "vlc"
+        bad_dir.mkdir(parents=True, exist_ok=True)
+        (bad_dir / "libvlc.dll").write_bytes(make_pe(exports=["libvlc_media_player_navigate", *stage_runtime.CUSTOM_EXPORTS]))
+        rec.add(bad_dir / "libvlc.dll", "test")
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.audit_tree(rec, patched=True)
+        self.assertIn("double resources nesting", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
