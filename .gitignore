@@ -18,6 +18,7 @@ dist-ssr/
 *.sig
 latest.json
 release-artifacts/
+artifacts-*/
 
 # Rust / Cargo build artifacts
 src-tauri/target/
