@@ -163,7 +163,9 @@ def parse_pe(data: bytes) -> PeInfo:
 # java.exe. Prefix and directories are relative to the audited root.
 NEBULAE_LAYOUT = (
     ("resources/vlc/plugins", ("resources/vlc",)),
-    ("resources/jre/bin", ("resources/jre/bin/server",)),
+    # jvm.dll lives in jre/bin/server and finds the JRE's own VC++ runtime in
+    # jre/bin: the launcher starts from bin, and lib.rs prepends jre/bin to PATH.
+    ("resources/jre", ("resources/jre/bin", "resources/jre/bin/server")),
 )
 
 

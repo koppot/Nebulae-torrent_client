@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "comment": "Every third-party input of the Windows x64 build, pinned by SHA-256 and size. scripts/windows/fetch_inputs.py refuses any file whose hash differs. Where an upstream publishes its own digest it is named in 'checked_against'; those digests were compared when the pin was made. A pin changes only in a reviewed commit.",
+  "inputs": {
+    "vlc-win64": {
+      "file": "vlc-3.0.23-win64.zip",
+      "url": "https://get.videolan.org/vlc/3.0.23/win64/vlc-3.0.23-win64.zip",
+      "sha256": "992d19dbd0b8a7cde9167d2f7780b1ef6f92acc8a71acfa736101a21f35181e1",
+      "bytes": 79893405,
+      "version": "3.0.23",
+      "role": "runtime: official VLC for Windows; libvlc.dll and the Blu-ray plugin are replaced by the patched build when one is staged",
+      "license": "GPL-2.0-or-later (VLC); LGPL-2.1-or-later (libvlc, libvlccore, most plugins); see COPYING.txt inside the archive",
+      "checked_against": "https://get.videolan.org/vlc/3.0.23/win64/vlc-3.0.23-win64.zip.sha256"
+    },
+    "vlc-src": {
+      "file": "vlc-3.0.23.tar.xz",
+      "url": "https://get.videolan.org/vlc/3.0.23/vlc-3.0.23.tar.xz",
+      "sha256": "e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0",
+      "bytes": 26486988,
+      "version": "3.0.23",
+      "role": "build: source of the patched libvlc.dll and Blu-ray plugin (patches/vlc-3.0.23)",
+      "license": "GPL-2.0-or-later / LGPL-2.1-or-later",
+      "checked_against": "https://get.videolan.org/vlc/3.0.23/vlc-3.0.23.tar.xz.sha256"
+    },
+    "libbluray-src": {
+      "file": "libbluray-1.5.0.tar.xz",
+      "url": "https://download.videolan.org/pub/videolan/libbluray/1.5.0/libbluray-1.5.0.tar.xz",
+      "sha256": "f676408e91a5d321abf8b8d4dfdae36205c297dab5c54c3ec519639025f474a2",
+      "bytes": 473072,
+      "version": "1.5.0",
+      "role": "build: libbluray linked into the patched Blu-ray plugin; its BD-J jars replace the stock 1.4.0 pair",
+      "license": "LGPL-2.1-or-later",
+      "checked_against": "https://download.videolan.org/pub/videolan/libbluray/1.5.0/libbluray-1.5.0.tar.xz.sha256"
+    },
+    "transmission-msi": {
+      "file": "transmission-4.1.3-x64.msi",
+      "url": "https://github.com/transmission/transmission/releases/download/4.1.3/transmission-4.1.3-x64.msi",
+      "sha256": "c8ea492d8f46fadac26e0c05b244cabba556201d5fe348dfcf1cf036621741f8",
+      "bytes": 23326720,
+      "version": "4.1.3",
+      "role": "runtime: transmission-daemon.exe and the DLLs it imports",
+      "license": "GPL-2.0-only or GPL-3.0-only, with an OpenSSL linking exception (see COPYING in the source tag); bundled libcurl: curl licence; OpenSSL 3: Apache-2.0; zlib: zlib licence",
+      "checked_against": "GitHub release asset digest (gh api repos/transmission/transmission/releases/tags/4.1.3)"
+    },
+    "tailscale-msi": {
+      "file": "tailscale-setup-1.104.1-amd64.msi",
+      "url": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi",
+      "sha256": "6da8bcdb0d45a214cae0e8a88c2987ad48dec134bf04dffb9c05f1354c02b0b4",
+      "bytes": 38718976,
+      "version": "1.104.1",
+      "role": "runtime: tailscale.exe and tailscaled.exe (started with --tun=userspace-networking, so wintun.dll is not staged)",
+      "license": "BSD-3-Clause (Tailscale); Go standard library and modules under their own licences",
+      "checked_against": "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.1-amd64.msi.sha256"
+    },
+    "temurin-jre": {
+      "file": "OpenJDK21U-jre_x64_windows_hotspot_21.0.12_8.zip",
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jre_x64_windows_hotspot_21.0.12_8.zip",
+      "sha256": "b8aa18fef5edb69bee8618f99677d66d0873d22cb40d974c15ac9ffcdecf73ba",
+      "bytes": 48993215,
+      "version": "21.0.12+8",
+      "role": "runtime: Java for BD-J menus (JAVA_HOME is set to resources/jre)",
+      "license": "GPL-2.0 with the Classpath Exception; the archive carries NOTICE and legal/",
+      "checked_against": "GitHub release asset digest (gh api repos/adoptium/temurin21-binaries/releases/tags/jdk-21.0.12+8)"
+    },
+    "vc-redist-x64": {
+      "file": "VC_redist.x64.exe",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+      "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+      "bytes": 25635768,
+      "version": "14.44.35211.0",
+      "role": "runtime: source of the app-local Visual C++ runtime DLLs placed next to the Transmission daemon (extracted with 7-Zip, never executed)",
+      "license": "Microsoft Visual C++ Redistributable licence terms (shipped as licenses/microsoft-vc-redist-license.rtf, extracted from the bundle itself); legal review of app-local redistribution is an open item",
+      "checked_against": "Microsoft's download URL embeds this hash; the file is Authenticode-signed by Microsoft"
+    },
+    "webview2-offline-x64": {
+      "file": "MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+      "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/f699d81e-69ce-4b09-aa07-23ff2713045b/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+      "sha256": "1c401b327fbc7bb9731b4e350a2194f083cbc3ede46508d52e1cae6610a39bea",
+      "bytes": 214884560,
+      "version": "stand-alone installer served by https://go.microsoft.com/fwlink/p/?LinkId=2124701 on 2026-10-28 (file dated 2026-10-26)",
+      "role": "installer: offline WebView2 runtime for machines without it; embedded in the NSIS installer",
+      "license": "Microsoft Edge WebView2 Runtime licence terms",
+      "checked_against": "Authenticode signature by Microsoft (verify on Windows with Get-AuthenticodeSignature); Microsoft rotates this GUID path, so an expired URL means a deliberate re-pin, not a silent update",
+      "optional": true
+    },
+    "license-transmission": {
+      "file": "transmission-4.1.3-COPYING",
+      "url": "https://raw.githubusercontent.com/transmission/transmission/4.1.3/COPYING",
+      "sha256": "9715b55d11caa499d34a6e23498c766fe1ece4ace57777553313e27d688dee78",
+      "bytes": 711,
+      "version": "4.1.3",
+      "role": "licence text: Transmission (the MSI carries none)",
+      "license": "GPL-2.0-only OR GPL-3.0-only"
+    },
+    "license-tailscale": {
+      "file": "tailscale-1.104.1-LICENSE",
+      "url": "https://raw.githubusercontent.com/tailscale/tailscale/v1.104.1/LICENSE",
+      "sha256": "a7ca6186a7963a0a60740f6047760eecd7a0234e8c38bd7e1e0bbcb324bda45b",
+      "bytes": 1515,
+      "version": "1.104.1",
+      "role": "licence text: Tailscale (the MSI carries none)",
+      "license": "BSD-3-Clause"
+    },
+    "license-curl": {
+      "file": "curl-8.16.0-COPYING",
+      "url": "https://raw.githubusercontent.com/curl/curl/curl-8_16_0/COPYING",
+      "sha256": "e18f1989333b70044b2adfb7dc2f905d0119dbdcac3bc9f4bc9d540e3a29de5b",
+      "bytes": 1088,
+      "version": "8.16.0",
+      "role": "licence text: libcurl.dll inside the Transmission MSI (PE version resource: 8.16.0)",
+      "license": "curl (MIT/X11 derivative)"
+    },
+    "license-openssl": {
+      "file": "openssl-3.5.4-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.5.4/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175,
+      "version": "3.5.4",
+      "role": "licence text: libcrypto-3-x64.dll and libssl-3-x64.dll inside the Transmission MSI (PE version resource: 3.5.4)",
+      "license": "Apache-2.0"
+    },
+    "license-zlib": {
+      "file": "zlib-1.3.1-LICENSE",
+      "url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "bytes": 1002,
+      "version": "1.3.1",
+      "role": "licence text: zlib.dll inside the Transmission MSI (PE version resource: 1.3.1)",
+      "license": "zlib"
+    },
+    "sevenzip-linux-x64": {
+      "file": "7z2605-linux-x64.tar.xz",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-linux-x64.tar.xz",
+      "sha256": "22cf82fcc6eb7474f1d5bb4f02c0f8ebd573a718089d6833dc30f8350a3b232e",
+      "bytes": 1579976,
+      "version": "26.05",
+      "role": "tool: cabinet and Burn-bundle extraction when staging on Linux (Windows runners use their own 7-Zip)",
+      "license": "LGPL-2.1-or-later with the unRAR restriction",
+      "checked_against": "GitHub release asset digest (gh api repos/ip7z/7zip/releases)",
+      "optional": true
+    }
+  }
+}
