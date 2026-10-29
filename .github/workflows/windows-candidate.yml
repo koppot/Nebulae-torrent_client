@@ -18,9 +18,9 @@ jobs:
     env:
       # Pinned toolchain, matching the CI Windows job (rustc 1.99.1).
       RUSTUP_TOOLCHAIN: 1.99.1
-      # Cache and staging directories on the runner.
-      NEBULAE_CACHE: ${{ runner.temp }}/nebulae-cache
-      NEBULAE_STAGE: ${{ runner.temp }}/nebulae-stage
+      # Cache and staging directories on the runner (Windows runner temp).
+      NEBULAE_CACHE: C:\nebulae-cache
+      NEBULAE_STAGE: C:\nebulae-stage
 
     steps:
       - name: Checkout repository
