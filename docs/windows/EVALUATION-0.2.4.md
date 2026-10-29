@@ -76,7 +76,7 @@ published installer does today; "Patched" is what the repaired runtime of sectio
 | M-10 | No "Play Main Feature" button once the menu has rendered | `PlayerOverlay.tsx:1360-1372` renders it whenever `player.isDisc` | Button always shown | Same unless implemented | **nowhere** (mentioned only in the repair ledger, section 13.3) |
 | M-11 | Sequential multi-disc continuation | only manual disc switching (`PlayerOverlay.tsx:1308-1331`) | n/a | n/a | **nowhere** |
 | M-12 | Branding, Tailnet and dependency fixes | `d60b25d` branding; `646f9c7` Tailnet ADC-offline; `2c35dce` release builds load only the bundled libbluray (macOS); macOS packaging scripts | Branding and Tailnet fix are in the shared code. The libbluray rule and the packaging scripts are macOS-only. Windows needs its own dependency staging (sections 5 and 6) | n/a | **present** (shared); Windows dependency work **port** |
-| M-13 | ASI-14 menu-bar speed readout | macOS menu-bar title; package `asi14-menu-bar-speed-package.zip` | Windows tray icons have a tooltip, no title text | n/a | **N/A** on Windows; a tooltip variant is possible and not included |
+| M-13 | ASI-14 menu-bar speed readout | macOS menu-bar title; package `asi14-menu-bar-speed-package.zip` | Windows tray icon title shows client-wide current down/up rates (`src-tauri/src/tray_speed.rs`, `speed_format.rs`) | code done, pending Windows run | **implemented (Linux-validated, Windows run pending)** — shows `↓<rate>  ↑<rate>` beside the tray icon, updated at most once per second, shown at >= 1 KiB/s, cleared after 3 s idle or producer failure (native dead-man); reuse the telemetry producer, no duplicate polling or since-start averages; Windows-only checks recorded as pending until executed on Windows |
 
 ## 4. Findings
 
@@ -250,6 +250,21 @@ Done (Linux):
 - Full stock staging run audited: 917 files, 395 MB, 483 PE files, every import resolves, no vcredist dependency left.
 - `cargo check` and a `--release` build of `nebulae.exe` for `x86_64-pc-windows-gnu` both pass (warnings unchanged: `embed_windows.rs:24`, `settings.rs:397`, `association.rs:18`). The GNU exe imports only system DLLs plus `WebView2Loader.dll` (dynamic); the bundler ships that DLL for `-gnu` targets when it sits next to the exe.
 - NSIS hooks compile under makensis 3.11 (the version tauri-bundler 2.10.2 uses) via `scripts/windows/tests/nsis/hooks-harness.nsi`; the exercise caught and fixed one real bug (`${StrLoc}` is not callable from uninstall sections; the hooks generate and use `un.StrLoc`).
+- `speed_format.rs` unit tests pass on Linux (platform-independent): rate formatting (B/K/M/G/T, figure-space padding, title width <= 14 chars), client-wide aggregation (active torrents only), empty input.
+- `tray_speed.rs` (Windows-only) compiles under `cargo check --target x86_64-pc-windows-gnu`; its unit tests (title shown when active, zero title when idle, stale-clear timing) are pending execution on Windows.
+
+### ASI-14 Windows — tray speed readout (acceptance criteria)
+
+The Windows equivalent of ASI-14 shows client-wide current download/upload rates beside the tray icon while the main window is hidden or minimized.
+
+**Acceptance criteria (all pending Windows execution):**
+1. Visible rates beside the tray icon (tray title), not tooltip-only or click-to-open — `tray.set_title` on `nebulae-tray`.
+2. Shows `↓<rate>  ↑<rate>` when either direction is at or above 1 KiB/s; hides after both stayed below for 3 s.
+3. Updates at most once per second; samples inside that window are dropped before any sum is computed.
+4. No duplicate polling and no since-start averages: driven by the existing 500 ms telemetry tick (`engine::telemetry`, `list_torrents`), using the raw instantaneous `download_rate`/`upload_rate`.
+5. Clears stale rates on engine stop/change/producer failure via the native 3 s dead-man.
+6. Preserves tray controls (show, add-torrent, create-torrent, pause-all, resume-all, quit) and left-click toggle / right-click menu lifecycle.
+7. Code committed on Linux (`f83b0bf`); Windows runtime execution (title actually appearing beside the tray icon) is pending a Windows build/test route.
 
 Not done (nothing of this exists yet):
 
