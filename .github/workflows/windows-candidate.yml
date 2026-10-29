@@ -11,6 +11,9 @@ name: Windows Candidate Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - factory-b/windows-0.2.4-candidate
 
 jobs:
   windows-candidate:
