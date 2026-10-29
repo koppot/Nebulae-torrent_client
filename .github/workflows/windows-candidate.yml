@@ -82,7 +82,7 @@ jobs:
           python3 scripts/windows/stage_runtime.py \
             --cache "$NEBULAE_CACHE" \
             --out "$NEBULAE_STAGE/resources" \
-            --exe "target/x86_64-pc-windows-msvc/release/nebulae.exe" \
+            --exe "src-tauri/target/x86_64-pc-windows-msvc/release/nebulae.exe" \
             --manifest "$NEBULAE_STAGE/build-manifest.json" \
             --no-audit
 
@@ -171,7 +171,7 @@ jobs:
           mkdir -p artifacts
           cp candidate-source.txt artifacts/
           cp "$NEBULAE_STAGE/build-manifest.json" artifacts/build-manifest.json
-          cp src-tauri/target/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
+          cp src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
           # Sidecar exe checksums.
           for exe in artifacts/*.exe; do
             [ -f "$exe" ] || continue
