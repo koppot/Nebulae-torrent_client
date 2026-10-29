@@ -127,7 +127,7 @@ jobs:
       - name: Run PE audit on packaged tree
         shell: bash
         run: |
-          python3 scripts/windows/pe_audit.py "$NEBULAE_STAGE/audit" nebulae \
+          python3 scripts/windows/pe_audit.py audit "$NEBULAE_STAGE/audit" --layout nebulae \
             --fail-on-missing \
             --fail-on-vcredist
 
