@@ -5,8 +5,11 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod speed_format;
 pub mod tailscale;
 pub mod taskbar_windows;
+#[cfg(target_os = "windows")]
+pub mod tray_speed;
 pub mod thumbs;
 pub mod updater;
 pub mod utils;
