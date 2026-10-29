@@ -157,41 +157,27 @@ jobs:
           Write-Host "Silent install succeeded (exit code 0)."
 
           # Locate the installed nebulae.exe.
-          # The NSIS installer runs with installMode: currentUser, so it
-          # installs under $LOCALAPPDATA rather than $PROGRAMFILES.
-          # Environment variables can arrive as Object[] arrays on the
-          # GitHub Actions Windows runner; use GetFolderPath for reliable
-          # string paths. Check the most likely install directories first,
-          # then do a shallow one-level search from the install roots.
-          $programFiles = [System.Environment]::GetFolderPath("ProgramFiles")
-          $localAppData = [System.Environment]::GetFolderPath("LocalApplicationData")
-          $programFilesX86 = [System.Environment]::GetFolderPath("ProgramFilesX86")
-          $nebulaePaths = @(
-            "$localAppData\Programs\Nebulae\nebulae.exe",
-            "$localAppData\Nebulae\nebulae.exe",
-            "$programFiles\Nebulae\nebulae.exe",
-            "${programFiles} (x86)\Nebulae\nebulae.exe",
-            "$programFilesX86\Nebulae\nebulae.exe"
-          )
-          $nebulae = $null
-          foreach ($p in $nebulaePaths) {
-            if (Test-Path $p) { $nebulae = $p; break }
+          # The NSIS installer runs with installMode: currentUser. Instead of
+          # guessing the install directory, query the Windows uninstall registry
+          # entry that NSIS always creates; its UninstallString points to
+          # uninstall.exe in the same directory as nebulae.exe.
+          $uninstallKey = Get-ItemProperty HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* `
+            -ErrorAction SilentlyContinue `
+            | Where-Object { $_.DisplayName -like "*Nebulae*" } `
+            | Select-Object -First 1
+          if (-not $uninstallKey) {
+            throw "FATAL: Nebulae uninstall registry entry not found after install"
           }
-          if (-not $nebulae) {
-            # Shallow search: one level deep from each install root.
-            $searchRoots = @($localAppData, $programFiles, $programFilesX86)
-            foreach ($root in $searchRoots) {
-              if (-not (Test-Path $root)) { continue }
-              $dirs = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue
-              foreach ($dir in $dirs) {
-                $candidate = "$($dir.FullName)\nebulae.exe"
-                if (Test-Path $candidate) { $nebulae = $candidate; break }
-              }
-              if ($nebulae) { break }
-            }
+          $uninstaller = $uninstallKey.UninstallString
+          if (-not $uninstaller) {
+            throw "FATAL: Nebulae uninstall entry has no UninstallString"
           }
-          if (-not $nebulae) {
-            throw "FATAL: nebulae.exe not found after install (searched install roots)"
+          # UninstallString is quoted; strip quotes and extract the directory.
+          $uninstaller = $uninstaller.Trim('"')
+          $nebulaeDir = Split-Path $uninstaller -Parent
+          $nebulae = Join-Path $nebulaeDir 'nebulae.exe'
+          if (-not (Test-Path $nebulae)) {
+            throw "FATAL: nebulae.exe not found at $nebulae (from uninstaller $uninstaller)"
           }
           Write-Host "Found nebulae.exe at: $nebulae"
 
