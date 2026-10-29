@@ -150,7 +150,7 @@ impl Paths {
         })
     }
 
-    fn tailscaled(&self) -> PathBuf {
+    pub(crate) fn tailscaled(&self) -> PathBuf {
         self.bin_dir.join(if cfg!(windows) {
             "tailscaled.exe"
         } else {
@@ -158,7 +158,7 @@ impl Paths {
         })
     }
 
-    fn tailscale(&self) -> PathBuf {
+    pub(crate) fn tailscale(&self) -> PathBuf {
         self.bin_dir.join(if cfg!(windows) {
             "tailscale.exe"
         } else {
@@ -366,12 +366,24 @@ fn daemon_cmdline_marker(paths: &Paths) -> String {
     paths.state_dir.to_string_lossy().to_string()
 }
 
+/// Escape PowerShell `-like` wildcard characters so a literal path can be
+/// embedded in a `-like '*pattern*'` match without `*`, `?` or `[`
+/// changing the semantics.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn escape_like_wildcards(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('`', "``")
+        .replace('*', "[*]")
+        .replace('?', "[?]")
+        .replace('[', "[[]")
+}
+
 /// PIDs of tailscaled processes whose command line carries OUR state dir
 /// (ownership proof).
 fn find_owned_daemon_pids(paths: &Paths) -> Vec<u32> {
     #[cfg(target_os = "windows")]
     {
-        let marker = daemon_cmdline_marker(paths);
+        let marker = escape_like_wildcards(&daemon_cmdline_marker(paths));
         let filter = "Name='tailscaled.exe'";
         let ps = format!(
             "$ErrorActionPreference='SilentlyContinue'; \
@@ -780,21 +792,35 @@ fn cli_on(paths: &Paths, args: &[&str], timeout: Duration) -> Result<String, Str
         .spawn()
         .map_err(|e| format!("tailscale cli spawn: {e}"))?;
 
+    // Drain the piped stdout/stderr on reader threads while the child runs.
+    // Tailscale CLI output is small, but a full pipe buffer can stall the
+    // child if we only read after it exits.
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    if let Some(mut out) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = out.read_to_string(&mut buf);
+            let _ = out_tx.send(buf);
+        });
+    }
+    if let Some(mut err) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            let _ = err_tx.send(buf);
+        });
+    }
+
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut output = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    let _ = out.read_to_string(&mut output);
-                }
+                let output = out_rx.recv().unwrap_or_default();
                 if status.success() {
                     return Ok(output);
                 }
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_string(&mut err);
-                }
+                let err = err_rx.recv().unwrap_or_default();
                 return Err(if err.trim().is_empty() { output } else { err });
             }
             Ok(None) if Instant::now() < deadline => {

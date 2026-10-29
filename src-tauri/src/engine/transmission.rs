@@ -286,8 +286,17 @@ fn terminate_pid_if_transmission(pid: u32) {
 
     #[cfg(windows)]
     {
+        // Only kill the PID if it really is transmission-daemon. A recycled
+        // PID can belong to an unrelated process; the image-name filter is
+        // the ownership proof that prevents killing the wrong process.
         let _ = crate::utils::process::create_hidden_command("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
+            .args([
+                "/F",
+                "/FI",
+                "IMAGENAME eq transmission-daemon.exe",
+                "/PID",
+                &pid.to_string(),
+            ])
             .status();
     }
 
@@ -1163,7 +1172,12 @@ fn persist_negotiated_port(db: &Arc<Database>, engine_dir: &Path, port: u16) {
     if let Ok(raw) = std::fs::read_to_string(&sp) {
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
             v["peer-port"] = json!(port);
-            let _ = std::fs::write(&sp, serde_json::to_string_pretty(&v).unwrap_or_default());
+            // Atomic write: temp file in the same directory, then rename.
+            // Prevents a torn settings.json if the process dies mid-write.
+            let tmp = sp.with_extension("json.tmp");
+            if let Ok(content) = serde_json::to_string_pretty(&v) {
+                let _ = std::fs::write(&tmp, &content).and_then(|()| std::fs::rename(&tmp, &sp));
+            }
         }
     }
 }
@@ -1270,11 +1284,14 @@ impl TransmissionTorrentEngine {
         );
 
         let settings_path = engine_dir.join("settings.json");
-        std::fs::write(
-            &settings_path,
-            serde_json::to_string_pretty(&trans_settings).unwrap_or_default(),
-        )
-        .map_err(|e| format!("Failed to write transmission settings.json: {e}"))?;
+        // Atomic write: temp file in the same directory, then rename.
+        // Prevents a torn settings.json if the process dies mid-write.
+        let tmp = settings_path.with_extension("json.tmp");
+        let content = serde_json::to_string_pretty(&trans_settings)
+            .map_err(|e| format!("Failed to serialize transmission settings: {e}"))?;
+        std::fs::write(&tmp, &content)
+            .and_then(|()| std::fs::rename(&tmp, &settings_path))
+            .map_err(|e| format!("Failed to write transmission settings.json: {e}"))?;
 
         // 6. Spawn the transmission-daemon sidecar
         info!(

@@ -312,14 +312,16 @@ pub fn detect_tailscale() -> Option<(String, String)> {
 /// connection). When the backend is Stopped — NOT NeedsLogin, which would
 /// open an interactive browser auth — issue a single `tailscale up`. The
 /// persisted wants-running flag then makes normal logins auto-connect.
-pub fn heal_stopped_tailscale() -> Option<String> {
+pub fn heal_stopped_tailscale(tailscale_path: &std::path::Path) -> Option<String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static HEALED_THIS_SESSION: AtomicBool = AtomicBool::new(false);
     if HEALED_THIS_SESSION.swap(true, Ordering::SeqCst) {
         return None; // one attempt per process; never flap the VPN
     }
 
-    let output = crate::utils::process::create_hidden_command("tailscale")
+    // Use the EMBEDDED tailscale CLI (resolved from bundled resources),
+    // never a system `tailscale` that happens to be on PATH.
+    let output = crate::utils::process::create_hidden_command(tailscale_path)
         .arg("status")
         .arg("--json")
         .output()
@@ -336,7 +338,7 @@ pub fn heal_stopped_tailscale() -> Option<String> {
     }
 
     tracing::warn!("[tailscale] backend Stopped at startup — issuing one `tailscale up` auto-heal");
-    let up = crate::utils::process::create_hidden_command("tailscale")
+    let up = crate::utils::process::create_hidden_command(tailscale_path)
         .arg("up")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
