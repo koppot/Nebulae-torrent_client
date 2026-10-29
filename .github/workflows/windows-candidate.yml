@@ -1,18 +1,20 @@
 name: Windows Candidate Build
 
 # Build-only candidate packaging for the Windows x64 0.2.4 release candidate.
-# Dispatched manually (workflow_dispatch). Builds the MSVC release, stages the
-# pinned runtime tree, produces the NSIS installer, runs the PE audit and a
-# silent install smoke test, and uploads everything as workflow artifacts only.
-# It never creates a release, never moves or creates tags, never touches
-# latest.json or any updater asset, and never publishes anything.
+# Dispatched manually (workflow_dispatch). Builds the MSVC release via `pnpm tauri
+# build`, stages the pinned runtime tree, produces the NSIS installer, runs the PE
+# audit on the packaged executable + resources, and runs a silent install smoke
+# test. Uploads artifacts only. Never creates a release, never moves or creates tags,
+# never touches latest.json or any updater asset, never publishes.
+#
+# This is an UNSIGNED test candidate: createUpdaterArtifacts is disabled because
+# Factory B holds no Tauri signing private key. It does NOT satisfy final-release
+# requirements. GeoLite2 databases are NOT staged (--require-geo not invoked), so
+# this build is explicitly INCOMPLETE and not release-ready (release blocker P-08).
 #
 # Authorized by the owner: one scratch branch, one artifacts-only workflow.
 
 on:
-  push:
-    branches:
-      - factory-b/windows-0.2.4-candidate
   workflow_dispatch: {}
 
 jobs:
@@ -63,77 +65,98 @@ jobs:
           python3 scripts/windows/fetch_inputs.py \
             --cache "$NEBULAE_CACHE"
 
-      - name: Record source identity
+      - name: Stage runtime resources (pinned inputs; no exe, no --require-geo for candidate)
         shell: bash
         run: |
+          python3 scripts/windows/stage_runtime.py \
+            --cache "$NEBULAE_CACHE" \
+            --out "$NEBULAE_STAGE/resources" \
+            --manifest "$NEBULAE_STAGE/build-manifest.json" \
+            --no-audit
+
+      - name: Copy staged resources to src-tauri/resources
+        shell: bash
+        run: |
+          rm -rf src-tauri/resources
+          cp -r "$NEBULAE_STAGE/resources" src-tauri/resources
+
+      - name: Disable updater artifacts for candidate (no signing key available)
+        shell: bash
+        run: |
+          python3 << 'EOF'
+          import json
+          p = 'src-tauri/tauri.conf.json'
+          d = json.load(open(p))
+          d['bundle']['createUpdaterArtifacts'] = False
+          with open(p, 'w') as f:
+              json.dump(d, f, indent=2)
+              f.write('\n')
+          print('createUpdaterArtifacts set to false for candidate build')
+          EOF
+
+      - name: Build NSIS installer (Tauri bundler 2.10.2; builds Rust internally)
+        shell: bash
+        run: |
+          pnpm tauri build --bundles nsis
+
+      - name: Locate packaged nebulae.exe and record source identity
+        shell: bash
+        run: |
+          EXE=$(find src-tauri/target/release -maxdepth 1 -name "nebulae.exe" -type f | head -1)
+          if [ -z "$EXE" ]; then
+            echo "::error::Packaged nebulae.exe not found in src-tauri/target/release/"
+            exit 1
+          fi
+          echo "PACKAGED_EXE=$EXE" >> "$GITHUB_ENV"
+          sha256sum "$EXE" | tee "$EXE.sha256"
           {
             echo "CANDIDATE_SHA=$(git rev-parse HEAD)"
             git log -1 --format='%H%n%ci%n%s'
           } > candidate-source.txt
           cat candidate-source.txt
 
-      - name: Build nebulae.exe (MSVC release)
+      - name: Build PE audit tree (packaged resources + packaged executable)
         shell: bash
         run: |
-          cargo build --release --locked --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml --bin nebulae
+          rm -rf "$NEBULAE_STAGE/audit"
+          mkdir -p "$NEBULAE_STAGE/audit"
+          cp -r "$NEBULAE_STAGE/resources"/* "$NEBULAE_STAGE/audit/"
+          cp "$PACKAGED_EXE" "$NEBULAE_STAGE/audit/nebulae.exe"
+          echo "Audit tree files: $(find "$NEBULAE_STAGE/audit" -type f | wc -l)"
 
-      - name: Stage runtime resources (pinned inputs; exe included for PE audit; stock VLC, no --require-geo for candidate)
+      - name: Run PE audit on packaged tree
         shell: bash
         run: |
-          python3 scripts/windows/stage_runtime.py \
-            --cache "$NEBULAE_CACHE" \
-            --out "$NEBULAE_STAGE/resources" \
-            --exe "src-tauri/target/x86_64-pc-windows-msvc/release/nebulae.exe" \
-            --manifest "$NEBULAE_STAGE/build-manifest.json" \
-            --no-audit
-
-      - name: Copy staged resources (exe excluded — Tauri adds it from the build output) to src-tauri/resources
-        shell: bash
-        run: |
-          rm -rf src-tauri/resources
-          cp -r "$NEBULAE_STAGE/resources" src-tauri/resources
-          rm -f src-tauri/resources/nebulae.exe
-
-      - name: Disable updater artifacts for candidate (no signing key available)
-        shell: bash
-        run: |
-          python3 -c "
-import json
-p = 'src-tauri/tauri.conf.json'
-d = json.load(open(p))
-d['tauri']['createUpdaterArtifacts'] = False
-with open(p, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-print('createUpdaterArtifacts set to false for candidate build')
-"
-
-      - name: Build NSIS installer (Tauri bundler 2.10.2)
-        shell: bash
-        run: |
-          pnpm tauri build --bundles nsis
-
-      - name: Run PE audit on staged tree
-        shell: bash
-        run: |
-          python3 scripts/windows/pe_audit.py "$NEBULAE_STAGE/resources" nebulae
+          python3 scripts/windows/pe_audit.py "$NEBULAE_STAGE/audit" nebulae \
+            --fail-on-missing \
+            --fail-on-vcredist
 
       - name: Silent install smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Locate the NSIS installer produced by the Tauri bundler.
           $installer = Get-ChildItem -Path "src-tauri\target\release\bundle\nsis\*.exe" |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) {
             throw "FATAL: NSIS installer not found in src-tauri\target\release\bundle\nsis"
           }
           Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+
+          # Record installer identity.
+          $installerHash = (Get-FileHash -Path $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Installer SHA-256: $installerHash"
+
+          # Silent install.
           Write-Host "Running silent install (/S)..."
           $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
           if ($install.ExitCode -ne 0) {
             throw "FATAL: silent install failed with exit code $($install.ExitCode)"
           }
-          Write-Host "Silent install succeeded."
+          Write-Host "Silent install succeeded (exit code 0)."
+
+          # Locate the installed nebulae.exe.
           $nebulaePaths = @(
             Join-Path $env:ProgramFiles 'Nebulae\nebulae.exe',
             Join-Path ${env:LOCALAPPDATA} 'Programs\Nebulae\nebulae.exe',
@@ -147,27 +170,36 @@ print('createUpdaterArtifacts set to false for candidate build')
             throw "FATAL: nebulae.exe not found after install"
           }
           Write-Host "Found nebulae.exe at: $nebulae"
+
+          # Verify installed executable identity against the packaged hash.
+          $installedHash = (Get-FileHash -Path $nebulae -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Installed nebulae.exe SHA-256: $installedHash"
+          if ($installedHash -ne $installerHash) {
+            Write-Host "WARNING: installed exe hash differs from installer hash (installer may embed a different build)."
+          }
+
+          # Launch and verify it does NOT exit unexpectedly.
           Write-Host "Launching nebulae.exe..."
           $proc = Start-Process -FilePath $nebulae -PassThru
           Start-Sleep -Seconds 8
           if ($proc.HasExited) {
-            Write-Host "First instance exited (expected if a previous instance is running or --quit IPC fired)."
-          } else {
-            Write-Host "SUCCESS: nebulae.exe is running (PID $($proc.Id))."
-            $proc.Kill()
+            $code = $proc.ExitCode
+            throw "FATAL: nebulae.exe exited unexpectedly after 8s with exit code $code. Capture logs and investigate."
           }
+          Write-Host "SUCCESS: nebulae.exe is running (PID $($proc.Id))."
+          $proc.Kill()
+
+          # Silent uninstall.
           $uninstaller = Join-Path (Split-Path $nebulae -Parent) 'uninstall.exe'
-          if (Test-Path $uninstaller) {
-            Write-Host "Running silent uninstall (/S)..."
-            $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) {
-              Write-Host "WARNING: silent uninstall exited with code $($uninstall.ExitCode) (non-fatal for candidate)."
-            } else {
-              Write-Host "Silent uninstall succeeded."
-            }
-          } else {
-            Write-Host "WARNING: uninstall.exe not found (non-fatal for candidate)."
+          if (-not (Test-Path $uninstaller)) {
+            throw "FATAL: uninstall.exe not found after install; uninstall validation cannot execute."
           }
+          Write-Host "Running silent uninstall (/S)..."
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "FATAL: silent uninstall failed with exit code $($uninstall.ExitCode)"
+          }
+          Write-Host "Silent uninstall succeeded (exit code 0)."
 
       - name: Prepare artifact directory
         shell: bash
@@ -175,12 +207,19 @@ print('createUpdaterArtifacts set to false for candidate build')
           mkdir -p artifacts
           cp candidate-source.txt artifacts/
           cp "$NEBULAE_STAGE/build-manifest.json" artifacts/build-manifest.json
-          cp src-tauri/target/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
-          for exe in artifacts/*.exe; do
-            [ -f "$exe" ] || continue
-            sha256sum "$exe" > "$exe.sha256"
-          done
-          (cd artifacts && sha256sum *.exe > SHA256SUMS.txt) 2>/dev/null || true
+          # Find and copy the NSIS installer.
+          INSTALLER=$(find src-tauri/target/release/bundle/nsis -name "*.exe" -type f | head -1)
+          if [ -z "$INSTALLER" ]; then
+            echo "::error::NSIS installer not found"
+            exit 1
+          fi
+          cp "$INSTALLER" artifacts/Nebulae-Setup-x64.exe
+          sha256sum artifacts/Nebulae-Setup-x64.exe > artifacts/Nebulae-Setup-x64.exe.sha256
+          # Copy the packaged executable and its checksum.
+          cp "$PACKAGED_EXE" artifacts/nebulae.exe
+          sha256sum artifacts/nebulae.exe > artifacts/nebulae.exe.sha256
+          # Aggregate SHA256SUMS (no || true — fail if missing).
+          (cd artifacts && sha256sum Nebulae-Setup-x64.exe nebulae.exe > SHA256SUMS.txt)
 
       - name: Upload candidate artifacts
         uses: actions/upload-artifact@v4
