@@ -157,17 +157,18 @@ jobs:
           Write-Host "Silent install succeeded (exit code 0)."
 
           # Locate the installed nebulae.exe.
-          # Environment variables may arrive as arrays in some PowerShell contexts
-          # (e.g. GitHub Actions Windows runner), which breaks Join-Path's
-          # AdditionalChildPath parameter. Use @(...)[0] to always take the
-          # first element whether the value is a string or an array.
-          $programFiles = @($env:ProgramFiles)[0]
-          $localAppData = @($env:LOCALAPPDATA)[0]
-          $programFilesX86 = @(${env:ProgramFiles(x86)})[0]
+          # Environment variables (e.g. $env:ProgramFiles) can arrive as
+          # Object[] arrays on the GitHub Actions Windows runner, which
+          # breaks Join-Path's AdditionalChildPath parameter. Use
+          # [System.Environment]::GetFolderPath() instead, which returns
+          # a reliable string path regardless of env var type.
+          $programFiles = [System.Environment]::GetFolderPath("ProgramFiles")
+          $localAppData = [System.Environment]::GetFolderPath("LocalApplicationData")
+          $programFilesX86 = [System.Environment]::GetFolderPath("ProgramFilesX86")
           $nebulaePaths = @(
-            Join-Path $programFiles 'Nebulae\nebulae.exe',
-            Join-Path $localAppData 'Programs\Nebulae\nebulae.exe',
-            Join-Path $programFilesX86 'Nebulae\nebulae.exe'
+            "$programFiles\Nebulae\nebulae.exe",
+            "$localAppData\Programs\Nebulae\nebulae.exe",
+            "$programFilesX86\Nebulae\nebulae.exe"
           )
           $nebulae = $null
           foreach ($p in $nebulaePaths) {
@@ -197,7 +198,7 @@ jobs:
           $proc.Kill()
 
           # Silent uninstall.
-          $uninstaller = Join-Path (Split-Path $nebulae -Parent) 'uninstall.exe'
+          $uninstaller = "$(Split-Path $nebulae -Parent)\uninstall.exe"
           if (-not (Test-Path $uninstaller)) {
             throw "FATAL: uninstall.exe not found after install; uninstall validation cannot execute."
           }
