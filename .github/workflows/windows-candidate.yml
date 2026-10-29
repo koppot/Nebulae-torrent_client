@@ -157,22 +157,41 @@ jobs:
           Write-Host "Silent install succeeded (exit code 0)."
 
           # Locate the installed nebulae.exe.
+          # The NSIS installer runs with installMode: currentUser, so it
+          # installs under $LOCALAPPDATA rather than $PROGRAMFILES.
           # Environment variables can arrive as Object[] arrays on the
           # GitHub Actions Windows runner; use GetFolderPath for reliable
-          # string paths, then search recursively for nebulae.exe since
-          # the NSIS install directory name may vary.
+          # string paths. Check the most likely install directories first,
+          # then do a shallow one-level search from the install roots.
           $programFiles = [System.Environment]::GetFolderPath("ProgramFiles")
           $localAppData = [System.Environment]::GetFolderPath("LocalApplicationData")
           $programFilesX86 = [System.Environment]::GetFolderPath("ProgramFilesX86")
-          $searchRoots = @($programFiles, "${programFiles} (x86)", $programFilesX86, $localAppData)
+          $nebulaePaths = @(
+            "$localAppData\Programs\Nebulae\nebulae.exe",
+            "$localAppData\Nebulae\nebulae.exe",
+            "$programFiles\Nebulae\nebulae.exe",
+            "${programFiles} (x86)\Nebulae\nebulae.exe",
+            "$programFilesX86\Nebulae\nebulae.exe"
+          )
           $nebulae = $null
-          foreach ($root in $searchRoots) {
-            if (-not (Test-Path $root)) { continue }
-            $matches = Get-ChildItem -Path $root -Filter "nebulae.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($matches) { $nebulae = $matches.FullName; break }
+          foreach ($p in $nebulaePaths) {
+            if (Test-Path $p) { $nebulae = $p; break }
           }
           if (-not $nebulae) {
-            throw "FATAL: nebulae.exe not found after install (searched $($searchRoots -join ', '))"
+            # Shallow search: one level deep from each install root.
+            $searchRoots = @($localAppData, $programFiles, $programFilesX86)
+            foreach ($root in $searchRoots) {
+              if (-not (Test-Path $root)) { continue }
+              $dirs = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue
+              foreach ($dir in $dirs) {
+                $candidate = "$($dir.FullName)\nebulae.exe"
+                if (Test-Path $candidate) { $nebulae = $candidate; break }
+              }
+              if ($nebulae) { break }
+            }
+          }
+          if (-not $nebulae) {
+            throw "FATAL: nebulae.exe not found after install (searched install roots)"
           }
           Write-Host "Found nebulae.exe at: $nebulae"
 
