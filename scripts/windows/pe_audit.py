@@ -33,7 +33,7 @@ SYSTEM_DLLS = frozenset(
     d2d1.dll d3d11.dll d3d12.dll d3d9.dll d3dcompiler_47.dll dbghelp.dll
     dcomp.dll dnsapi.dll dsound.dll dwmapi.dll dwrite.dll dxgi.dll dxva2.dll
     gdi32.dll gdi32full.dll gdiplus.dll glu32.dll hid.dll imm32.dll
-    iphlpapi.dll kernel32.dll kernelbase.dll mf.dll mfplat.dll mfreadwrite.dll
+    iphlpapi.dll kernel32.dll kernelbase.dll ktmw32.dll mf.dll mfplat.dll mfreadwrite.dll
     mmdevapi.dll mpr.dll msacm32.dll msi.dll msimg32.dll msvcrt.dll mswsock.dll
     ncrypt.dll netapi32.dll normaliz.dll ntdll.dll ole32.dll oleacc.dll
     oleaut32.dll opengl32.dll pdh.dll powrprof.dll propsys.dll psapi.dll

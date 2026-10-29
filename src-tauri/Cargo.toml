@@ -15,9 +15,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "nebulae"
 path = "src/main.rs"
 
+# CI-only signature verifier. Gated behind a non-default feature so release
+# builds skip it: tauri-cli bundles every [[bin]] it can resolve, and without
+# required-features this tool would ship inside end-user installers (P-05).
 [[bin]]
 name = "verify-payload-signature"
 path = "src/bin/verify_payload_signature.rs"
+required-features = ["ci-verify-payload-signature"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,6 +33,9 @@ tauri-build = { version = "2", features = [] }
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 test-updater = []
+# Enables the CI-only verify-payload-signature bin (cargo run --features
+# ci-verify-payload-signature --bin verify-payload-signature ...).
+ci-verify-payload-signature = ["dep:minisign-verify"]
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
@@ -61,7 +68,7 @@ libc = "0.2.191"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 maxminddb = "0.24"
 md5 = "0.7"
-minisign-verify = "0.3"
+minisign-verify = { version = "0.3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

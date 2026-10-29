@@ -209,9 +209,9 @@ touched this file; `git log -- docs/windows` shows it.
 
 | Area | IDs | Planned change | Status |
 |---|---|---|---|
-| Audit tooling | P-01, P-05 | `scripts/windows/pe_audit.py` with unit tests | **done** (16 tests pass on Linux) |
-| Input pinning and fetch | P-04, P-02, P-07 | lock file, fetch/verify script, licence set | open |
-| Staging and packaging config | P-01, P-05, P-06, P-08, P-09, P-10 | stage script with an allow-list, app-local VC++ runtime next to the daemon, offline WebView2, no CI-only binaries, NSIS hook fixes | open |
+| Audit tooling | P-01, P-05 | `scripts/windows/pe_audit.py` with unit tests | **done** (41 tests pass on Linux) |
+| Input pinning and fetch | P-04, P-02, P-07 | lock file, fetch/verify script, licence set | **done** (13 inputs pinned by sha256 with provenance; fetch verifies size+hash) |
+| Staging and packaging config | P-01, P-05, P-06, P-08, P-09, P-10 | stage script with an allow-list, app-local VC++ runtime next to the daemon, offline WebView2, no CI-only binaries, NSIS hook fixes | **mostly done**: staging run passes the audit (917 files, zero unresolved imports, zero vcredist); hooks.nsh rewritten (Restart-Manager-scoped sidecar stop, elevation-gated firewall rules, ownership-checked handler/rule removal, /UPDATE guard, real data dirs, x64 guard) and syntax-clean under makensis 3.11; `webviewInstallMode` is now `offlineInstaller`; the CI-only bin is gated behind `ci-verify-payload-signature`. Remaining: GeoLite2 staging (P-08, needs a licence key), pinned WebView2 preseed in the candidate workflow, CI pins (P-10) |
 | Windows runtime fixes | W-01 to W-26 | as listed | open |
 | Player/window fixes | E-01 to E-09 | as listed | open |
 | IPC and path fixes | F-01 to F-07 | missing commands, path helper with tests, asset scope | open |
@@ -219,19 +219,29 @@ touched this file; `git log -- docs/windows` shows it.
 | Candidate workflow | P-10 | `windows-candidate.yml`: pinned runner, `--bundles nsis`, PE audit, silent install, launch and uninstall smoke test, artifacts only | open, **blocked on authorisation to push** |
 | Mac features missing everywhere | M-10, M-11 | wait for Factory A's design, then adopt | open |
 
+Installer license page: the NSIS template shows one only when `bundle.license` is set; it is unset today and stays
+unset from this lane, because that key is global (it would also change the Linux packages and any future WiX MSI) and
+adds an obligatory click for every installer. Licence coverage is instead shipped as files under
+`resources/licenses/` (P-07 fix) plus the in-repo `THIRD-PARTY-NOTICES.md`. Turning those into a license page is a
+cross-platform product decision for the maintainers.
+
 ## 7. Verification status
 
-Done (Linux, this session):
+Done (Linux):
 
 - Hash-verified downloads of every pinned input; the published installer extracted and audited (section 2).
 - `libvlc.dll` of the stock zip compared with the symbols the Rust code needs (316 exports; the two custom ones missing).
-- `pe_audit.py` cross-checked against `pefile` on 369 PE files with no mismatch, and covered by 16 synthetic-PE unit tests.
+- `pe_audit.py` cross-checked against `pefile` on 369 PE files with no mismatch, and covered by synthetic-PE unit tests (41 tests in `scripts/windows/tests` pass).
 - VLC 3.0.23 source read for the export mechanism (section 5).
+- Full stock staging run audited: 917 files, 395 MB, 483 PE files, every import resolves, no vcredist dependency left.
+- `cargo check` and a `--release` build of `nebulae.exe` for `x86_64-pc-windows-gnu` both pass (warnings unchanged: `embed_windows.rs:24`, `settings.rs:397`, `association.rs:18`). The GNU exe imports only system DLLs plus `WebView2Loader.dll` (dynamic); the bundler ships that DLL for `-gnu` targets when it sits next to the exe.
+- NSIS hooks compile under makensis 3.11 (the version tauri-bundler 2.10.2 uses) via `scripts/windows/tests/nsis/hooks-harness.nsi`; the exercise caught and fixed one real bug (`${StrLoc}` is not callable from uninstall sections; the hooks generate and use `un.StrLoc`).
 
 Not done (nothing of this exists yet):
 
-- Any Rust compile or test, any Windows run, any installer build or install, any playback, any patched-VLC build.
+- Any Windows run of the exe, any installer build or install, any playback, any patched-VLC build, any MSVC build (the release route).
 - Whether the repaired runtime fixes the Blu-ray First Play flash on Windows. It is unproven even on macOS in the repair ledger.
+- `clippy -- -D warnings` is still red (`settings.rs:397` unused `app`, plus the two older warnings); fixed with the runtime repairs.
 
 ## 8. Access needed to finish
 
