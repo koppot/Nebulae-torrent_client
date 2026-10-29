@@ -160,9 +160,12 @@ jobs:
           # Environment variables may arrive as arrays in some PowerShell contexts
           # (e.g. GitHub Actions Windows runner), which breaks Join-Path's
           # AdditionalChildPath parameter. Take the first element if so.
-          $programFiles = if ($env:ProgramFiles -is [array]) { $env:ProgramFiles[0] } else { $env:ProgramFiles }
-          $localAppData = if ($env:LOCALAPPDATA -is [array]) { $env:LOCALAPPDATA[0] } else { $env:LOCALAPPDATA }
-          $programFilesX86 = if ($env:ProgramFiles(x86) -is [array]) { $env:ProgramFiles(x86)[0] } else { $env:ProgramFiles(x86) }
+          $programFilesRaw = $env:ProgramFiles
+          $localAppDataRaw = $env:LOCALAPPDATA
+          $programFilesX86Raw = ${env:ProgramFiles(x86)}
+          $programFiles = if ($programFilesRaw -is [array]) { $programFilesRaw[0] } else { $programFilesRaw }
+          $localAppData = if ($localAppDataRaw -is [array]) { $localAppDataRaw[0] } else { $localAppDataRaw }
+          $programFilesX86 = if ($programFilesX86Raw -is [array]) { $programFilesX86Raw[0] } else { $programFilesX86Raw }
           $nebulaePaths = @(
             Join-Path $programFiles 'Nebulae\nebulae.exe',
             Join-Path $localAppData 'Programs\Nebulae\nebulae.exe',
