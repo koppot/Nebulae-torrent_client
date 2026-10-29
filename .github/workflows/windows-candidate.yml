@@ -10,7 +10,10 @@ name: Windows Candidate Build
 # Authorized by the owner: one scratch branch, one artifacts-only workflow.
 
 on:
-  workflow_dispatch
+  push:
+    branches:
+      - factory-b/windows-0.2.4-candidate
+  workflow_dispatch: {}
 
 jobs:
   windows-candidate:
