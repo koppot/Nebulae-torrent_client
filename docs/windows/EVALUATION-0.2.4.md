@@ -91,7 +91,7 @@ published installer does today; "Patched" is what the repaired runtime of sectio
 | P-05 | M | V | Baggage shipped: `verify-payload-signature.exe` (a CI tool, a stray `[[bin]]` in `Cargo.toml`); about 28 MB of Qt6/dbus DLLs next to the daemon (the daemon imports only `libcrypto`, `libcurl`, `libssl` and the VC runtime); VLC `msi/`, `skins/` and similar. |
 | P-06 | M | V | `resources/build-manifest.json` is a stale macOS arm64 manifest (git revision `1e4c924`) from `resources/**/*`. |
 | P-07 | H | V | No licence or notice files for VLC, libbluray, Transmission, Temurin, Tailscale, VC++ runtime. |
-| P-08 | M | V | `resources/geo` holds only `.gitkeep`. The GeoLite2 candidate paths in the code match the Windows layout, but the database is not staged. |
+| P-08 | B | V | `resources/geo` holds only `.gitkeep`. GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb are now REQUIRED (not optional) for 0.2.4. The databases are NOT in the repository (`.gitignore` excludes `src-tauri/resources/geo/*.mmdb`) and `scripts/download_geo_db.sh` requires a MaxMind license key that Factory B does not hold. Release blocker: no authorized source for the database; cannot stage, verify, or ship it. |
 | P-09 | H | S | NSIS: `src-tauri/nsis/installer.nsi` is orphaned (no `nsis.template` in `tauri.conf.json`); only `hooks.nsh` is wired (installer hooks). In `hooks.nsh`: `netsh` firewall rules fail silently when not elevated (install mode is `currentUser`); magnet, `.torrent` and `.adc` handlers are deleted unconditionally, also during updates and including other applications' registrations; association writes duplicate the bundler's; `taskkill /F /T /IM` kills by image name and hits unrelated Transmission or Tailscale processes; the "delete data" checkbox targets `org.asiandvdclub.nebulae`, not the real `%APPDATA%\Nebulae\internal`; no x64 guard. |
 | P-10 | M | S | CI gaps: no Windows install, launch or PE smoke test; Tauri CLI floats (`^2`); no Rust toolchain pin; `targets: "all"` also builds an unused WiX MSI. `ci.yml` `windows-tests` passed this time. |
 | P-11 | M | S | Signing and updater. Authenticode runs through SignPath only when `vars.WINDOWS_SIGN_PROVIDER` is set (it is not: unsigned; the app does not verify Authenticode on update). The minisign updater key (`TAURI_SIGNING_PRIVATE_KEY`) is always required because `createUpdaterArtifacts` is true. `generate-updater-manifest.py` is used only by `build-test.yml` and checks for `setup.exe`, not `Nebulae-Setup-x64.exe`. `release.yml` `workflow_dispatch` defaults `tag_name` to `v0.9.0`, a feed hazard. |
@@ -211,7 +211,7 @@ touched this file; `git log -- docs/windows` shows it.
 |---|---|---|---|
 | Audit tooling | P-01, P-05 | `scripts/windows/pe_audit.py` with unit tests | **done** (41 tests pass on Linux) |
 | Input pinning and fetch | P-04, P-02, P-07 | lock file, fetch/verify script, licence set | **done** (13 inputs pinned by sha256 with provenance; fetch verifies size+hash) |
-| Staging and packaging config | P-01, P-05, P-06, P-08, P-09, P-10 | stage script with an allow-list, app-local VC++ runtime next to the daemon, offline WebView2, no CI-only binaries, NSIS hook fixes | **mostly done**: staging run passes the audit (917 files, zero unresolved imports, zero vcredist); hooks.nsh rewritten (Restart-Manager-scoped sidecar stop, elevation-gated firewall rules, ownership-checked handler/rule removal, /UPDATE guard, real data dirs, x64 guard) and syntax-clean under makensis 3.11; `webviewInstallMode` is now `offlineInstaller`; the CI-only bin is gated behind `ci-verify-payload-signature`. Remaining: GeoLite2 staging (P-08, needs a licence key), pinned WebView2 preseed in the candidate workflow, CI pins (P-10) |
+| Staging and packaging config | P-01, P-05, P-06, P-08, P-09, P-10 | stage script with an allow-list, app-local VC++ runtime next to the daemon, offline WebView2, no CI-only binaries, NSIS hook fixes | **mostly done**: staging run passes the audit (917 files, zero unresolved imports, zero vcredist); hooks.nsh rewritten (Restart-Manager-scoped sidecar stop, elevation-gated firewall rules, ownership-checked handler/rule removal, /UPDATE guard, real data dirs, x64 guard) and syntax-clean under makensis 3.11; `webviewInstallMode` is now `offlineInstaller`; the CI-only bin is gated behind `ci-verify-payload-signature`. `stage_runtime.py` now has `--geo-dir`/`--require-geo` so a release build fails loudly without both GeoLite2 databases. Remaining: GeoLite2 staging is BLOCKED (P-08 — Factory B has no MaxMind licence key), pinned WebView2 preseed in the candidate workflow, CI pins (P-10) |
 | Windows runtime fixes | W-01 to W-26 | as listed | open |
 | Player/window fixes | E-01 to E-09 | as listed | open |
 | IPC and path fixes | F-01 to F-07 | missing commands, path helper with tests, asset scope | open |
@@ -224,6 +224,19 @@ unset from this lane, because that key is global (it would also change the Linux
 adds an obligatory click for every installer. Licence coverage is instead shipped as files under
 `resources/licenses/` (P-07 fix) plus the in-repo `THIRD-PARTY-NOTICES.md`. Turning those into a license page is a
 cross-platform product decision for the maintainers.
+
+### GeoLite2 release check (REQUIRED, blocked)
+
+GeoLite2 is a required dependency for Nebulae 0.2.4, not optional. The release checks are:
+
+1. **Edition / build identity:** `GeoLite2-Country.mmdb` and `GeoLite2-ASN.mmdb`, current weekly build from MaxMind (edition IDs `GeoLite2-Country` and `GeoLite2-ASN`). Build/date identity is whatever MaxMind serves at download time; record it in the build manifest.
+2. **Authorized source:** MaxMind's download service (`download.maxmind.com`), via `scripts/download_geo_db.sh`, which requires a MaxMind account signup and a license key. GeoLite2 is free but the key is mandatory — no key, no download.
+3. **Packaged location:** `{app}\resources\geo\GeoLite2-Country.mmdb` and `{app}\resources\geo\GeoLite2-ASN.mmdb` in the installed tree (code tries `<resource dir>/resources/geo/` first, then `<resource dir>/geo/`).
+4. **Integrity verification:** `stage_runtime.py` stages both files (from `--geo-dir`) and records their SHA-256 in `resources/build-manifest.json`; `pe_audit` covers the rest of the tree. The `.mmdb` files themselves are validated by opening them with the `maxminddb` crate (the engine logs `[geo] GeoLite2 resolver loaded` on success).
+5. **Lookup verification (blocked):** with a real database, open `GeoResolver::from_resource_dir` and run representative lookups — e.g. `country_code("8.8.8.8")` → `Some("US")`, `asn("8.8.8.8")` → `Some(15169)`, and a private IP → `LocalityTier::Lan`. This cannot run without the database.
+6. **Release gate:** `stage_runtime.py --require-geo` fails the staging run when either database is absent. Missing, unreadable, invalid, or incorrectly located database files block release.
+
+**Blocker:** Factory B has no MaxMind license key and no authorized source for the databases. `.gitignore` excludes `src-tauri/resources/geo/*.mmdb` and they are not in `inputs.lock.json`. The download script, the notice text, the staging slots and the release gate are all in place; only the credentials are missing. Do not substitute another product and do not silently omit the database.
 
 ## 7. Verification status
 

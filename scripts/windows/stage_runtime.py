@@ -527,6 +527,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cab-tool", help="7-Zip executable; auto-detected otherwise")
     ap.add_argument("--offline", action="store_true", help="use only what is already in the cache")
     ap.add_argument("--no-audit", action="store_true", help="skip the PE audit (experiments only)")
+    ap.add_argument("--geo-dir", type=Path, help="directory holding the downloaded MaxMind "
+        "GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb (see scripts/download_geo_db.sh); "
+        "they are copied into resources/geo/ in the staged tree")
+    ap.add_argument("--require-geo", action="store_true", help="fail the staging run when the "
+        "GeoLite2 databases are not provided; release builds must set this")
     args = ap.parse_args(argv)
 
     warnings: list[str] = []
@@ -553,8 +558,21 @@ def main(argv: list[str] | None = None) -> int:
     stage_tailscale(args.cache, inputs, rec, cab_tool)
     stage_vcredist(args.cache, inputs, rec, cab_tool)
     stage_licenses(args.cache, inputs, rec, patched)
-    (out / "resources" / "geo").mkdir(exist_ok=True)
-    warnings.append("resources/geo holds no GeoLite2 data (needs a MaxMind licence key at build time)")
+    geo_out = out / "resources" / "geo"
+    geo_out.mkdir(exist_ok=True)
+    if args.geo_dir is not None:
+        for name in ("GeoLite2-Country.mmdb", "GeoLite2-ASN.mmdb"):
+            src = args.geo_dir / name
+            if src.is_file():
+                rec.copy(src, geo_out / name, "MaxMind GeoLite2 database (downloaded by scripts/download_geo_db.sh)")
+            elif args.require_geo:
+                fail(f"--require-geo: {name} not found in --geo-dir {args.geo_dir}")
+    elif args.require_geo:
+        fail("--require-geo: GeoLite2 databases not provided (--geo-dir); a release build cannot omit them")
+    if not (geo_out / "GeoLite2-Country.mmdb").is_file():
+        warnings.append("resources/geo holds no GeoLite2-Country.mmdb (a MaxMind licence key is required at build time)")
+    if not (geo_out / "GeoLite2-ASN.mmdb").is_file():
+        warnings.append("resources/geo holds no GeoLite2-ASN.mmdb (a MaxMind licence key is required at build time)")
     if not args.exe:
         warnings.append("no --exe given: the audit covers resources only, not nebulae.exe")
 
