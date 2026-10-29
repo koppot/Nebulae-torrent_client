@@ -157,11 +157,12 @@ jobs:
           Write-Host "Silent install succeeded (exit code 0)."
 
           # Locate the installed nebulae.exe.
-          # Cast env vars to string: in some PowerShell contexts they arrive as arrays,
-          # which breaks Join-Path's AdditionalChildPath parameter.
-          $programFiles = [string]$env:ProgramFiles
-          $localAppData = [string]${env:LOCALAPPDATA}
-          $programFilesX86 = [string]${env:ProgramFiles(x86)}
+          # Environment variables may arrive as arrays in some PowerShell contexts
+          # (e.g. GitHub Actions Windows runner), which breaks Join-Path's
+          # AdditionalChildPath parameter. Take the first element if so.
+          $programFiles = if ($env:ProgramFiles -is [array]) { $env:ProgramFiles[0] } else { $env:ProgramFiles }
+          $localAppData = if ($env:LOCALAPPDATA -is [array]) { $env:LOCALAPPDATA[0] } else { $env:LOCALAPPDATA }
+          $programFilesX86 = if ($env:ProgramFiles(x86) -is [array]) { $env:ProgramFiles(x86)[0] } else { $env:ProgramFiles(x86) }
           $nebulaePaths = @(
             Join-Path $programFiles 'Nebulae\nebulae.exe',
             Join-Path $localAppData 'Programs\Nebulae\nebulae.exe',
