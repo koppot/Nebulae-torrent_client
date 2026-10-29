@@ -74,7 +74,7 @@ jobs:
       - name: Build nebulae.exe (MSVC release)
         shell: bash
         run: |
-          cargo build --release --locked --target x86_64-pc-windows-msvc --bin nebulae
+          cargo build --release --locked --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml --bin nebulae
 
       - name: Stage runtime resources (pinned inputs; exe included for PE audit; stock VLC, no --require-geo for candidate)
         shell: bash
