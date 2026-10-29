@@ -126,6 +126,8 @@ mod tests {
             save_path: "".to_string(),
             added_on: 0,
             completed_on: None,
+            comment: String::new(),
+            created_by: String::new(),
             piece_size: 0,
             total_pieces: 0,
             sequential_download: false,
@@ -152,7 +154,7 @@ mod tests {
         let title = state.update(&torrents);
         assert!(title.is_some());
         assert!(!title.as_ref().unwrap().is_empty());
-        assert!(title.as_ref().unwrap().len() <= MAX_TITLE_CHARS);
+        assert!(title.as_ref().unwrap().chars().count() <= MAX_TITLE_CHARS);
     }
 
     #[test]
@@ -169,7 +171,7 @@ mod tests {
         let t = title.as_deref().unwrap();
         assert!(t.starts_with("↓"));
         assert!(t.contains("0B"));
-        assert!(t.len() <= MAX_TITLE_CHARS);
+        assert!(t.chars().count() <= MAX_TITLE_CHARS);
         // Figure spaces pad the zero fields to a stable width.
         assert!(t.contains(FIGURE_SPACE));
     }

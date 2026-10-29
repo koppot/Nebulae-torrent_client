@@ -68,10 +68,11 @@ jobs:
       - name: Stage runtime resources (pinned inputs; no exe, no --require-geo for candidate)
         shell: bash
         run: |
+          mkdir -p "$NEBULAE_STAGE"
           python3 scripts/windows/stage_runtime.py \
             --cache "$NEBULAE_CACHE" \
-            --out "$NEBULAE_STAGE/resources" \
-            --manifest "$NEBULAE_STAGE/build-manifest.json" \
+            --out "$NEBULAE_STAGE" \
+            --manifest "$NEBULAE_STAGE/resources/build-manifest.json" \
             --no-audit
 
       - name: Copy staged resources to src-tauri/resources
@@ -120,7 +121,7 @@ jobs:
         run: |
           rm -rf "$NEBULAE_STAGE/audit"
           mkdir -p "$NEBULAE_STAGE/audit"
-          cp -r "$NEBULAE_STAGE/resources"/* "$NEBULAE_STAGE/audit/"
+          cp -r "$NEBULAE_STAGE/resources" "$NEBULAE_STAGE/audit/resources"
           cp "$PACKAGED_EXE" "$NEBULAE_STAGE/audit/nebulae.exe"
           echo "Audit tree files: $(find "$NEBULAE_STAGE/audit" -type f | wc -l)"
 
@@ -156,18 +157,45 @@ jobs:
           }
           Write-Host "Silent install succeeded (exit code 0)."
 
-          # NOTE: nebulae.exe launch/uninstall verification requires
-          # Windows-side debugging to determine the NSIS install directory
-          # (installMode: currentUser). The silent install exit code 0 is
-          # the key validation. These steps can be enabled once the
-          # install path is confirmed on a Windows machine.
+          # Verify installed executable and sidecars
+          $installDir = Join-Path $env:LOCALAPPDATA "Nebulae"
+          $installedExe = Join-Path $installDir "nebulae.exe"
+          if (-not (Test-Path $installedExe)) {
+            throw "FATAL: installed nebulae.exe not found at $installedExe"
+          }
+          $exeHash = (Get-FileHash -Path $installedExe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Installed nebulae.exe SHA-256: $exeHash"
+
+          # Verify sidecar directories exist under resources
+          $resourcesDir = Join-Path $installDir "resources"
+          $vlcDir = Join-Path $resourcesDir "vlc"
+          $engineDir = Join-Path $resourcesDir "engine"
+          if (-not (Test-Path $vlcDir)) {
+            throw "FATAL: resources/vlc not found at $vlcDir"
+          }
+          if (-not (Test-Path $engineDir)) {
+            throw "FATAL: resources/engine not found at $engineDir"
+          }
+          Write-Host "Verified resources layout ($vlcDir and $engineDir exist)"
+
+          # Silent uninstall
+          $uninstaller = Join-Path $installDir "uninstall.exe"
+          if (-not (Test-Path $uninstaller)) {
+            throw "FATAL: uninstaller not found at $uninstaller"
+          }
+          Write-Host "Running silent uninstall (/S _?=$installDir)..."
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S', ("_?=" + $installDir) -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "FATAL: silent uninstall failed with exit code $($uninstall.ExitCode)"
+          }
+          Write-Host "Silent uninstall succeeded (exit code 0)."
 
       - name: Prepare artifact directory
         shell: bash
         run: |
           mkdir -p artifacts
           cp candidate-source.txt artifacts/
-          cp "$NEBULAE_STAGE/build-manifest.json" artifacts/build-manifest.json
+          cp "$NEBULAE_STAGE/resources/build-manifest.json" artifacts/build-manifest.json
           # Find and copy the NSIS installer.
           INSTALLER=$(find src-tauri/target/release/bundle/nsis -name "*.exe" -type f | head -1)
           if [ -z "$INSTALLER" ]; then

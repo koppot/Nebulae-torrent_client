@@ -8,9 +8,9 @@ pub mod player;
 pub mod speed_format;
 pub mod tailscale;
 pub mod taskbar_windows;
+pub mod thumbs;
 #[cfg(target_os = "windows")]
 pub mod tray_speed;
-pub mod thumbs;
 pub mod updater;
 pub mod utils;
 pub mod webview_recovery;

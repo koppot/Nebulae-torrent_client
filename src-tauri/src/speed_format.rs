@@ -36,6 +36,7 @@ pub fn format_rate(bytes_per_sec: u64) -> String {
     if unit_idx == 0 {
         format!("{}{}", val as u64, UNITS[0])
     } else {
+        let val = (val * 10.0).floor() / 10.0;
         format!("{:.1}{}", val, UNITS[unit_idx])
     }
 }
@@ -43,10 +44,15 @@ pub fn format_rate(bytes_per_sec: u64) -> String {
 /// Right-pad a rate string with figure spaces to `width`, or return it
 /// unchanged when it already meets or exceeds `width`.
 fn pad_rate(s: &str, width: usize) -> String {
-    if s.len() >= width {
+    let char_count = s.chars().count();
+    if char_count >= width {
         s.to_string()
     } else {
-        format!("{}{}", FIGURE_SPACE.to_string().repeat(width - s.len()), s)
+        format!(
+            "{}{}",
+            FIGURE_SPACE.to_string().repeat(width - char_count),
+            s
+        )
     }
 }
 
@@ -105,6 +111,8 @@ mod tests {
             save_path: "".to_string(),
             added_on: 0,
             completed_on: None,
+            comment: String::new(),
+            created_by: String::new(),
             piece_size: 0,
             total_pieces: 0,
             sequential_download: false,
@@ -161,7 +169,10 @@ mod tests {
     #[test]
     fn title_width_budget() {
         let title = format_speed_title(1_234_567, 89_012);
-        assert!(title.len() <= MAX_TITLE_CHARS, "title too long: {title}");
+        assert!(
+            title.chars().count() <= MAX_TITLE_CHARS,
+            "title too long: {title}"
+        );
     }
 
     #[test]
