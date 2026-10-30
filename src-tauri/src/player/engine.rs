@@ -1141,6 +1141,22 @@ impl VlcSession {
                 }
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            // Probe whether any audio output devices are active.
+            // On headless servers, VMs, or RDP sessions without redirected audio,
+            // waveOutGetNumDevs() returns 0. If 0, VLC's default mmdevice audio output
+            // fails and crashes during playback. Passing --aout=adummy avoids the crash.
+            #[link(name = "winmm")]
+            extern "system" {
+                fn waveOutGetNumDevs() -> u32;
+            }
+            let audio_devs = unsafe { waveOutGetNumDevs() };
+            if audio_devs == 0 {
+                tracing::warn!("No active audio playback devices detected on Windows (waveOutGetNumDevs=0); using --aout=adummy to prevent mmdevice crash");
+                args.push(CString::new("--aout=adummy").unwrap());
+            }
+        }
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
             let mut instance = shared.load(std::sync::atomic::Ordering::SeqCst) as *mut c_void;
