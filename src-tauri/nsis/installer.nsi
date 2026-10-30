@@ -979,11 +979,10 @@ Function CreateOrUpdateStartMenuShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
+  ; Skip creating shortcut if in no shortcut mode
   ; but always create if migrating from wix
   ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+    ${If} $NoShortcutMode = 1
       Return
     ${EndIf}
   ${EndIf}
@@ -1008,11 +1007,10 @@ Function CreateOrUpdateDesktopShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
+  ; Skip creating shortcut if in no shortcut mode
   ; but always create if migrating from wix
   ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+    ${If} $NoShortcutMode = 1
       Return
     ${EndIf}
   ${EndIf}

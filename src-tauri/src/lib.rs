@@ -439,6 +439,9 @@ pub fn run() {
                 .decorations(false)
                 .transparent(true)
                 .center();
+                if let Some(icon) = app.default_window_icon() {
+                    builder = builder.icon(icon.clone())?;
+                }
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
                         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",
