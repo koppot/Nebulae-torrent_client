@@ -18,19 +18,21 @@ use tauri::AppHandle;
 
 use crate::commands::torrent::TorrentItem;
 use crate::speed_format::{
-    aggregate_client_rates, format_speed_title, SHOW_THRESHOLD, STALE_AFTER_SECS,
+    aggregate_client_rates, create_composite_tray_icon, format_rate, SHOW_THRESHOLD,
+    STALE_AFTER_SECS,
 };
 
 /// Tray icon id used by the builder in `lib.rs` (`"nebulae-tray"`).
 const TRAY_ID: &str = "nebulae-tray";
 
-/// State for the readout: throttles title updates to once per second and
-/// clears the readout after both directions stay below threshold for
-/// `STALE_AFTER_SECS` (a native dead-man, so producer failure clears it).
+/// State for the readout: throttles icon updates to once per second and
+/// clears the readout (restoring the default brand icon) after both directions
+/// stay below threshold for `STALE_AFTER_SECS`.
 pub struct TraySpeedState {
     last_update: Instant,
-    last_title: Option<String>,
+    last_rates: Option<(u64, u64)>,
     last_active: Instant,
+    is_custom_icon: bool,
 }
 
 impl Default for TraySpeedState {
@@ -38,8 +40,9 @@ impl Default for TraySpeedState {
         let now = Instant::now();
         Self {
             last_update: now - Duration::from_secs(1), // allow immediate first update
-            last_title: None,
+            last_rates: None,
             last_active: now,
+            is_custom_icon: false,
         }
     }
 }
@@ -50,9 +53,9 @@ impl TraySpeedState {
     }
 
     /// Call once per telemetry tick with the current torrent list.
-    /// Returns `Some(title)` to show, or `None` to clear the readout.
-    /// Throttled to at most one title change per second.
-    pub fn update(&mut self, torrents: &[TorrentItem]) -> Option<String> {
+    /// Returns `Some((down, up))` to show, or `None` to clear/restore idle icon.
+    /// Throttled to at most one update per second.
+    pub fn update(&mut self, torrents: &[TorrentItem]) -> Option<(u64, u64)> {
         let now = Instant::now();
         let (down, up) = aggregate_client_rates(torrents);
         let active = down >= SHOW_THRESHOLD || up >= SHOW_THRESHOLD;
@@ -60,47 +63,57 @@ impl TraySpeedState {
             self.last_active = now;
         }
 
-        // Hide after both directions stayed below threshold for STALE_AFTER.
+        // Restore idle icon after both directions stayed below threshold for STALE_AFTER_SECS.
         if now - self.last_active > Duration::from_secs(STALE_AFTER_SECS) {
-            if self.last_title.is_some() {
-                self.last_title = None;
+            if self.last_rates.is_some() {
+                self.last_rates = None;
                 return None;
             }
             return None;
         }
 
-        // Throttle: at most one title update per second.
+        // Throttle: at most one icon update per second.
         if now - self.last_update < Duration::from_secs(1) {
-            return self.last_title.clone();
+            return self.last_rates;
         }
         self.last_update = now;
 
-        let title = format_speed_title(down, up);
-        self.last_title = Some(title.clone());
-        Some(title)
+        self.last_rates = Some((down, up));
+        Some((down, up))
     }
 }
 
-/// Apply a computed title to the tray icon, or clear it when `None`.
-fn apply_title(app: &AppHandle, title: Option<&str>) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_title(title);
-    }
-}
-
-/// Update the tray title from the current telemetry snapshot. Intended to be
+/// Update the tray icon and tooltip from the current telemetry snapshot. Intended to be
 /// called once per telemetry tick from `engine::telemetry` (Windows only).
 pub fn update_tray_title(app: &AppHandle, torrents: &[TorrentItem], state: &mut TraySpeedState) {
-    match state.update(torrents) {
-        Some(title) => apply_title(app, Some(&title)),
-        None => apply_title(app, None),
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        match state.update(torrents) {
+            Some((down, up)) => {
+                let rgba = create_composite_tray_icon(up, down);
+                let img = tauri::image::Image::new_owned(rgba, 32, 32);
+                let _ = tray.set_icon(Some(img));
+                state.is_custom_icon = true;
+
+                // Also update tooltip with exact rates
+                let tooltip = format!("Nebulae — ↑ {}  ↓ {}", format_rate(up), format_rate(down));
+                let _ = tray.set_tooltip(Some(&tooltip));
+            }
+            None => {
+                if state.is_custom_icon {
+                    if let Some(default_icon) = app.default_window_icon() {
+                        let _ = tray.set_icon(Some(default_icon.clone()));
+                    }
+                    let _ = tray.set_tooltip(Some("Nebulae — Client by Asian DVD Club"));
+                    state.is_custom_icon = false;
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::speed_format::{FIGURE_SPACE, MAX_TITLE_CHARS};
 
     fn item(status: &str, down: u64, up: u64) -> TorrentItem {
         TorrentItem {
@@ -148,31 +161,19 @@ mod tests {
     }
 
     #[test]
-    fn title_not_empty_when_active() {
+    fn rates_reported_when_active() {
         let mut state = TraySpeedState::new();
         let torrents = vec![item("Downloading", 2000, 1000)];
-        let title = state.update(&torrents);
-        assert!(title.is_some());
-        assert!(!title.as_ref().unwrap().is_empty());
-        assert!(title.as_ref().unwrap().chars().count() <= MAX_TITLE_CHARS);
+        let rates = state.update(&torrents);
+        assert!(rates.is_some());
+        assert_eq!(rates.unwrap(), (2000, 1000));
     }
 
     #[test]
-    fn idle_torrents_report_zero_title() {
+    fn idle_torrents_report_none_initially() {
         let mut state = TraySpeedState::new();
-        let active = vec![item("Downloading", 2000, 0)];
-        assert!(state.update(&active).is_some());
         let idle = vec![item("Paused", 0, 0), item("Error", 0, 0)];
-        // Without advancing Instant the state stays "recently active", so it
-        // still reports a (zero) title. The 3 s stale clear depends on the
-        // real clock and is verified on Windows.
-        let title = state.update(&idle);
-        assert!(title.is_some());
-        let t = title.as_deref().unwrap();
-        assert!(t.starts_with("↓"));
-        assert!(t.contains("0B"));
-        assert!(t.chars().count() <= MAX_TITLE_CHARS);
-        // Figure spaces pad the zero fields to a stable width.
-        assert!(t.contains(FIGURE_SPACE));
+        let rates = state.update(&idle);
+        assert!(rates.is_none());
     }
 }

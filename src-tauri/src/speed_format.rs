@@ -41,6 +41,156 @@ pub fn format_rate(bytes_per_sec: u64) -> String {
     }
 }
 
+/// Format a concise rate string for the dynamic tray icon (e.g. `0B`, `999B`, `9.5K`, `82K`, `500K`, `1.2M`, `99M`, `1.2G`).
+pub fn format_tray_rate(bytes_per_sec: u64) -> String {
+    if bytes_per_sec == 0 {
+        return "0B".to_string();
+    }
+    let mut val = bytes_per_sec as f64;
+    let units = ["B", "K", "M", "G", "T"];
+    let mut unit_idx = 0usize;
+    while val >= 1024.0 && unit_idx < units.len() - 1 {
+        val /= 1024.0;
+        unit_idx += 1;
+    }
+    if unit_idx == 0 {
+        format!("{}{}", val as u64, units[0])
+    } else if val < 10.0 {
+        let val = (val * 10.0).floor() / 10.0;
+        format!("{:.1}{}", val, units[unit_idx])
+    } else {
+        format!("{:.0}{}", val.floor(), units[unit_idx])
+    }
+}
+
+const BRAND_ICON_PNG: &[u8] = include_bytes!("../icons/32x32.png");
+
+/// 3x5 bitmap glyph definitions for digits, units, and arrows.
+fn glyph_3x5(c: char) -> Option<[u8; 5]> {
+    match c {
+        '0' => Some([0b111, 0b101, 0b101, 0b101, 0b111]),
+        '1' => Some([0b010, 0b110, 0b010, 0b010, 0b111]),
+        '2' => Some([0b111, 0b001, 0b111, 0b100, 0b111]),
+        '3' => Some([0b111, 0b001, 0b111, 0b001, 0b111]),
+        '4' => Some([0b101, 0b101, 0b111, 0b001, 0b001]),
+        '5' => Some([0b111, 0b100, 0b111, 0b001, 0b111]),
+        '6' => Some([0b111, 0b100, 0b111, 0b101, 0b111]),
+        '7' => Some([0b111, 0b001, 0b010, 0b010, 0b010]),
+        '8' => Some([0b111, 0b101, 0b111, 0b101, 0b111]),
+        '9' => Some([0b111, 0b101, 0b111, 0b001, 0b111]),
+        'B' => Some([0b110, 0b101, 0b110, 0b101, 0b110]),
+        'K' => Some([0b101, 0b110, 0b100, 0b110, 0b101]),
+        'M' => Some([0b101, 0b111, 0b101, 0b101, 0b101]),
+        'G' => Some([0b111, 0b100, 0b101, 0b101, 0b111]),
+        'T' => Some([0b111, 0b010, 0b010, 0b010, 0b010]),
+        '↑' | '^' => Some([0b010, 0b111, 0b010, 0b010, 0b010]),
+        '↓' | 'v' => Some([0b010, 0b010, 0b010, 0b111, 0b010]),
+        _ => None,
+    }
+}
+
+fn draw_glyph(canvas: &mut [u8], c: char, start_x: usize, start_y: usize, color: [u8; 4]) -> usize {
+    if c == '.' {
+        let px = start_x;
+        let py = start_y + 4;
+        if px < 32 && py < 32 {
+            let idx = (py * 32 + px) * 4;
+            canvas[idx..idx + 4].copy_from_slice(&color);
+        }
+        return 2;
+    }
+    if let Some(rows) = glyph_3x5(c) {
+        for (dy, &row) in rows.iter().enumerate() {
+            let py = start_y + dy;
+            if py >= 32 {
+                continue;
+            }
+            for dx in 0..3 {
+                let px = start_x + dx;
+                if px >= 32 {
+                    continue;
+                }
+                if (row & (1 << (2 - dx))) != 0 {
+                    let idx = (py * 32 + px) * 4;
+                    canvas[idx..idx + 4].copy_from_slice(&color);
+                }
+            }
+        }
+        4
+    } else {
+        2
+    }
+}
+
+fn draw_text_with_shadow(
+    canvas: &mut [u8],
+    text: &str,
+    x: usize,
+    y: usize,
+    color: [u8; 4],
+    shadow: [u8; 4],
+) {
+    // 1. Draw 1px drop shadow offset (+1, +1)
+    let mut cur_x = x;
+    for ch in text.chars() {
+        if cur_x >= 32 {
+            break;
+        }
+        cur_x += draw_glyph(canvas, ch, cur_x + 1, y + 1, shadow);
+    }
+    // 2. Draw foreground glyphs
+    let mut cur_x = x;
+    for ch in text.chars() {
+        if cur_x >= 32 {
+            break;
+        }
+        cur_x += draw_glyph(canvas, ch, cur_x, y, color);
+    }
+}
+
+/// Creates a 32x32 composite RGBA tray icon containing:
+/// - The approved Nebulae brand icon on the left (12x12, vertically centered at Y=10)
+/// - Upload rate on TOP (`↑ <up>`)
+/// - Download rate on BOTTOM (`↓ <down>`)
+pub fn create_composite_tray_icon(up: u64, down: u64) -> Vec<u8> {
+    let mut canvas = vec![0u8; 32 * 32 * 4];
+
+    // 1. Approved brand icon on the left (12x12, X=0..11, Y=10..21)
+    if let Ok(brand_img) = image::load_from_memory(BRAND_ICON_PNG) {
+        let resized = image::imageops::resize(
+            &brand_img.to_rgba8(),
+            12,
+            12,
+            image::imageops::FilterType::Lanczos3,
+        );
+        for y in 0..12 {
+            for x in 0..12 {
+                let p = resized.get_pixel(x, y);
+                let target_y = 10 + y as usize;
+                let target_x = x as usize;
+                let idx = (target_y * 32 + target_x) * 4;
+                canvas[idx..idx + 4].copy_from_slice(&p.0);
+            }
+        }
+    }
+
+    // 2. Format rates
+    let up_text = format!("↑{}", format_tray_rate(up));
+    let down_text = format!("↓{}", format_tray_rate(down));
+
+    let shadow_color = [0, 0, 0, 220];
+    let up_color = [56, 189, 248, 255]; // high-contrast light blue/cyan
+    let down_color = [74, 222, 128, 255]; // high-contrast bright green
+
+    // Upload on TOP (Y=4)
+    draw_text_with_shadow(&mut canvas, &up_text, 13, 4, up_color, shadow_color);
+
+    // Download on BOTTOM (Y=19)
+    draw_text_with_shadow(&mut canvas, &down_text, 13, 19, down_color, shadow_color);
+
+    canvas
+}
+
 /// Right-pad a rate string with figure spaces to `width`, or return it
 /// unchanged when it already meets or exceeds `width`.
 fn pad_rate(s: &str, width: usize) -> String {
@@ -56,13 +206,13 @@ fn pad_rate(s: &str, width: usize) -> String {
     }
 }
 
-/// Format the combined tray title `↓<down>  ↑<up>`, each rate right-padded
+/// Format the combined tray title `↑<up>  ↓<down>`, each rate right-padded
 /// with figure spaces to a stable 5-char field so the title does not jitter
 /// as the numbers change.
 pub fn format_speed_title(down: u64, up: u64) -> String {
     let down_str = pad_rate(&format_rate(down), 5);
     let up_str = pad_rate(&format_rate(up), 5);
-    format!("↓{}  ↑{}", down_str, up_str)
+    format!("↑{}  ↓{}", up_str, down_str)
 }
 
 /// Sum the current download and upload rates across all active torrents,
@@ -198,5 +348,29 @@ mod tests {
     #[test]
     fn aggregate_empty() {
         assert_eq!(aggregate_client_rates(&[]), (0, 0));
+    }
+
+    #[test]
+    fn tray_rate_formatting() {
+        assert_eq!(format_tray_rate(0), "0B");
+        assert_eq!(format_tray_rate(500), "500B");
+        assert_eq!(format_tray_rate(1536), "1.5K");
+        assert_eq!(format_tray_rate(50 * 1024), "50K");
+        assert_eq!(format_tray_rate(500 * 1024), "500K");
+        assert_eq!(format_tray_rate(1024 * 1024 * 12), "12M");
+        assert_eq!(format_tray_rate(1024 * 1024 * 3 / 2), "1.5M");
+        assert_eq!(format_tray_rate(1024u64.pow(3) * 2), "2.0G");
+    }
+
+    #[test]
+    fn composite_icon_dimensions_and_content() {
+        let icon_bytes = create_composite_tray_icon(1_500_000, 4_500_000);
+        assert_eq!(icon_bytes.len(), 32 * 32 * 4);
+        // Ensure non-zero alpha in left brand icon area (X=5, Y=15)
+        let brand_alpha = icon_bytes[(15 * 32 + 5) * 4 + 3];
+        assert!(brand_alpha > 0);
+        // Ensure non-zero pixels in text regions
+        let has_text_pixels = icon_bytes.as_chunks::<4>().0.iter().any(|p| p[3] > 0);
+        assert!(has_text_pixels);
     }
 }
