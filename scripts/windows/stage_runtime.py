@@ -176,7 +176,7 @@ class Recorder:
 
 def _check_member_name(name: str) -> PurePosixPath:
     p = PurePosixPath(name)
-    if (p.is_absolute() or ".." in p.parts or any("\\" in part or ":" in part for part in p.parts)):
+    if (p.is_absolute() or ".." in p.parts or "\\" in name or any(":" in part for part in p.parts)):
         fail(f"archive member {name!r} has an unsafe path")
     return p
 
@@ -191,7 +191,8 @@ def extract_zip(zip_path: Path, dest: Path, strip_prefix: str, rec: Recorder, so
                 continue
             if (info.external_attr >> 16) & 0o170000 == 0o120000:
                 fail(f"{zip_path.name}: symlink member {info.filename!r} is not allowed")
-            rel = _check_member_name(info.filename)
+            raw_name = getattr(info, "orig_filename", info.filename)
+            rel = _check_member_name(raw_name)
             if not str(rel).startswith(strip_prefix):
                 continue
             sub = str(rel)[len(strip_prefix):]

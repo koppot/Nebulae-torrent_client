@@ -143,9 +143,12 @@ class FetchTests(Fixture):
 def make_zip(path: Path, members: dict[str, bytes], symlinks=()) -> Path:
     with zipfile.ZipFile(path, "w") as zf:
         for name, data in members.items():
-            zf.writestr(name, data)
+            info = zipfile.ZipInfo()
+            info.filename = name
+            zf.writestr(info, data)
         for name in symlinks:
-            info = zipfile.ZipInfo(name)
+            info = zipfile.ZipInfo()
+            info.filename = name
             info.external_attr = (0o120777 << 16)
             zf.writestr(info, b"target")
     return path
