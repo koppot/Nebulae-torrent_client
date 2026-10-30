@@ -216,6 +216,8 @@ pub fn apply_staged_update_if_present(app: &tauri::AppHandle) {
         if let Ok(mut lock) = state.0.lock() {
             if let Some((update, bytes)) = lock.take() {
                 info!("Natural quit detected: executing staged Windows silent installer...");
+                #[cfg(target_os = "windows")]
+                crate::taskbar_windows::flush_icon_cache();
                 let _ = update.install(&bytes);
             }
         }

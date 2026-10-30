@@ -110,7 +110,12 @@ ${UnStrLoc}
   WriteRegStr HKCU "Software\Classes\adc\DefaultIcon" "" "$INSTDIR\nebulae.exe,0"
   WriteRegStr HKCU "Software\Classes\adc\shell\open\command" "" '"$INSTDIR\nebulae.exe" "%1"'
 
-  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  ; Purge stale custom Jump List destination caches for Nebulae
+  ; Windows stores Jump List tasks and their cached icons in CustomDestinations
+  Delete "$APPDATA\Microsoft\Windows\Recent\CustomDestinations\36134c10a5336e21.customDestinations-ms"
+
+  ; Flush Windows Shell icon and thumbnail cache (SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_IDLIST | SHCNF_FLUSH = 0x1000)
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, i 0, i 0)'
 
   !insertmacro _NEBULAE_FWRULE_ADD "Nebulae Torrent Client" "$INSTDIR\nebulae.exe"
   !insertmacro _NEBULAE_FWRULE_ADD "Nebulae Transmission Daemon" "$INSTDIR\resources\engine\transmission\transmission-daemon.exe"
@@ -140,7 +145,12 @@ ${UnStrLoc}
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Torrent Client" "$INSTDIR\nebulae.exe"
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Transmission Daemon" "$INSTDIR\resources\engine\transmission\transmission-daemon.exe"
 
-    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+    ; Purge stale custom Jump List destination caches for Nebulae
+  ; Windows stores Jump List tasks and their cached icons in CustomDestinations
+  Delete "$APPDATA\Microsoft\Windows\Recent\CustomDestinations\36134c10a5336e21.customDestinations-ms"
+
+  ; Flush Windows Shell icon and thumbnail cache (SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_IDLIST | SHCNF_FLUSH = 0x1000)
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, i 0, i 0)'
   ${EndIf}
 !macroend
 
