@@ -1037,48 +1037,13 @@ fn start_playback_inner(
                                     );
                                     }
                                     menu_watch::WindowEnd::DirectFeature => {
-                                        // Outcome C: Menu startup did not complete and no usable playback is active.
-                                        // Safe bounded main-feature fallback: reopen the disc ONCE with
-                                        // bypass_menu=true. That session starts no menu or warning
-                                        // watcher (menu_watch::startup_watchers_enabled), so this
-                                        // fallback cannot trigger itself again.
-                                        let disc_path = poison(&state.current_resolved)
-                                            .clone()
-                                            .or_else(|| poison(&state.current_path).clone());
-                                        if let Some(path) = disc_path {
-                                            tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete on static/intro title {cur_title}; falling back to direct main-feature playback [Outcome C]"
+                                        // Outcome C: Menu startup did not complete.
+                                        // User policy: Do not silently fall back to direct feature playback.
+                                        // Preserve the actual failure reason and report the limitation.
+                                        tracing::warn!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms on title {cur_title} (length_ms={cur_len}); preserving player state without silent fallback to direct feature playback [Outcome C]",
+                                            menu_watch::WINDOW_MS
                                         );
-                                            let app_fallback = app_menu.clone();
-                                            tauri::async_runtime::spawn(async move {
-                                                use tauri::Manager;
-                                                let s = app_fallback.state::<PlayerState>();
-                                                // Something else may have been opened while this task was queued;
-                                                // never replace it with the disc that timed out.
-                                                if s.session_gen
-                                                    .load(std::sync::atomic::Ordering::SeqCst)
-                                                    != menu_gen
-                                                {
-                                                    tracing::info!(
-                                                    "[menu-diag] menu watcher (session_gen={menu_gen}): session changed before the fallback reopen; dropping it"
-                                                );
-                                                    return;
-                                                }
-                                                let _ = player_open_inner(
-                                                    &app_fallback,
-                                                    &s,
-                                                    path,
-                                                    false,
-                                                    None,
-                                                    menu_watch::FALLBACK_BYPASS_MENU,
-                                                )
-                                                .await;
-                                            });
-                                        } else {
-                                            tracing::warn!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no disc path found [Outcome None]; leaving recoverable player state"
-                                        );
-                                        }
                                     }
                                 }
                             });

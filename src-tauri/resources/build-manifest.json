@@ -2385,7 +2385,7 @@
   },
   {
    "path": "resources/vlc/plugins/access/liblibbluray_plugin.dll",
-   "sha256": "c1de9025162e61b62bca2cbc1649b9cad41cb3cf2bf8710bccad16c04238f762",
+   "sha256": "cee54342c8f528b74ae8eed207c141e6e3cc433b46de616ddd30bdc04632a4b1",
    "bytes": 1882814,
    "source": "complete-modified-build: VLC 3.0.23 + patches navigate-menu.patch, vt-305.patch, hdr-tonemap.patch, bluray-playlist-id.patch, bluray-menu-first.patch (toolchain unknown)"
   },

@@ -14,21 +14,43 @@ use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
+use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW,
-    GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC, HWND_TOP,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+    GetWindowLongPtrW, GetWindowRect, IsIconic, LoadCursorW, RegisterClassExW, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW,
     SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
     SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPOS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
-    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED,
-    WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
-    WS_VISIBLE,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
+
+/// Lazily registers the dedicated black video surface window class once.
+static SURFACE_CLASS_INIT: OnceLock<()> = OnceLock::new();
+
+fn ensure_surface_class() {
+    SURFACE_CLASS_INIT.get_or_init(|| unsafe {
+        let black_brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(DefWindowProcW),
+            hInstance: HINSTANCE(std::ptr::null_mut()),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: black_brush,
+            lpszClassName: w!("NebulaeVideoSurface"),
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&wc);
+    });
+}
 
 /// Static AppHandle storage for cross-module use (EDR retry, etc.).
 /// Set once by `overlay_app_init` during `ensure_overlay`.
@@ -198,12 +220,14 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let w = rect.right - rect.left;
     let h = rect.bottom - rect.top;
 
+    ensure_surface_class();
+
     // Create the video surface as an independent WS_POPUP window with no owner,
-    // positioned directly behind the transparent main window.
+    // positioned directly behind the transparent main window with a black background.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
-            w!("STATIC"),
+            w!("NebulaeVideoSurface"),
             w!("Nebulae Video Surface"),
             WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             x,
@@ -517,6 +541,14 @@ unsafe extern "system" fn overlay_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_ERASEBKGND => {
+            let hdc = HDC(wparam.0 as _);
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            let black_brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
+            let _ = FillRect(hdc, &rc, black_brush);
+            return LRESULT(1);
+        }
         WM_KEYDOWN => {
             let vk = wparam.0 as u32;
             let key = windows_key_name(vk, lparam);
