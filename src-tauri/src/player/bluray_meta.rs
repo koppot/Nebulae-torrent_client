@@ -126,8 +126,11 @@ unsafe fn open_bluray_lib() -> Result<&'static Library, String> {
                     }
                     #[cfg(target_os = "windows")]
                     {
+                        candidates.push(dir.join("resources/vlc/libbluray-4.dll"));
                         candidates.push(dir.join("resources/vlc/libbluray.dll"));
+                        candidates.push(dir.join("vlc/libbluray-4.dll"));
                         candidates.push(dir.join("vlc/libbluray.dll"));
+                        candidates.push(dir.join("libbluray-4.dll"));
                         candidates.push(dir.join("libbluray.dll"));
                     }
                     #[cfg(target_os = "linux")]
