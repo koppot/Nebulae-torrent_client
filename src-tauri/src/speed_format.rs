@@ -157,12 +157,38 @@ pub fn create_composite_tray_icon(up: u64, down: u64) -> Vec<u8> {
 
     // 1. Approved brand icon on the left (12x12, X=0..11, Y=10..21)
     if let Ok(brand_img) = image::load_from_memory(BRAND_ICON_PNG) {
-        let resized = image::imageops::resize(
-            &brand_img.to_rgba8(),
-            12,
-            12,
-            image::imageops::FilterType::Lanczos3,
-        );
+        let rgba = brand_img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let mut min_x = w;
+        let mut min_y = h;
+        let mut max_x = 0;
+        let mut max_y = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if rgba.get_pixel(x, y)[3] > 32 {
+                    if x < min_x {
+                        min_x = x;
+                    }
+                    if x > max_x {
+                        max_x = x;
+                    }
+                    if y < min_y {
+                        min_y = y;
+                    }
+                    if y > max_y {
+                        max_y = y;
+                    }
+                }
+            }
+        }
+        let cropped = if min_x <= max_x && min_y <= max_y {
+            image::imageops::crop_imm(&rgba, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+                .to_image()
+        } else {
+            rgba
+        };
+        let resized =
+            image::imageops::resize(&cropped, 12, 12, image::imageops::FilterType::Lanczos3);
         for y in 0..12 {
             for x in 0..12 {
                 let p = resized.get_pixel(x, y);
