@@ -295,6 +295,20 @@ class MsiHelperTests(unittest.TestCase):
                 msi_reader.safe_rel(bad)
 
 
+def make_mock_jar():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("org/videolan/Libbluray.class", b"cafebabe")
+    return buf.getvalue()
+
+
+def make_mock_mmdb(db_type="GeoLite2-Country"):
+    header = b"\x00" * 16384
+    marker = b"\xab\xcd\xefMaxMind.com"
+    metadata = f'{{"database_type":"{db_type}"}}'.encode("utf-8")
+    return header + marker + metadata
+
+
 class StageVlcContractTests(Fixture):
     def setUp(self):
         super().setUp()
@@ -304,19 +318,40 @@ class StageVlcContractTests(Fixture):
 
     def _create_complete_modified_tree(self, custom_exports=stage_runtime.CUSTOM_EXPORTS,
                                        with_core=True, with_plugin=True, with_jars=True,
-                                       with_manifest=True, machine=0x8664, stock_jars=False):
+                                       with_manifest=True, machine=0x8664, stock_jars=False,
+                                       corrupt_jar=False, with_plugins_dir=True,
+                                       plugin_count=12, with_video_output=True):
         (self.vlc_dir / "libvlc.dll").write_bytes(make_pe(exports=list(custom_exports), machine=machine))
         if with_core:
             (self.vlc_dir / "libvlccore.dll").write_bytes(make_pe(machine=machine))
-        access = self.vlc_dir / "plugins" / "access"
-        access.mkdir(parents=True, exist_ok=True)
-        if with_plugin:
-            (access / "liblibbluray_plugin.dll").write_bytes(make_pe(machine=machine))
-        if with_jars:
-            (access / "libbluray-j2se-1.5.0.jar").write_bytes(b"PK\x03\x04jar15")
-            (access / "libbluray-awt-j2se-1.5.0.jar").write_bytes(b"PK\x03\x04awtjar15")
-        if stock_jars:
-            (access / "libbluray-j2se-1.4.0.jar").write_bytes(b"PK\x03\x04stock14")
+        if with_plugins_dir:
+            access = self.vlc_dir / "plugins" / "access"
+            access.mkdir(parents=True, exist_ok=True)
+            if with_plugin:
+                (access / "liblibbluray_plugin.dll").write_bytes(make_pe(machine=machine))
+            if with_jars:
+                jar_data = b"not a zip file" if corrupt_jar else make_mock_jar()
+                (access / "libbluray-j2se-1.5.0.jar").write_bytes(jar_data)
+                (access / "libbluray-awt-j2se-1.5.0.jar").write_bytes(jar_data)
+            if stock_jars:
+                (access / "libbluray-j2se-1.4.0.jar").write_bytes(make_mock_jar())
+            if with_video_output:
+                vout = self.vlc_dir / "plugins" / "video_output"
+                vout.mkdir(parents=True, exist_ok=True)
+                (vout / "libdirect3d11_plugin.dll").write_bytes(make_pe(machine=machine))
+                (vout / "libgl_plugin.dll").write_bytes(make_pe(machine=machine))
+                for i in range(plugin_count):
+                    (vout / f"libmock{i}_plugin.dll").write_bytes(make_pe(machine=machine))
+            else:
+                for i in range(plugin_count):
+                    (access / f"libmock{i}_plugin.dll").write_bytes(make_pe(machine=machine))
+        else:
+            if with_plugin:
+                (self.vlc_dir / "liblibbluray_plugin.dll").write_bytes(make_pe(machine=machine))
+            if with_jars:
+                jar_data = b"not a zip file" if corrupt_jar else make_mock_jar()
+                (self.vlc_dir / "libbluray-j2se-1.5.0.jar").write_bytes(jar_data)
+                (self.vlc_dir / "libbluray-awt-j2se-1.5.0.jar").write_bytes(jar_data)
         if with_manifest:
             manifest = {
                 "vlc_version": "3.0.23",
@@ -386,6 +421,71 @@ class StageVlcContractTests(Fixture):
         with self.assertRaises(stage_runtime.StageError) as ctx:
             stage_runtime.audit_tree(rec, patched=True)
         self.assertIn("double resources nesting", str(ctx.exception))
+
+    def test_rejects_corrupt_bdj_jar(self):
+        self._create_complete_modified_tree(corrupt_jar=True)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("corrupt or not a valid jar/zip archive", str(ctx.exception))
+
+    def test_rejects_modified_tree_without_plugins_dir(self):
+        self._create_complete_modified_tree(with_plugins_dir=False)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("lacks a plugins directory", str(ctx.exception))
+
+    def test_rejects_incomplete_plugin_suite(self):
+        self._create_complete_modified_tree(plugin_count=1)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("contains only", str(ctx.exception))
+        self.assertIn("expected complete VLC plugin suite", str(ctx.exception))
+
+    def test_rejects_missing_plugin_category(self):
+        self._create_complete_modified_tree(with_video_output=False)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("lacks required plugin category", str(ctx.exception))
+
+    def test_stage_geo_validates_mmdb_format(self):
+        geo_dir = self.scratch / "geo"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        country_file = geo_dir / "GeoLite2-Country.mmdb"
+        asn_file = geo_dir / "GeoLite2-ASN.mmdb"
+        country_file.write_bytes(make_mock_mmdb("GeoLite2-Country"))
+        asn_file.write_bytes(make_mock_mmdb("GeoLite2-ASN"))
+
+        sha_c = stage_runtime.validate_mmdb_format(country_file, "GeoLite2-Country")
+        sha_a = stage_runtime.validate_mmdb_format(asn_file, "GeoLite2-ASN")
+        self.assertEqual(len(sha_c), 64)
+        self.assertEqual(len(sha_a), 64)
+
+    def test_stage_geo_rejects_missing_metadata_marker(self):
+        geo_dir = self.scratch / "geo"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        bad_file = geo_dir / "GeoLite2-Country.mmdb"
+        bad_file.write_bytes(b"\x00" * 20000)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.validate_mmdb_format(bad_file, "GeoLite2-Country")
+        self.assertIn("MaxMind metadata marker not found", str(ctx.exception))
+
+    def test_stage_geo_rejects_wrong_database_type(self):
+        geo_dir = self.scratch / "geo"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        bad_file = geo_dir / "GeoLite2-Country.mmdb"
+        bad_file.write_bytes(make_mock_mmdb("GeoLite2-City"))
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.validate_mmdb_format(bad_file, "GeoLite2-Country")
+        self.assertIn("metadata does not declare expected database type", str(ctx.exception))
+
+    def test_stage_geo_rejects_too_small(self):
+        geo_dir = self.scratch / "geo"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        bad_file = geo_dir / "GeoLite2-Country.mmdb"
+        bad_file.write_bytes(b"short")
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.validate_mmdb_format(bad_file, "GeoLite2-Country")
+        self.assertIn("too small to be a valid MMDB file", str(ctx.exception))
 
 
 if __name__ == "__main__":

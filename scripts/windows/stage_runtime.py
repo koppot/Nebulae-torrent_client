@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import io
 import json
 import shutil
@@ -62,6 +63,43 @@ CUSTOM_EXPORTS = (
     "libvlc_media_player_get_bluray_menu_open",
     "libvlc_media_player_get_bluray_playlist_id",
 )
+
+MAXMIND_METADATA_MARKER = b"\xab\xcd\xefMaxMind.com"
+
+# Pinned SHA-256 digests for current validated MaxMind databases (SPEC-WIN-VLC-0.2.4-REV1).
+# Any future legitimate database update must update this pin explicitly in a reviewed commit.
+PINNED_GEO_HASHES = {
+    "GeoLite2-Country.mmdb": "54e327d9fe9214e568c5b8f8ce97a7f7e7087b7de10b0560640417695d153797",
+    "GeoLite2-ASN.mmdb": "ab93d4ebe5287ab9a459bcd67f3d5b358e261666c16fd246543c8ba771a78bf4",
+}
+
+
+def validate_mmdb_format(path: Path, expected_type: str) -> str:
+    """Validates that path is a valid MaxMind DB (.mmdb) file and returns its SHA-256 hex digest.
+
+    Per MaxMind DB format specification v2:
+    - Minimum valid size is at least 16 KiB.
+    - Metadata section begins with the 14-byte marker b'\\xab\\xcd\\xefMaxMind.com' in the last 128 KiB.
+    - Metadata must contain the expected database type string.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        fail(f"cannot read GeoLite2 database {path.name}: {exc}")
+
+    if len(data) < 16384:
+        fail(f"GeoLite2 database {path.name} is too small to be a valid MMDB file ({len(data)} bytes, minimum 16 KiB)")
+
+    search_window = data[-131072:] if len(data) > 131072 else data
+    pos = search_window.rfind(MAXMIND_METADATA_MARKER)
+    if pos == -1:
+        fail(f"GeoLite2 database {path.name} is corrupt or not an MMDB file: MaxMind metadata marker not found")
+
+    metadata = search_window[pos + len(MAXMIND_METADATA_MARKER):]
+    if expected_type.encode("utf-8") not in metadata:
+        fail(f"GeoLite2 database {path.name} metadata does not declare expected database type '{expected_type}'")
+
+    return hashlib.sha256(data).hexdigest()
 
 TRANSMISSION_FILES = (
     "transmission-daemon.exe",
@@ -271,11 +309,14 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
         if matches:
             fail(f"modified VLC runtime tree contains forbidden stock BD-J jar: {matches[0].name}")
 
-    # Check that required 1.5.0 jars are present
+    # Check that required 1.5.0 jars are present and are valid zip/jar archives
     jar_missing = []
     for jar in REQUIRED_BD_JARS:
-        if not (patched / "plugins" / "access" / jar).is_file() and not (patched / jar).is_file():
+        jar_path = patched / "plugins" / "access" / jar if (patched / "plugins" / "access" / jar).is_file() else patched / jar
+        if not jar_path.is_file():
             jar_missing.append(jar)
+        elif not zipfile.is_zipfile(jar_path):
+            fail(f"BD-J jar {jar_path.name} in modified runtime tree is corrupt or not a valid jar/zip archive")
     if jar_missing:
         fail(f"modified VLC runtime tree lacks required BD-J 1.5.0 jar(s): {', '.join(jar_missing)}")
 
@@ -297,6 +338,17 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
     dest.mkdir(parents=True, exist_ok=True)
 
     has_plugins_dir = (patched / "plugins").is_dir()
+    if require_modified:
+        if not has_plugins_dir:
+            fail(f"modified VLC runtime tree at {patched} lacks a plugins directory; a complete plugin suite is required for release")
+        plugin_dlls = list((patched / "plugins").rglob("*.dll"))
+        if len(plugin_dlls) < 10:
+            fail(f"modified VLC plugins directory at {patched / 'plugins'} contains only {len(plugin_dlls)} plugin DLLs; "
+                 f"expected complete VLC plugin suite (at least 10 plugin DLLs across categories). A partial overlay is prohibited.")
+        for req_cat in ("access", "video_output"):
+            if not (patched / "plugins" / req_cat).is_dir():
+                fail(f"modified VLC plugins directory lacks required plugin category '{req_cat}/'")
+
     if has_plugins_dir:
         for f in sorted(patched.rglob("*")):
             if f.is_file():
@@ -640,12 +692,17 @@ def main(argv: list[str] | None = None) -> int:
     geo_out = out / "resources" / "geo"
     geo_out.mkdir(exist_ok=True)
     if args.geo_dir is not None:
-        for name in ("GeoLite2-Country.mmdb", "GeoLite2-ASN.mmdb"):
+        for name, expected_type in (("GeoLite2-Country.mmdb", "GeoLite2-Country"),
+                                   ("GeoLite2-ASN.mmdb", "GeoLite2-ASN")):
             src = args.geo_dir / name
             if src.is_file():
-                if src.stat().st_size == 0:
-                    fail(f"GeoLite2 database {name} is empty (0 bytes)")
-                rec.copy(src, geo_out / name, "MaxMind GeoLite2 database (downloaded by scripts/download_geo_db.sh)")
+                actual_sha = validate_mmdb_format(src, expected_type)
+                pinned_sha = inputs.get(f"geo-{expected_type.lower()}", {}).get("sha256") or PINNED_GEO_HASHES.get(name)
+                if args.require_geo:
+                    if pinned_sha and actual_sha.lower() != pinned_sha.lower():
+                        fail(f"GeoLite2 database {name} SHA-256 mismatch: got {actual_sha}, expected pinned {pinned_sha}. "
+                             f"Legitimate database updates must update the pinned digest in inputs.lock.json or PINNED_GEO_HASHES in a reviewed commit.")
+                rec.copy(src, geo_out / name, f"MaxMind {name} (format verified, SHA-256 {actual_sha[:12]}...)")
             elif args.require_geo:
                 fail(f"--require-geo: {name} not found in --geo-dir {args.geo_dir}")
     elif args.require_geo:
