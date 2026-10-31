@@ -22,6 +22,7 @@ import { PortForwardModal } from './components/modals/PortForwardModal';
 import { VpnManagerModal } from './components/modals/VpnManagerModal';
 import { TrackerModal } from './components/modals/TrackerModal';
 import { DeleteTorrentModal } from './components/modals/DeleteTorrentModal';
+import { QbitImportModal } from './components/modals/QbitImportModal';
 import { RecoveryScreen } from './components/recovery/RecoveryScreen';
 import PlayerOverlay from './components/player/PlayerOverlay';
 import { FileUp, Film, GripHorizontal } from 'lucide-react';
@@ -565,6 +566,7 @@ export const App: React.FC = () => {
       <VpnManagerModal />
       <TrackerModal />
       <DeleteTorrentModal />
+      <QbitImportModal />
 
       {/* First-Run Media Mode Choice */}
       {splashDismissed && showFirstRunMediaModal && (

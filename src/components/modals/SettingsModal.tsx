@@ -36,6 +36,7 @@ import {
   AlertCircle,
   Fingerprint,
   Info,
+  FolderInput,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -51,7 +52,7 @@ type SettingsTab =
   | 'advanced';
 
 export const SettingsModal: React.FC = () => {
-  const { showSettings, setShowSettings } = useUiStore();
+  const { showSettings, setShowSettings, setShowQbitImport } = useUiStore();
   const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
   const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
@@ -783,6 +784,26 @@ export const SettingsModal: React.FC = () => {
                   <p className="text-[10px] text-[#a3a3a3] font-mono mt-1">
                     Parameters: %N (Name), %D (Save path), %F (Content path), %I (Info-hash), %L (Category)
                   </p>
+                </div>
+
+                <div className="pt-3 border-t border-[#333333]">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
+                    qBittorrent Migration
+                  </h3>
+                  <p className="text-[11px] text-[#a3a3a3] mb-3">
+                    Import existing torrents, fastresume data, download paths, categories, and tags from qBittorrent into Nebula.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSettings(false);
+                      setShowQbitImport(true);
+                    }}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] hover:border-[#e50914] text-white text-xs font-medium transition"
+                  >
+                    <FolderInput className="w-3.5 h-3.5 text-[#e50914]" />
+                    <span>Import from qBittorrent…</span>
+                  </button>
                 </div>
               </div>
             )}
