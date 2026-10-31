@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     sequential_download INTEGER DEFAULT 0,
     first_last_piece_prio INTEGER DEFAULT 0,
     super_seeding INTEGER DEFAULT 0,
-    racing_override INTEGER
+    racing_override INTEGER,
+    last_checked INTEGER
 );
 "#;
 

@@ -42,6 +42,7 @@ impl Database {
             // Per-torrent Racing Mode choice: NULL = follow the global preset,
             // 1 = pinned on, 0 = pinned off.
             ("racing_override", "INTEGER"),
+            ("last_checked", "INTEGER"),
         ];
         for (col, col_type) in extra_cols {
             let sql = format!("ALTER TABLE torrent_metadata ADD COLUMN {col} {col_type}");
@@ -216,8 +217,9 @@ impl Database {
             "INSERT INTO torrent_metadata (
                 info_hash, display_title, category, labels, is_watched, notes, added_at,
                 completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                sequential_download, first_last_piece_prio, super_seeding, racing_override
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                sequential_download, first_last_piece_prio, super_seeding, racing_override,
+                last_checked
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(info_hash) DO UPDATE SET
                 display_title = excluded.display_title,
                 category = excluded.category,
@@ -232,7 +234,8 @@ impl Database {
                 sequential_download = excluded.sequential_download,
                 first_last_piece_prio = excluded.first_last_piece_prio,
                 super_seeding = excluded.super_seeding,
-                racing_override = excluded.racing_override",
+                racing_override = excluded.racing_override,
+                last_checked = COALESCE(excluded.last_checked, torrent_metadata.last_checked)",
             params![
                 meta.info_hash,
                 meta.display_title,
@@ -250,8 +253,28 @@ impl Database {
                 if meta.first_last_piece_prio { 1 } else { 0 },
                 if meta.super_seeding { 1 } else { 0 },
                 meta.racing_override.map(|v| if v { 1i64 } else { 0i64 }),
+                meta.last_checked.map(|c| c as i64),
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn set_torrent_last_checked(&self, info_hash: &str, timestamp: u64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE torrent_metadata SET last_checked = ?1 WHERE info_hash = ?2",
+            params![timestamp as i64, info_hash],
+        )?;
+        if updated == 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "INSERT INTO torrent_metadata (info_hash, added_at, last_checked) VALUES (?1, ?2, ?3)",
+                params![info_hash, now, timestamp as i64],
+            )?;
+        }
         Ok(())
     }
 
@@ -306,7 +329,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding, racing_override
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override,
+                    last_checked
              FROM torrent_metadata WHERE info_hash = ?1",
         )?;
         let mut rows = stmt.query(params![info_hash])?;
@@ -321,6 +345,7 @@ impl Database {
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
+            let lc_opt: Option<i64> = row.get(16).unwrap_or(None);
 
             Ok(Some(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -339,6 +364,7 @@ impl Database {
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
                 racing_override: ro_opt.map(|v| v == 1),
+                last_checked: lc_opt.map(|c| c.max(0) as u64),
             }))
         } else {
             Ok(None)
@@ -352,7 +378,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding, racing_override
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override,
+                    last_checked
              FROM torrent_metadata",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -366,6 +393,7 @@ impl Database {
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
+            let lc_opt: Option<i64> = row.get(16).unwrap_or(None);
 
             Ok(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -384,6 +412,7 @@ impl Database {
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
                 racing_override: ro_opt.map(|v| v == 1),
+                last_checked: lc_opt.map(|c| c.max(0) as u64),
             })
         })?;
 
@@ -422,6 +451,7 @@ pub struct TorrentDbMetadata {
     pub first_last_piece_prio: bool,
     pub super_seeding: bool,
     pub racing_override: Option<bool>,
+    pub last_checked: Option<u64>,
 }
 
 #[cfg(test)]
@@ -481,6 +511,37 @@ mod tests {
         assert_eq!(row.added_at, 1_700_000_000);
         assert_eq!(row.ratio_limit, 2.5);
         assert!(row.sequential_download);
+    }
+
+    #[test]
+    fn last_checked_round_trips_and_preserves_on_coalesce() {
+        let db = memory_db();
+        let mut meta = TorrentDbMetadata {
+            info_hash: HASH.to_string(),
+            added_at: 1_700_000_000,
+            last_checked: Some(1_700_000_123),
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+        assert_eq!(
+            db.get_torrent_metadata(HASH).unwrap().unwrap().last_checked,
+            Some(1_700_000_123)
+        );
+
+        // When updated without specifying last_checked, previous last_checked is preserved
+        meta.last_checked = None;
+        db.upsert_torrent_metadata(&meta).unwrap();
+        assert_eq!(
+            db.get_torrent_metadata(HASH).unwrap().unwrap().last_checked,
+            Some(1_700_000_123)
+        );
+
+        // Targeted setter updates last_checked
+        db.set_torrent_last_checked(HASH, 1_700_000_999).unwrap();
+        assert_eq!(
+            db.get_torrent_metadata(HASH).unwrap().unwrap().last_checked,
+            Some(1_700_000_999)
+        );
     }
 
     #[test]

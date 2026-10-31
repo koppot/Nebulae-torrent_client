@@ -2291,7 +2291,16 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 // preferences, not engine state: they stay in the database as
                 // saved and are not shown as active behavior.
                 super_seeding: false,
-                tags: Vec::new(),
+                last_checked: meta.and_then(|m| m.last_checked),
+                tags: meta
+                    .and_then(|m| m.labels.as_ref())
+                    .map(|l| {
+                        l.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 files,
                 trackers,
                 download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),

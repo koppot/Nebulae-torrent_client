@@ -158,6 +158,7 @@ impl RtorrentRemoteEngine {
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
+            last_checked: None,
             tags: Vec::new(),
             files: Vec::new(),
             trackers: Vec::new(),

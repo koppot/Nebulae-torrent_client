@@ -109,6 +109,7 @@ impl MockTorrentEngine {
                 sequential_download: false,
                 first_last_piece_prio: true,
                 super_seeding: false,
+                last_checked: None,
                 tags: vec![
                     "Japanese".to_string(),
                     "Classic".to_string(),
@@ -195,6 +196,7 @@ impl MockTorrentEngine {
                 sequential_download: true,
                 first_last_piece_prio: true,
                 super_seeding: false,
+                last_checked: None,
                 tags: vec!["Criterion".to_string(), "Kurosawa".to_string()],
                 files: vec![
                     TorrentFileItem {
@@ -402,6 +404,7 @@ impl MockTorrentEngine {
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
+            last_checked: None,
             tags: vec!["Active".to_string()],
             files: final_files,
             trackers: parsed.trackers,
@@ -596,6 +599,7 @@ impl TorrentEngine for MockTorrentEngine {
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
+            last_checked: None,
             tags: vec!["Active".to_string()],
             files,
             trackers: vec![TorrentTrackerItem {
