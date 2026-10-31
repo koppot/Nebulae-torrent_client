@@ -17,6 +17,8 @@ impl QbitImporter {
     pub async fn execute_import(
         selected_torrents: Vec<QbitTorrent>,
         options: ImportOptions,
+        qbit_data_dir: &Path,
+        backup_root: &Path,
         engine: SharedEngine,
         db: Arc<Database>,
         logs_dir: &Path,
@@ -248,11 +250,41 @@ impl QbitImporter {
             }
         }
 
+        // 13. Optional removal phase (R4b & Section 5b)
+        let (removed_count, not_removed, backup_dir) =
+            if options.remove_from_qbit && !imported_torrents.is_empty() {
+                let proc_checker = super::remover::SystemProcessChecker;
+                let trash_provider = super::remover::DefaultTrashProvider;
+                let (rc, nr, bd) = super::remover::QbitRemover::execute_removal(
+                    &imported_torrents,
+                    qbit_data_dir,
+                    backup_root,
+                    &proc_checker,
+                    &trash_provider,
+                );
+                log_lines.push(format!(
+                    "Removal phase: {} removed, {} not removed. Backup: {:?}",
+                    rc,
+                    nr.len(),
+                    bd
+                ));
+                for nr_item in &nr {
+                    log_lines.push(format!(
+                        "[NOT REMOVED] {} ({}): {}",
+                        nr_item.name, nr_item.info_hash, nr_item.reason
+                    ));
+                }
+                (rc, nr, bd)
+            } else {
+                (0, Vec::new(), None)
+            };
+
         log_lines.push(format!(
-            "Import phase complete: {} imported, {} skipped, {} failed.",
+            "Import session finished: {} imported, {} skipped, {} failed, {} removed.",
             imported_torrents.len(),
             skipped.len(),
-            failed.len()
+            failed.len(),
+            removed_count
         ));
 
         // Flush log file to disk
@@ -271,9 +303,9 @@ impl QbitImporter {
             imported_count: imported_torrents.len(),
             skipped,
             failed,
-            removed_count: 0,
-            not_removed: Vec::new(),
-            backup_dir: None,
+            removed_count,
+            not_removed,
+            backup_dir,
             log_file: log_path.to_string_lossy().to_string(),
             log_preview: full_log,
         };
