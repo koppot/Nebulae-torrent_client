@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Import from qBittorrent (Windows & macOS Parity)**:
+  - Added "Import from qBittorrent…" entry in Settings (Downloads > qBittorrent Migration) and TitleBar Tools menu.
+  - Automatic detection of qBittorrent data directory across Windows (`SHGetKnownFolderPath(FOLDERID_LocalAppData)`, registry, portable process inspections) and macOS (`~/Library/Application Support/qBittorrent`, `~/.config`, XDG paths) with interactive browse fallback.
+  - Multi-step migration wizard: initial confirmation, directory validation, interactive torrent selection table with live selection counter, category filtering, search, and pre-disabled items for torrents already loaded in Nebulae.
+  - Dual storage format support: parses legacy file storage (`BT_backup` `.torrent` and `.fastresume` pairs with lossy UTF-8 bencode tolerance) and modern dynamic SQLite database storage (`torrents.db` with runtime schema introspection and read-only URI locking prevention).
+  - Preservation of critical transfer state: save paths, content layout (Original, Subfolder, NoSubfolder), `mapped_files` file renames, per-file priorities, categories, tags, speed and share limits, sequential flags, and original add/completion dates.
+  - Background verification queue: adds imported torrents in paused state, applies file renames prior to verification, schedules hash checks with a concurrency limit of 2, auto-resumes completed transfers that were active in qBittorrent, and tags transfers as "Imported from qBittorrent".
+  - Persistent, sortable "Last checked" column in the Manager table with local timezone formatting and dynamic progress reporting ("Queued", "Checking… ({pct}%)", localized timestamp).
+- **Optional Safe Removal from qBittorrent**:
+  - Gated, non-persisted option to remove transferred torrent entries from qBittorrent after successful ingestion and verification.
+  - Safety guarantees: qBittorrent process detection (aborts if qBittorrent is running, never kills the process), required second confirmation modal, hard safety path guard (strictly restricts deletion to `<qbit_data_dir>/BT_backup/<hash>.(torrent|fastresume)`, rejecting payload paths), mandatory pre-removal backup to `<profile>/qbit-import-backups/<timestamp>/` with integrity validation and `manifest.json`, and atomic SQLite transaction deletion with instant rollback on error.
+  - Summary report dialog detailing imported, skipped, and removed counts, failure reasons, backup location with open-folder button, and copyable log text.
+
 ## [0.2.4] - 2026-10-30
 
 ### Fixed
