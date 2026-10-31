@@ -5,6 +5,7 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod qbit_import;
 pub mod speed_format;
 pub mod tailscale;
 pub mod taskbar_windows;
