@@ -371,6 +371,7 @@ pub fn run() {
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
         .manage(player::PlayerState::default())
+        .manage(commands::qbit_import::QbitImportState::default())
         .setup(move |app| {
             use tauri::Manager;
             // Rounded app corners (owner, Movist-style): apply once at
@@ -811,6 +812,13 @@ pub fn run() {
             commands::tracker::unlink_adc_account,
             commands::tracker::get_seed_time_records,
             commands::tracker::calculate_ratio_projection,
+            // qBittorrent Ingestion & Migration
+            commands::qbit_import::qbit_auto_locate,
+            commands::qbit_import::qbit_validate_dir,
+            commands::qbit_import::qbit_check_running,
+            commands::qbit_import::qbit_scan_torrents,
+            commands::qbit_import::qbit_execute_import,
+            commands::qbit_import::qbit_restore_backup,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");
