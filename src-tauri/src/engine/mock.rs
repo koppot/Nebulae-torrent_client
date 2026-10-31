@@ -636,7 +636,10 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn pause_torrent(&self, id: &str) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = "Paused".to_string();
             item.download_rate = 0;
             item.upload_rate = 0;
@@ -648,7 +651,9 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        let pos = list.iter().position(|t| t.id == id);
+        let pos = list
+            .iter()
+            .position(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id));
         let Some(idx) = pos else {
             return Ok(());
         };
@@ -732,7 +737,10 @@ impl TorrentEngine for MockTorrentEngine {
         }
 
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = if item.progress >= 1.0 {
                 "Seeding".to_string()
             } else {
@@ -816,7 +824,10 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn force_recheck(&self, id: &str) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = "Checking".to_string();
             Ok(())
         } else {

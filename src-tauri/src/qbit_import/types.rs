@@ -107,6 +107,7 @@ pub struct ImportSummaryReport {
     pub removed_count: usize,
     pub not_removed: Vec<TorrentNotRemovedInfo>,
     pub backup_dir: Option<String>,
+    pub unsupported_settings: Vec<String>,
     pub log_file: String,
     pub log_preview: String,
 }

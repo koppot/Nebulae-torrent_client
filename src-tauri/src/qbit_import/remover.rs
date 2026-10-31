@@ -5,13 +5,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info, warn};
+
+static BACKUP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrashMethod {
     RecycleBin,
     MacTrash,
-    PermanentDelete,
 }
 
 pub trait TrashProvider: Send + Sync {
@@ -24,7 +26,6 @@ impl TrashProvider for DefaultTrashProvider {
     fn delete_file(&self, path: &Path) -> Result<TrashMethod, String> {
         #[cfg(target_os = "macos")]
         {
-            // Try macOS AppleScript/Finder trash
             if let Ok(canon) = path.canonicalize() {
                 let script = format!(
                     "tell application \"Finder\" to delete POSIX file \"{}\"",
@@ -40,15 +41,15 @@ impl TrashProvider for DefaultTrashProvider {
                 }
             }
 
-            // Fallback to permanent delete if trash is not available (e.g. external network volume)
-            fs::remove_file(path).map_err(|e| format!("Failed to delete file: {e}"))?;
-            Ok(TrashMethod::PermanentDelete)
+            // Silent permanent deletion is strictly prohibited
+            Err(format!(
+                "Could not move '{}' to macOS Trash. Silent permanent deletion is strictly prohibited.",
+                path.display()
+            ))
         }
 
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::ffi::OsStrExt;
-            // Best effort Windows recycle bin via PowerShell or Win32 API, fallback to remove_file
             let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             let script = format!(
                 "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{}', 'OnlyErrorDialogs', 'SendToRecycleBin')",
@@ -64,14 +65,18 @@ impl TrashProvider for DefaultTrashProvider {
                 }
             }
 
-            fs::remove_file(path).map_err(|e| format!("Failed to remove file: {e}"))?;
-            Ok(TrashMethod::PermanentDelete)
+            Err(format!(
+                "Could not move '{}' to Windows Recycle Bin. Silent permanent deletion is strictly prohibited.",
+                path.display()
+            ))
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            fs::remove_file(path).map_err(|e| format!("Failed to remove file: {e}"))?;
-            Ok(TrashMethod::PermanentDelete)
+            Err(format!(
+                "Trash service unavailable for '{}' on this OS. Silent permanent deletion is strictly prohibited.",
+                path.display()
+            ))
         }
     }
 }
@@ -87,12 +92,20 @@ impl ProcessChecker for SystemProcessChecker {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EntryJournalStatus {
+    BackedUp,
+    Removed { method: String },
+    NotRemoved { reason: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupEntry {
     pub info_hash: String,
     pub original_files: Vec<String>,
     pub backup_files: Vec<String>,
     pub source_type: String,
+    pub status: EntryJournalStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,7 +182,6 @@ impl QbitRemover {
             )
         })?;
 
-        // Normalize paths for comparison
         let normalized_data_dir = qbit_data_dir
             .canonicalize()
             .unwrap_or_else(|_| qbit_data_dir.to_path_buf());
@@ -188,21 +200,76 @@ impl QbitRemover {
         Ok(())
     }
 
+    /// Inspects and verifies that an SQLite database matches qBittorrent's recognized schema
+    pub fn inspect_and_verify_sqlite_schema(conn: &Connection) -> Result<(String, String), String> {
+        let table_name: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY CASE WHEN name = 'torrents' THEN 0 ELSE 1 END LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Could not find target table in torrents.db: {e}"))?;
+
+        let pragma_sql = format!("PRAGMA table_info(\"{table_name}\")");
+        let mut col_stmt = conn
+            .prepare(&pragma_sql)
+            .map_err(|e| format!("PRAGMA table_info failed: {e}"))?;
+        let cols: Vec<String> = col_stmt
+            .query_map([], |row| row.get(1))
+            .map_err(|e| format!("Failed to read columns: {e}"))?
+            .flatten()
+            .collect();
+
+        let has_meta_or_resume = cols.iter().any(|c| {
+            let l = c.to_lowercase();
+            l.contains("torrent")
+                || l.contains("resume")
+                || l.contains("metadata")
+                || l.contains("data")
+        });
+        if !has_meta_or_resume {
+            return Err(format!(
+                "Database table '{table_name}' does not match recognized qBittorrent torrents schema"
+            ));
+        }
+
+        let id_col = cols
+            .iter()
+            .find(|c| {
+                let l = c.to_lowercase();
+                l.contains("hash") || l.contains("id")
+            })
+            .or_else(|| cols.first())
+            .ok_or_else(|| format!("Could not find hash/id column in '{table_name}'"))?;
+
+        Ok((table_name, id_col.clone()))
+    }
+
     /// Creates and verifies a backup before any deletion occurs.
-    /// If verification fails, ABORTS removal immediately.
+    /// Uses SQLite online backup API for torrents.db to guarantee transactional WAL consistency.
+    /// Uses byte-for-byte verification for legacy files.
+    /// If verification fails, cleanly aborts and removes the temporary backup folder.
     pub fn create_and_verify_backup(
         torrents_to_remove: &[QbitTorrent],
         qbit_data_dir: &Path,
         backup_root: &Path,
     ) -> Result<BackupManifest, String> {
+        let count = BACKUP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let backup_dir = backup_root.join(&timestamp);
+        let folder_name = format!("{timestamp}-{nanos:09}-{count}");
+        let backup_dir = backup_root.join(folder_name);
+
         fs::create_dir_all(&backup_dir)
             .map_err(|e| format!("Failed to create backup directory {:?}: {e}", backup_dir))?;
 
         let mut manifest_entries = Vec::new();
         let mut has_sqlite_entries = false;
         let mut sqlite_db_path: Option<PathBuf> = None;
+        let mut sqlite_hashes_to_verify: Vec<String> = Vec::new();
 
         for t in torrents_to_remove {
             match &t.source {
@@ -210,6 +277,14 @@ impl QbitRemover {
                     torrent_path,
                     fastresume_path,
                 } => {
+                    if !torrent_path.is_file() && !fastresume_path.is_file() {
+                        let _ = fs::remove_dir_all(&backup_dir);
+                        return Err(format!(
+                            "Invalid or stale source reference for '{}': neither {:?} nor {:?} exist as regular files",
+                            t.name, torrent_path, fastresume_path
+                        ));
+                    }
+
                     let mut original_files = Vec::new();
                     let mut backup_files = Vec::new();
 
@@ -218,19 +293,27 @@ impl QbitRemover {
                         let fname = torrent_path.file_name().unwrap();
                         let target = backup_dir.join(fname);
                         fs::copy(torrent_path, &target).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
                             format!(
                                 "Failed copying {:?} to backup {:?}: {e}",
                                 torrent_path, target
                             )
                         })?;
 
-                        // Verify size
-                        let src_len = fs::metadata(torrent_path).map(|m| m.len()).unwrap_or(0);
-                        let dst_len = fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-                        if src_len != dst_len || src_len == 0 {
+                        // Byte-for-byte verification against source
+                        let src_bytes = fs::read(torrent_path).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
+                            format!("Failed reading source .torrent: {e}")
+                        })?;
+                        let dst_bytes = fs::read(&target).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
+                            format!("Failed reading backed-up .torrent: {e}")
+                        })?;
+                        if src_bytes != dst_bytes || src_bytes.is_empty() {
+                            let _ = fs::remove_dir_all(&backup_dir);
                             return Err(format!(
-                                "Backup verification failed: size mismatch for {:?} (src={}, dst={})",
-                                fname, src_len, dst_len
+                                "Backup verification failed: Byte mismatch for {:?}",
+                                fname
                             ));
                         }
 
@@ -243,19 +326,27 @@ impl QbitRemover {
                         let fname = fastresume_path.file_name().unwrap();
                         let target = backup_dir.join(fname);
                         fs::copy(fastresume_path, &target).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
                             format!(
                                 "Failed copying {:?} to backup {:?}: {e}",
                                 fastresume_path, target
                             )
                         })?;
 
-                        // Verify size
-                        let src_len = fs::metadata(fastresume_path).map(|m| m.len()).unwrap_or(0);
-                        let dst_len = fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-                        if src_len != dst_len || src_len == 0 {
+                        // Byte-for-byte verification against source
+                        let src_bytes = fs::read(fastresume_path).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
+                            format!("Failed reading source .fastresume: {e}")
+                        })?;
+                        let dst_bytes = fs::read(&target).map_err(|e| {
+                            let _ = fs::remove_dir_all(&backup_dir);
+                            format!("Failed reading backed-up .fastresume: {e}")
+                        })?;
+                        if src_bytes != dst_bytes || src_bytes.is_empty() {
+                            let _ = fs::remove_dir_all(&backup_dir);
                             return Err(format!(
-                                "Backup verification failed: size mismatch for {:?} (src={}, dst={})",
-                                fname, src_len, dst_len
+                                "Backup verification failed: Byte mismatch for {:?}",
+                                fname
                             ));
                         }
 
@@ -268,6 +359,7 @@ impl QbitRemover {
                         original_files,
                         backup_files,
                         source_type: "Legacy BT_backup".to_string(),
+                        status: EntryJournalStatus::BackedUp,
                     });
                 }
                 QbitSourceType::SqliteRow { info_hash, db_path } => {
@@ -275,6 +367,7 @@ impl QbitRemover {
                     if sqlite_db_path.is_none() {
                         sqlite_db_path = Some(db_path.clone());
                     }
+                    sqlite_hashes_to_verify.push(info_hash.clone());
                     manifest_entries.push(BackupEntry {
                         info_hash: info_hash.clone(),
                         original_files: vec![db_path.to_string_lossy().to_string()],
@@ -283,49 +376,89 @@ impl QbitRemover {
                             .to_string_lossy()
                             .to_string()],
                         source_type: "SQLite torrents.db".to_string(),
+                        status: EntryJournalStatus::BackedUp,
                     });
                 }
             }
         }
 
-        // If any torrent was from SQLite, backup torrents.db and verify integrity
+        // If any torrent was from SQLite, use SQLite online backup API to take an atomic snapshot
         if has_sqlite_entries {
             if let Some(ref db_path) = sqlite_db_path {
                 let target_db = backup_dir.join("torrents.db");
-                fs::copy(db_path, &target_db).map_err(|e| {
-                    format!(
-                        "Failed to copy SQLite database {:?} to backup: {e}",
-                        db_path
-                    )
+
+                let src_conn = Connection::open_with_flags(
+                    db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+                )
+                .map_err(|e| {
+                    let _ = fs::remove_dir_all(&backup_dir);
+                    format!("Failed to open source SQLite DB in read-only mode: {e}")
                 })?;
 
-                // Also copy -wal and -shm if present
-                let wal = PathBuf::from(format!("{}-wal", db_path.to_string_lossy()));
-                if wal.is_file() {
-                    let _ = fs::copy(&wal, backup_dir.join("torrents.db-wal"));
-                }
-                let shm = PathBuf::from(format!("{}-shm", db_path.to_string_lossy()));
-                if shm.is_file() {
-                    let _ = fs::copy(&shm, backup_dir.join("torrents.db-shm"));
-                }
+                let mut dst_conn = Connection::open(&target_db).map_err(|e| {
+                    let _ = fs::remove_dir_all(&backup_dir);
+                    format!("Failed to create backup SQLite DB at {:?}: {e}", target_db)
+                })?;
+
+                let backup =
+                    rusqlite::backup::Backup::new(&src_conn, &mut dst_conn).map_err(|e| {
+                        let _ = fs::remove_dir_all(&backup_dir);
+                        format!("Failed to initialize SQLite online backup: {e}")
+                    })?;
+
+                backup
+                    .run_to_completion(10, std::time::Duration::from_millis(25), None)
+                    .map_err(|e| {
+                        let _ = fs::remove_dir_all(&backup_dir);
+                        format!("SQLite online backup failed during execution: {e}")
+                    })?;
+
+                drop(backup);
+                drop(src_conn);
 
                 // Verify backup DB integrity
-                let conn = Connection::open(&target_db).map_err(|e| {
-                    format!("Failed opening backup SQLite database for verification: {e}")
+                let mut stmt = dst_conn.prepare("PRAGMA integrity_check").map_err(|e| {
+                    let _ = fs::remove_dir_all(&backup_dir);
+                    format!("Failed preparing integrity check on backup: {e}")
                 })?;
-                let mut stmt = conn
-                    .prepare("PRAGMA integrity_check")
-                    .map_err(|e| format!("Failed preparing integrity check on backup: {e}"))?;
-                let check_result: String = stmt
-                    .query_row([], |row| row.get(0))
-                    .map_err(|e| format!("Integrity check query failed on backup: {e}"))?;
+                let check_result: String = stmt.query_row([], |row| row.get(0)).map_err(|e| {
+                    let _ = fs::remove_dir_all(&backup_dir);
+                    format!("Integrity check query failed on backup: {e}")
+                })?;
 
                 if check_result.to_lowercase() != "ok" {
+                    let _ = fs::remove_dir_all(&backup_dir);
                     return Err(format!(
                         "ABORT: SQLite backup integrity check failed with status: {check_result}"
                     ));
                 }
-                info!("Verified SQLite backup integrity: ok");
+
+                // Verify that EVERY scheduled SQLite hash is present in the backed-up database
+                let (table_name, id_col) = Self::inspect_and_verify_sqlite_schema(&dst_conn)?;
+                for hash in &sqlite_hashes_to_verify {
+                    let query_sql = format!(
+                        "SELECT COUNT(*) FROM \"{table_name}\" WHERE LOWER(\"{id_col}\") = ?1"
+                    );
+                    let count: i64 = dst_conn
+                        .query_row(&query_sql, rusqlite::params![hash.to_lowercase()], |row| {
+                            row.get(0)
+                        })
+                        .unwrap_or(0);
+                    if count == 0 {
+                        let _ = fs::remove_dir_all(&backup_dir);
+                        return Err(format!(
+                            "Backup verification failed: Hash '{}' scheduled for removal is not present in backed-up database.",
+                            hash
+                        ));
+                    }
+                }
+
+                info!(
+                    "Verified SQLite backup integrity and confirmed {} hashes present",
+                    sqlite_hashes_to_verify.len()
+                );
             }
         }
 
@@ -339,10 +472,14 @@ impl QbitRemover {
             manual_restore_instructions: instructions,
         };
 
-        let manifest_json = serde_json::to_string_pretty(&manifest)
-            .map_err(|e| format!("Failed to serialize manifest.json: {e}"))?;
-        fs::write(backup_dir.join("manifest.json"), manifest_json.as_bytes())
-            .map_err(|e| format!("Failed to write manifest.json: {e}"))?;
+        let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| {
+            let _ = fs::remove_dir_all(&backup_dir);
+            format!("Failed to serialize manifest.json: {e}")
+        })?;
+        fs::write(backup_dir.join("manifest.json"), manifest_json.as_bytes()).map_err(|e| {
+            let _ = fs::remove_dir_all(&backup_dir);
+            format!("Failed to write manifest.json: {e}")
+        })?;
 
         info!(
             "Created and verified backup with {} entries at {:?}",
@@ -378,7 +515,7 @@ impl QbitRemover {
             return (0, not_removed, None);
         }
 
-        // 2. Filter out torrents flagged with missing_path
+        // 2. Filter out torrents flagged with missing_path or already in Nebula
         let mut eligible_torrents = Vec::new();
         let mut not_removed = Vec::new();
 
@@ -388,6 +525,12 @@ impl QbitRemover {
                     info_hash: t.info_hash.clone(),
                     name: t.name.clone(),
                     reason: "Download path unavailable; skipped removal for safety.".to_string(),
+                });
+            } else if t.already_in_nebula {
+                not_removed.push(TorrentNotRemovedInfo {
+                    info_hash: t.info_hash.clone(),
+                    name: t.name.clone(),
+                    reason: "Already in Nebula prior to this import; skipped removal.".to_string(),
                 });
             } else {
                 eligible_torrents.push(t);
@@ -399,7 +542,7 @@ impl QbitRemover {
         }
 
         // 3. Create mandatory backup before any removal
-        let backup_manifest = match Self::create_and_verify_backup(
+        let mut backup_manifest = match Self::create_and_verify_backup(
             &eligible_torrents
                 .iter()
                 .map(|&t| t.clone())
@@ -439,6 +582,15 @@ impl QbitRemover {
                     reason: "qBittorrent was launched during removal. Operation aborted."
                         .to_string(),
                 });
+                if let Some(entry) = backup_manifest
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.info_hash.eq_ignore_ascii_case(&t.info_hash))
+                {
+                    entry.status = EntryJournalStatus::NotRemoved {
+                        reason: "qBittorrent running during removal".to_string(),
+                    };
+                }
                 continue;
             }
 
@@ -448,13 +600,29 @@ impl QbitRemover {
                     fastresume_path,
                 } => {
                     let mut file_error = None;
+                    let mut methods = Vec::new();
+
+                    let torrent_exists = torrent_path.exists();
+                    let fastresume_exists = fastresume_path.exists();
+
+                    if !torrent_exists && !fastresume_exists {
+                        file_error = Some(
+                            "Source files no longer exist on disk (invalid or stale reference)"
+                                .to_string(),
+                        );
+                    }
 
                     // (a) Delete .torrent
                     if torrent_path.exists() {
                         if let Err(e) = Self::validate_path_safety(torrent_path, qbit_data_dir) {
                             file_error = Some(e);
-                        } else if let Err(e) = trash_provider.delete_file(torrent_path) {
-                            file_error = Some(format!("Failed trashing .torrent: {e}"));
+                        } else {
+                            match trash_provider.delete_file(torrent_path) {
+                                Ok(m) => methods.push(format!("{m:?}")),
+                                Err(e) => {
+                                    file_error = Some(format!("Failed trashing .torrent: {e}"))
+                                }
+                            }
                         }
                     }
 
@@ -462,8 +630,13 @@ impl QbitRemover {
                     if file_error.is_none() && fastresume_path.exists() {
                         if let Err(e) = Self::validate_path_safety(fastresume_path, qbit_data_dir) {
                             file_error = Some(e);
-                        } else if let Err(e) = trash_provider.delete_file(fastresume_path) {
-                            file_error = Some(format!("Failed trashing .fastresume: {e}"));
+                        } else {
+                            match trash_provider.delete_file(fastresume_path) {
+                                Ok(m) => methods.push(format!("{m:?}")),
+                                Err(e) => {
+                                    file_error = Some(format!("Failed trashing .fastresume: {e}"))
+                                }
+                            }
                         }
                     }
 
@@ -471,11 +644,26 @@ impl QbitRemover {
                         not_removed.push(TorrentNotRemovedInfo {
                             info_hash: t.info_hash.clone(),
                             name: t.name.clone(),
-                            reason: err,
+                            reason: err.clone(),
                         });
+                        if let Some(entry) = backup_manifest
+                            .entries
+                            .iter_mut()
+                            .find(|e| e.info_hash.eq_ignore_ascii_case(&t.info_hash))
+                        {
+                            entry.status = EntryJournalStatus::NotRemoved { reason: err };
+                        }
                     } else {
-                        // Idempotent: if files were already gone or trashed successfully
                         removed_count += 1;
+                        if let Some(entry) = backup_manifest
+                            .entries
+                            .iter_mut()
+                            .find(|e| e.info_hash.eq_ignore_ascii_case(&t.info_hash))
+                        {
+                            entry.status = EntryJournalStatus::Removed {
+                                method: methods.join(", "),
+                            };
+                        }
                     }
                 }
                 QbitSourceType::SqliteRow { info_hash, db_path } => {
@@ -493,6 +681,17 @@ impl QbitRemover {
                 match Self::execute_sqlite_removal_transaction(db_path, &sqlite_hashes_to_remove) {
                     Ok(count) => {
                         removed_count += count;
+                        for hash in &sqlite_hashes_to_remove {
+                            if let Some(entry) = backup_manifest
+                                .entries
+                                .iter_mut()
+                                .find(|e| e.info_hash.eq_ignore_ascii_case(hash))
+                            {
+                                entry.status = EntryJournalStatus::Removed {
+                                    method: "SQLite Transaction".to_string(),
+                                };
+                            }
+                        }
                     }
                     Err(e) => {
                         error!("SQLite removal transaction failed: {e}. All SQLite removals rolled back.");
@@ -507,52 +706,38 @@ impl QbitRemover {
                                 name,
                                 reason: format!("SQLite transaction rolled back: {e}"),
                             });
+                            if let Some(entry) = backup_manifest
+                                .entries
+                                .iter_mut()
+                                .find(|e| e.info_hash.eq_ignore_ascii_case(hash))
+                            {
+                                entry.status = EntryJournalStatus::NotRemoved {
+                                    reason: format!("SQLite transaction rolled back: {e}"),
+                                };
+                            }
                         }
                     }
                 }
             }
         }
 
+        // Flush updated journal to manifest.json
+        if let Ok(json) = serde_json::to_string_pretty(&backup_manifest) {
+            let manifest_path = Path::new(&backup_folder).join("manifest.json");
+            let _ = fs::write(manifest_path, json.as_bytes());
+        }
+
         (removed_count, not_removed, Some(backup_folder))
     }
 
-    fn execute_sqlite_removal_transaction(
+    pub fn execute_sqlite_removal_transaction(
         db_path: &Path,
         hashes_to_delete: &HashSet<String>,
     ) -> Result<usize, String> {
         let mut conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open SQLite database for removal: {e}"))?;
 
-        // Inspect sqlite_master for table and column names
-        let table_name: String = conn
-            .query_row(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY CASE WHEN name = 'torrents' THEN 0 ELSE 1 END LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Could not find target table in torrents.db: {e}"))?;
-
-        // Find id column
-        let pragma_sql = format!("PRAGMA table_info(\"{table_name}\")");
-        let mut col_stmt = conn
-            .prepare(&pragma_sql)
-            .map_err(|e| format!("PRAGMA table_info failed: {e}"))?;
-        let cols: Vec<String> = col_stmt
-            .query_map([], |row| row.get(1))
-            .map_err(|e| format!("Failed to read columns: {e}"))?
-            .flatten()
-            .collect();
-
-        let id_col = cols
-            .iter()
-            .find(|c| {
-                let l = c.to_lowercase();
-                l.contains("hash") || l.contains("id")
-            })
-            .or_else(|| cols.first())
-            .ok_or_else(|| format!("Could not find hash/id column in '{table_name}'"))?;
-
-        drop(col_stmt);
+        let (table_name, id_col) = Self::inspect_and_verify_sqlite_schema(&conn)?;
 
         let tx = conn
             .transaction()
@@ -575,43 +760,113 @@ impl QbitRemover {
             }
         }
 
-        // Commit transaction
-        tx.commit()
-            .map_err(|e| format!("Transaction commit failed: {e}"))?;
-
-        // Run integrity check after commit
-        let check_res: String = conn
+        // Run integrity check INSIDE the transaction BEFORE commit
+        let check_res: String = tx
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(|e| format!("PRAGMA integrity_check query failed: {e}"))?;
+            .map_err(|e| format!("PRAGMA integrity_check query failed in transaction: {e}"))?;
 
         if check_res.to_lowercase() != "ok" {
-            return Err(format!("Integrity check failed after removal: {check_res}"));
+            return Err(format!(
+                "Integrity check failed inside transaction: {check_res}. Rolling back."
+            ));
         }
+
+        // Commit transaction only after integrity check passes
+        tx.commit()
+            .map_err(|e| format!("Transaction commit failed: {e}"))?;
 
         Ok(deleted_count)
     }
 
-    /// Restores a backup from manifest.json
-    pub fn restore_from_manifest(manifest_path: &Path) -> Result<usize, String> {
+    /// Safely restores a backup from manifest.json:
+    /// - Requires explicit confirmation.
+    /// - Requires qBittorrent to be closed.
+    /// - Validates that all destination files resolve strictly within the validated qBittorrent directory.
+    /// - Takes a pre-restore backup of torrents.db before restoring SQLite entries.
+    pub fn restore_from_manifest(
+        manifest_path: &Path,
+        process_checker: &dyn ProcessChecker,
+        confirm: bool,
+    ) -> Result<usize, String> {
+        if !confirm {
+            return Err("Restoration aborted: Explicit user confirmation required.".to_string());
+        }
+
+        if process_checker.is_qbittorrent_running() {
+            return Err(
+                "qBittorrent is currently running. Please close it completely before restoring."
+                    .to_string(),
+            );
+        }
+
         let content = fs::read_to_string(manifest_path)
-            .map_err(|e| format!("Failed reading manifest: {e}"))?;
+            .map_err(|e| format!("Failed reading manifest at {:?}: {e}", manifest_path))?;
         let manifest: BackupManifest =
             serde_json::from_str(&content).map_err(|e| format!("Corrupt manifest.json: {e}"))?;
 
+        let qbit_data_dir = Path::new(&manifest.qbit_data_dir);
+        let canon_data_dir = qbit_data_dir.canonicalize().map_err(|e| {
+            format!(
+                "qBittorrent data dir '{}' cannot be resolved: {e}",
+                manifest.qbit_data_dir
+            )
+        })?;
+
         let mut restored = 0;
+        let mut sqlite_restored = false;
+
         for entry in &manifest.entries {
             for (idx, b_path) in entry.backup_files.iter().enumerate() {
-                if let Some(orig_path) = entry.original_files.get(idx) {
-                    if Path::new(b_path).is_file() {
-                        let orig = Path::new(orig_path);
-                        if let Some(parent) = orig.parent() {
-                            let _ = fs::create_dir_all(parent);
-                        }
-                        fs::copy(b_path, orig).map_err(|e| {
-                            format!("Failed to restore {:?} to {:?}: {e}", b_path, orig)
-                        })?;
-                        restored += 1;
+                if let Some(orig_path_str) = entry.original_files.get(idx) {
+                    let backup_file = Path::new(b_path);
+                    if !backup_file.is_file() {
+                        warn!("Backup file {:?} does not exist; skipping restore", b_path);
+                        continue;
                     }
+
+                    let orig_file = Path::new(orig_path_str);
+
+                    // Path Traversal Guard:
+                    // File must resolve strictly inside canon_data_dir
+                    let parent = orig_file.parent().ok_or_else(|| {
+                        format!("Invalid restore path '{}': missing parent", orig_path_str)
+                    })?;
+                    let canon_parent = parent
+                        .canonicalize()
+                        .unwrap_or_else(|_| parent.to_path_buf());
+                    if !canon_parent.starts_with(&canon_data_dir) {
+                        return Err(format!(
+                            "SECURITY REFUSAL: Target restore path '{}' escapes qBittorrent directory '{}'.",
+                            orig_path_str,
+                            canon_data_dir.display()
+                        ));
+                    }
+
+                    // For SQLite: take a pre-restore safety copy of current DB if it exists
+                    if orig_file.file_name().and_then(|f| f.to_str()) == Some("torrents.db")
+                        && !sqlite_restored
+                    {
+                        if orig_file.is_file() {
+                            let pre_restore_backup = canon_data_dir.join(format!(
+                                "torrents.db.pre_restore_{}",
+                                chrono::Local::now().format("%Y%m%d-%H%M%S")
+                            ));
+                            let _ = fs::copy(orig_file, &pre_restore_backup);
+                            info!(
+                                "Created safety snapshot before SQLite restore at {:?}",
+                                pre_restore_backup
+                            );
+                        }
+                        sqlite_restored = true;
+                    }
+
+                    fs::copy(backup_file, orig_file).map_err(|e| {
+                        format!(
+                            "Failed to restore {:?} to {:?}: {e}",
+                            backup_file, orig_file
+                        )
+                    })?;
+                    restored += 1;
                 }
             }
         }

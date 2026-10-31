@@ -68,6 +68,34 @@ impl BVal {
     pub fn dict_get_dict(&self, key: &str) -> Option<&BTreeMap<Vec<u8>, BVal>> {
         self.dict_get(key)?.as_dict()
     }
+
+    /// Extracts the root torrent name and relative file paths from metainfo bytes
+    pub fn extract_torrent_files_and_name(raw_bytes: &[u8]) -> Option<(String, Vec<String>)> {
+        let root = BencodeParser::new(raw_bytes).parse().ok()?;
+        let info = root.dict_get("info")?;
+        let name = info
+            .dict_get_str("name")
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        if let Some(files) = info.dict_get_list("files") {
+            let mut paths = Vec::new();
+            for f in files {
+                if let Some(path_list) = f.dict_get_list("path") {
+                    let parts: Vec<String> =
+                        path_list.iter().filter_map(|p| p.as_str_lossy()).collect();
+                    if !parts.is_empty() {
+                        paths.push(format!("{}/{}", name, parts.join("/")));
+                    }
+                }
+            }
+            if !paths.is_empty() {
+                return Some((name, paths));
+            }
+        }
+
+        // Single-file torrent
+        Some((name.clone(), vec![name]))
+    }
 }
 
 pub struct BencodeParser<'a> {

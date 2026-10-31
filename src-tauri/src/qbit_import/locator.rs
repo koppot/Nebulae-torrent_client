@@ -385,10 +385,16 @@ fn check_qbittorrent_running_system() -> (bool, Option<String>) {
         let output = Command::new("tasklist")
             .args(["/FI", "IMAGENAME eq qbittorrent.exe", "/FO", "CSV", "/NH"])
             .output();
-        if let Ok(out) = output {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if s.to_lowercase().contains("qbittorrent.exe") {
-                return (true, Some("qbittorrent.exe".to_string()));
+        match output {
+            Ok(out) => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if s.to_lowercase().contains("qbittorrent.exe") {
+                    return (true, Some("qbittorrent.exe".to_string()));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("tasklist command failed: {e}. Treating process state conservatively as running.");
+                return (true, Some("Indeterminate (tasklist failed)".to_string()));
             }
         }
     }
@@ -396,26 +402,41 @@ fn check_qbittorrent_running_system() -> (bool, Option<String>) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use std::process::Command;
-        let output = Command::new("pgrep")
-            .args(["-l", "-i", "qbittorrent"])
-            .output();
-        if let Ok(out) = output {
-            let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 && parts[1].to_lowercase().contains("qbittorrent") {
-                    return (true, Some(parts[1].to_string()));
+        let output = Command::new("pgrep").args(["-i", "qbittorrent"]).output();
+        match output {
+            Ok(out) if out.status.success() => {
+                return (true, Some("qbittorrent".to_string()));
+            }
+            Ok(_) => {
+                // Secondary check via ps in case of custom executable names
+                if let Ok(ps_out) = Command::new("ps").args(["-ax", "-c"]).output() {
+                    let s = String::from_utf8_lossy(&ps_out.stdout);
+                    for line in s.lines() {
+                        let lower = line.to_lowercase();
+                        if lower.contains("qbittorrent") {
+                            return (true, Some("qbittorrent".to_string()));
+                        }
+                    }
                 }
             }
-        }
-
-        // Secondary check via ps if pgrep not present
-        if let Ok(ps_out) = Command::new("ps").args(["-ax", "-c"]).output() {
-            let s = String::from_utf8_lossy(&ps_out.stdout);
-            for line in s.lines() {
-                let lower = line.to_lowercase();
-                if lower.contains("qbittorrent") {
-                    return (true, Some("qbittorrent".to_string()));
+            Err(e) => {
+                tracing::warn!("pgrep failed: {e}. Falling back to ps probe.");
+                if let Ok(ps_out) = Command::new("ps").args(["-ax", "-c"]).output() {
+                    let s = String::from_utf8_lossy(&ps_out.stdout);
+                    for line in s.lines() {
+                        let lower = line.to_lowercase();
+                        if lower.contains("qbittorrent") {
+                            return (true, Some("qbittorrent".to_string()));
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        "ps command also failed. Treating process state conservatively as running."
+                    );
+                    return (
+                        true,
+                        Some("Indeterminate (process probe failed)".to_string()),
+                    );
                 }
             }
         }

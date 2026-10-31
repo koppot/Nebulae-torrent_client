@@ -471,6 +471,7 @@ export interface ImportSummaryReport {
   removed_count: number;
   not_removed: TorrentNotRemovedInfo[];
   backup_dir?: string | null;
+  unsupported_settings: string[];
   log_file: string;
   log_preview: string;
 }

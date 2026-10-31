@@ -160,15 +160,30 @@ export const QbitImportModal: React.FC = () => {
 
   const handleSelectAll = useCallback(() => {
     if (!scanResult) return;
-    const all = new Set<string>();
-    scanResult.torrents.forEach((t) => {
-      if (!t.already_in_nebula) all.add(t.info_hash.toLowerCase());
+    setSelectedHashes((prev) => {
+      const next = new Set(prev);
+      filteredTorrents.forEach((t) => {
+        if (!t.already_in_nebula) {
+          next.add(t.info_hash.toLowerCase());
+        }
+      });
+      return next;
     });
-    setSelectedHashes(all);
-  }, [scanResult]);
+  }, [scanResult, filteredTorrents]);
 
   const handleSelectNone = () => {
-    setSelectedHashes(new Set());
+    if (!scanResult) return;
+    if (categoryFilter !== 'all' || searchQuery.trim()) {
+      setSelectedHashes((prev) => {
+        const next = new Set(prev);
+        filteredTorrents.forEach((t) => {
+          next.delete(t.info_hash.toLowerCase());
+        });
+        return next;
+      });
+    } else {
+      setSelectedHashes(new Set());
+    }
   };
 
   // Handle clicking "Import" on selection screen
@@ -332,6 +347,10 @@ export const QbitImportModal: React.FC = () => {
                   </p>
                   <p className="text-xs text-red-300/80">
                     {errorMsg || 'Please select the folder containing torrents.db or BT_backup.'}
+                  </p>
+                  <p className="text-[11px] text-[#a3a3a3] pt-1">
+                    On macOS: If accessing ~/Library/Application Support is restricted, click &quot;Browse…&quot; to grant access via the system dialog, or grant Full Disk Access to Nebulae in System Settings &gt; Privacy &amp; Security.
+                    On Windows: If accessing restricted profile locations, verify Nebulae has read access.
                   </p>
                 </div>
               </div>
@@ -743,6 +762,20 @@ export const QbitImportModal: React.FC = () => {
                     <FolderOpen className="w-3.5 h-3.5 text-[#e50914]" />
                     <span>Open folder</span>
                   </button>
+                </div>
+              )}
+
+              {/* Unsupported qBittorrent Settings Notice */}
+              {summaryReport.unsupported_settings && summaryReport.unsupported_settings.length > 0 && (
+                <div className="p-3 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-1.5 text-xs">
+                  <span className="text-[10px] uppercase font-bold text-[#a3a3a3] block font-sans">
+                    Unsupported qBittorrent Settings (Preserved or Safely Mapped)
+                  </span>
+                  {summaryReport.unsupported_settings.map((s, idx) => (
+                    <div key={idx} className="text-[#a3a3a3] font-mono text-[11px]">
+                      • {s}
+                    </div>
+                  ))}
                 </div>
               )}
 

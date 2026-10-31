@@ -246,7 +246,8 @@ pub async fn qbit_execute_import(
 }
 
 #[tauri::command]
-pub fn qbit_restore_backup(manifest_path: String) -> Result<usize, String> {
+pub fn qbit_restore_backup(manifest_path: String, confirm: bool) -> Result<usize, String> {
     let p = Path::new(&manifest_path);
-    QbitRemover::restore_from_manifest(p)
+    let proc_checker = crate::qbit_import::remover::SystemProcessChecker;
+    QbitRemover::restore_from_manifest(p, &proc_checker, confirm)
 }

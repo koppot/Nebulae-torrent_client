@@ -41,8 +41,10 @@ impl QbitImporter {
         ));
 
         let mut imported_torrents = Vec::new();
+        let mut confirmed_persisted_torrents = Vec::new();
         let mut skipped = Vec::new();
         let mut failed = Vec::new();
+        let mut unsupported_settings = Vec::new();
 
         // Query existing torrents in Nebula for deduplication
         let existing_hashes: std::collections::HashSet<String> = match engine.list_torrents() {
@@ -132,17 +134,42 @@ impl QbitImporter {
             // Ensure torrent is paused initially
             let _ = engine.pause_torrent(&added_hash);
 
-            // 6. Apply mapped_files renames before hash check
-            for (file_idx, renamed_path) in torrent.mapped_files.iter().enumerate() {
-                if let Some(new_name) = Path::new(renamed_path).file_name().and_then(|n| n.to_str())
+            // 6. Apply mapped_files renames (root folder, nested folders, files) before hash check
+            if !torrent.mapped_files.is_empty() {
+                if let Some((orig_name, orig_paths)) =
+                    crate::qbit_import::bencode::BVal::extract_torrent_files_and_name(
+                        &torrent.raw_torrent_bytes,
+                    )
                 {
-                    if let Err(e) =
-                        engine.rename_torrent_file(&added_hash, file_idx as u32, new_name)
-                    {
-                        debug!(
-                            "Rename file {} in {} to {} skipped/failed: {}",
-                            file_idx, added_hash, new_name, e
-                        );
+                    let rename_ops = QbitMapper::compute_rename_operations(
+                        &orig_name,
+                        &orig_paths,
+                        &torrent.mapped_files,
+                        &layout,
+                    );
+                    for op in rename_ops {
+                        if op.is_folder {
+                            if let Err(e) = engine.rename_torrent_folder(
+                                &added_hash,
+                                &op.old_path,
+                                &op.new_name,
+                            ) {
+                                debug!(
+                                    "Folder rename {:?} -> {:?} in {}: {}",
+                                    op.old_path, op.new_name, added_hash, e
+                                );
+                            }
+                        } else {
+                            let idx = op.file_index.unwrap_or(0);
+                            if let Err(e) =
+                                engine.rename_torrent_file(&added_hash, idx, &op.new_name)
+                            {
+                                debug!(
+                                    "File rename index {} to {:?} in {}: {}",
+                                    idx, op.new_name, added_hash, e
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -177,6 +204,26 @@ impl QbitImporter {
                 let _ = engine.set_category(&added_hash, cat);
             }
 
+            // Record unsupported settings for report visibility
+            if torrent.seeding_time_limit.is_some()
+                && !unsupported_settings
+                    .iter()
+                    .any(|s: &String| s.contains("seedingTimeLimit"))
+            {
+                unsupported_settings.push(
+                    "qBt-seedingTimeLimit: Seeding time limits not enforced by engine".to_string(),
+                );
+            }
+            if torrent.auto_managed
+                && !unsupported_settings
+                    .iter()
+                    .any(|s: &String| s.contains("auto_managed"))
+            {
+                unsupported_settings.push(
+                    "auto_managed: Per-torrent automatic management override not supported (global setting applies)".to_string(),
+                );
+            }
+
             // 11. Persist to SQLite torrent_metadata
             let initial_last_checked = if options.skip_recheck {
                 torrent.completed_time.or(Some(torrent.added_time))
@@ -184,8 +231,9 @@ impl QbitImporter {
                 None
             };
 
+            let canonical_hash = torrent.info_hash.to_lowercase();
             let db_meta = TorrentDbMetadata {
-                info_hash: added_hash.clone(),
+                info_hash: canonical_hash.clone(),
                 display_title: Some(torrent.name.clone()),
                 category: torrent.category.clone(),
                 labels: Some(labels_csv),
@@ -205,20 +253,28 @@ impl QbitImporter {
             };
 
             if let Err(e) = db.upsert_torrent_metadata(&db_meta) {
-                warn!("Failed to persist metadata for imported torrent {added_hash}: {e}");
+                warn!("Failed to persist metadata for imported torrent {canonical_hash}: {e}");
+            }
+            if added_hash.to_lowercase() != canonical_hash {
+                let mut alt_meta = db_meta.clone();
+                alt_meta.info_hash = added_hash.clone();
+                let _ = db.upsert_torrent_metadata(&alt_meta);
             }
 
-            // Verify persistence by reading back from DB (as required by section 5b step 4)
+            // Verify persistence by reading back from DB (durable persistence guard)
             let persisted = db
-                .get_torrent_metadata(&added_hash)
+                .get_torrent_metadata(&canonical_hash)
                 .ok()
                 .flatten()
+                .or_else(|| db.get_torrent_metadata(&added_hash).ok().flatten())
                 .is_some();
             if !persisted {
                 log_lines.push(format!(
                     "[WARN] {} ({}): Metadata persistence verification returned empty",
-                    torrent.name, added_hash
+                    torrent.name, canonical_hash
                 ));
+            } else {
+                confirmed_persisted_torrents.push(torrent.clone());
             }
 
             log_lines.push(format!(
@@ -228,35 +284,14 @@ impl QbitImporter {
             imported_torrents.push(torrent);
         }
 
-        // 12. Schedule Recheck Queue (concurrency = 2) if skip_recheck is false
-        if !options.skip_recheck && !imported_torrents.is_empty() {
-            let recheck_items: Vec<(String, bool)> = imported_torrents
-                .iter()
-                .map(|t| (t.info_hash.clone(), !t.paused))
-                .collect();
-
-            let engine_clone = engine.clone();
-            let db_clone = db.clone();
-
-            tokio::spawn(async move {
-                run_recheck_queue(recheck_items, engine_clone, db_clone).await;
-            });
-        } else if options.skip_recheck {
-            // If skipping recheck, resume torrents that were running in qBittorrent
-            for t in &imported_torrents {
-                if !t.paused {
-                    let _ = engine.resume_torrent(&t.info_hash);
-                }
-            }
-        }
-
-        // 13. Optional removal phase (R4b & Section 5b)
+        // 12. Optional removal phase (R4b & Section 5b)
+        // Must run only on verified persisted torrents before auto-resume
         let (removed_count, not_removed, backup_dir) =
-            if options.remove_from_qbit && !imported_torrents.is_empty() {
+            if options.remove_from_qbit && !confirmed_persisted_torrents.is_empty() {
                 let proc_checker = super::remover::SystemProcessChecker;
                 let trash_provider = super::remover::DefaultTrashProvider;
                 let (rc, nr, bd) = super::remover::QbitRemover::execute_removal(
-                    &imported_torrents,
+                    &confirmed_persisted_torrents,
                     qbit_data_dir,
                     backup_root,
                     &proc_checker,
@@ -278,6 +313,60 @@ impl QbitImporter {
             } else {
                 (0, Vec::new(), None)
             };
+
+        // Determine safe resume flags:
+        // If removal was requested for a torrent, but removal FAILED for it,
+        // DO NOT automatically resume! Keep paused to prevent dual-client collisions.
+        let failed_removal_hashes: std::collections::HashSet<String> = not_removed
+            .iter()
+            .map(|nr| nr.info_hash.to_lowercase())
+            .collect();
+
+        // 13. Schedule Recheck Queue (concurrency = 2) if skip_recheck is false
+        if !options.skip_recheck && !imported_torrents.is_empty() {
+            let recheck_items: Vec<(String, bool)> = imported_torrents
+                .iter()
+                .map(|t| {
+                    let hash_lower = t.info_hash.to_lowercase();
+                    let was_running = !t.paused;
+                    let removal_failed =
+                        options.remove_from_qbit && failed_removal_hashes.contains(&hash_lower);
+                    let should_resume = was_running && !removal_failed;
+
+                    if was_running && removal_failed {
+                        log_lines.push(format!(
+                            "[SAFETY] Withholding auto-resume for '{}' ({}): qBittorrent removal failed. Kept paused.",
+                            t.name, t.info_hash
+                        ));
+                    }
+
+                    (t.info_hash.clone(), should_resume)
+                })
+                .collect();
+
+            let engine_clone = engine.clone();
+            let db_clone = db.clone();
+
+            tokio::spawn(async move {
+                run_recheck_queue(recheck_items, engine_clone, db_clone).await;
+            });
+        } else if options.skip_recheck {
+            // If skipping recheck, resume torrents that were running in qBittorrent (except failed removal)
+            for t in &imported_torrents {
+                let hash_lower = t.info_hash.to_lowercase();
+                let was_running = !t.paused;
+                let removal_failed =
+                    options.remove_from_qbit && failed_removal_hashes.contains(&hash_lower);
+                if was_running && !removal_failed {
+                    let _ = engine.resume_torrent(&t.info_hash);
+                } else if was_running && removal_failed {
+                    log_lines.push(format!(
+                        "[SAFETY] Withholding auto-resume for '{}' ({}): qBittorrent removal failed. Kept paused.",
+                        t.name, t.info_hash
+                    ));
+                }
+            }
+        }
 
         log_lines.push(format!(
             "Import session finished: {} imported, {} skipped, {} failed, {} removed.",
@@ -306,6 +395,7 @@ impl QbitImporter {
             removed_count,
             not_removed,
             backup_dir,
+            unsupported_settings,
             log_file: log_path.to_string_lossy().to_string(),
             log_preview: full_log,
         };
@@ -332,7 +422,7 @@ async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db:
             info!("[recheck_queue] Triggering force_recheck for {}", hash);
             if let Err(e) = eng.force_recheck(&hash) {
                 warn!(
-                    "[recheck_queue] force_recheck call failed for {}: {}",
+                    "[recheck_queue] force_recheck call failed for {}: {}. last_checked will not be stamped.",
                     hash, e
                 );
                 return;
@@ -352,25 +442,32 @@ async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db:
                             t.status == "Checking" || t.status == "Queued for checking";
                         if is_checking {
                             checked_once = true;
-                        } else if checked_once || t.progress >= 1.0 {
-                            // Verification complete
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0);
-                            let _ = database.set_torrent_last_checked(&hash, now);
-                            info!(
-                                "[recheck_queue] Verification completed for {} (progress={:.1}%)",
-                                hash,
-                                t.progress * 100.0
-                            );
-
-                            if should_resume && t.progress >= 1.0 {
+                        } else if checked_once {
+                            // Verification complete: check for error state or missing download path
+                            if t.status != "Error" && Path::new(&t.save_path).exists() {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                let _ = database.set_torrent_last_checked(&hash, now);
                                 info!(
-                                    "[recheck_queue] Resuming 100% verified active torrent {}",
+                                    "[recheck_queue] Verification completed for {} (progress={:.1}%)",
+                                    hash,
+                                    t.progress * 100.0
+                                );
+
+                                if should_resume && t.progress >= 1.0 {
+                                    info!(
+                                        "[recheck_queue] Resuming 100% verified active torrent {}",
+                                        hash
+                                    );
+                                    let _ = eng.resume_torrent(&hash);
+                                }
+                            } else {
+                                warn!(
+                                    "[recheck_queue] Torrent {} ended in error/missing state. last_checked not stamped.",
                                     hash
                                 );
-                                let _ = eng.resume_torrent(&hash);
                             }
                             break;
                         }
