@@ -10,24 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.5] - Unreleased (Pending)
 
 ### Added
-- **Import from qBittorrent (Windows & macOS Parity)**:
-  - Import existing qBittorrent torrents on macOS and Windows, with automatic profile discovery, selectable imports, and preservation of supported settings, existing download paths, and renamed files.
-  - Background hash verification and a persistent “Last checked” timestamp.
-  - Optional removal of successfully imported torrent entries from qBittorrent, disabled by default, with verified backups and selective restoration. Downloaded files are never deleted by source-entry removal.
-  - Automatic detection of qBittorrent data directory across Windows (`%LOCALAPPDATA%\qBittorrent`, registry, portable process inspections) and macOS (`~/Library/Application Support/qBittorrent`, `~/.config`, XDG paths) with interactive browse fallback.
+- **Import from qBittorrent into Nebulae**:
+  - Import existing qBittorrent torrents into Nebulae with automatic profile discovery, selectable imports, and preservation of download paths, file renames, and per-file priorities.
+  - Optional safe removal of imported torrents from qBittorrent with verified backup and selective restoration. Downloaded files are never deleted by source-entry removal.
+  - Genuine hash rechecking on import and persistent “Last checked” metadata with sortable Manager column.
   - Multi-step migration wizard: initial confirmation dialog, directory validation, interactive torrent selection table with live selection counter, category filtering, search, and pre-disabled items for torrents already loaded in Nebulae.
   - Dual storage format support: parses legacy file storage (`BT_backup` `.torrent` and `.fastresume` pairs with lossy UTF-8 bencode tolerance) and modern dynamic SQLite database storage (`torrents.db` with runtime schema introspection and read-only URI locking prevention).
   - Preservation of critical transfer state: save paths, content layout (Original, Subfolder, NoSubfolder), `mapped_files` file renames, per-file priorities, categories, tags, speed and share limits, sequential flags, and original add/completion dates.
-  - Accurate reporting of unsupported settings: per-torrent seeding time limits (`qBt-seedingTimeLimit`) and per-torrent automatic management overrides (`auto_managed`) are surfaced in the import report rather than silently dropped.
+  - Settings fidelity and unsupported settings disclosure:
+    - Preserved: save path, file renames, file priorities (normal/high/skipped), maximum download/upload rate limits, ratio limits, sequential download flag, category, tags, add date, completed date.
+    - Unsupported settings: `qBt-seedingTimeLimit` is not supported because Transmission does not track elapsed seeding duration; `auto_managed` is not supported because Transmission does not offer a matching queue-management toggle. Both are surfaced in the import report rather than silently dropped.
   - Background verification queue: adds imported torrents in paused state, applies file renames prior to verification, schedules hash checks with a concurrency limit of 2, auto-resumes completed transfers that were active in qBittorrent, and tags transfers as "Imported from qBittorrent".
-  - Persistent, sortable "Last checked" column in the Manager table with local timezone formatting and dynamic progress reporting ("Queued", "Checking… ({pct}%)", localized timestamp).
   - Safety guarantees for optional removal: qBittorrent running-process detection (aborts removal if qBittorrent is running), required confirmation modal, hard safety path guard (strictly restricts deletion to `<qbit_data_dir>/BT_backup/<hash>.(torrent|fastresume)`, rejecting payload paths), mandatory pre-removal backup to `<profile>/qbit_backups/<timestamp>/` with integrity validation and `manifest.json`, and atomic SQLite transaction deletion with instant rollback on error.
   - Summary report dialog detailing imported, skipped, and removed counts, failure reasons, backup location with open-folder button, and copyable log text.
 
 ### Fixed
-- **Windows Common-Controls 6.0 Manifest Linking**: Fixed instant application crash (`0xc0000139`, `STATUS_ENTRYPOINT_NOT_FOUND`) on Windows GNU targets by generating and embedding an RT_MANIFEST referencing Common-Controls 6.0 via `windres`, enabling `rfd` task dialogs.
-- **Windows Recycle Bin Path Normalization**: Stripped `\\?\` verbatim UNC prefixes before passing paths to PowerShell `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile`, ensuring Recycle Bin deletions succeed without argument exceptions.
-- **Windows Tray Speed Initializer Startup Staleness**: Initialized `last_active` to stale timestamp on startup so idle state cleanly reports `None` instead of returning initial zero rates.
+- **Windows Tray Speed Reporting**: Fixed Windows tray speed reporting regression during idle states by initializing `last_active` to a stale timestamp on startup so idle state cleanly reports `None` instead of returning initial zero rates.
+- **Windows Test Suite & Manifest Compatibility**: Fixed Windows test suite initialization and Common Controls manifest compatibility (`0xc0000139`, `STATUS_ENTRYPOINT_NOT_FOUND`) on Windows GNU targets by generating and embedding an RT_MANIFEST referencing Common-Controls 6.0 via `windres`, enabling `rfd` task dialogs.
+- **Windows Recycle Bin Path Handling**: Fixed native Windows Recycle Bin deletion handling for verbatim extended paths by stripping `\\?\` verbatim UNC prefixes before passing paths to PowerShell `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile`, ensuring Recycle Bin deletions succeed without argument exceptions.
+
+### Changed / Documentation
+- **Architectural Plan**: Added architectural specification for qBittorrent import and safe source removal (`docs/qbit-import-plan.md`).
+- **Settings-Fidelity Matrix**: Added cross-platform testing matrix and settings fidelity documentation (`docs/qbit-import-testing.md`).
+- **Acceptance Evidence & Safety Audit**: Documented evidence-based acceptance audit and destructive-operation safety bounds (`docs/qbit-import-acceptance.md`).
+- **Real-Engine Verification**: Added end-to-end integration and real-engine verification reports confirming non-destructive payload mapping, genuine verification, and selective restoration.
 
 ## [0.2.4] - 2026-10-30
 
