@@ -23,6 +23,33 @@ impl QbitImporter {
         db: Arc<Database>,
         logs_dir: &Path,
     ) -> (ImportSummaryReport, Vec<QbitTorrent>) {
+        let proc_checker = super::remover::SystemProcessChecker;
+        let trash_provider = super::remover::DefaultTrashProvider;
+        Self::execute_import_with_services(
+            selected_torrents,
+            options,
+            qbit_data_dir,
+            backup_root,
+            engine,
+            db,
+            logs_dir,
+            &proc_checker,
+            &trash_provider,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_import_with_services(
+        selected_torrents: Vec<QbitTorrent>,
+        options: ImportOptions,
+        qbit_data_dir: &Path,
+        backup_root: &Path,
+        engine: SharedEngine,
+        db: Arc<Database>,
+        logs_dir: &Path,
+        process_checker: &dyn super::remover::ProcessChecker,
+        trash_provider: &dyn super::remover::TrashProvider,
+    ) -> (ImportSummaryReport, Vec<QbitTorrent>) {
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let log_file_name = format!("qbit_import_{timestamp}.log");
         let log_path = logs_dir.join(&log_file_name);
@@ -288,14 +315,12 @@ impl QbitImporter {
         // Must run only on verified persisted torrents before auto-resume
         let (removed_count, not_removed, backup_dir) =
             if options.remove_from_qbit && !confirmed_persisted_torrents.is_empty() {
-                let proc_checker = super::remover::SystemProcessChecker;
-                let trash_provider = super::remover::DefaultTrashProvider;
                 let (rc, nr, bd) = super::remover::QbitRemover::execute_removal(
                     &confirmed_persisted_torrents,
                     qbit_data_dir,
                     backup_root,
-                    &proc_checker,
-                    &trash_provider,
+                    process_checker,
+                    trash_provider,
                 );
                 log_lines.push(format!(
                     "Removal phase: {} removed, {} not removed. Backup: {:?}",

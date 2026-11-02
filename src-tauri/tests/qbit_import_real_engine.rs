@@ -2,7 +2,9 @@ use nebulae_torrent_client_lib::commands::settings::UserSettings;
 use nebulae_torrent_client_lib::db::Database;
 use nebulae_torrent_client_lib::engine::metainfo::{build_torrent_file, ParsedTorrent};
 use nebulae_torrent_client_lib::engine::{SharedEngine, TorrentEngine, TransmissionTorrentEngine};
-use nebulae_torrent_client_lib::qbit_import::remover::{ProcessChecker, QbitRemover, RestoreMode};
+use nebulae_torrent_client_lib::qbit_import::remover::{
+    DefaultTrashProvider, ProcessChecker, QbitRemover, RestoreMode,
+};
 use nebulae_torrent_client_lib::qbit_import::types::{ImportOptions, QbitSourceType, QbitTorrent};
 use nebulae_torrent_client_lib::qbit_import::QbitImporter;
 use nebulae_torrent_client_lib::utils::paths::AppPaths;
@@ -640,7 +642,10 @@ fn test_real_engine_removal_and_selective_recovery_round_trip() {
         skip_recheck: false,
     };
 
-    let (summary, imported) = QbitImporter::execute_import(
+    let proc_checker_mock = MockProcessChecker { running: false };
+    let trash_provider = DefaultTrashProvider;
+
+    let (summary, imported) = QbitImporter::execute_import_with_services(
         vec![qbt_a.clone()],
         options,
         &qbit_dir,
@@ -648,6 +653,8 @@ fn test_real_engine_removal_and_selective_recovery_round_trip() {
         shared_engine.clone(),
         db.clone(),
         &paths.logs_dir,
+        &proc_checker_mock,
+        &trash_provider,
     );
 
     assert_eq!(summary.imported_count, 1);
