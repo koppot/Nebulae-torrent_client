@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 pub struct QbitImporter;
 
 impl QbitImporter {
-    pub async fn execute_import(
+    pub fn execute_import(
         selected_torrents: Vec<QbitTorrent>,
         options: ImportOptions,
         qbit_data_dir: &Path,
@@ -112,8 +112,8 @@ impl QbitImporter {
             let download_dir_str = eff_download_dir.to_string_lossy().to_string();
 
             // 5. Add to engine in PAUSED state
-            let add_res =
-                engine.add_torrent_from_bytes(&torrent.raw_torrent_bytes, Some(&download_dir_str));
+            let add_res = engine
+                .add_torrent_from_bytes_paused(&torrent.raw_torrent_bytes, Some(&download_dir_str));
 
             let added_hash = match add_res {
                 Ok(hash) => hash,
@@ -347,9 +347,19 @@ impl QbitImporter {
             let engine_clone = engine.clone();
             let db_clone = db.clone();
 
-            tokio::spawn(async move {
-                run_recheck_queue(recheck_items, engine_clone, db_clone).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    run_recheck_queue(recheck_items, engine_clone, db_clone).await;
+                });
+            } else {
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    rt.block_on(run_recheck_queue(recheck_items, engine_clone, db_clone));
+                });
+            }
         } else if options.skip_recheck {
             // If skipping recheck, resume torrents that were running in qBittorrent (except failed removal)
             for t in &imported_torrents {
@@ -424,7 +434,15 @@ pub async fn run_recheck_queue(
         let task = tokio::spawn(async move {
             let _permit = permit;
             info!("[recheck_queue] Triggering force_recheck for {}", hash);
-            if let Err(e) = eng.force_recheck(&hash) {
+            let force_res = tokio::task::spawn_blocking({
+                let eng = eng.clone();
+                let hash = hash.clone();
+                move || eng.force_recheck(&hash)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("spawn_blocking failed: {e}")));
+
+            if let Err(e) = force_res {
                 warn!(
                     "[recheck_queue] force_recheck call failed for {}: {}. last_checked will not be stamped.",
                     hash, e
@@ -433,17 +451,41 @@ pub async fn run_recheck_queue(
             }
 
             // Poll torrent status until checking completes
+            let mut saw_checking = false;
+            let mut non_checking_ticks = 0;
             for _ in 0..600 {
-                if let Ok(list) = eng.list_torrents() {
+                let list_res = tokio::task::spawn_blocking({
+                    let eng = eng.clone();
+                    move || eng.list_torrents()
+                })
+                .await
+                .unwrap_or_else(|e| Err(format!("spawn_blocking failed: {e}")));
+
+                if let Ok(list) = list_res {
                     if let Some(t) = list
                         .into_iter()
                         .find(|item| item.info_hash.eq_ignore_ascii_case(&hash))
                     {
                         let is_checking =
                             t.status == "Checking" || t.status == "Queued for checking";
-                        if !is_checking {
-                            // Verification complete: check for error state or missing download path
-                            if t.status != "Error" && Path::new(&t.save_path).exists() {
+                        if is_checking {
+                            saw_checking = true;
+                            non_checking_ticks = 0;
+                        } else {
+                            // Missing download path or fatal error terminates check without timestamping
+                            if t.status == "Error" || !Path::new(&t.save_path).exists() {
+                                warn!(
+                                    "[recheck_queue] Torrent {} ended in error/missing state. last_checked not stamped.",
+                                    hash
+                                );
+                                break;
+                            }
+
+                            // If we observed checking in progress, then exiting checking indicates completion.
+                            // If checking has not yet been observed (engine delay or very fast small check),
+                            // require a minimum grace window (4 ticks = 200ms) of stable non-checking before
+                            // concluding verification has completed.
+                            if saw_checking {
                                 let now = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_secs())
@@ -460,15 +502,43 @@ pub async fn run_recheck_queue(
                                         "[recheck_queue] Resuming 100% verified active torrent {}",
                                         hash
                                     );
-                                    let _ = eng.resume_torrent(&hash);
+                                    let _ = tokio::task::spawn_blocking({
+                                        let eng = eng.clone();
+                                        let hash = hash.clone();
+                                        move || eng.resume_torrent(&hash)
+                                    })
+                                    .await;
                                 }
+                                break;
                             } else {
-                                warn!(
-                                    "[recheck_queue] Torrent {} ended in error/missing state. last_checked not stamped.",
-                                    hash
-                                );
+                                non_checking_ticks += 1;
+                                if non_checking_ticks >= 4 {
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0);
+                                    let _ = database.set_torrent_last_checked(&hash, now);
+                                    info!(
+                                        "[recheck_queue] Verification completed (immediate check window) for {} (progress={:.1}%)",
+                                        hash,
+                                        t.progress * 100.0
+                                    );
+
+                                    if should_resume && t.progress >= 1.0 {
+                                        info!(
+                                            "[recheck_queue] Resuming 100% verified active torrent {}",
+                                            hash
+                                        );
+                                        let _ = tokio::task::spawn_blocking({
+                                            let eng = eng.clone();
+                                            let hash = hash.clone();
+                                            move || eng.resume_torrent(&hash)
+                                        })
+                                        .await;
+                                    }
+                                    break;
+                                }
                             }
-                            break;
                         }
                     }
                 }

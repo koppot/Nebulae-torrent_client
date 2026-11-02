@@ -665,8 +665,7 @@ async fn test_acceptance_end_to_end_import_with_unsupported_settings() {
         engine.clone(),
         db.clone(),
         &logs_dir,
-    )
-    .await;
+    );
 
     assert_eq!(summary.imported_count, 1);
     assert_eq!(imported.len(), 1);
@@ -752,8 +751,7 @@ async fn test_acceptance_end_to_end_import_duplicate_skipped() {
         engine.clone(),
         db.clone(),
         &logs_dir,
-    )
-    .await;
+    );
 
     assert_eq!(summary.imported_count, 0);
     assert_eq!(imported.len(), 0);
@@ -839,8 +837,7 @@ async fn test_acceptance_end_to_end_removal_failure_withholds_auto_resume() {
         engine.clone(),
         db.clone(),
         &logs_dir,
-    )
-    .await;
+    );
 
     // 1. Import itself succeeded
     assert_eq!(summary.imported_count, 1);
@@ -1203,8 +1200,7 @@ async fn test_acceptance_rename_maps_without_modifying_payload_and_detects_colli
         engine.clone(),
         db.clone(),
         &logs_dir,
-    )
-    .await;
+    );
 
     assert_eq!(summary.imported_count, 1);
     assert_eq!(imported.len(), 1);

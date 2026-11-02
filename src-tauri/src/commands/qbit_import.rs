@@ -119,7 +119,13 @@ pub async fn qbit_scan_torrents(
         QbitReader::merge_sources(legacy_torrents, sqlite_torrents);
 
     // 4. Mark deduplication against existing Nebula torrents
-    let existing_hashes: std::collections::HashSet<String> = match engine.list_torrents() {
+    let existing_hashes: std::collections::HashSet<String> = match tokio::task::spawn_blocking({
+        let eng = engine.inner().clone();
+        move || eng.list_torrents()
+    })
+    .await
+    .unwrap_or_else(|_| Err("spawn_blocking failed".to_string()))
+    {
         Ok(list) => list
             .into_iter()
             .map(|t| t.info_hash.to_lowercase())
@@ -231,16 +237,23 @@ pub async fn qbit_execute_import(
     }
 
     let backup_root = paths.base_data_dir.join("qbit-import-backups");
-    let (report, _) = QbitImporter::execute_import(
-        target_torrents,
-        options,
-        &data_dir,
-        &backup_root,
-        engine.inner().clone(),
-        db.inner().clone(),
-        &paths.logs_dir,
-    )
-    .await;
+    let logs_dir = paths.logs_dir.clone();
+    let eng = engine.inner().clone();
+    let db_clone = db.inner().clone();
+
+    let (report, _) = tokio::task::spawn_blocking(move || {
+        QbitImporter::execute_import(
+            target_torrents,
+            options,
+            &data_dir,
+            &backup_root,
+            eng,
+            db_clone,
+            &logs_dir,
+        )
+    })
+    .await
+    .map_err(|e| format!("Import task failed: {e}"))?;
 
     Ok(report)
 }

@@ -32,6 +32,16 @@ pub trait TorrentEngine: Send + Sync {
         bytes: &[u8],
         download_dir: Option<&str>,
     ) -> Result<String, String>;
+    /// Add a torrent from raw .torrent bencode bytes guaranteed to be added in the paused state.
+    fn add_torrent_from_bytes_paused(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let id = self.add_torrent_from_bytes(bytes, download_dir)?;
+        let _ = self.pause_torrent(&id);
+        Ok(id)
+    }
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String>;
     fn pause_torrent(&self, id: &str) -> Result<(), String>;
     fn resume_torrent(&self, id: &str) -> Result<(), String>;
