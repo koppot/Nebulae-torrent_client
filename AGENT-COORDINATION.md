@@ -1885,3 +1885,25 @@ then Manager speed tooltip wiring using your `041d5b8` data contract.
   2. Parent folder vs playable target resolution: directories containing disc subfolders (e.g., multi-disc sets) fail when opened at the parent root instead of the specific playable disc target.
   3. Menu watcher readiness predicate: prematurely dispatching title/menu actions before `count > 0 && cur_title >= 0 && (is_playing || state == Playing)` causes stalls.
 - **Implementation & Gating:** Concrete source fixes are being applied on `factory-b/windows-0.2.4-candidate`. Version remains strictly `0.2.4`. Publication, tag modifications, release asset replacement, and updater activation remain held pending user runtime acceptance.
+
+## 2026-11-02 — Antigravity: Windows 0.2.4 Release Candidate Built & Verified (100% PASS)
+
+- **Source Commit:** `08176de45d8aa62ff5e13d964319409b5eb0cf45` on branch `factory-b/windows-0.2.4-candidate` (pushed to `origin`).
+- **Final Built Installer:**
+  - File: `Nebulae_0.2.4_x64-setup.exe`
+  - Location: `C:\nebulae-build\src-tauri\target\release\bundle\nsis\Nebulae_0.2.4_x64-setup.exe`
+  - Size: 322,154,683 bytes (307.23 MiB)
+  - SHA-256: `FB7A2A565903AF4E5103307DC1E9272997A94F72A6002C021D6EC13184C2A665`
+- **Extracted Runtime Manifest & Component Audit:**
+  - `nebulae.exe`: SHA-256 `EB77DF6A2597AAA906426AD85B4B61A0022C2BC24C07E2F4B7C8252DF9EC265A` (56,408,969 bytes)
+  - `resources\vlc\libvlc.dll`: SHA-256 `07EAB3D7E7FD0CCDBCD99B9A97D2EFFA7A6A3885472A7C36011F6DA04B80748D` (Patched VLC 3.0.23, 319 exports)
+  - `resources\vlc\plugins\access\liblibbluray_plugin.dll`: SHA-256 `CEE54342C8F528B74AE8EED207C141E6E3CC433B46DE616DDD30BDC04632A4B1` (Patched plugin with startup menu bypass jump)
+  - `resources\jre`: JRE 21 (Temurin 21.0.9+10) present in `resources\jre\bin\java.exe`
+  - `resources\geo`: `GeoLite2-ASN.mmdb` and `GeoLite2-Country.mmdb` present
+  - `resources\build-manifest.json`: Verified
+- **Installed GUI Playback Verification Results (100% PASS via CDP on Supermicro):**
+  1. Single DVD ISO (`Gohatto`): PASS. Mounted directly via `dvd:///` location into interactive Top Menu (`title=0`, `at_menu=true`), playback progressed smoothly, pause/resume verified, seek to 60s verified (`time=61883ms`), stop/close verified, reopen verified.
+  2. Multi-Disc ISO Folder (`Banner of the Stars III`): PASS. Resolved `DISC_1.ISO` target, mounted via `dvd:///` location, started at menu, time progressed, clean close.
+  3. Multi-Disc DVD Folder (`Antique Bakery`): PASS. Resolved `ANTIQUE BAKERY 1` disc folder target, mounted via `dvd:///` location, started at menu, time progressed, clean close.
+  4. Blu-ray Interactive Menus (`Fuuka D1`): PASS. Staged patched `liblibbluray_plugin.dll` (`cee543...`) prevented startup demux stall; player started at menu title 0 without auto-bypassing (`starts_at_menu_title_0=true`, `no_auto_play_all=true`), menu activation started feature on title 1 (progressed past 23.2s), return to menu button returned to interactive Top Menu at title 0 (`return_to_menu_works=true`), clean close verified.
+- **Release Status:** Ready for user testing and acceptance. Publication, tag update, and updater activation held pending approval.
