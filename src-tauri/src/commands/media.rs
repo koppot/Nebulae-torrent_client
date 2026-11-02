@@ -139,6 +139,8 @@ pub struct ResolvedPlayback {
     pub title: String,
     pub is_disc: bool,
     pub external: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disc_scheme: Option<String>,
 }
 
 /// `player_open` return value and `player-opened` event payload: the
@@ -152,6 +154,70 @@ pub struct PlayerOpenResult {
     #[serde(flatten)]
     pub info: ResolvedPlayback,
     pub gen: u64,
+}
+
+/// Map a DiscType to its libVLC MRL scheme ("bluray" or "dvd").
+pub fn disc_scheme_for_type(
+    disc_type: crate::utils::disc_detector::DiscType,
+) -> Option<&'static str> {
+    match disc_type {
+        crate::utils::disc_detector::DiscType::BluRay
+        | crate::utils::disc_detector::DiscType::UhdBluRay => Some("bluray"),
+        crate::utils::disc_detector::DiscType::DvdVideo
+        | crate::utils::disc_detector::DiscType::DvdAudio => Some("dvd"),
+        _ => None,
+    }
+}
+
+/// Determine the valid playable disc target from a DiscStructureInfo.
+/// libVLC requires:
+/// - Optical image (.iso / .img): the image file itself.
+/// - Disc folder (BDMV / VIDEO_TS): the disc root directory containing BDMV or VIDEO_TS.
+///
+/// Silently falling back to an unplayable parent directory is prohibited.
+fn playable_disc_target(disc: &DiscStructureInfo) -> Result<PathBuf, String> {
+    let play_path = Path::new(&disc.play_target);
+    if play_path.is_file() {
+        if play_path.exists() {
+            return Ok(play_path.to_path_buf());
+        } else {
+            return Err(format!(
+                "Playable target file does not exist: {}",
+                play_path.display()
+            ));
+        }
+    }
+    // If play_target is a directory ending in BDMV, VIDEO_TS, or AUDIO_TS,
+    // the libVLC disc root is its parent directory.
+    let name = play_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name == "bdmv" || name == "video_ts" || name == "audio_ts" {
+        if let Some(parent) = play_path.parent() {
+            if parent.exists() {
+                return Ok(parent.to_path_buf());
+            }
+        }
+    }
+    let root = Path::new(&disc.root_path);
+    if root.join("BDMV").exists()
+        || root.join("bdmv").exists()
+        || root.join("VIDEO_TS").exists()
+        || root.join("video_ts").exists()
+        || root.join("AUDIO_TS").exists()
+        || root.join("audio_ts").exists()
+    {
+        return Ok(root.to_path_buf());
+    }
+    if play_path.is_dir() && play_path.exists() {
+        return Ok(play_path.to_path_buf());
+    }
+    Err(format!(
+        "No valid playable disc target found for {}",
+        disc.title
+    ))
 }
 
 /// Derive the best user-facing title and year for a disc release.
@@ -200,23 +266,32 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     if !path.exists() {
         return Err(format!("Media path does not exist: {file_path}"));
     }
+
+    // 1. Direct inspection with DiscDetector (detects direct disc roots or direct ISO files)
     if let Some(disc) = DiscDetector::inspect(path) {
-        let title = best_display_title_for_disc(path, &disc.title);
-        return Ok(ResolvedPlayback {
-            resolved_path: disc.root_path.clone(),
-            title,
-            is_disc: true,
-            external: false,
-        });
+        let scheme = disc_scheme_for_type(disc.disc_type).map(String::from);
+        if scheme.is_some() {
+            let target = playable_disc_target(&disc)?;
+            let title = best_display_title_for_disc(path, &disc.title);
+            return Ok(ResolvedPlayback {
+                resolved_path: target.display().to_string(),
+                title,
+                is_disc: true,
+                external: false,
+                disc_scheme: scheme,
+            });
+        }
     }
+
+    // 2. Directory inspection
     if path.is_dir() {
-        // The BDMV/VIDEO_TS directory itself was passed (e.g. saved in the
-        // resume store): the disc root is its parent.
         let dir_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
+
+        // 2a. Direct BDMV/VIDEO_TS directory itself passed
         if dir_name == "bdmv" || dir_name == "video_ts" {
             if let Some(disc_root) = path.parent() {
                 let raw_title = disc_root
@@ -224,25 +299,73 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
                     .and_then(|s| s.to_str())
                     .unwrap_or("Video");
                 let title = best_display_title_for_disc(disc_root, raw_title);
+                let scheme = if dir_name == "bdmv" { "bluray" } else { "dvd" };
                 return Ok(ResolvedPlayback {
                     resolved_path: disc_root.display().to_string(),
                     title,
                     is_disc: true,
                     external: false,
+                    disc_scheme: Some(scheme.to_string()),
                 });
             }
         }
+
+        // 2b. Multi-disc parent directory: check inspect_all for disc subfolders / images
+        let all_discs = DiscDetector::inspect_all(path);
+        if !all_discs.is_empty() {
+            if let Some(first_disc) = all_discs.first() {
+                let scheme = disc_scheme_for_type(first_disc.disc_type).map(String::from);
+                if scheme.is_some() {
+                    let target = playable_disc_target(first_disc)?;
+                    let raw_title = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&first_disc.title);
+                    let title = best_display_title_for_disc(path, raw_title);
+                    tracing::info!(
+                        "resolve_playback: multi-disc set '{}' -> first disc {}",
+                        path.display(),
+                        target.display()
+                    );
+                    return Ok(ResolvedPlayback {
+                        resolved_path: target.display().to_string(),
+                        title,
+                        is_disc: true,
+                        external: false,
+                        disc_scheme: scheme,
+                    });
+                }
+            }
+        }
+
+        // 2c. Subdirectory disc targets via resolve_disc_target
         if let Some(target) = resolve_disc_target(path) {
             if let Some(disc) = DiscDetector::inspect(&target) {
-                let title = best_display_title_for_disc(&target, &disc.title);
-                return Ok(ResolvedPlayback {
-                    resolved_path: disc.root_path.clone(),
-                    title,
-                    is_disc: true,
-                    external: false,
-                });
+                let scheme = disc_scheme_for_type(disc.disc_type).map(String::from);
+                if scheme.is_some() {
+                    let playable = playable_disc_target(&disc)?;
+                    let raw_title = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&disc.title);
+                    let title = best_display_title_for_disc(path, raw_title);
+                    tracing::info!(
+                        "resolve_playback: disc target '{}' -> playable {}",
+                        target.display(),
+                        playable.display()
+                    );
+                    return Ok(ResolvedPlayback {
+                        resolved_path: playable.display().to_string(),
+                        title,
+                        is_disc: true,
+                        external: false,
+                        disc_scheme: scheme,
+                    });
+                }
             }
         }
+
+        // 2d. Plain directory without discs: find main video file
         return match find_main_video(path) {
             Some(video) => {
                 let title = video
@@ -255,24 +378,14 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
                     title,
                     is_disc: false,
                     external: false,
+                    disc_scheme: None,
                 })
             }
             None => Err(format!("No playable media found in {}", path.display())),
         };
     }
-    let title = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Video")
-        .to_string();
 
-    // A file INSIDE a disc structure (BDMV/STREAM/*.m2ts, VIDEO_TS/*.VOB)
-    // must never play as a bare clip: such entries are menu loops seconds
-    // long, and playback ends into a black screen (owner-reported blank
-    // player for the Fuuka Blu-ray). Older builds saved such paths into the
-    // resume store; redirect to the disc itself (played through the
-    // bluray:// MRL so titles, chapters and the menu are available) instead
-    // of playing the clip as a bare file.
+    // 3. File inside a disc structure (BDMV/STREAM/*.m2ts, VIDEO_TS/*.VOB)
     let disc_ancestor = path.ancestors().skip(1).find(|a| {
         let name = a
             .file_name()
@@ -282,13 +395,18 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         name == "bdmv" || name == "video_ts"
     });
     if let Some(disc_dir) = disc_ancestor {
-        // The disc root is the folder CONTAINING BDMV/VIDEO_TS.
         if let Some(disc_root) = disc_dir.parent() {
-            let title = disc_root
+            let disc_name = disc_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let scheme = if disc_name == "bdmv" { "bluray" } else { "dvd" };
+            let raw_title = disc_root
                 .file_name()
                 .and_then(|s| s.to_str())
-                .unwrap_or(title.as_str())
-                .to_string();
+                .unwrap_or("Video");
+            let title = best_display_title_for_disc(disc_root, raw_title);
             tracing::info!(
                 "resolve_playback: in-disc file {} redirected to disc root {}",
                 path.display(),
@@ -299,148 +417,45 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
                 title,
                 is_disc: true,
                 external: false,
+                disc_scheme: Some(scheme.to_string()),
             });
         }
     }
 
-    // A BDMV folder picked directly is the inside of one disc: its
-    // PARENT is the disc root the engine wants (bluray://<root>).
-    if path.is_dir() {
-        let dir_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.to_ascii_lowercase())
+    // 4. Optical disc image file (.iso / .img)
+    if path.is_file() {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
             .unwrap_or_default();
-        if dir_name == "bdmv" || dir_name == "video_ts" {
-            if let Some(root) = path.parent() {
-                let title = root
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(title.as_str())
-                    .to_string();
-                tracing::info!(
-                    "resolve_playback: {} folder {} redirected to disc root {}",
-                    dir_name,
-                    path.display(),
-                    root.display()
-                );
+        if (ext == "iso" || ext == "img") && DiscDetector::is_optical_image(path) {
+            if let Some(disc) = DiscDetector::inspect(path) {
+                let scheme = disc_scheme_for_type(disc.disc_type).map(String::from);
+                let title = best_display_title_for_disc(path, &disc.title);
                 return Ok(ResolvedPlayback {
-                    resolved_path: root.display().to_string(),
+                    resolved_path: file_path.to_string(),
                     title,
                     is_disc: true,
                     external: false,
+                    disc_scheme: scheme,
                 });
             }
         }
     }
 
-    // A folder holding one or more DISC FOLDERS (a multi-disc release
-    // imported from disk): resolve to the first disc folder; the player's
-    // disc switcher discovers the siblings by walking up from there.
-    if path.is_dir() {
-        let mut disc_dirs: Vec<PathBuf> = std::fs::read_dir(path)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|d| d.is_dir())
-                    .filter(|d| {
-                        d.join("BDMV").is_dir()
-                            || d.join("bdmv").is_dir()
-                            || d.join("VIDEO_TS").is_dir()
-                            || d.join("video_ts").is_dir()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        disc_dirs.sort();
-        if let Some(disc) = disc_dirs.first() {
-            let title = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(title.as_str())
-                .to_string();
-            tracing::info!(
-                "resolve_playback: multi-disc folder {} -> first disc {}",
-                path.display(),
-                disc.display()
-            );
-            return Ok(ResolvedPlayback {
-                resolved_path: disc.display().to_string(),
-                title,
-                is_disc: true,
-                external: false,
-            });
-        }
-    }
-
-    // ISO disc image: a file that CONTAINS a disc. VLC's demuxers detect
-    // the image themselves (media_new_path is enough); marking it as a disc
-    // gives it menu handling and the demux liveness check. A folder that
-    // holds a single ISO resolves to that ISO (the folder picker only
-    // chooses folders).
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if path.is_file() && ext == "iso" {
-        let title = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(title.as_str())
-            .to_string();
-        tracing::info!(
-            "resolve_playback: ISO image {} treated as disc",
-            path.display()
-        );
-        return Ok(ResolvedPlayback {
-            resolved_path: file_path.to_string(),
-            title,
-            is_disc: true,
-            external: false,
-        });
-    }
-    if path.is_dir() {
-        let isos: Vec<PathBuf> = std::fs::read_dir(path)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| {
-                        p.is_file()
-                            && p.extension()
-                                .and_then(|e| e.to_str())
-                                .map(|e| e.eq_ignore_ascii_case("iso"))
-                                .unwrap_or(false)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if isos.len() == 1 {
-            let iso = &isos[0];
-            let title = iso
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(title.as_str())
-                .to_string();
-            tracing::info!(
-                "resolve_playback: folder {} holds one ISO, using {}",
-                path.display(),
-                iso.display()
-            );
-            return Ok(ResolvedPlayback {
-                resolved_path: iso.display().to_string(),
-                title,
-                is_disc: true,
-                external: false,
-            });
-        }
-    }
-
+    // 5. Plain file
+    let title = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Video")
+        .to_string();
     Ok(ResolvedPlayback {
         resolved_path: file_path.to_string(),
         title,
         is_disc: false,
         external: false,
+        disc_scheme: None,
     })
 }
 
@@ -607,6 +622,7 @@ fn start_playback_inner(
             title,
             is_disc: true,
             external: false,
+            disc_scheme: None,
         }
     } else {
         match resolve_playback(file_path) {
@@ -643,11 +659,13 @@ fn start_playback_inner(
                 tracing::error!("player_open: overlay unhide failed: {e}");
                 return Err(e);
             }
+            let scheme_ref = resolved.disc_scheme.as_deref();
             match VlcSession::open_shared(
                 &lib,
                 &state.shared_instance,
                 &resolved.resolved_path,
                 view,
+                scheme_ref,
                 bypass_menu,
             ) {
                 Ok(session) => {
@@ -734,20 +752,10 @@ fn start_playback_inner(
                             let menu_gen =
                                 state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                             let menu_mp = session.media_player;
-                            let is_bluray_disc = resolved.is_disc
-                                && {
-                                    let p = std::path::Path::new(&resolved.resolved_path);
-                                    if p.is_dir() {
-                                        p.join("BDMV").exists() || p.join("bdmv").exists()
-                                    } else {
-                                        crate::utils::disc_detector::DiscDetector::inspect(p)
-                                        .map(|d| matches!(d.disc_type, crate::utils::disc_detector::DiscType::BluRay | crate::utils::disc_detector::DiscType::UhdBluRay))
-                                        .unwrap_or(false)
-                                    }
-                                };
+                            let is_bluray_disc = resolved.disc_scheme.as_deref() == Some("bluray");
                             std::thread::spawn(move || {
                                 use tauri::Manager;
-                                let max_wait_attempts = 150; // 150 * 20ms = 3s
+                                let max_wait_attempts = 300; // 300 * 20ms = 6s
                                 let mut ready = false;
                                 for _ in 0..max_wait_attempts {
                                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -768,14 +776,20 @@ fn start_playback_inner(
                                     let count = unsafe {
                                         (lib.libvlc_media_player_get_title_count)(mp as *mut c_void)
                                     };
-                                    if count > 0 {
+                                    let cur_title = unsafe {
+                                        (lib.libvlc_media_player_get_title)(mp as *mut c_void)
+                                    };
+                                    let is_playing = unsafe {
+                                        (lib.libvlc_media_player_is_playing)(mp as *mut c_void) != 0
+                                    };
+                                    if count > 0 && cur_title >= 0 && is_playing {
                                         ready = true;
                                         break;
                                     }
                                 }
                                 if !ready {
                                     tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 3s; exiting"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 6s; exiting"
                                 );
                                     return;
                                 }
@@ -1034,6 +1048,9 @@ fn start_playback_inner(
                                 let cur_len = unsafe {
                                     (lib.libvlc_media_player_get_length)(mp as *mut c_void)
                                 };
+                                let cur_time = unsafe {
+                                    (lib.libvlc_media_player_get_time)(mp as *mut c_void)
+                                };
                                 // Same ground-truth rule as the watch loop: on
                                 // Blu-ray a title report that the demuxer does
                                 // not confirm is not "at menu". On DVD/other discs,
@@ -1044,6 +1061,7 @@ fn start_playback_inner(
                                             != Some(false));
                                 let keep_playing = is_playing
                                     && (cur_len >= 120_000
+                                        || cur_time > 0
                                         || unsafe { engine::is_active_feature_playback(&lib, mp) });
 
                                 match menu_watch::window_end(at_menu, keep_playing) {
@@ -3277,6 +3295,7 @@ fn collect_disc_candidates(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
                 p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
                 Some(ref ext) if ext == "iso" || ext == "img"
             )
+            && DiscDetector::is_optical_image(&p)
         {
             out.push(p);
         }
@@ -3579,6 +3598,7 @@ mod tests {
                 title: "Disc".to_string(),
                 is_disc: true,
                 external: false,
+                disc_scheme: Some("bluray".to_string()),
             },
             gen: 7,
         };
@@ -3587,6 +3607,7 @@ mod tests {
         assert_eq!(v["title"], "Disc");
         assert_eq!(v["is_disc"], true);
         assert_eq!(v["external"], false);
+        assert_eq!(v["disc_scheme"], "bluray");
         assert_eq!(v["gen"], 7);
     }
 
@@ -3695,13 +3716,24 @@ mod tests {
         );
     }
 
+    fn write_test_iso(path: &Path, id: &[u8; 5]) {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::File::create(path).unwrap();
+        f.set_len(32768 + 2048).unwrap();
+        f.seek(SeekFrom::Start(32768)).unwrap();
+        let mut sector = [0u8; 2048];
+        sector[0] = 1;
+        sector[1..6].copy_from_slice(id);
+        f.write_all(&sector).unwrap();
+    }
+
     #[test]
     fn test_resolve_disc_target_deep_iso_beats_episodes() {
         let base = std::env::temp_dir().join(format!("neb-disc-{}", std::process::id()));
         let nested = base.join("Season 1").join("Discs");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(base.join("episode01.mkv"), b"x").unwrap();
-        std::fs::write(nested.join("DISC_1.ISO"), b"x").unwrap();
+        write_test_iso(&nested.join("DISC_1.ISO"), b"CD001");
         let got = resolve_disc_target(&base).unwrap();
         assert!(got.ends_with("DISC_1.ISO"), "got {got:?}");
         std::fs::remove_dir_all(&base).unwrap();
@@ -3711,10 +3743,87 @@ mod tests {
     fn test_resolve_disc_target_prefers_disc_one() {
         let base = std::env::temp_dir().join(format!("neb-disc2-{}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("DISC_2.ISO"), b"x").unwrap();
-        std::fs::write(base.join("DISC_1.ISO"), b"x").unwrap();
+        write_test_iso(&base.join("DISC_2.ISO"), b"CD001");
+        write_test_iso(&base.join("DISC_1.ISO"), b"CD001");
         let got = resolve_disc_target(&base).unwrap();
         assert!(got.ends_with("DISC_1.ISO"), "got {got:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_playback_direct_video_ts_root() {
+        let base = std::env::temp_dir().join(format!("neb-res-dvd-{}", std::process::id()));
+        let vts = base.join("VIDEO_TS");
+        std::fs::create_dir_all(&vts).unwrap();
+        std::fs::write(vts.join("VIDEO_TS.IFO"), b"fake ifo").unwrap();
+        std::fs::write(vts.join("VTS_01_1.VOB"), vec![0u8; 10_000]).unwrap();
+
+        let res = resolve_playback(&base.display().to_string()).unwrap();
+        assert!(res.is_disc);
+        assert_eq!(res.disc_scheme.as_deref(), Some("dvd"));
+        assert_eq!(res.resolved_path, base.display().to_string());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_playback_direct_bdmv_root() {
+        let base = std::env::temp_dir().join(format!("neb-res-bdmv-{}", std::process::id()));
+        let bdmv = base.join("BDMV");
+        std::fs::create_dir_all(&bdmv).unwrap();
+        std::fs::write(bdmv.join("index.bdmv"), b"fake bdmv").unwrap();
+
+        let res = resolve_playback(&base.display().to_string()).unwrap();
+        assert!(res.is_disc);
+        assert_eq!(res.disc_scheme.as_deref(), Some("bluray"));
+        assert_eq!(res.resolved_path, base.display().to_string());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_playback_folder_with_optical_iso() {
+        let base = std::env::temp_dir().join(format!("neb-res-folder-iso-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let iso_path = base.join("Movie.iso");
+        write_test_iso(&iso_path, b"BEA01");
+
+        let res = resolve_playback(&base.display().to_string()).unwrap();
+        assert!(res.is_disc);
+        assert_eq!(res.disc_scheme.as_deref(), Some("dvd"));
+        assert_eq!(res.resolved_path, iso_path.display().to_string());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_playback_multi_disc_folder() {
+        let base = std::env::temp_dir().join(format!("neb-res-multidisc-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let disc1 = base.join("DISC 1");
+        let disc2 = base.join("DISC 2");
+        std::fs::create_dir_all(disc1.join("VIDEO_TS")).unwrap();
+        std::fs::write(disc1.join("VIDEO_TS").join("VIDEO_TS.IFO"), b"fake ifo").unwrap();
+        std::fs::create_dir_all(disc2.join("VIDEO_TS")).unwrap();
+        std::fs::write(disc2.join("VIDEO_TS").join("VIDEO_TS.IFO"), b"fake ifo").unwrap();
+
+        let res = resolve_playback(&base.display().to_string()).unwrap();
+        assert!(res.is_disc);
+        assert_eq!(res.disc_scheme.as_deref(), Some("dvd"));
+        assert_eq!(res.resolved_path, disc1.display().to_string());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_playback_non_optical_iso_rejected_as_disc() {
+        let base = std::env::temp_dir().join(format!("neb-res-fake-iso-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let fake_iso = base.join("fake.iso");
+        std::fs::write(&fake_iso, b"not an optical disc image").unwrap();
+
+        let res = resolve_playback(&fake_iso.display().to_string()).unwrap();
+        assert!(
+            !res.is_disc,
+            "Non-optical .iso must NOT be treated as a disc"
+        );
+        assert_eq!(res.disc_scheme, None);
         std::fs::remove_dir_all(&base).unwrap();
     }
 

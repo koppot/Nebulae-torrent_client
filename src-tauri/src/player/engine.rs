@@ -1083,7 +1083,7 @@ impl VlcSession {
         // Standalone constructor: instance created here is kept for the
         // process lifetime (never released — see close()).
         let shared = std::sync::atomic::AtomicUsize::new(0);
-        Self::open_shared(lib, &shared, path, video_target, false)
+        Self::open_shared(lib, &shared, path, video_target, None, false)
     }
 
     /// Shared-instance variant: the instance is created once and kept for
@@ -1093,6 +1093,7 @@ impl VlcSession {
         shared: &std::sync::atomic::AtomicUsize,
         path: &str,
         video_target: usize,
+        disc_scheme: Option<&str>,
         bypass_menu: bool,
     ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
@@ -1186,22 +1187,13 @@ impl VlcSession {
             if let Some(shim) = std::env::var_os("NEBULAE_VLC_LOG") {
                 install_vlc_log_shim(std::path::Path::new(&shim), instance);
             }
-            let is_dir = std::path::Path::new(path).is_dir();
-            let media = if is_dir {
-                // Scheme follows the folder CONTENTS: a BDMV child means
-                // Blu-ray, a VIDEO_TS child means DVD. The path string alone
-                // is misleading — "Blu-ray" in a folder name does not imply
-                // a BDMV under the disc root.
-                let root = std::path::Path::new(path);
-                let scheme = if root.join("BDMV").exists() || root.join("bdmv").exists() {
-                    "bluray"
-                } else {
-                    "dvd"
-                };
+            let media = if let Some(scheme) = disc_scheme {
                 let mrl = format_disc_mrl(scheme, path);
+                tracing::info!("[vlc-open] opening disc location MRL: {mrl}");
                 let c_mrl = CString::new(mrl).map_err(|_| "bad path".to_string())?;
                 (lib.libvlc_media_new_location)(instance, c_mrl.as_ptr())
             } else {
+                tracing::info!("[vlc-open] opening filesystem path: {path}");
                 (lib.libvlc_media_new_path)(instance, c_path.as_ptr())
             };
             if media.is_null() {

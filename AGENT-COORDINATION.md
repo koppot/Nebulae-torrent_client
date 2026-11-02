@@ -1873,3 +1873,15 @@ branches are safe to consolidate per your notice. No files to spare.
 
 Next: UHD playback reproduction with fresh logs, then menu/toolbar layout,
 then Manager speed tooltip wiring using your `041d5b8` data contract.
+
+
+## 2026-11-02 — Antigravity: Windows 0.2.4 Release Recovery & Package Identity Reconciliation
+
+- **Ownership Transfer:** Antigravity owns Windows 0.2.4 release recovery (replacing nonfunctional Factory B). Factory A owns macOS recovery in `/Users/dev/Documents/GitHub/Nebulae-factory-repair` (read-only reference).
+- **Package Identity Reconciled:** The published Windows release installer `Nebulae-Setup-x64.exe` (and `Nebulae_0.2.4_x64-setup.exe`) has SHA-256 `fe33d0a5411244aa4fa4e12e96cc2fa213e6009c292733b1c7ce9927ea2b45f4` (size 322,137,515 bytes) and contains `nebulae.exe` SHA-256 `fdbb4741d3594343a0b092d956a219b2d12d87eb22f1d8444b33b242b19faa66`.
+- **Withdrawal of Prior Claim:** Earlier claims that published Windows 0.2.4 carried stock VLC or lacked dependencies are withdrawn. Inspection of unpacked `fe33d0a5...` confirms it carries patched `libvlc.dll` (SHA-256 `07eab3d7...`, 319 exports including `libvlc_media_player_get_bluray_menu_open`), patched `liblibbluray_plugin.dll` (SHA-256 `cee54342...`), full Temurin JRE 21 tree, and GeoLite2 databases. The previously cited `4211640d...` artifact was the superseded initial build from Oct 28.
+- **Root Cause & Concrete Repair Targets:**
+  1. Optical disc image (`.iso`/`.img`) routing: images opened via `libvlc_media_new_path` fail to engage dvdnav demuxing; routing via `dvd:///` (`libvlc_media_new_location`) mounts the interactive DVD menu.
+  2. Parent folder vs playable target resolution: directories containing disc subfolders (e.g., multi-disc sets) fail when opened at the parent root instead of the specific playable disc target.
+  3. Menu watcher readiness predicate: prematurely dispatching title/menu actions before `count > 0 && cur_title >= 0 && (is_playing || state == Playing)` causes stalls.
+- **Implementation & Gating:** Concrete source fixes are being applied on `factory-b/windows-0.2.4-candidate`. Version remains strictly `0.2.4`. Publication, tag modifications, release asset replacement, and updater activation remain held pending user runtime acceptance.

@@ -62,7 +62,7 @@ impl DiscDetector {
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            if ext == "iso" || ext == "img" {
+            if (ext == "iso" || ext == "img") && Self::is_optical_image(path) {
                 let lower_title = title.to_lowercase();
                 let is_uhd = lower_title.contains("uhd")
                     || lower_title.contains("2160p")
@@ -182,6 +182,7 @@ impl DiscDetector {
                                     .map(|s| s.to_ascii_lowercase()),
                                 Some(ext) if ext == "iso" || ext == "img"
                             )
+                            && DiscDetector::is_optical_image(&p)
                         {
                             out.push(p);
                         }
@@ -238,6 +239,54 @@ impl DiscDetector {
         }
 
         None
+    }
+
+    /// Check whether a file contains standard optical disc volume descriptor identifiers
+    /// at Sector 16 (offset 32768) and subsequent sectors.
+    /// Standard volume descriptors:
+    /// - ISO 9660: b"CD001" at sector offset 1..6
+    /// - ECMA-167 / UDF: b"BEA01", b"NSR02", b"NSR03", b"TEA01" at sector offset 1..6
+    /// - High Sierra: b"CDROM" at sector offset 1..6 or 8..13
+    pub fn is_optical_image(path: &Path) -> bool {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = fs::File::open(path) else {
+            return false;
+        };
+        // Sector 16 starts at 32768 bytes (16 * 2048).
+        // Standard optical sectors are 2048 bytes each.
+        if file.seek(SeekFrom::Start(32768)).is_err() {
+            return false;
+        }
+        // Read up to 16 sectors (32 KB) starting from Sector 16.
+        let mut buffer = [0u8; 32768];
+        let Ok(bytes_read) = file.read(&mut buffer) else {
+            return false;
+        };
+        if bytes_read < 2048 {
+            return false;
+        }
+        let num_sectors = bytes_read / 2048;
+        for i in 0..num_sectors {
+            let sector_start = i * 2048;
+            if sector_start + 6 <= bytes_read {
+                let id_5 = &buffer[sector_start + 1..sector_start + 6];
+                if id_5 == b"CD001"
+                    || id_5 == b"BEA01"
+                    || id_5 == b"NSR02"
+                    || id_5 == b"NSR03"
+                    || id_5 == b"TEA01"
+                    || id_5 == b"CDROM"
+                {
+                    return true;
+                }
+            }
+            if sector_start + 13 <= bytes_read
+                && &buffer[sector_start + 8..sector_start + 13] == b"CDROM"
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Size-class ladder shared by every ISO classification path (the file
@@ -327,7 +376,9 @@ impl DiscDetector {
                         .extension()
                         .and_then(|e| e.to_str())
                         .map(|s| s.to_ascii_lowercase());
-                    if ext.as_deref() == Some("iso") || ext.as_deref() == Some("img") {
+                    if (ext.as_deref() == Some("iso") || ext.as_deref() == Some("img"))
+                        && Self::is_optical_image(&child)
+                    {
                         if let Some(info) = Self::inspect(&child) {
                             discs.push(info);
                         }
@@ -556,6 +607,41 @@ impl DiscDetector {
 mod tests {
     use super::*;
 
+    fn write_mock_optical_iso(path: &Path, size: u64, id: &[u8; 5]) {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = fs::File::create(path).unwrap();
+        if size > 0 {
+            f.set_len(size).unwrap();
+        }
+        if size >= 32768 + 2048 {
+            f.seek(SeekFrom::Start(32768)).unwrap();
+            let mut sector = [0u8; 2048];
+            sector[0] = 1;
+            sector[1..6].copy_from_slice(id);
+            f.write_all(&sector).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_is_optical_image_headers() {
+        let tmp =
+            std::env::temp_dir().join(format!("nebulae_optical_test_{}.iso", std::process::id()));
+        write_mock_optical_iso(&tmp, 100_000, b"CD001");
+        assert!(DiscDetector::is_optical_image(&tmp));
+
+        write_mock_optical_iso(&tmp, 100_000, b"BEA01");
+        assert!(DiscDetector::is_optical_image(&tmp));
+
+        write_mock_optical_iso(&tmp, 100_000, b"NSR02");
+        assert!(DiscDetector::is_optical_image(&tmp));
+
+        // Rejection of non-optical content
+        let _ = fs::File::create(&tmp).and_then(|f| f.set_len(100_000));
+        assert!(!DiscDetector::is_optical_image(&tmp));
+
+        let _ = fs::remove_file(&tmp);
+    }
+
     #[test]
     fn test_detect_dvd_video_ts_structure() {
         let tmp = std::env::temp_dir().join("nebulae_disc_test_dvd");
@@ -591,7 +677,7 @@ mod tests {
     #[test]
     fn test_detect_4k_uhd_iso() {
         let tmp = std::env::temp_dir().join("nebulae_disc_test_uhd.iso");
-        fs::write(&tmp, b"fake uhd iso content").unwrap();
+        write_mock_optical_iso(&tmp, 60 * 1024 * 1024 * 1024, b"CD001");
 
         let detected = DiscDetector::inspect(&tmp).expect("Failed to detect UHD ISO");
         assert_eq!(detected.disc_type, DiscType::UhdBluRay);
@@ -611,8 +697,7 @@ mod tests {
             ("DISC_1.ISO", 2_159_046_656u64),
             ("DISC_2.ISO", 3_354_021_888u64),
         ] {
-            let f = fs::File::create(base.join(name)).unwrap();
-            f.set_len(size).unwrap(); // sparse: reserves size without writing
+            write_mock_optical_iso(&base.join(name), size, b"CD001");
         }
         let set = DiscDetector::inspect_all(&base);
         assert_eq!(set.len(), 2, "both ISOs must be classified");
