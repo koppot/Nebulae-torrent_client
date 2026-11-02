@@ -97,3 +97,10 @@ Nebulae incorporates an optional background update subsystem:
 - **Zero Traffic When Disabled**: When unchecked, the update check aborts before opening any socket or issuing any DNS query.
 - **Cryptographic Verification**: Every payload is verified against the compiled-in Minisign public key (`RWRBb7y7i6osRaR3dP9YGfYFxS5tyi5NIF+Xk+c+pM11p0v+f0Vqye5X`). Unsigned or mismatched payloads are rejected immediately.
 - **Linux Boundary**: Native `.deb` and `.rpm` packages update via system package managers (`apt`, `dnf`); the in-app updater targets portable AppImage builds only.
+
+---
+
+## 8. Peer Discovery & Swarm Privacy
+
+- **Public Swarms**: Peer discovery mechanisms (DHT - Distributed Hash Table, PEX - Peer Exchange, LSD - Local Service Discovery) follow user preferences configured in Settings. These settings can be toggled independently, apply immediately to the running engine without restart, and persist across restarts.
+- **Private Swarms**: Torrents marked with the BitTorrent `private: 1` flag are strictly isolated by the engine. In accordance with standard protocol specifications (BEP 27), DHT, PEX, and Local Service Discovery are unconditionally disabled for private swarms regardless of session preferences, preventing peer IP disclosure to public networks or unauthenticated third parties.

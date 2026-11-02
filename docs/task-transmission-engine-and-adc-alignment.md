@@ -51,9 +51,10 @@ below is subordinate to them.
   would let banned/unauthenticated parties harvest member peer IPs. Note
   that an earlier general BitTorrent recommendation ("send PEX queries every
   60 seconds") is **explicitly rejected** for this project — the owner's
-  own constraint list forbids it. PEX/DHT/LPD stay off at the session level
-  as defense-in-depth, even though the `private: 1` flag already disables
-  them in compliant engines.
+  own constraint list forbids it. For public torrents, DHT, PEX, and LSD
+  follow user settings and update dynamically; for torrents marked private,
+  the engine's internal gating (`is_public()` checks in libtransmission)
+  unconditionally forbids DHT, PEX, and LSD.
 - **Never modify anything inside the `info` dictionary** of an existing
   torrent (alters the info-hash; the tracker rejects the announce and the
   member's ratio silently stops logging). No `url-list`/web-seed injection
@@ -174,13 +175,13 @@ Settings mapping (Transmission session-set / settings.json):
 | — (new) | `upload-slots-per-torrent` | 6 (range 4–8) |
 | — (new) | `encryption` | `preferred` |
 | — (new) | `utp-enabled` | true |
-| — (new) | `dht-enabled` | **false** |
-| — (new) | `pex-enabled` | **false** |
-| — (new) | `lpd-enabled` | **false** |
+| — (new) | `dht-enabled` | from `UserSettings.enable_dht` (public swarms only; gated on private) |
+| — (new) | `pex-enabled` | from `UserSettings.enable_pex` (public swarms only; gated on private) |
+| — (new) | `lpd-enabled` | from `UserSettings.enable_lsd` (public swarms only; gated on private) |
 | — (new) | `bind-address-ipv4` | VPN interface IP when killswitch active |
 
-DHT/PEX/LPD are hard-off at session level (Section 1). The `private: 1`
-flag would disable them per-torrent anyway; we keep both layers.
+Session preferences govern public discovery, while torrents marked private
+are restricted unconditionally by libtransmission's per-torrent privacy checks.
 
 **Killswitch inheritance (security-relevant):** the sidecar is a separate
 process — it does NOT automatically inherit any VPN/killswitch logic the

@@ -433,7 +433,9 @@ pub fn save_user_settings(
 
     // Apply all session settings to the live engine immediately so the user
     // does not have to restart the daemon for changes to take effect.
-    let _ = engine.apply_global_settings(&settings);
+    engine
+        .apply_global_settings(&settings)
+        .map_err(|e| format!("Settings saved, but failed to apply to active engine: {e}"))?;
 
     #[cfg(target_os = "macos")]
     crate::player::embed_macos::update_blackout_state(&_app);

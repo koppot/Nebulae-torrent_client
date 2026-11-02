@@ -755,7 +755,8 @@ pub struct TransmissionTorrentEngine {
 }
 
 /// Builds the transmission-daemon `settings.json` configuration structure with
-/// strict private tracker constraints (DHT, PEX, LPD hard-disabled at the session level)
+/// peer-discovery settings (DHT, PEX, LPD) mapped from Nebulae UserSettings for public
+/// swarms (while libtransmission internally gates private torrents),
 /// and settings mapped from Nebulae UserSettings.
 pub fn build_transmission_settings(
     settings: &UserSettings,
@@ -817,10 +818,11 @@ pub fn build_transmission_settings(
         "encryption": 1, // Preferred
         "utp-enabled": true,
 
-        // Mandatory private tracker constraints: hard-off at session level
-        "dht-enabled": false,
-        "pex-enabled": false,
-        "lpd-enabled": false,
+        // Peer discovery (DHT, PEX, Local Peer Discovery / LSD)
+        // Governs public swarms; libtransmission internally enforces is_public() gates on each torrent.
+        "dht-enabled": settings.enable_dht,
+        "pex-enabled": settings.enable_pex,
+        "lpd-enabled": settings.enable_lsd,
 
         // Interface binding and storage
         "bind-address-ipv4": bind_ipv4,
@@ -3108,6 +3110,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 v["peer-limit-global"] = json!(peer_global);
                 v["upload-slots-per-torrent"] = json!(unchoke_slots);
                 v["cache-size-mb"] = json!(cache_mb_eff);
+                v["dht-enabled"] = json!(settings.enable_dht);
+                v["pex-enabled"] = json!(settings.enable_pex);
+                v["lpd-enabled"] = json!(settings.enable_lsd);
                 v["preallocation"] = json!(if settings.preallocate_disk_space {
                     1u8
                 } else {
@@ -3146,6 +3151,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
             // Peer connectivity
             "peer-limit-per-torrent":   peer_per_torrent,
             "peer-limit-global":        peer_global,
+            "dht-enabled":              settings.enable_dht,
+            "pex-enabled":              settings.enable_pex,
+            "lpd-enabled":              settings.enable_lsd,
 
             // Disk cache (throughput-critical)
             "cache-size-mb":            cache_mb_eff,
@@ -3439,20 +3447,58 @@ mod tests {
     }
 
     #[test]
-    fn test_transmission_private_tracker_settings_hard_off() {
-        let settings = json!({
-            "dht-enabled": false,
-            "pex-enabled": false,
-            "lpd-enabled": false,
-            "encryption": 1,
-            "utp-enabled": true
-        });
+    fn test_peer_discovery_settings_mapping() {
+        // 1. Default UserSettings (all peer discovery enabled by default for public swarms)
+        let default_settings = UserSettings::default();
+        let default_config = build_transmission_settings(
+            &default_settings,
+            "/home/user/Downloads",
+            "127.0.0.1",
+            9091,
+            "nebulae",
+            "pass",
+        );
+        assert_eq!(default_config["dht-enabled"], true);
+        assert_eq!(default_config["pex-enabled"], true);
+        assert_eq!(default_config["lpd-enabled"], true);
 
-        assert_eq!(settings["dht-enabled"], false);
-        assert_eq!(settings["pex-enabled"], false);
-        assert_eq!(settings["lpd-enabled"], false);
-        assert_eq!(settings["encryption"], 1);
-        assert_eq!(settings["utp-enabled"], true);
+        // 2. Explicitly disabled UserSettings
+        let disabled_settings = UserSettings {
+            enable_dht: false,
+            enable_pex: false,
+            enable_lsd: false,
+            ..Default::default()
+        };
+        let disabled_config = build_transmission_settings(
+            &disabled_settings,
+            "/home/user/Downloads",
+            "127.0.0.1",
+            9091,
+            "nebulae",
+            "pass",
+        );
+        assert_eq!(disabled_config["dht-enabled"], false);
+        assert_eq!(disabled_config["pex-enabled"], false);
+        assert_eq!(disabled_config["lpd-enabled"], false);
+
+        // 3. Independent toggling (DHT on, PEX off, LSD on)
+        let custom_settings = UserSettings {
+            enable_dht: true,
+            enable_pex: false,
+            enable_lsd: true,
+            ..Default::default()
+        };
+        let custom_config = build_transmission_settings(
+            &custom_settings,
+            "/home/user/Downloads",
+            "127.0.0.1",
+            9091,
+            "nebulae",
+            "pass",
+        );
+        assert_eq!(custom_config["dht-enabled"], true);
+        assert_eq!(custom_config["pex-enabled"], false);
+        assert_eq!(custom_config["lpd-enabled"], true);
     }
 
     #[test]
@@ -3493,10 +3539,10 @@ mod tests {
         assert_eq!(config["encryption"], 1);
         assert_eq!(config["utp-enabled"], true);
 
-        // Private tracker constraints hard-disabled
-        assert_eq!(config["dht-enabled"], false);
-        assert_eq!(config["pex-enabled"], false);
-        assert_eq!(config["lpd-enabled"], false);
+        // Peer discovery maps from user settings (default on)
+        assert_eq!(config["dht-enabled"], true);
+        assert_eq!(config["pex-enabled"], true);
+        assert_eq!(config["lpd-enabled"], true);
 
         // Interface and path
         assert_eq!(config["bind-address-ipv4"], "10.2.0.5");
@@ -3542,6 +3588,122 @@ mod tests {
         assert_eq!(stats.get("version").and_then(|v| v.as_str()), Some("4.1.3"));
 
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn test_apply_global_settings_peer_discovery() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "nebulae_apply_settings_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let _ = std::fs::create_dir_all(&test_dir);
+        let config_dir = test_dir.clone();
+        let settings_file = config_dir.join("settings.json");
+        std::fs::write(&settings_file, "{}").unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let received_body = Arc::new(Mutex::new(String::new()));
+        let received_clone = received_body.clone();
+
+        let server_thread = std::thread::spawn(move || {
+            // First request: 409 handshake
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let resp = "HTTP/1.1 409 Conflict\r\nServer: Transmission\r\nX-Transmission-Session-Id: mock-token-123\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+            }
+
+            // Second request: session-set with payload
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                if let Some(idx) = req_str.find("\r\n\r\n") {
+                    let mut lock = received_clone.lock().unwrap();
+                    *lock = req_str[idx + 4..].to_string();
+                }
+
+                let body = r#"{"result":"success","arguments":{}}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let rpc_client = Arc::new(TransmissionRpcClient::new(port, "testuser", "testpass"));
+        let db_file = config_dir.join("test.db");
+        let db = Arc::new(crate::db::Database::new(&db_file).unwrap());
+
+        let paths = Arc::new(AppPaths {
+            base_data_dir: config_dir.clone(),
+            internal_dir: config_dir.clone(),
+            logs_dir: config_dir.clone(),
+            diagnostics_dir: config_dir.clone(),
+            db_dir: config_dir.clone(),
+            db_file: db_file.clone(),
+            cache_dir: config_dir.clone(),
+            engine_dir: config_dir.clone(),
+            debug_dir: config_dir.clone(),
+        });
+
+        let engine = TransmissionTorrentEngine {
+            rpc_client,
+            child_process: Arc::new(Mutex::new(None)),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
+            config_dir: config_dir.clone(),
+            db,
+            paths,
+            kill_switch_active: Arc::new(AtomicBool::new(false)),
+            bound_interface: Arc::new(Mutex::new(None)),
+            metadata_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            peer_ema_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            geo_resolver: None,
+            rtt_prober: Arc::new(crate::utils::rtt_prober::RttProber::new()),
+            peer_remove_unsupported: Arc::new(AtomicBool::new(false)),
+            daemon_version: Arc::new(Mutex::new(Some("4.1.3".to_string()))),
+            is_shutting_down: Arc::new(AtomicBool::new(false)),
+        };
+
+        let user_settings = UserSettings {
+            enable_dht: true,
+            enable_pex: false,
+            enable_lsd: true,
+            ..Default::default()
+        };
+
+        engine.apply_global_settings(&user_settings).unwrap();
+        server_thread.join().unwrap();
+
+        // 1. Verify disk update in settings.json
+        let disk_raw = std::fs::read_to_string(&settings_file).unwrap();
+        let disk_json: serde_json::Value = serde_json::from_str(&disk_raw).unwrap();
+        assert_eq!(disk_json["dht-enabled"], true);
+        assert_eq!(disk_json["pex-enabled"], false);
+        assert_eq!(disk_json["lpd-enabled"], true);
+
+        // 2. Verify live RPC payload sent to Transmission session-set
+        let rpc_payload_str = received_body.lock().unwrap().clone();
+        let rpc_payload: serde_json::Value = serde_json::from_str(&rpc_payload_str).unwrap();
+        assert_eq!(rpc_payload["method"], "session-set");
+        let args = &rpc_payload["arguments"];
+        assert_eq!(args["dht-enabled"], true);
+        assert_eq!(args["pex-enabled"], false);
+        assert_eq!(args["lpd-enabled"], true);
+
+        let _ = std::fs::remove_dir_all(&test_dir);
     }
 
     #[test]

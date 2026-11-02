@@ -49,7 +49,7 @@ Source code corresponding to the distributed `transmission-daemon` binary is the
 
 ### Private-tracker compliance
 
-The bundled `transmission-daemon` is configured at launch with `dht-enabled: false`, `pex-enabled: false`, and `lpd-enabled: false` at the session level. These settings are written by Nebulae's `TransmissionTorrentEngine` and are non-user-overridable. They are defense-in-depth: private torrents with `private: 1` already disable DHT/PEX/LPD at the per-torrent level in any compliant engine.
+The bundled `transmission-daemon` is configured at launch and during live settings updates with user-configured peer discovery settings (`dht-enabled`, `pex-enabled`, `lpd-enabled`) for public swarms. For private torrents with `private: 1`, libtransmission unconditionally enforces strict privacy restrictions at the torrent level, disabling DHT, PEX, and LSD to ensure complete private-swarm isolation.
 
 ### GNU GENERAL PUBLIC LICENSE (Version 2, June 1991)
 

@@ -123,7 +123,7 @@ Nebulae is engineered around verified, concrete controls rather than unsupported
 | **Safe Logging** | Application and engine runtime logs written to disk. | Raw network packets in transit over the wire. | Enabled by default. | None. Redaction filters run automatically at log write time. | Unmatched proprietary patterns may bypass regex filters. |
 | **Client-Only VPN Binding** | Peer-to-peer data transfers and tracker announces handled by the BitTorrent engine. | Webview UI requests (e.g. poster fetches), external web links, other desktop applications. | Disabled by default ("No VPN"). | Requires selecting an active VPN network interface or importing a profile. | If interface is missing, transfers fail closed or stay paused. |
 | **VPN Kill Switch** | Active torrent downloads and seeding transfers. | System OS traffic, system DNS queries, third-party software. | Armed when VPN mode is active. | Configured via VPN settings toggle. | Pauses active transfers and rebinds engine to `127.0.0.1` within 500ms of tunnel loss. |
-| **Private Swarm Isolation** | Torrents marked with the standard BitTorrent private flag. | Public torrents without the private flag. | Enforced automatically. | Enabled per metainfo specification. | DHT, PEX, and local peer discovery are completely shut off for the swarm. |
+| **Private Swarm Isolation** | Torrents marked with the standard BitTorrent private flag. | Public torrents without the private flag. | Enforced automatically. | Enabled per metainfo specification. | DHT, PEX, and local peer discovery are unconditionally disabled by the engine for private swarms while honoring user preferences for public swarms. |
 
 ### Concrete Privacy Realities & Boundaries
 
@@ -161,13 +161,10 @@ For full architectural documentation, see **[Privacy & Security Architecture (do
 - **HTTP / HTTPS URLs**: Direct download URLs pointing to valid `.torrent` metainfo.
 - **Raw Metainfo Bytes**: In-memory inspection and addition for webview drops.
 
-### Supported Tracker Types & Current Implementation Limitation
+### Supported Tracker Types & Peer Discovery
 - **Public & Private Trackers**: Full protocol support for standards-compliant HTTP, HTTPS, and UDP trackers.
-- **Current Limitation — Peer Discovery (DHT / PEX / LSD):** In current builds, DHT (Distributed Hash Table), PEX (Peer Exchange), and LSD/LPD (Local Service Discovery) are disabled at the engine session level to ensure strict compliance with private tracker rules and prevent peer IP disclosure. Because this setting is currently global rather than per-torrent:
-  - Swarms rely strictly on active tracker announces over HTTP, HTTPS, or UDP.
-  - Public torrents require at least one reachable, responsive tracker in their tier list.
-  - Trackerless torrents relying purely on DHT will not find peers in the current engine release.
-  - *Decoupling public from private peer-discovery scoping is tracked as a dedicated engineering task and will not be altered in this documentation release.*
+- **Peer Discovery (DHT / PEX / LSD):** User preferences in Settings govern peer discovery for public torrents (Distributed Hash Table, Peer Exchange, and Local Service Discovery). Each control operates independently, applies dynamically to the running engine without restarting, and persists across restarts.
+- **Private Swarm Protection**: Torrents marked with the standard BitTorrent private flag (`private: 1`) are restricted unconditionally by the engine. DHT, PEX, and local peer discovery remain strictly disabled for private torrents regardless of session preferences, preventing peer IP leakage while preserving public discovery.
 - **Private Tracker Approval**: While Nebulae implements standard BitTorrent protocol specifications, individual private trackers enforce specific whitelists and client approval policies. Always check your tracker's client guidelines.
 
 ### Optional Community Features
