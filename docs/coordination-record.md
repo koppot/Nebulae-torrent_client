@@ -906,3 +906,29 @@ the SEPARATE = the recorded = the next.
 - Patch file: `/Users/dev/patches/tailscale-macos-adoption.patch`
 - Zero HDR-related files modified.
 
+
+### Windows 0.2.4 Verified Release & Permanent Rollback Baseline (Antigravity — 2026-11-02)
+
+- **Status**: PUBLISHED and AUTHORITATIVE. User tested and explicitly accepted the Windows 0.2.4 candidate installer.
+- **Approved Installer**: `Nebulae_0.2.4_x64-setup.exe` (and release alias `Nebulae-Setup-x64.exe`)
+  - Size: `322,154,683` bytes (307.23 MiB)
+  - SHA-256: `FB7A2A565903AF4E5103307DC1E9272997A94F72A6002C021D6EC13184C2A665`
+- **Application Payload**: `nebulae.exe`
+  - Size: `56,408,969` bytes (53.80 MiB)
+  - SHA-256: `EB77DF6A2597AAA906426AD85B4B61A0022C2BC24C07E2F4B7C8252DF9EC265A`
+- **Durable Archives**:
+  1. `C:\nebulae-backup\release-v0.2.4-windows-baseline\Nebulae_0.2.4_x64-setup.exe` on `supermicro.local`
+  2. `/Users/dev/nebulae-recovery-evidence/release-v0.2.4-windows-baseline/Nebulae_0.2.4_x64-setup.exe` on macOS
+- **Published GitHub Assets (v0.2.4)**:
+  - `Nebulae_0.2.4_x64-setup.exe` (SHA-256 `fb7a2a56...`)
+  - `Nebulae_0.2.4_x64-setup.exe.sha256`
+  - `Nebulae_0.2.4_x64-setup.exe.sig`
+  - `Nebulae-Setup-x64.exe` (SHA-256 `fb7a2a56...`)
+  - `Nebulae-Setup-x64.exe.sha256`
+  - `Nebulae-Setup-x64.exe.sig`
+  - `nebulae.exe` (SHA-256 `eb77df6a...`)
+  - `nebulae.exe.sha256`
+  - `latest.json` (updated windows-x86_64 signature)
+  - `SHA256SUMS.txt` (updated Windows checksums)
+- **Tag Policy**: Shared release tag `v0.2.4` remains unchanged at `c972dd4fb1591d56373923917bf5550e951e3dba` (`00a8880`).
+- **Rollback Documentation**: Detailed rollback instructions, component manifests, and verification procedures are documented in `docs/rollback/WINDOWS-0.2.4-ROLLBACK-BASELINE.md`.
