@@ -934,3 +934,15 @@ the SEPARATE = the recorded = the next.
   - `SHA256SUMS.txt` (updated Windows checksums)
 - **Tag Policy**: Shared release tag `v0.2.4` remains unchanged at `c972dd4fb1591d56373923917bf5550e951e3dba` (`00a8880`).
 - **Rollback Documentation**: Detailed rollback instructions, component manifests, and verification procedures are documented in `docs/rollback/WINDOWS-0.2.4-ROLLBACK-BASELINE.md`.
+
+### Windows 0.2.5 Updater Release (Antigravity — 2026-11-02)
+
+- **Purpose**: Deliver the user-approved Windows baseline fixes via Tauri's automated updater to existing 0.2.4 installations by publishing under version `0.2.5`.
+- **Binary Identity**: Byte-for-byte exact reuse of the tested 0.2.4 baseline installer:
+  - `Nebulae_0.2.5_x64-setup.exe` (SHA-256 `fb7a2a565903af4e5103307dc1e9272997a94f72a6002c021d6ec13184c2a665`, 322,154,683 bytes)
+  - `Nebulae-Setup-x64.exe` (SHA-256 `fb7a2a565903af4e5103307dc1e9272997a94f72a6002c021d6ec13184c2a665`, 322,154,683 bytes)
+  - Zero rebuilds, zero code changes, zero dependency changes, zero repackaging.
+- **Application Payload Version**: Intentionally remains 0.2.4 inside `nebulae.exe` (`eb77df6a2597aaa906426ad85b4b61a0022c2bc24c07e2f4b7c8252df9ec265a`).
+- **Updater Signature**: Minisign signature bound to `--app-version 0.2.5` to pass Tauri's `verify_signed_version` check against `latest.json`.
+- **macOS Scope**: Strict exclusion. Release `v0.2.5` contains only Windows x86_64 assets. macOS track remains exclusively with Factory A.
+- **Git Tag**: Tag `v0.2.5` anchored at commit `2211136` on branch `factory-b/windows-0.2.4-candidate`.

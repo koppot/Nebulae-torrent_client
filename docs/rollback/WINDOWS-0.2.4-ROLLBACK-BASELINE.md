@@ -189,3 +189,22 @@ The Windows 0.2.4 recovery completion, hash reconciliation, and rollback baselin
 3. **Decoupled macOS Track**:
    - Factory A retains sole ownership of the macOS release-recovery candidate in `/Users/dev/Documents/Nebulae-macos-0.2.4-recovery`.
    - Windows publication does not authorize macOS release publication, which remains on a separate verification track awaiting explicit user approval.
+
+---
+
+## 9. Version 0.2.5 Updater Release Continuity
+
+To deliver the user-approved Windows baseline fixes via Tauri's automated updater to existing 0.2.4 installations, the working installer has been published as release **0.2.5** (`v0.2.5`).
+
+### Key Parameters of Release 0.2.5:
+1. **Byte-for-Byte Binary Reuse**:
+   - Reuses the identical user-approved installer binary (`fb7a2a565903af4e5103307dc1e9272997a94f72a6002c021d6ec13184c2a665`, 322,154,683 bytes).
+   - Zero rebuilds, zero source code changes, zero dependency changes, and zero repackaging were performed.
+2. **Payload Version Continuity**:
+   - The application payload inside the installer (`nebulae.exe`, SHA-256 `eb77df6a2597aaa906426ad85b4b61a0022c2bc24c07e2f4b7c8252df9ec265a`) intentionally retains its internal application version of `0.2.4`.
+3. **Cryptographic Updater Binding**:
+   - The detached minisign signature for `Nebulae-Setup-x64.exe` was generated with `--app-version 0.2.5` to satisfy Tauri's `verify_signed_version` requirement against `latest.json` (`announced_version: 0.2.5`).
+4. **Strict macOS Exclusion**:
+   - Release `v0.2.5` contains solely Windows x86_64 artifacts (`Nebulae_0.2.5_x64-setup.exe`, `Nebulae-Setup-x64.exe`, `nebulae.exe`, signatures, checksums, and a Windows-only `latest.json`). macOS assets were not built, modified, or published.
+5. **Rollback Immutability**:
+   - Release `v0.2.4` and the local/remote rollback archives remain immutable and permanent.
