@@ -2,20 +2,31 @@
 
 ## 1. Core Privacy Philosophy
 
-Nebulae (Torrent Client by Asian DVD Club) is engineered on a strict **local-first, zero-telemetry** architecture.
+Nebulae is engineered on a strict **local-first** architecture with **zero analytics or usage tracking**:
 
-- **Zero Phone-Home / Analytics**: Nebulae does not include Google Analytics, Sentry, Mixpanel, telemetry pingbacks, or background usage tracking.
-- **No Cloud Account Mandatory**: All core BitTorrent operations, settings, and media management function entirely on your local machine without requiring any account.
-- **Your Data Remains Yours**: Download histories, torrent files, configurations, and peer statistics are stored exclusively in your local SQLite database on your own storage drive.
+- **Zero Analytics & Diagnostic Telemetry**: Nebulae does not embed third-party analytics SDKs (such as Google Analytics, Mixpanel, or Sentry), crash-reporting phone-home daemons, or background behavior telemetry.
+- **Legitimate Outbound Network Traffic**: Outbound network connections are strictly limited to necessary protocol functions:
+  1. *BitTorrent Swarm & Tracker Traffic*: Announce requests to configured HTTP/HTTPS/UDP trackers and peer-to-peer data transfers.
+  2. *Software Updates*: When enabled, a single startup HTTPS check to GitHub Releases (`https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json`). This can be toggled off at any time in Settings.
+  3. *Media Metadata Scrapes*: When Simple Media Mode is active, public metadata and poster queries (e.g., TMDB).
+  4. *Optional ADC Integration*: If an Asian DVD Club account is explicitly linked by the user, authenticated HTTPS status calls to `asiandvdclub.org`.
+- **Local Data Inventory**:
+  - **Settings, torrent metadata & transfer statistics**: Stored locally in SQLite (`internal/db/nebulae.db`).
+  - **BitTorrent engine state & checkpoints**: Stored in `internal/engine-state/`.
+  - **Session logs**: Stored in `internal/logs/nebulae_session.log` with automatic regex redaction.
+  - **Temporary piece cache & media posters**: Stored in `internal/cache/`.
+  - **Credentials & secrets**: WireGuard private keys and OpenVPN credentials are routed to the operating system credential vault. The optional ADC passkey is stored in the OS credential vault with a local SQLite settings record for session management.
+  - **Downloaded content**: Placed strictly in the user-selected save destination.
 
 ---
 
-## 2. Internal Storage Isolation (`Nebulae/internal/`)
+## 2. Storage Isolation & Runtime Paths
 
-All technical files are strictly separated from user-facing document folders and normal views:
+Technical runtime artifacts are isolated within dedicated `internal/` folders, keeping them separate from user media:
 
 - **macOS**: `~/Library/Application Support/Nebulae/internal/`
-- **Windows**: `%LOCALAPPDATA%\Nebulae\internal\`
+- **Windows**: `%APPDATA%\Nebulae\internal\` (and `%LOCALAPPDATA%\Nebulae\internal\`)
+- **Linux**: `~/.local/share/Nebulae/internal/`
 
 ```text
 internal/
@@ -26,24 +37,26 @@ internal/
 └── diagnostics/    # Crash and panic reports
 ```
 
-Normal settings screens present only user-friendly configurations. Technical file paths are never exposed in the main interface.
+### Path Resolution & Migration Notice
+- **Current Runtime Paths**: Current releases resolve user data under the `Nebulae` directory name across all platforms (`dirs::data_dir().join("Nebulae")`).
+- **Webview Runtime State**: Webview state and framework-managed caches persist under the application bundle identifier `org.asiandvdclub.nebulae` (e.g., `~/Library/Application Support/org.asiandvdclub.nebulae/` on macOS and `%LOCALAPPDATA%\org.asiandvdclub.nebulae\` on Windows).
+- **Legacy Paths**: Earlier alpha/preview builds (pre-v0.2.3) stored data under legacy paths (`~/Library/Application Support/ADC/` on macOS, `%APPDATA%\ADC\` on Windows, and `~/.config/ADC/` on Linux). Fresh installations do not use these legacy paths.
 
 ---
 
 ## 3. Sanitized Logging (`SafeLogger`)
 
-By default, the internal logging subsystem sanitizes all logged entries:
-- Magnet links (`magnet:?xt=...`) are redacted to `[REDACTED_MAGNET_LINK]`.
-- Private tracker announce URLs with passkeys are redacted to `[REDACTED_TRACKER_URL]`.
-- Torrent file titles and private paths are excluded from automated log strings.
-- Passwords and private keys are never written to disk logs.
+By default, internal logging scrubs sensitive values before writing to disk:
+- Magnet links (`magnet:?xt=...`) are replaced with `[REDACTED_MAGNET_LINK]`.
+- Private tracker announce URLs with embedded passkeys are replaced with `[REDACTED_TRACKER_URL]`.
+- Authentication tokens and API parameters are stripped.
+- WireGuard private keys, passwords, and disk paths are excluded from automated log outputs.
 
 ---
 
 ## 4. Developer Diagnostics ("Der Sperre")
 
 Access to diagnostic data is guarded by the **Show Advanced Diagnostics** section in Settings, marked by the internal developer icon (*Der Sperre*):
-
 - **Open Logs Folder**: Opens the isolated local directory in your system file manager.
 - **Copy Diagnostic Summary**: Copies a sanitized JSON summary (OS version, architecture, engine status) without revealing file paths or private hashes.
 - **Clear Internal Cache**: Safely purges temporary piece caches without altering your downloaded media.
@@ -55,22 +68,32 @@ Access to diagnostic data is guarded by the **Show Advanced Diagnostics** sectio
 
 - **Path Traversal Mitigation**: File paths within `.torrent` metadata (e.g. `../../Windows/System32` or `../../.bashrc`) are strictly sanitized. Any file path attempting to escape the selected download target root directory is rejected immediately.
 - **Tauri 2 IPC Isolation**: The frontend webview is isolated by Tauri 2 capability definitions (`capabilities/default.json`). Arbitrary operating system command execution is blocked.
-- **Keychain Storage**: All VPN credentials, passkeys, and authentication secrets are stored directly in the macOS Keychain or Windows Credential Manager.
+- **Credential Storage Implementation & Limitations**:
+  - **macOS**: Apple Keychain Services (`Security.framework`).
+  - **Windows**: Windows Credential Manager (`wincred`).
+  - **Linux**: D-Bus Secret Service API (via the `keyring` crate). Requires a running Secret Service daemon (such as GNOME Keyring or KWallet). In headless or minimal desktop environments lacking a Secret Service provider, credentials fall back to the local SQLite database.
 
 ---
 
-## 6. Automatic Software Updates & Network Telemetry Boundaries
+## 6. VPN Socket Binding & Kill Switch Boundaries
 
-Nebulae incorporates an optional background auto-update subsystem designed in strict alignment with our privacy architecture and the silent-update consent conditions recorded in our [code signing policy](code-signing-policy.md) (originally drafted against the SignPath Foundation OSS terms; enforced regardless of which signing provider, if any, is onboarded):
+Nebulae includes application-level network controls designed to constrain BitTorrent traffic:
 
-- **Default State & One-Time Consent**: Auto-updates are enabled by default (`auto_update_enabled: true`) to ensure security patches, cryptographic updates, and community tracker compatibility reach users promptly. A clear toggle is provided on first run and in **Settings → Behavior**.
-- **Network Scope & Telemetry**:
-  - When enabled, Nebulae checks for updates once on startup by querying the official GitHub Releases endpoint over HTTPS:
-    `https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json`
-  - Network transmission is strictly limited to standard HTTPS request headers (client version, target operating system architecture, and transit IP address processed by GitHub's CDN).
-  - Nebulae **never** transmits user identifiers, hardware fingerprints, download histories, passkeys, or configuration details to the update server.
-- **Zero Phone-Home When Disabled**: If the user unchecks *"Automatically keep Nebulae updated (recommended)"*, the auto-update subsystem aborts immediately upon launch prior to opening any network socket or resolving any DNS query. Zero requests or telemetry packets are sent.
-- **Cryptographic Signature Verification**: Every update payload is verified against our hardcoded Minisign public key (`RWRBb7y7i6osRaR3dP9YGfYFxS5tyi5NIF+Xk+c+pM11p0v+f0Vqye5X`) prior to execution or extraction. Tampered or unsigned binaries are discarded immediately.
-- **Silent Background Staging**: When an update is detected, the binary is downloaded quietly in the background without popups, toasts, or dialogs. It is staged to apply strictly upon natural application quit, ensuring active torrent transfers are never interrupted.
-- **Linux Package Manager Boundary**: Native Linux packages (`.deb` and `.rpm`) are updated via system package managers (`apt`, `dnf`). The in-app updater targets portable AppImage builds only.
+- **Interface Binding**: When an application VPN interface is selected, Nebulae binds Transmission daemon's listening and peer sockets (`bind-address-ipv4`) to that interface's IPv4 address.
+- **Fail-Closed Kill Switch**: A background Tokio watcher polls interface link status every 500ms. If the interface disappears or loses its IPv4 address, Nebulae calls `torrent-stop` on all active torrents and rebinds `bind-address-ipv4` to `127.0.0.1`.
+- **Runtime Boundaries & Demonstration**:
+  - *Application-level, not kernel-level*: This mechanism operates via socket binding and daemon RPC commands; it is not a kernel firewall filter (such as Windows Filtering Platform or macOS Packet Filter).
+  - *Detection timing*: The kill switch operates on a 500ms polling cycle. While the watcher responds upon detection, in-flight socket buffers may drain during that window.
+  - *Network scope*: Interface binding applies to Transmission's peer-to-peer and tracker transfers. It does not control system-wide DNS resolution, third-party applications, or external web browsing. Users requiring unconditional network-wide protection should employ operating-system or router firewall rules.
 
+---
+
+## 7. Automatic Software Updates & Telemetry Boundaries
+
+Nebulae incorporates an optional background update subsystem:
+
+- **Default State**: Enabled by default (`auto_update_enabled: true`) to ensure security patches and tracker updates are received. Can be disabled at any time in **Settings → Behavior**.
+- **Network Scope**: Checks once on application launch via HTTPS against GitHub Releases (`latest.json`). Only standard HTTPS transit headers are sent; no user identifiers, hardware UUIDs, or torrent histories are transmitted.
+- **Zero Traffic When Disabled**: When unchecked, the update check aborts before opening any socket or issuing any DNS query.
+- **Cryptographic Verification**: Every payload is verified against the compiled-in Minisign public key (`RWRBb7y7i6osRaR3dP9YGfYFxS5tyi5NIF+Xk+c+pM11p0v+f0Vqye5X`). Unsigned or mismatched payloads are rejected immediately.
+- **Linux Boundary**: Native `.deb` and `.rpm` packages update via system package managers (`apt`, `dnf`); the in-app updater targets portable AppImage builds only.

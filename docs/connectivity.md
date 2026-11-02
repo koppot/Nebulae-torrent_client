@@ -14,13 +14,13 @@ The Connectivity Doctor performs non-intrusive local and network probes to evalu
 
 | Metric | Target State | Explanation |
 | :--- | :--- | :--- |
-| **Listening Port** | Reachable (Green) | Incoming peer connections can reach ADC on your configured port (default: `6881`). |
+| **Listening Port** | Reachable (Green) | Incoming peer connections can reach Nebulae on your configured port (default: `6881`). |
 | **UPnP / NAT-PMP / PCP** | Active / Available | Automatic router port mapping protocols that open port forwarding leases on demand. |
 | **NAT Traversal Type** | Full Cone / Moderate | Classifies whether your router allows unsolicited incoming packets from peers. |
 | **IPv4 Connectivity** | Connected | Traditional Internet Protocol connectivity. |
 | **IPv6 Connectivity** | Ready (Dual-Stack) | Modern, address-abundant protocol allowing direct peer connections without NAT. |
 | **DNS Health** | Low Latency / Intact | DNS resolution speed and validation that tracker domains resolve cleanly. |
-| **VPN Binding** | Securely Bound | Verifies that all ADC engine sockets are locked to the selected VPN network adapter. |
+| **VPN Binding** | Securely Bound | Verifies that all Nebulae engine sockets are locked to the selected VPN network adapter. |
 | **Tracker Status** | Healthy (200 OK) | Confirms HTTP and UDP tracker announces are succeeding without authentication faults. |
 
 ---
@@ -42,25 +42,25 @@ If UPnP is disabled on your router, follow these steps to manually forward port 
 2. Log in with your router credentials.
 3. Locate **Port Forwarding**, **Virtual Server**, or **NAT Rules** (usually under *Advanced* or *WAN* settings).
 4. Add a new rule:
-   - **Service Name**: `ADC BitTorrent`
+   - **Service Name**: `Nebulae BitTorrent`
    - **Protocol**: `TCP/UDP` (or `Both`)
    - **External Port**: `6881`
    - **Internal Port**: `6881`
    - **Internal IP**: Your computer's local IP address (e.g. `192.168.1.100`)
-5. Click **Apply** or **Save**, then click the **Retest** button in ADC Connectivity Doctor.
+5. Click **Apply** or **Save**, then click the **Retest** button in the Connectivity Doctor.
 
 ---
 
-## 5. ADC Connect In-App Supervisor
+## 5. Connectivity In-App Supervisor
 
-**ADC Connect** is an integrated in-app supervisor task (running asynchronously within Nebulae, rather than as an external daemon or background sidecar) that provides continuous connectivity and swarm health management:
+The connectivity supervisor is an integrated in-app task (running asynchronously within Nebulae, rather than as an external daemon or background sidecar) that provides continuous connectivity and swarm health management:
 
-- **What ADC Connect Does**:
+- **What the Supervisor Does**:
   - Automatically monitors UPnP and NAT-PMP port mapping statuses.
   - Monitors the active VPN interface via a 500ms fail-closed supervisor loop (`spawn_kill_switch_watcher`) and instantly pauses transfers if the VPN drops.
-  - Enforces community seeding rules and Seed Time Shield protections (`spawn_seeding_rules_loop`).
-  - Generates privacy-safe diagnostic reports for community support with passkey/magnet redaction.
-- **What ADC Connect Never Does**:
+  - Enforces optional community seeding rules and Seed Time Shield protections (`spawn_seeding_rules_loop`) when configured.
+  - Generates privacy-safe diagnostic reports for support with passkey/magnet redaction.
+- **What the Supervisor Never Does**:
   - Never spawns separate external background daemons or sidecars (maintaining single signed binary SignPath compliance).
   - Never proxies torrent data through external cloud servers.
   - Never logs or stores IP addresses, torrent names, or passkeys.

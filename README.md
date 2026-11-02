@@ -1,21 +1,30 @@
-# Nebulae
+# Nebulae — Privacy-Focused BitTorrent Client
 
 <p align="center">
   <img src="src/assets/app-icon.png" alt="Nebulae Crest" width="128" height="128" />
 </p>
 
 <p align="center">
-  <strong>Torrent Client by Asian DVD Club</strong><br>
-  <em>Native Desktop Application for Windows and macOS</em>
+  <strong>Open-source, privacy-focused BitTorrent client for public and private trackers</strong><br>
+  <em>Cross-platform desktop application for Windows, macOS, and Linux</em>
+</p>
+
+<p align="center">
+  <a href="https://nebulae.asiandvdclub.org"><strong>Official Website</strong></a> •
+  <a href="https://github.com/koppot/Nebulae-torrent_client/releases">Downloads</a> •
+  <a href="LICENSE">License (MIT)</a> •
+  <a href="https://github.com/koppot/Nebulae-torrent_client/actions">CI Status</a>
 </p>
 
 <p align="center">
   <a href="#about">About</a> •
-  <a href="#core-features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#packages">Packages</a> •
-  <a href="#internal-storage">Internal Storage</a> •
-  <a href="#code-signing-policy">Code Signing Policy</a> •
+  <a href="#downloads">Downloads</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#privacy-architecture">Privacy Architecture</a> •
+  <a href="#compatibility">Compatibility & Onboarding</a> •
+  <a href="#faq">FAQ</a> •
+  <a href="#code-signing-policy">Code Signing</a> •
   <a href="#development">Development</a>
 </p>
 
@@ -23,99 +32,193 @@
 
 ## About
 
-**Nebulae** is a modern, privacy-focused peer-to-peer file-transfer client designed for communities, archives, and organizations sharing content with permission.
+Nebulae is an open-source, privacy-focused, general-purpose BitTorrent client with optional Asian DVD Club integration.
 
-It combines a clean, media-friendly interface inspired by Asian DVD Club's visual styling with advanced connectivity diagnostics, Smart Peering telemetry, isolated VPN socket binding, and community torrent-management tools.
+It is designed around user privacy, reliable long-term seeding, and advanced torrent management for public and private trackers. It is a general-purpose application—not an ADC-exclusive client. Asian DVD Club (ADC) integration is an optional capability for community members; ADC membership is not required for general torrent use.
 
-### Designed for Communities
+### Built For
 
-Nebulae is built for:
-- **Creators** distributing their own work directly to audiences
-- **Open-source projects** sharing large ISO images and binary releases
-- **Archives and preservation communities** protecting cultural artifacts
-- **Families and organizations** exchanging large media archives
-- **Media communities** organizing lawful digital collections
-- **Private communities** that operate with clear rules and member trust
+- **Open-source distribution**: Sharing Linux distributions, open-source software releases, and public datasets.
+- **Independent creators**: Distributing digital media, music, and creative works directly to audiences.
+- **Digital archivists & preservationists**: Maintaining long-term cultural and historical archives with consistent seeding tools.
+- **Private & public community swarms**: Participating in standards-compatible BitTorrent swarms with fine-grained bandwidth and connection controls.
 
 Nebulae does not host, index, search, recommend, or distribute content.
 
 ---
 
-## Core Features
+<a name="downloads"></a>
+## Downloads & Supported Platforms
 
+Official release packages are published on the **[GitHub Releases](https://github.com/koppot/Nebulae-torrent_client/releases)** page.
+
+| Operating System | Architecture | Package / Installer | Description |
+| :--- | :--- | :--- | :--- |
+| **Windows** (10, 11, Server 2016+) | `x86_64` (64-bit) | `Nebulae-Setup-x64.exe`<br>`nebulae.exe` | Standard NSIS installer or standalone executable. |
+| **macOS Apple Silicon** (M1–M5) | `aarch64` | `Nebulae-macOS-arm64.dmg`<br>`Nebulae-macOS-arm64.dmg-app.zip` | Apple Silicon disk image or direct application archive. |
+| **macOS Intel** (macOS 11+) | `x86_64` | `Nebulae-macOS-x64.dmg`<br>`Nebulae-macOS-x64.dmg-app.zip` | Intel x86_64 disk image or direct application archive. |
+| **Linux** (glibc ≥ 2.35) | `x86_64` | `Nebulae-Linux-x86_64.deb`<br>`Nebulae-Linux-x86_64.rpm`<br>`Nebulae-Linux-x86_64.AppImage`<br>`nebulae-linux-x86_64` | Debian/Ubuntu `.deb`, Fedora/RHEL/openSUSE `.rpm`, portable AppImage, or standalone binary. |
+
+For installation walkthroughs, Gatekeeper/SmartScreen guidance, and runtime storage details, refer to the **[Installation Guide](docs/installation.md)**.
+
+---
+
+<a name="quick-start"></a>
+## Quick Start (General Torrent Use)
+
+1. **Launch Nebulae**: Open the application on your computer.
+2. **Add a Torrent**:
+   - **Drag and Drop**: Drag any `.torrent` file or magnet link directly into the Nebulae window.
+   - **Toolbar / Menu**: Click the **Add Torrent (+)** button in the top navigation bar.
+   - **File or Magnet**: Select a local `.torrent` file or paste a `magnet:?xt=urn:btih:...` link.
+3. **Choose Save Destination**: Select your target download directory (defaults to your standard `Downloads` folder).
+4. **Inspect Files & Priorities**: Optionally review file hierarchies, adjust individual piece priorities, or configure initial speed limits.
+5. **Start Transfer**: Click **Add Torrent** to initiate transfer. Active transfers, bandwidth rates, peer counts, and swarm statistics appear immediately in the interface.
+
+*No account creation, community registration, or passkey configuration is needed for general torrent use.*
+
+---
+
+<a name="features"></a>
+## Features Organized by User Need
+
+### 1. General Torrent Management
 - **Dual UI Modes**:
-  - **Simple Media Mode**: Netflix-style shelves (*Active Downloads*, *Recently Added*, *Completed*, *Seeding*, *Ready to Watch*), poster-style media cards, and single-click playback.
-  - **Torrent Manager Mode**: Power-user table view with status filters, categories, search, and a deep tabbed inspector (*Files*, *Trackers*, *Peers*, *Speed*, *Log*).
-- **Smart Peering Engine**: Passive latency, throughput, and reciprocity telemetry with rolling quality scoring and 5 selectable peering modes (*Balanced*, *Speed First*, *Latency First*, *Local First*, *Privacy First*).
-- **Connectivity Doctor**: Detects listening port reachability, UPnP/NAT-PMP/PCP availability, dual-stack IPv4/IPv6 health, and DNS latency with guided router port-forwarding instructions.
-- **VPN for ADC Only**: Supports importing WireGuard (`.conf`) and OpenVPN (`.ovpn`) profiles. Binds torrent engine sockets directly to the VPN interface without redirecting your browser or system applications. Includes an integrated Kill Switch that pauses transfers if the VPN drops.
-- **AsianDVDClub Community Framework**: Passkey masking and OS Keychain storage, ratio dashboard, Seed Time Shield, and private torrent safeguards (automatic permanent disable of DHT, PEX, and LSD on private swarms).
-- **Cinematic Startup Splash**: Archive splash screen displaying initialization progress and a community invitation to visit `asiandvdclub.org`.
+  - **Simple Media Mode**: Clean, poster-driven shelf layout (*Active Downloads*, *Recently Added*, *Completed*, *Seeding*, *Ready to Watch*) with single-click playback.
+  - **Torrent Manager Mode**: Power-user tabular interface with category filters, search, status sorting, and an in-depth inspector panel (*Files*, *Trackers*, *Peers*, *Speed*, *Log*).
+- **Fine-Grained Swarm Controls**: Set per-torrent and global download/upload bandwidth limits, maximum connection ceilings, and seed ratio caps.
+- **Content Inspection & Renaming**: Inspect metainfo contents prior to download, adjust file priorities, and rename torrent targets on disk while preserving swarm integrity.
+- **Queue & Speed Scheduling**: Alternate speed limits (Turtle Mode), maximum active download/seed queue limits, and automatic stall management.
+
+### 2. Privacy and Network Controls
+- **Zero Analytics Architecture**: No third-party analytics trackers, advertising IDs, crash beacons, or background telemetry.
+- **Safe Logging (`SafeLogger`)**: Disk logs automatically redact sensitive data, replacing passkeys, authentication tokens, and magnet URIs with redaction markers.
+- **Internal Storage Isolation**: Technical runtime data (SQLite database, fast-resume state, session logs) is stored in a dedicated `internal/` folder separated from user media.
+- **Application-Only VPN Socket Binding**: Bind the underlying BitTorrent engine sockets strictly to a designated VPN network interface without routing external system applications through the tunnel.
+- **Fail-Closed Kill Switch**: Background watcher checks the VPN interface link state every 500ms; if the tunnel drops, transfers pause immediately and engine sockets rebind to `127.0.0.1` to prevent unencrypted traffic leaks.
+- **Connectivity Diagnostics**: Built-in Connectivity Doctor evaluates listening port accessibility, UPnP / NAT-PMP port mapping health, dual-stack IPv4/IPv6 availability, and DNS response latency.
+
+### 3. Seeding and Long-Term Preservation
+- **Smart Peering Telemetry**: Passive observation of peer latency, throughput reciprocity, and connection stability to maintain healthy long-term swarms.
+- **Racing Mode**: Dedicated high-priority profile that allocates expanded connection pools and elevated bandwidth priorities for time-sensitive swarms.
+- **Optical Disc Cinema Engine**: Embedded media runtime capable of playing DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD disc structures with interactive menu navigation. Zero external player installation required.
+
+### 4. Optional Community Integrations
+- **Asian DVD Club (ADC) Integration**:
+  - **Optional Account Linking**: Connect an ADC username and passkey to monitor community ratio, uploaded/downloaded byte statistics, and bonus points directly in the client.
+  - **Seed Time Shield**: Visual countdown and tracking against community minimum seeding obligations (e.g., 72 hours) to avoid hit-and-run penalties.
+  - **Credential Security**: Passkeys are encrypted and stored in the native operating system credential vault where supported.
+  - **Private Swarm Enforcement**: Automatic enforcement of private tracker protocol rules (disabling DHT, PEX, and LSD on swarms with `info.private = 1`).
 
 ---
 
-<a name="packages"></a>
-## Shipped Executables & Packages
+<a name="privacy-architecture"></a>
+## Privacy & Security Architecture
 
-All published binaries, installers, and packages use the approved naming convention:
+Nebulae is engineered around verified, concrete controls rather than unsupported marketing claims:
 
-| Platform | Target Architecture | Package / Executable |
-| :--- | :--- | :--- |
-| **Windows x64** | `x86_64-pc-windows-msvc` | `Nebulae-Setup-x64.exe` (installs `nebulae.exe`) |
-| **macOS Apple Silicon (M1/M2/M3/M4/M5)** | `aarch64-apple-darwin` | `Nebulae-macOS-arm64.dmg` (mounts `Nebulae.app`) |
-| **macOS Intel** | `x86_64-apple-darwin` | `Nebulae-macOS-x64.dmg` (mounts `Nebulae.app`) |
-| **Protocol Handler** | Cross-platform | `adc://` and `magnet:?` |
+| Capability | What Traffic It Covers | What It Does Not Cover | Default State | Configuration Requirements | Failure Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Local Storage Isolation** | Application preferences, torrent metadata, resume data, logs, cache. | User-selected media download folder. | Enabled by default. | None. Files written to local `internal/` folders. | Corrupted SQLite databases trigger automatic schema repair. |
+| **Safe Logging** | Application and engine runtime logs written to disk. | Raw network packets in transit over the wire. | Enabled by default. | None. Redaction filters run automatically at log write time. | Unmatched proprietary patterns may bypass regex filters. |
+| **Client-Only VPN Binding** | Peer-to-peer data transfers and tracker announces handled by the BitTorrent engine. | Webview UI requests (e.g. poster fetches), external web links, other desktop applications. | Disabled by default ("No VPN"). | Requires selecting an active VPN network interface or importing a profile. | If interface is missing, transfers fail closed or stay paused. |
+| **VPN Kill Switch** | Active torrent downloads and seeding transfers. | System OS traffic, system DNS queries, third-party software. | Armed when VPN mode is active. | Configured via VPN settings toggle. | Pauses active transfers and rebinds engine to `127.0.0.1` within 500ms of tunnel loss. |
+| **Private Swarm Isolation** | Torrents marked with the standard BitTorrent private flag. | Public torrents without the private flag. | Enforced automatically. | Enabled per metainfo specification. | DHT, PEX, and local peer discovery are completely shut off for the swarm. |
 
----
+### Concrete Privacy Realities & Boundaries
 
-## Installation
+1. **Telemetry vs. Legitimate Network Connections**: Nebulae contains zero analytics SDKs or behavioral phone-home mechanisms. Legitimate outbound network traffic occurs only for:
+   - Active peer transfers and tracker announces requested by your torrents.
+   - Startup update checks against GitHub Releases (disabled with one toggle in Settings).
+   - Media poster scrapes when Simple Media Mode is active.
+   - Optional community status queries if an Asian DVD Club account is linked.
+2. **Local Data Inventory**:
+   - *Preferences & swarm metadata:* SQLite database (`internal/db/nebulae.db`).
+   - *Engine resume checkpoints:* `internal/engine-state/`.
+   - *Session logs:* `internal/logs/nebulae_session.log` (sanitized).
+   - *Cache & posters:* `internal/cache/`.
+   - *Credentials:* WireGuard private keys and OpenVPN credentials route to the OS credential vault. An optional ADC passkey is stored in the OS credential vault with a local SQLite settings record for session management.
+   - *Downloaded media:* Placed strictly in your chosen destination directory.
+3. **OS Credential Vault Dependencies**:
+   - macOS: Apple Keychain Services.
+   - Windows: Windows Credential Manager.
+   - Linux: Requires an active D-Bus Secret Service provider (e.g. GNOME Keyring or KWallet). In headless or minimal Linux desktop setups lacking a secret service daemon, credentials fall back to the local SQLite database.
+4. **VPN Socket Binding & Kill Switch Limits**:
+   - Transmission daemon binds `bind-address-ipv4` to the active VPN interface IP.
+   - Detection occurs via a 500ms polling watcher; during tunnel collapse, existing socket buffers may take a brief moment to drain.
+   - This is an application-level interface binding mechanism, not a kernel packet filter (such as Windows WFP or macOS PF). It does not intercept system DNS or outside-process traffic.
 
-Detailed installation instructions covering Windows SmartScreen, macOS Gatekeeper, firewall permissions, router port forwarding, and troubleshooting are available in:
-
-📖 **[Full Installation Guide (docs/installation.md)](docs/installation.md)**
-
----
-
-## Code signing policy
-
-> **SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.**
-
-Windows artifacts in current releases are **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher on first run. No certificate has been issued, and no signing provider is active. The prepared SignPath integration is preserved but inactive (`docs/signpath-ci-integration.md`), and the [code signing policy](docs/code-signing-policy.md) states the provider-neutral rules that will govern signed releases under whichever provider is onboarded in the future.
-
-- Full policy (roles, approvers, verifiable-build rules, per-release manual approval): **[docs/code-signing-policy.md](docs/code-signing-policy.md)**
-- Privacy policy: **[docs/privacy.md](docs/privacy.md)**
-- Roles: Authors/Committers and Reviewers: [koppot](https://github.com/koppot) (repository owner) · Signing approvers: [koppot](https://github.com/koppot)
-
----
-
-## Internal Storage & Diagnostics
-
-Technical files are strictly isolated from the main user interface:
-
-- **macOS**: `~/Library/Application Support/Nebulae/internal/`
-- **Windows**: `%LOCALAPPDATA%\Nebulae\internal\`
-
-```text
-internal/
-├── db/             # Local SQLite database (nebulae.db)
-├── logs/           # Redacted session logs (nebulae_session.log)
-├── cache/          # Fast-resume state & temporary piece cache
-├── engine-state/   # BitTorrent engine checkpoints & DHT cache
-└── diagnostics/    # Crash and panic reports
-```
-
-### Developer Mode ("Der Sperre")
-Developer diagnostics and internal log exports are housed in the **Show Advanced Diagnostics** section under Settings, identified by the developer mark (*Der Sperre*). Secrets, passkeys, and magnet URIs are automatically redacted.
+For full architectural documentation, see **[Privacy & Security Architecture (docs/privacy.md)](docs/privacy.md)** and the **[VPN & Kill Switch Guide (docs/vpn.md)](docs/vpn.md)**.
 
 ---
 
+<a name="compatibility"></a>
+## Compatibility & Onboarding
+
+### Supported Torrent Inputs
+- **`.torrent` Files**: Added via drag-and-drop, open file dialog, or file-association launch.
+- **Magnet Links**: Standard `magnet:?xt=urn:btih:...` URIs via clipboard, click, or manual entry.
+- **HTTP / HTTPS URLs**: Direct download URLs pointing to valid `.torrent` metainfo.
+- **Raw Metainfo Bytes**: In-memory inspection and addition for webview drops.
+
+### Supported Tracker Types & Current Implementation Limitation
+- **Public & Private Trackers**: Full protocol support for standards-compliant HTTP, HTTPS, and UDP trackers.
+- **Current Limitation — Peer Discovery (DHT / PEX / LSD):** In current builds, DHT (Distributed Hash Table), PEX (Peer Exchange), and LSD/LPD (Local Service Discovery) are disabled at the engine session level to ensure strict compliance with private tracker rules and prevent peer IP disclosure. Because this setting is currently global rather than per-torrent:
+  - Swarms rely strictly on active tracker announces over HTTP, HTTPS, or UDP.
+  - Public torrents require at least one reachable, responsive tracker in their tier list.
+  - Trackerless torrents relying purely on DHT will not find peers in the current engine release.
+  - *Decoupling public from private peer-discovery scoping is tracked as a dedicated engineering task and will not be altered in this documentation release.*
+- **Private Tracker Approval**: While Nebulae implements standard BitTorrent protocol specifications, individual private trackers enforce specific whitelists and client approval policies. Always check your tracker's client guidelines.
+
+### Optional Community Features
+- Asian DVD Club (ADC) integration is entirely optional.
+- You do **not** need an ADC account or passkey to download, seed, or manage ordinary torrents.
+- If you do not configure an ADC account, community-specific widgets remain inactive while all standard BitTorrent functionality operates without restriction.
+
+---
+
+<a name="faq"></a>
+## Frequently Asked Questions (FAQ)
+
+### Q: Is Nebulae only for Asian DVD Club?
+**A:** No. Nebulae is an open-source, general-purpose BitTorrent client. It connects to any standard public or private tracker. ADC integration is an optional module that adds community-specific ratio and seed-time tracking.
+
+### Q: Do I need an ADC account to use Nebulae?
+**A:** No. General torrent operations—downloading, seeding, file management, speed capping, and VPN binding—do not require an ADC account or credentials. An ADC account is only required if you choose to link your profile for community ratio monitoring.
+
+### Q: Can I use Nebulae with other trackers?
+**A:** Yes. Nebulae works with standards-compatible public and private trackers over HTTP, HTTPS, and UDP. Note that private trackers often maintain private client approval whitelists; confirm your tracker's policy before use.
+
+### Q: Is Nebulae a torrent tracker?
+**A:** No. Nebulae is a BitTorrent client (desktop application) powered by an embedded Transmission engine backend. It connects to external trackers and swarm peers to transfer files.
+
+### Q: What privacy protections does Nebulae provide?
+**A:** Nebulae operates with zero analytics or telemetry, stores data in local isolated storage, sanitizes disk logs to redact secrets, isolates internal technical files, and supports locking BitTorrent traffic to a specific VPN interface with an automatic fail-closed kill switch. Refer to [Privacy Architecture](#privacy-architecture) for exact boundaries and limitations.
+
+---
+
+<a name="code-signing-policy"></a>
+## Code Signing & Release Verification
+
+> **Windows Release Notice:** Windows builds are currently unsigned beta releases. On first run, Windows SmartScreen will display an unrecognized publisher warning ("Windows protected your PC"). Click **More info** → **Run anyway** to proceed.
+
+- **Cryptographic Minisign Verification**: All release manifests and auto-update payloads are cryptographically signed with the official public key:
+  ```text
+  RWRBb7y7i6osRaR3dP9YGfYFxS5tyi5NIF+Xk+c+pM11p0v+f0Vqye5X
+  ```
+- **Checksum Catalog**: Every release includes a verified `SHA256SUMS.txt` listing digests for all platform packages.
+- Full code signing governance: **[docs/code-signing-policy.md](docs/code-signing-policy.md)**.
+
+---
+
+<a name="development"></a>
 ## Local Development & Build
 
 ### Prerequisites
-- Node.js 18+ and `pnpm`
-- Rust 1.75+ with Cargo
+- [Node.js](https://nodejs.org/) (v18+) and [pnpm](https://pnpm.io/)
+- [Rust](https://www.rust-lang.org/) (1.75+) with `cargo`
 
-### Running Locally
+### Setup and Development
 ```bash
 # Clone the repository
 git clone https://github.com/koppot/Nebulae-torrent_client.git
@@ -124,13 +227,13 @@ cd Nebulae-torrent_client
 # Install frontend dependencies
 pnpm install
 
-# Run desktop application in development mode
+# Run application in development mode
 pnpm tauri dev
 ```
 
-### Building Release Installers
+### Packaging & Release Builds
 ```bash
-# Build production bundle for the current host OS
+# Compile production desktop bundle for your current OS
 pnpm tauri build
 ```
 
@@ -138,4 +241,4 @@ pnpm tauri build
 
 ## License
 
-Licensed under the MIT License ([LICENSE](LICENSE)).
+Nebulae is open-source software licensed under the **[MIT License](LICENSE)**.
