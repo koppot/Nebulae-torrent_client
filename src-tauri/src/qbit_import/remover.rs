@@ -117,6 +117,20 @@ pub struct BackupManifest {
     pub manual_restore_instructions: String,
 }
 
+pub const WHOLE_PROFILE_ROLLBACK_CONFIRMATION_PHRASE: &str =
+    "This replaces the entire qBittorrent torrent database with the backup. Torrents added or changed since that backup may be lost from the active profile.";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestoreMode {
+    /// Selectively restores only the entries recorded in the manifest.
+    /// Preserves unrelated torrents added to the active database after the backup.
+    /// Never overwrites existing conflicting entries.
+    Selective,
+    /// Overwrites the active database with the backup snapshot.
+    /// Requires an explicit confirmation phrase acknowledging profile rollback.
+    WholeProfileRollback { confirmation_phrase: String },
+}
+
 pub struct QbitRemover;
 
 impl QbitRemover {
@@ -778,15 +792,31 @@ impl QbitRemover {
         Ok(deleted_count)
     }
 
-    /// Safely restores a backup from manifest.json:
-    /// - Requires explicit confirmation.
-    /// - Requires qBittorrent to be closed.
-    /// - Validates that all destination files resolve strictly within the validated qBittorrent directory.
-    /// - Takes a pre-restore backup of torrents.db before restoring SQLite entries.
+    /// Safely restores a backup from manifest.json using default Selective mode.
     pub fn restore_from_manifest(
         manifest_path: &Path,
         process_checker: &dyn ProcessChecker,
         confirm: bool,
+    ) -> Result<usize, String> {
+        Self::restore_from_manifest_with_mode(
+            manifest_path,
+            process_checker,
+            confirm,
+            RestoreMode::Selective,
+        )
+    }
+
+    /// Safely restores a backup from manifest.json:
+    /// - Requires explicit confirmation.
+    /// - Requires qBittorrent to be closed.
+    /// - Validates that all destination files resolve strictly within the validated qBittorrent directory.
+    /// - Selective mode restores only manifest entries, preserving new/unrelated active torrents.
+    /// - WholeProfileRollback mode replaces the entire database only when explicit phrase is supplied.
+    pub fn restore_from_manifest_with_mode(
+        manifest_path: &Path,
+        process_checker: &dyn ProcessChecker,
+        confirm: bool,
+        mode: RestoreMode,
     ) -> Result<usize, String> {
         if !confirm {
             return Err("Restoration aborted: Explicit user confirmation required.".to_string());
@@ -813,7 +843,7 @@ impl QbitRemover {
         })?;
 
         let mut restored = 0;
-        let mut sqlite_restored = false;
+        let mut sqlite_processed = false;
 
         for entry in &manifest.entries {
             for (idx, b_path) in entry.backup_files.iter().enumerate() {
@@ -842,31 +872,170 @@ impl QbitRemover {
                         ));
                     }
 
-                    // For SQLite: take a pre-restore safety copy of current DB if it exists
-                    if orig_file.file_name().and_then(|f| f.to_str()) == Some("torrents.db")
-                        && !sqlite_restored
-                    {
-                        if orig_file.is_file() {
-                            let pre_restore_backup = canon_data_dir.join(format!(
-                                "torrents.db.pre_restore_{}",
-                                chrono::Local::now().format("%Y%m%d-%H%M%S")
-                            ));
-                            let _ = fs::copy(orig_file, &pre_restore_backup);
-                            info!(
-                                "Created safety snapshot before SQLite restore at {:?}",
-                                pre_restore_backup
-                            );
-                        }
-                        sqlite_restored = true;
-                    }
+                    let is_sqlite =
+                        orig_file.file_name().and_then(|f| f.to_str()) == Some("torrents.db");
 
-                    fs::copy(backup_file, orig_file).map_err(|e| {
-                        format!(
-                            "Failed to restore {:?} to {:?}: {e}",
-                            backup_file, orig_file
-                        )
-                    })?;
-                    restored += 1;
+                    if is_sqlite {
+                        if sqlite_processed {
+                            continue;
+                        }
+                        sqlite_processed = true;
+
+                        match &mode {
+                            RestoreMode::Selective => {
+                                // Prefer selective row restoration when active torrents.db exists
+                                if orig_file.is_file() {
+                                    let active_conn = Connection::open(orig_file).map_err(|e| {
+                                        format!("Failed opening active torrents.db: {e}")
+                                    })?;
+                                    let backup_conn = Connection::open_with_flags(
+                                        backup_file,
+                                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                                    )
+                                    .map_err(|e| {
+                                        format!("Failed opening backup torrents.db: {e}")
+                                    })?;
+
+                                    let (table_name, id_col) =
+                                        Self::inspect_and_verify_sqlite_schema(&active_conn)?;
+
+                                    let pragma_sql = format!("PRAGMA table_info(\"{table_name}\")");
+                                    let mut col_stmt = active_conn
+                                        .prepare(&pragma_sql)
+                                        .map_err(|e| format!("{e}"))?;
+                                    let cols: Vec<String> = col_stmt
+                                        .query_map([], |row| row.get(1))
+                                        .map_err(|e| format!("{e}"))?
+                                        .flatten()
+                                        .collect();
+
+                                    let col_names = cols
+                                        .iter()
+                                        .map(|c| format!("\"{c}\""))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    let placeholders = cols
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, _)| format!("?{}", i + 1))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+
+                                    let check_sql = format!(
+                                        "SELECT 1 FROM \"{table_name}\" WHERE \"{id_col}\" = ?1 LIMIT 1"
+                                    );
+                                    let select_sql = format!(
+                                        "SELECT {col_names} FROM \"{table_name}\" WHERE \"{id_col}\" = ?1"
+                                    );
+                                    let insert_sql = format!(
+                                        "INSERT INTO \"{table_name}\" ({col_names}) VALUES ({placeholders})"
+                                    );
+
+                                    // For every manifest entry, selectively restore only absent rows
+                                    for manifest_entry in &manifest.entries {
+                                        let exists: bool = active_conn
+                                            .query_row(
+                                                &check_sql,
+                                                [&manifest_entry.info_hash],
+                                                |_| Ok(true),
+                                            )
+                                            .unwrap_or(false);
+
+                                        if exists {
+                                            info!(
+                                                "Entry '{}' already exists in active torrents.db; skipping to avoid overwriting conflicting data",
+                                                manifest_entry.info_hash
+                                            );
+                                            continue;
+                                        }
+
+                                        let mut select_stmt = backup_conn
+                                            .prepare(&select_sql)
+                                            .map_err(|e| format!("{e}"))?;
+                                        let row_vals = select_stmt.query_row(
+                                            [&manifest_entry.info_hash],
+                                            |row| {
+                                                let mut vals = Vec::with_capacity(cols.len());
+                                                for i in 0..cols.len() {
+                                                    vals.push(
+                                                        row.get::<_, rusqlite::types::Value>(i)?,
+                                                    );
+                                                }
+                                                Ok(vals)
+                                            },
+                                        );
+
+                                        if let Ok(vals) = row_vals {
+                                            active_conn
+                                                .execute(
+                                                    &insert_sql,
+                                                    rusqlite::params_from_iter(vals),
+                                                )
+                                                .map_err(|e| {
+                                                    format!("Failed inserting restored row: {e}")
+                                                })?;
+                                            restored += 1;
+                                            info!(
+                                                "Selectively restored torrent hash '{}' into active torrents.db",
+                                                manifest_entry.info_hash
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // Active db did not exist; copy backup file directly
+                                    fs::copy(backup_file, orig_file).map_err(|e| {
+                                        format!(
+                                            "Failed to restore {:?} to {:?}: {e}",
+                                            backup_file, orig_file
+                                        )
+                                    })?;
+                                    restored += 1;
+                                }
+                            }
+                            RestoreMode::WholeProfileRollback {
+                                confirmation_phrase,
+                            } => {
+                                if confirmation_phrase.trim()
+                                    != WHOLE_PROFILE_ROLLBACK_CONFIRMATION_PHRASE
+                                {
+                                    return Err(format!(
+                                        "Whole-profile rollback refused: Confirmation phrase mismatch. Expected: '{}'",
+                                        WHOLE_PROFILE_ROLLBACK_CONFIRMATION_PHRASE
+                                    ));
+                                }
+
+                                if orig_file.is_file() {
+                                    let pre_restore_backup = canon_data_dir.join(format!(
+                                        "torrents.db.pre_restore_{}",
+                                        chrono::Local::now().format("%Y%m%d-%H%M%S")
+                                    ));
+                                    let _ = fs::copy(orig_file, &pre_restore_backup);
+                                    info!(
+                                        "Created safety snapshot before SQLite whole-profile restore at {:?}",
+                                        pre_restore_backup
+                                    );
+                                }
+
+                                fs::copy(backup_file, orig_file).map_err(|e| {
+                                    format!(
+                                        "Failed to restore {:?} to {:?}: {e}",
+                                        backup_file, orig_file
+                                    )
+                                })?;
+                                restored += 1;
+                                info!("Whole-profile rollback executed for torrents.db");
+                            }
+                        }
+                    } else {
+                        // Legacy individual files (.torrent and .fastresume)
+                        fs::copy(backup_file, orig_file).map_err(|e| {
+                            format!(
+                                "Failed to restore {:?} to {:?}: {e}",
+                                backup_file, orig_file
+                            )
+                        })?;
+                        restored += 1;
+                    }
                 }
             }
         }

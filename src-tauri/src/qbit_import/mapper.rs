@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentLayout {
@@ -236,12 +237,52 @@ impl QbitMapper {
                 }
             }
 
-            // 3. Detect individual file renames
+            // Pre-scan for collisions within mapped_files (multiple files mapped to same relative target)
+            let mut target_paths_count: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (idx, mapped_parts) in norm_mapped.iter().enumerate() {
+                let full_target = mapped_parts.join("/").to_lowercase();
+                target_paths_count.entry(full_target).or_default().push(idx);
+            }
+
+            // Pre-scan for original full paths of unrenamed files
+            let mut unrenamed_original_paths: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for (idx, orig_parts) in norm_orig.iter().enumerate() {
                 if let Some(mapped_parts) = norm_mapped.get(idx) {
+                    if orig_parts == mapped_parts {
+                        unrenamed_original_paths.insert(orig_parts.join("/").to_lowercase());
+                    }
+                }
+            }
+
+            // 3. Detect individual file renames with collision avoidance
+            for (idx, orig_parts) in norm_orig.iter().enumerate() {
+                if let Some(mapped_parts) = norm_mapped.get(idx) {
+                    let full_target = mapped_parts.join("/").to_lowercase();
+                    // Collision check 1: if multiple files map to this same target
+                    if let Some(colliding_indices) = target_paths_count.get(&full_target) {
+                        if colliding_indices.len() > 1 {
+                            warn!(
+                                "Collision detected in mapped_files for '{}': indices {:?} collide. Skipping conflicting rename.",
+                                full_target, colliding_indices
+                            );
+                            continue;
+                        }
+                    }
+
+                    // Collision check 2: if mapped target collides with an unrenamed file
                     let orig_file_name = orig_parts.last().cloned().unwrap_or_default();
                     let mapped_file_name = mapped_parts.last().cloned().unwrap_or_default();
                     if !orig_file_name.is_empty() && orig_file_name != mapped_file_name {
+                        if unrenamed_original_paths.contains(&full_target) {
+                            warn!(
+                                "Collision between original and mapped path: '{}' collides with unrenamed original file. Skipping conflicting rename.",
+                                full_target
+                            );
+                            continue;
+                        }
+
                         ops.push(RenameOperation {
                             is_folder: false,
                             file_index: Some(idx as u32),

@@ -246,8 +246,19 @@ pub async fn qbit_execute_import(
 }
 
 #[tauri::command]
-pub fn qbit_restore_backup(manifest_path: String, confirm: bool) -> Result<usize, String> {
+pub fn qbit_restore_backup(
+    manifest_path: String,
+    confirm: bool,
+    whole_profile_confirmation: Option<String>,
+) -> Result<usize, String> {
     let p = Path::new(&manifest_path);
     let proc_checker = crate::qbit_import::remover::SystemProcessChecker;
-    QbitRemover::restore_from_manifest(p, &proc_checker, confirm)
+    let mode = if let Some(phrase) = whole_profile_confirmation {
+        crate::qbit_import::remover::RestoreMode::WholeProfileRollback {
+            confirmation_phrase: phrase,
+        }
+    } else {
+        crate::qbit_import::remover::RestoreMode::Selective
+    };
+    QbitRemover::restore_from_manifest_with_mode(p, &proc_checker, confirm, mode)
 }

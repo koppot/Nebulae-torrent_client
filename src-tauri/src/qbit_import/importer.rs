@@ -404,7 +404,11 @@ impl QbitImporter {
     }
 }
 
-async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db: Arc<Database>) {
+pub async fn run_recheck_queue(
+    items: Vec<(String, bool)>,
+    engine: SharedEngine,
+    db: Arc<Database>,
+) {
     info!(
         "Starting qBittorrent import recheck queue for {} torrents (max concurrency: 2)",
         items.len()
@@ -429,10 +433,7 @@ async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db:
             }
 
             // Poll torrent status until checking completes
-            let mut checked_once = false;
             for _ in 0..600 {
-                // Up to 20 minutes per check
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 if let Ok(list) = eng.list_torrents() {
                     if let Some(t) = list
                         .into_iter()
@@ -440,9 +441,7 @@ async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db:
                     {
                         let is_checking =
                             t.status == "Checking" || t.status == "Queued for checking";
-                        if is_checking {
-                            checked_once = true;
-                        } else if checked_once {
+                        if !is_checking {
                             // Verification complete: check for error state or missing download path
                             if t.status != "Error" && Path::new(&t.save_path).exists() {
                                 let now = std::time::SystemTime::now()
@@ -473,6 +472,7 @@ async fn run_recheck_queue(items: Vec<(String, bool)>, engine: SharedEngine, db:
                         }
                     }
                 }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
         });
         tasks.push(task);
