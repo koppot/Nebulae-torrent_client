@@ -7,21 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.5] - Unreleased (Pending)
 
 ### Added
 - **Import from qBittorrent (Windows & macOS Parity)**:
-  - Added "Import from qBittorrent…" entry in Settings (Downloads > qBittorrent Migration) and TitleBar Tools menu.
-  - Automatic detection of qBittorrent data directory across Windows (`SHGetKnownFolderPath(FOLDERID_LocalAppData)`, registry, portable process inspections) and macOS (`~/Library/Application Support/qBittorrent`, `~/.config`, XDG paths) with interactive browse fallback.
-  - Multi-step migration wizard: initial confirmation, directory validation, interactive torrent selection table with live selection counter, category filtering, search, and pre-disabled items for torrents already loaded in Nebulae.
+  - Import existing qBittorrent torrents on macOS and Windows, with automatic profile discovery, selectable imports, and preservation of supported settings, existing download paths, and renamed files.
+  - Background hash verification and a persistent “Last checked” timestamp.
+  - Optional removal of successfully imported torrent entries from qBittorrent, disabled by default, with verified backups and selective restoration. Downloaded files are never deleted by source-entry removal.
+  - Automatic detection of qBittorrent data directory across Windows (`%LOCALAPPDATA%\qBittorrent`, registry, portable process inspections) and macOS (`~/Library/Application Support/qBittorrent`, `~/.config`, XDG paths) with interactive browse fallback.
+  - Multi-step migration wizard: initial confirmation dialog, directory validation, interactive torrent selection table with live selection counter, category filtering, search, and pre-disabled items for torrents already loaded in Nebulae.
   - Dual storage format support: parses legacy file storage (`BT_backup` `.torrent` and `.fastresume` pairs with lossy UTF-8 bencode tolerance) and modern dynamic SQLite database storage (`torrents.db` with runtime schema introspection and read-only URI locking prevention).
   - Preservation of critical transfer state: save paths, content layout (Original, Subfolder, NoSubfolder), `mapped_files` file renames, per-file priorities, categories, tags, speed and share limits, sequential flags, and original add/completion dates.
+  - Accurate reporting of unsupported settings: per-torrent seeding time limits (`qBt-seedingTimeLimit`) and per-torrent automatic management overrides (`auto_managed`) are surfaced in the import report rather than silently dropped.
   - Background verification queue: adds imported torrents in paused state, applies file renames prior to verification, schedules hash checks with a concurrency limit of 2, auto-resumes completed transfers that were active in qBittorrent, and tags transfers as "Imported from qBittorrent".
   - Persistent, sortable "Last checked" column in the Manager table with local timezone formatting and dynamic progress reporting ("Queued", "Checking… ({pct}%)", localized timestamp).
-- **Optional Safe Removal from qBittorrent**:
-  - Gated, non-persisted option to remove transferred torrent entries from qBittorrent after successful ingestion and verification.
-  - Safety guarantees: qBittorrent process detection (aborts if qBittorrent is running, never kills the process), required second confirmation modal, hard safety path guard (strictly restricts deletion to `<qbit_data_dir>/BT_backup/<hash>.(torrent|fastresume)`, rejecting payload paths), mandatory pre-removal backup to `<profile>/qbit-import-backups/<timestamp>/` with integrity validation and `manifest.json`, and atomic SQLite transaction deletion with instant rollback on error.
+  - Safety guarantees for optional removal: qBittorrent running-process detection (aborts removal if qBittorrent is running), required confirmation modal, hard safety path guard (strictly restricts deletion to `<qbit_data_dir>/BT_backup/<hash>.(torrent|fastresume)`, rejecting payload paths), mandatory pre-removal backup to `<profile>/qbit_backups/<timestamp>/` with integrity validation and `manifest.json`, and atomic SQLite transaction deletion with instant rollback on error.
   - Summary report dialog detailing imported, skipped, and removed counts, failure reasons, backup location with open-folder button, and copyable log text.
+
+### Fixed
+- **Windows Common-Controls 6.0 Manifest Linking**: Fixed instant application crash (`0xc0000139`, `STATUS_ENTRYPOINT_NOT_FOUND`) on Windows GNU targets by generating and embedding an RT_MANIFEST referencing Common-Controls 6.0 via `windres`, enabling `rfd` task dialogs.
+- **Windows Recycle Bin Path Normalization**: Stripped `\\?\` verbatim UNC prefixes before passing paths to PowerShell `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile`, ensuring Recycle Bin deletions succeed without argument exceptions.
+- **Windows Tray Speed Initializer Startup Staleness**: Initialized `last_active` to stale timestamp on startup so idle state cleanly reports `None` instead of returning initial zero rates.
 
 ## [0.2.4] - 2026-10-30
 

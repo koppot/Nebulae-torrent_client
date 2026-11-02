@@ -125,3 +125,24 @@ If qBittorrent data needs to be restored to its pre-removal state:
      - macOS: `~/Library/Application Support/qBittorrent/torrents.db`
      - Windows: `%LOCALAPPDATA%\qBittorrent\torrents.db`
 6. Restart qBittorrent. All previous transfers will be restored intact.
+
+---
+
+## 8. Supported vs. Unsupported Settings Fidelity
+
+Nebulae preserves supported torrent parameters while explicitly identifying and surfacing unsupported parameters in the import report dialog:
+
+### Supported Settings
+- **Transfer Paths**: `save_path` / `download_path` and `qBt-savePath` (preserved at existing disk locations without relocating data).
+- **Renamed File Hierarchy**: `mapped_files` (applied via engine RPC prior to hash rechecking).
+- **Content Layout**: `Original`, `Subfolder`, and `NoSubfolder` structures.
+- **File Priorities**: Per-file priorities (`priority` byte array mapped to engine priorities).
+- **Trackers & Swarm**: All tracker tiers and announce URLs preserved.
+- **Categorization & Metadata**: Categories, tags (mapped to labels), original add timestamps, and completion dates.
+- **Bandwidth Limits**: `dl_limit` and `up_limit` (download and upload limits in KiB/s).
+- **Ratio Limits**: `max_ratio` (seeded ratio limits; -1.0 indicates disabled).
+- **Download Flags**: `sequential_download` and first/last piece priority (`first_last_piece_prio`).
+
+### Unsupported Settings (Surfaced in Report)
+- **`qBt-seedingTimeLimit`**: Per-torrent seeding time limits are not supported by the underlying Transmission torrent engine. Surfaced in the summary report under `Unsupported settings` rather than silently ignored.
+- **`auto_managed`**: Per-torrent automatic management overrides are not supported (global client queuing rules apply). Surfaced in the summary report.
