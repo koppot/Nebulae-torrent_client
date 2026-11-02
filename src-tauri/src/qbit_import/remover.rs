@@ -51,13 +51,19 @@ impl TrashProvider for DefaultTrashProvider {
         #[cfg(target_os = "windows")]
         {
             let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let path_str = canon.to_string_lossy();
+            let clean_path = if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
+                format!(r"\\{}", stripped)
+            } else if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+                stripped.to_string()
+            } else {
+                path_str.to_string()
+            };
             let script = format!(
                 "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{}', 'OnlyErrorDialogs', 'SendToRecycleBin')",
-                canon.to_string_lossy().replace('\'', "''")
+                clean_path.replace('\'', "''")
             );
-            let res = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-Command", &script])
-                .output();
+            let res = crate::utils::process::run_hidden_powershell(&script);
 
             if let Ok(out) = res {
                 if out.status.success() {
