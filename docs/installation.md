@@ -1,6 +1,6 @@
 # Nebulae Installation and User Guide
 
-This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **Nebulae** (Subtitle: **Torrent Client by Asian DVD Club**) on Windows, macOS, and Linux.
+This guide provides step-by-step, beginner-friendly instructions for installing, configuring, and updating **Nebulae** (Privacy-Focused BitTorrent Client) on Windows, macOS, and Linux.
 
 ---
 
@@ -50,7 +50,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 ## Understanding Nebulae
 
 - **Product Name**: **Nebulae**
-- **Product Subtitle**: **Torrent Client by Asian DVD Club**
+- **Product Subtitle**: **Privacy-Focused BitTorrent Client**
 - **Executable Name**: **`nebulae`** (`nebulae.exe` on Windows)
 - **macOS Application Bundle**: **`Nebulae.app`**
 - **Installers & Disk Images**:
@@ -144,7 +144,7 @@ Nebulae includes an integrated, silent background updater designed around explic
 1. Open **Windows Settings** (Win + I) → **Apps** → **Installed apps**.
 2. Find **Nebulae** in the list.
 3. Click the three dots (...) and select **Uninstall**.
-4. To remove all database state and logs, delete the directory `%APPDATA%\ADC\`.
+4. To remove all database state and logs, delete the directory `%LOCALAPPDATA%\Nebulae\`.
 
 ---
 
@@ -223,7 +223,7 @@ Press Enter. Nebulae will open immediately.
 
 - **Automatic Silent Updates**: When *"Automatically keep Nebulae updated (recommended)"* is enabled, Nebulae checks for signed releases on startup, downloads verified packages quietly in the background, and replaces the application bundle in `/Applications/` non-destructively. The new version takes effect the next time Nebulae launches.
 - **Disabling Automatic Updates**: Toggle the option off at any time in **Settings → Options (Behavior)**. When toggled off, no network requests or DNS queries are made.
-- **Manual Update**: Download `Nebulae-macOS-arm64.dmg` (or `Nebulae-macOS-x64.dmg` for Intel), drag `Nebulae.app` into Applications, and click **Replace**. All preferences and torrent history remain safe in `~/Library/Application Support/ADC/`.
+- **Manual Update**: Download `Nebulae-macOS-arm64.dmg` (or `Nebulae-macOS-x64.dmg` for Intel), drag `Nebulae.app` into Applications, and click **Replace**. All preferences and torrent history remain safe in `~/Library/Application Support/Nebulae/`.
 
 ---
 
@@ -233,7 +233,7 @@ Press Enter. Nebulae will open immediately.
 2. Open Finder → **Applications** → Drag **`Nebulae.app`** to the **Trash**.
 3. To delete all saved data, open Terminal and run:
    ```bash
-   rm -rf ~/Library/Application\ Support/ADC
+   rm -rf ~/Library/Application\ Support/Nebulae
    ```
 
 ---
@@ -380,24 +380,31 @@ For in-depth architectural notes, dependency trees, and display server troublesh
   ```
 - **Purge User Data & Logs**:
   ```bash
-  rm -rf ~/.local/share/Nebulae ~/.config/ADC
+  rm -rf ~/.local/share/Nebulae ~/.config/Nebulae
   ```
 
 ---
 
 ## 5. Isolated Internal Storage & Diagnostics
 
-To maintain a clean and reliable interface, Nebulae strictly isolates technical files:
+To maintain a clean and reliable interface, Nebulae strictly isolates technical runtime files from user media.
 
+### Runtime Directory Hierarchy
 ```text
 [macOS]   ~/Library/Application Support/Nebulae/internal/
-[Windows] %LOCALAPPDATA%\Nebulae\internal\
+[Windows] %APPDATA%\Nebulae\internal\ (and %LOCALAPPDATA%\Nebulae\internal\)
+[Linux]   ~/.local/share/Nebulae/internal/
           ├── db/             # SQLite metadata database (nebulae.db)
           ├── logs/           # Rotated session logs (nebulae_session.log)
           ├── cache/          # Fast resume state & piece cache
           ├── engine-state/   # BitTorrent engine checkpoints
           └── diagnostics/    # Crash and panic reports
 ```
+
+### Path Resolution & Migration Notice
+- **Current Data Directory**: Standard application data resolves to the `Nebulae` directory name (`dirs::data_dir().join("Nebulae")`).
+- **Webview Runtime State**: Webview state and framework-managed caches persist under the application bundle identifier `org.asiandvdclub.nebulae` (e.g. `~/Library/Application Support/org.asiandvdclub.nebulae/` on macOS and `%LOCALAPPDATA%\org.asiandvdclub.nebulae\` on Windows).
+- **Legacy Paths**: Earlier alpha/preview builds (prior to v0.2.3) placed state under legacy directory names (`~/Library/Application Support/ADC/` on macOS, `%APPDATA%\ADC\` on Windows, and `~/.config/ADC/` on Linux). If migrating from an early build, uninstallers and cleaners may check these locations to ensure complete data removal.
 
 ### Accessing Diagnostics
 1. Click the **Settings (gear)** icon in the top right.
@@ -413,7 +420,7 @@ To maintain a clean and reliable interface, Nebulae strictly isolates technical 
 
 ## 6. Optical Disc Cinema & Media Playback
 
-Nebulae includes a dedicated media station mode designed specifically for Asian DVD Club's optical archive library, featuring interactive menu playback for DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD Blu-ray releases.
+Nebulae includes a dedicated media station mode for optical archive preservation, featuring interactive menu playback for DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD Blu-ray releases.
 
 ### Zero-Dependency Bundled Player
 

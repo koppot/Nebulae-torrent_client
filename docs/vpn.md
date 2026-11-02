@@ -38,17 +38,19 @@ Nebulae offers three selectable network modes under **Settings → VPN**:
 The integrated **Nebulae Kill Switch** protects your default network connection in the event of VPN tunnel failure:
 
 - **How it works**: A background Tokio watcher monitors the bound VPN interface link state every 500ms.
-- **On Disconnect**: If the VPN interface goes down, loses its IP address, or fails handshake renewal, ADC **instantly pauses all active torrents**.
-- **User Notice**: A high-visibility banner appears in the client:
-  `VPN Disconnected — ADC Paused to protect your interface`
+- **On Disconnect**: If the VPN interface goes down, loses its IP address, or fails handshake renewal, Nebulae **instantly pauses all active torrents** and rebinds the BitTorrent engine socket to `127.0.0.1` (local loopback) to prevent socket leaks.
+- **User Notice**: A high-visibility banner and status notice appears in the client:
+  `VPN Disconnected — Transfers paused to protect your interface`
 - **Reconnecting**: Transfers resume only after the VPN link is restored and verified, or when the user manually resumes transfers.
 
 ---
 
-## 5. Leak Protection & Verification
+## 5. Scope, Verification & Limitations
 
-ADC includes active safeguards to prevent data leaks:
+Nebulae provides concrete, implementation-based network controls:
 
-- **DNS Leak Protection**: DNS queries for tracker announce URLs are directed through the VPN interface's designated DNS servers.
-- **IPv6 Leak Protection**: If your imported VPN profile routes IPv4 only, ADC disables IPv6 peer connectivity for active torrents, preventing IPv6 fallback on your unencrypted connection.
-- **Binding Verification**: The Connectivity Doctor runs periodic checks to confirm that outgoing packets originate from your VPN IP address and not your physical gateway.
+- **Interface Binding Verification**: The Connectivity Doctor runs periodic checks to confirm whether outgoing packets originate from your VPN IP address or your physical gateway.
+- **Traffic Covered**: The application-only VPN setting binds the underlying BitTorrent engine (`transmission-daemon`) peer and transfer sockets directly to the specified VPN interface IPv4 address.
+- **Traffic Not Covered**: Operating system traffic, third-party applications, external browser requests (e.g., clicking external documentation links), and standalone UI metadata requests (such as TMDB poster fetches) are not routed through the engine socket binding.
+- **System DNS & IPv6 Scope**: Nebulae does not install virtual network kernel drivers or modify global OS routing tables. System DNS resolution and operating system IPv6 routing remain governed by your operating system and VPN provider configuration.
+- **Default State**: By default, Nebulae operates in standard direct network mode ("No VPN"). Application-only VPN routing and Kill Switch enforcement require explicit user configuration or profile import.

@@ -1,7 +1,7 @@
 [package]
 name = "nebulae_torrent_client"
 version = "0.2.4"
-description = "Nebulae — Client by Asian DVD Club"
+description = "Open-source, privacy-focused BitTorrent client for public and private trackers, with advanced seeding tools and optional Asian DVD Club (ADC) integration."
 authors = ["Asian DVD Club"]
 license = "MIT"
 edition = "2021"
