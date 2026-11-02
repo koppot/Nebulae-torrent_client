@@ -8,7 +8,7 @@ The installer recorded herein was placed in `C:\Users\administrator\Downloads\Ne
 
 > *"The Windows installer you placed in the Downloads folder on `supermicro.local` is now the approved Windows 0.2.4 release. I have tested it, and everything is working."*
 
-This exact binary has been preserved byte-for-byte in immutable, durable storage and published to GitHub release `v0.2.4`. If any future release or candidate exhibits a regression, this verified artifact serves as the authoritative rollback target to be restored directly without rebuilding, repackaging, or recompilation.
+This exact binary has been preserved byte-for-byte in durable, read-only protected storage and published to GitHub release `v0.2.4`. If any future release or candidate exhibits a regression, this verified artifact serves as the authoritative rollback target to be restored directly without rebuilding, repackaging, or recompilation.
 
 ---
 
@@ -36,6 +36,24 @@ This exact binary has been preserved byte-for-byte in immutable, durable storage
 | **SHA-256 Checksum** | `eb77df6a2597aaa906426ad85b4b61a0022c2bc24c07e2f4b7c8252df9ec265a` |
 | **Architecture** | x86_64 PE32+ executable (Windows GUI) |
 
+### Binary Identity Reconciled: Compiler Output (`3CB69FBD…`) vs. NSIS Payload (`EB77DF6A…`)
+
+During candidate verification, two SHA-256 checksums were recorded for `nebulae.exe`:
+- `3CB69FBDB0B7595BE0015EBE0617539CEB399B815F2E5812D25DE3CBF188CB0A` (unbundled binary)
+- `EB77DF6A2597AAA906426AD85B4B61A0022C2BC24C07E2F4B7C8252DF9EC265A` (packaged installer payload)
+
+A byte-level diff analysis establishes the exact relationship between the two files:
+1. **Size Parity**: Both files have the exact same size of `56,408,969` bytes.
+2. **Byte Diff Count**: Out of 56,408,969 bytes, exactly **3 bytes** differ (56,408,966 bytes are identical).
+3. **Diff Location & Context**:
+   - Location: Offset `0x01FD84D8` (byte index 33,391,832)
+   - Compiler output (`3CB69FBD...`): `__TAURI_BUNDLE_TYPE_VAR_UNK` (ASCII bytes `0x55, 0x4E, 0x4B` = `UNK`, unbundled/unknown package type)
+   - Packaged payload (`EB77DF6A...`): `__TAURI_BUNDLE_TYPE_VAR_NSS` (ASCII bytes `0x4E, 0x53, 0x53` = `NSS`, Nullsoft Scriptable System package type)
+
+**Root Cause**: When `cargo build --release` finishes, Tauri leaves the unbundled marker `__TAURI_BUNDLE_TYPE_VAR_UNK` in the raw binary at `target/release/nebulae.exe`. When Tauri's bundler constructs the NSIS installer (`tauri build`), it copies the binary into the staging bundle and patches those 3 marker bytes to `__TAURI_BUNDLE_TYPE_VAR_NSS` so that the application can query its runtime packaging mechanism.
+
+The code, compilation flags, dependencies, and runtime logic are 100% identical. The authoritative payload delivered by the installer and tested by the user is `EB77DF6A2597AAA906426AD85B4B61A0022C2BC24C07E2F4B7C8252DF9EC265A`.
+
 ---
 
 ## 3. Source Provenance and Git Identity
@@ -45,7 +63,7 @@ This exact binary has been preserved byte-for-byte in immutable, durable storage
 - **Branch**: `origin/factory-b/windows-0.2.4-candidate`
 - **Commit Subject**: `fix(player): preserve disc type through resolution, route optical images to disc MRLs, and guard menu readiness`
 - **Release Tag Policy**: Release tag `v0.2.4` remains anchored at annotated tag `c972dd4fb1591d56373923917bf5550e951e3dba` (`00a8880`). No tag movement was performed.
-- **Documentation Commit**: `48b644d` (`docs: record final Windows 0.2.4 candidate build and verified test battery results`)
+- **Documentation Commits**: `48b644d`, `8e70429`.
 
 ---
 
@@ -93,19 +111,23 @@ The updater signatures were generated using the project secret key (`~/.tauri/ne
 
 ---
 
-## 6. Durable Archive Locations
+## 6. Durable Archive Locations & Filesystem Protection
 
-The approved installer is stored in the following durable locations separate from GitHub release assets:
+The approved installer is preserved in dedicated local rollback directories. To guard against accidental overwrites or standard deletions, filesystem-level write protections have been explicitly applied:
 
 1. **Target Windows Host (`supermicro.local`)**:
    `C:\nebulae-backup\release-v0.2.4-windows-baseline\Nebulae_0.2.4_x64-setup.exe`
    - Verified SHA-256: `FB7A2A565903AF4E5103307DC1E9272997A94F72A6002C021D6EC13184C2A665`
    - Exact Size: `322,154,683` bytes
+   - **Filesystem Protection**: NTFS `ReadOnly` attribute (`attrib +r`). Windows prevents in-place file modifications or standard overwrites unless `attrib -r` is deliberately executed.
 
 2. **Durable Local Storage (macOS Controller)**:
    `/Users/dev/nebulae-recovery-evidence/release-v0.2.4-windows-baseline/Nebulae_0.2.4_x64-setup.exe`
    - Verified SHA-256: `fb7a2a565903af4e5103307dc1e9272997a94f72a6002c021d6ec13184c2a665`
    - Exact Size: `322,154,683` bytes
+   - **Filesystem Protection**: POSIX mode `0444` (`-r--r--r--`) plus BSD file flag `uchg` (user immutable flag applied via `chflags uchg`). macOS blocks truncation, deletion, renaming, or modification by any standard user process until `chflags nouchg` is run.
+
+*Note on Immutability Scope*: These archives are protected against ordinary administrative error and automated build script overwrites via OS filesystem attributes; they are local filesystem read-only copies and not stored on hardware WORM (Write Once Read Many) or cloud object-lock vaults.
 
 3. **Published GitHub Release Assets**:
    - https://github.com/koppot/Nebulae-torrent_client/releases/download/v0.2.4/Nebulae_0.2.4_x64-setup.exe
@@ -151,3 +173,19 @@ If a subsequent build or candidate causes a playback or packaging regression, ex
    ```cmd
    "%TEMP%\Nebulae_0.2.4_x64-setup.exe" /S
    ```
+
+---
+
+## 8. Multi-Agent Coordination & Acknowledgment Record
+
+The Windows 0.2.4 recovery completion, hash reconciliation, and rollback baseline have been communicated across the project coordination system:
+
+1. **Notion Coordination**:
+   - Checkpoint page `H-P2` published under *Nebulae — Shared Engineering Handoff* ([`40cedf71-48ed-81ad-b3df-fbee737590e0`](https://app.notion.com/p/40cedf7148ed81adb3dffbee737590e0)).
+   - Status updated on `A. Current State` ([`406edf71-48ed-81ed-be46-dbc08463d79c`](https://app.notion.com/p/406edf7148ed81edbe46dbc08463d79c)).
+   - Acceptance ledger updated on `C. Acceptance Ledger` ([`406edf71-48ed-8105-8540-f359b0231f9d`](https://app.notion.com/p/406edf7148ed81058540f359b0231f9d)).
+2. **Linear Task Tracking**:
+   - Issue [`ASI-15`](https://linear.app/asiandvdclub/issue/ASI-15/windows-x64-024-evaluation-repair-and-installer-antigravity) updated with full technical resolution and closed as Done.
+3. **Decoupled macOS Track**:
+   - Factory A retains sole ownership of the macOS release-recovery candidate in `/Users/dev/Documents/Nebulae-macos-0.2.4-recovery`.
+   - Windows publication does not authorize macOS release publication, which remains on a separate verification track awaiting explicit user approval.

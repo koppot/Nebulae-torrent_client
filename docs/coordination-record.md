@@ -916,9 +916,11 @@ the SEPARATE = the recorded = the next.
 - **Application Payload**: `nebulae.exe`
   - Size: `56,408,969` bytes (53.80 MiB)
   - SHA-256: `EB77DF6A2597AAA906426AD85B4B61A0022C2BC24C07E2F4B7C8252DF9EC265A`
-- **Durable Archives**:
-  1. `C:\nebulae-backup\release-v0.2.4-windows-baseline\Nebulae_0.2.4_x64-setup.exe` on `supermicro.local`
-  2. `/Users/dev/nebulae-recovery-evidence/release-v0.2.4-windows-baseline/Nebulae_0.2.4_x64-setup.exe` on macOS
+  - Reconciled against unbundled compiler binary `3CB69FBD...`: Exactly 3 bytes differ out of 56,408,969 bytes at offset `0x01FD84D8` where Tauri's NSIS bundler patches the bundle marker from `__TAURI_BUNDLE_TYPE_VAR_UNK` to `__TAURI_BUNDLE_TYPE_VAR_NSS`.
+- **Durable Archives & Filesystem Protection**:
+  1. `C:\nebulae-backup\release-v0.2.4-windows-baseline\Nebulae_0.2.4_x64-setup.exe` on `supermicro.local` (protected via NTFS `ReadOnly` attribute `+r`)
+  2. `/Users/dev/nebulae-recovery-evidence/release-v0.2.4-windows-baseline/Nebulae_0.2.4_x64-setup.exe` on macOS (protected via POSIX `0444` and BSD `uchg` user immutable flag)
+  - *Protection scope*: Local filesystem read-only protected copies preventing accidental overwrite/deletion.
 - **Published GitHub Assets (v0.2.4)**:
   - `Nebulae_0.2.4_x64-setup.exe` (SHA-256 `fb7a2a56...`)
   - `Nebulae_0.2.4_x64-setup.exe.sha256`
