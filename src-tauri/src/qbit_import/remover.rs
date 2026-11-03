@@ -77,7 +77,7 @@ impl TrashProvider for DefaultTrashProvider {
                 pFrom: windows::core::PCWSTR(wide.as_ptr()),
                 pTo: windows::core::PCWSTR::null(),
                 fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
-                fAnyOperationsAborted: windows::Win32::Foundation::BOOL(0),
+                fAnyOperationsAborted: Default::default(),
                 hNameMappings: std::ptr::null_mut(),
                 lpszProgressTitle: windows::core::PCWSTR::null(),
             };
