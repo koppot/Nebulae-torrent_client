@@ -155,13 +155,56 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      set({ torrents: averageTransferSpeeds(reconcileRecheckState(data)), isLoading: false });
+      const prevTorrents = get().torrents;
+      const prevMap = new Map<string, TorrentItem>(prevTorrents.map((t) => [t.id, t]));
+
+      const merged = data.map((t) => {
+        const prev = prevMap.get(t.id);
+        if (!prev) return t;
+        return {
+          ...t,
+          files: t.files && t.files.length > 0 ? t.files : prev.files,
+          trackers: t.trackers && t.trackers.length > 0 ? t.trackers : prev.trackers,
+        };
+      });
+
+      set({ torrents: averageTransferSpeeds(reconcileRecheckState(merged)), isLoading: false });
+
+      const selId = get().selectedId;
+      if (selId) {
+        invoke<TorrentItem>('get_torrent_details', { id: selId })
+          .then((detail) => {
+            if (get().selectedId === selId && detail) {
+              set({
+                torrents: get().torrents.map((t) =>
+                  t.id === selId ? { ...t, files: detail.files, trackers: detail.trackers } : t
+                ),
+              });
+            }
+          })
+          .catch(() => {});
+      }
     } catch {
       set({ isLoading: false });
     }
   },
 
-  setSelectedId: (selectedId) => set({ selectedId }),
+  setSelectedId: (selectedId) => {
+    set({ selectedId });
+    if (selectedId) {
+      invoke<TorrentItem>('get_torrent_details', { id: selectedId })
+        .then((detail) => {
+          if (get().selectedId === selectedId && detail) {
+            set({
+              torrents: get().torrents.map((t) =>
+                t.id === selectedId ? { ...t, files: detail.files, trackers: detail.trackers } : t
+              ),
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  },
 
   pauseTorrent: async (id: string) => {
     try {

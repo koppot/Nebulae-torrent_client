@@ -152,6 +152,18 @@ export async function resolvePoster(
   torrentName: string,
   contentPath: string,
 ): Promise<string | null> {
+  // 0. Database persisted user-chosen or saved poster: highest priority!
+  if (infoHash) {
+    try {
+      const dbPoster = await invoke<string | null>('get_torrent_poster', { infoHash });
+      if (dbPoster && dbPoster.trim().length > 0) {
+        return dbPoster.trim();
+      }
+    } catch {
+      /* ignore and fall through */
+    }
+  }
+
   // 1. Per-torrent cache from a previous resolution of the same torrent.
   const cached = posterForTorrent(infoHash);
   if (cached) return cached;

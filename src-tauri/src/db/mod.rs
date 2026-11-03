@@ -48,6 +48,7 @@ impl Database {
             ("user_title_locked", "INTEGER DEFAULT 0"),
             // Feature 3: manual poster ordering
             ("sort_order", "INTEGER"),
+            ("poster_path", "TEXT"),
             // Feature 8/9: metadata provider attribution
             ("provider", "TEXT"),
             ("provider_id", "TEXT"),
@@ -346,7 +347,7 @@ impl Database {
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
                     sequential_download, first_last_piece_prio, super_seeding, racing_override,
-                    user_display_title, user_title_locked, sort_order, is_external, sync_miss_count,
+                    user_display_title, user_title_locked, sort_order, poster_path, is_external, sync_miss_count,
                     last_checked
              FROM torrent_metadata WHERE info_hash = ?1",
         )?;
@@ -363,9 +364,9 @@ impl Database {
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
             let utl_int: i32 = row.get(17).unwrap_or(0);
-            let is_ext_int: i32 = row.get(19).unwrap_or(0);
-            let miss_count: i64 = row.get(20).unwrap_or(0);
-            let lc_opt: Option<i64> = row.get(21).unwrap_or(None);
+            let is_ext_int: i32 = row.get(20).unwrap_or(0);
+            let miss_count: i64 = row.get(21).unwrap_or(0);
+            let lc_opt: Option<i64> = row.get(22).unwrap_or(None);
 
             Ok(Some(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -387,6 +388,7 @@ impl Database {
                 user_display_title: row.get(16)?,
                 user_title_locked: utl_int == 1,
                 sort_order: row.get(18)?,
+                poster_path: row.get(19)?,
                 is_external: is_ext_int == 1,
                 sync_miss_count: miss_count,
                 last_checked: lc_opt.map(|c| c.max(0) as u64),
@@ -404,7 +406,7 @@ impl Database {
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
                     sequential_download, first_last_piece_prio, super_seeding, racing_override,
-                    user_display_title, user_title_locked, sort_order, is_external, sync_miss_count,
+                    user_display_title, user_title_locked, sort_order, poster_path, is_external, sync_miss_count,
                     last_checked
              FROM torrent_metadata",
         )?;
@@ -420,9 +422,9 @@ impl Database {
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
             let utl_int: i32 = row.get(17).unwrap_or(0);
-            let is_ext_int: i32 = row.get(19).unwrap_or(0);
-            let miss_count: i64 = row.get(20).unwrap_or(0);
-            let lc_opt: Option<i64> = row.get(21).unwrap_or(None);
+            let is_ext_int: i32 = row.get(20).unwrap_or(0);
+            let miss_count: i64 = row.get(21).unwrap_or(0);
+            let lc_opt: Option<i64> = row.get(22).unwrap_or(None);
 
             Ok(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -444,6 +446,7 @@ impl Database {
                 user_display_title: row.get(16)?,
                 user_title_locked: utl_int == 1,
                 sort_order: row.get(18)?,
+                poster_path: row.get(19)?,
                 is_external: is_ext_int == 1,
                 sync_miss_count: miss_count,
                 last_checked: lc_opt.map(|c| c.max(0) as u64),
@@ -533,6 +536,47 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// Persist a chosen poster path or URL for a torrent.
+    pub fn set_torrent_poster(&self, info_hash: &str, poster_path: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let updated = conn.execute(
+            "UPDATE torrent_metadata
+             SET poster_path = ?1, added_at = COALESCE(added_at, ?2)
+             WHERE info_hash = ?3",
+            params![poster_path, now, info_hash],
+        )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT INTO torrent_metadata (info_hash, poster_path, added_at)
+                 VALUES (?1, ?2, ?3)",
+                params![info_hash, poster_path, now],
+            )?;
+        }
+        // Also update snatched_records if present
+        let _ = conn.execute(
+            "UPDATE snatched_records SET poster_path = ?1 WHERE info_hash = ?2",
+            params![poster_path, info_hash],
+        );
+        Ok(())
+    }
+
+    /// Retrieve the persisted poster path or URL for a torrent.
+    pub fn get_torrent_poster(&self, info_hash: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT poster_path FROM torrent_metadata WHERE info_hash = ?1")?;
+        let mut rows = stmt.query(params![info_hash])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
     }
 
     // ── Feature 5: removed-torrent → External reclassification ───────────────
@@ -718,6 +762,7 @@ pub struct TorrentDbMetadata {
     pub user_title_locked: bool,
     // Feature 3: manual poster ordering
     pub sort_order: Option<i64>,
+    pub poster_path: Option<String>,
     // Feature 5: removed-torrent tracking
     pub is_external: bool,
     pub sync_miss_count: i64,

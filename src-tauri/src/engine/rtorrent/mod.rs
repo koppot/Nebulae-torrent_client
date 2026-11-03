@@ -157,6 +157,7 @@ impl RtorrentRemoteEngine {
             total_pieces: int(16).max(0) as u32,
             sequential_download: false,
             first_last_piece_prio: false,
+            sort_order: None,
             super_seeding: false,
             last_checked: None,
             tags: Vec::new(),

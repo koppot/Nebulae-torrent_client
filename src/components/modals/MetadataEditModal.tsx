@@ -69,7 +69,7 @@ interface Props {
   infoHash: string;
   currentTitle: string;
   onClose: () => void;
-  onConfirmed: (newTitle: string, provider: string, providerId: string) => void;
+  onConfirmed: (newTitle: string, provider: string, providerId: string, posterUrl?: string) => void;
 }
 
 export const MetadataEditModal: React.FC<Props> = ({
@@ -125,23 +125,18 @@ export const MetadataEditModal: React.FC<Props> = ({
           : String(selected.data.mal_id);
 
       const newTitle = resultTitle(selected);
+      const posterUrl = resultPoster(selected);
 
-      // 1. Store user-defined title (locks it so rescans don't overwrite it).
-      await invoke('set_user_display_title', {
-        infoHash,
+      // Save user title, provider attribution, and poster directly to database
+      await invoke('save_media_metadata_and_poster', {
+        idOrHashOrPath: infoHash,
         title: newTitle,
-      });
-
-      // 2. Store provider attribution.
-      await invoke('set_media_provider', {
-        infoHash,
         provider: selected.provider,
         providerId: pid,
+        posterUrl: posterUrl ?? null,
       });
 
-      // 3. Fetch and cache the correct poster from the selected provider.
-      //    This overwrites any previously cached poster for this entry.
-      //    Poster fetch is best-effort — a failure does not block the confirm.
+      // Best-effort provider cache fetch
       try {
         if (selected.provider === 'tmdb') {
           const year = resultYear(selected);
@@ -150,11 +145,10 @@ export const MetadataEditModal: React.FC<Props> = ({
           await invoke('fetch_mal_anime', { title: newTitle });
         }
       } catch (posterErr) {
-        // Non-fatal: title and provider are already committed.
         console.warn('[MetadataEditModal] poster fetch failed:', posterErr);
       }
 
-      onConfirmed(newTitle, selected.provider, pid);
+      onConfirmed(newTitle, selected.provider, pid, posterUrl ?? undefined);
     } catch (e) {
       setError(String(e));
     } finally {

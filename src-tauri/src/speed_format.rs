@@ -293,6 +293,7 @@ mod tests {
             total_pieces: 0,
             sequential_download: false,
             first_last_piece_prio: false,
+            sort_order: None,
             super_seeding: false,
             last_checked: None,
             tags: Vec::new(),

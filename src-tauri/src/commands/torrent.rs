@@ -72,6 +72,8 @@ pub struct TorrentItem {
     pub sequential_download: bool,
     pub first_last_piece_prio: bool,
     #[serde(default)]
+    pub sort_order: Option<i64>,
+    #[serde(default)]
     pub super_seeding: bool,
     #[serde(default)]
     pub last_checked: Option<u64>,
@@ -333,6 +335,17 @@ pub async fn list_torrents(engine: State<'_, SharedEngine>) -> Result<Vec<Torren
     tokio::task::spawn_blocking(move || engine.list_torrents())
         .await
         .map_err(|e| format!("list_torrents task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn get_torrent_details(
+    id: String,
+    engine: State<'_, SharedEngine>,
+) -> Result<TorrentItem, String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.get_torrent_details(&id))
+        .await
+        .map_err(|e| format!("get_torrent_details task failed: {e}"))?
 }
 
 #[tauri::command]

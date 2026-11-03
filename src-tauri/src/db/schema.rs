@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     user_title_locked INTEGER DEFAULT 0,
     -- Feature 3: manual poster ordering (NULL = newly added, sorted last)
     sort_order INTEGER,
+    poster_path TEXT,
     -- Feature 8/9: metadata provider attribution
     provider TEXT,
     provider_id TEXT,

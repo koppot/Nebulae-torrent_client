@@ -699,6 +699,7 @@ pub fn run() {
             commands::settings::get_engine_identity_info,
             // Torrent & Engine
             commands::torrent::list_torrents,
+            commands::torrent::get_torrent_details,
             commands::torrent::open_torrent_folder,
             commands::torrent::add_torrent,
             commands::torrent::remove_torrent,
@@ -788,13 +789,11 @@ pub fn run() {
             commands::media::add_external_media,
             commands::media::list_external_media,
             commands::media::remove_external_media,
+            commands::media::set_external_media_title,
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
             commands::torrent::select_disc_folder,
             commands::torrent::select_disc_file,
-            commands::media::player_disc_chapters,
-            commands::media::player_disc_display_title,
-            commands::media::player_always_on_top,
             commands::media::player_list_tracks,
             commands::media::player_track_languages,
             commands::media::window_begin_drag,
@@ -836,6 +835,9 @@ pub fn run() {
             commands::library::set_posters_per_row,
             // Feature 8/9: metadata provider attribution
             commands::library::set_media_provider,
+            commands::library::set_torrent_poster,
+            commands::library::get_torrent_poster,
+            commands::library::save_media_metadata_and_poster,
             // Feature 8/9: multi-result metadata search
             commands::media::search_tmdb_titles,
             commands::media::search_mal_titles,

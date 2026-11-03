@@ -24,7 +24,7 @@ impl DefaultLocator {
         Self
     }
 
-    /// Checks if a candidate directory contains a non-empty BT_backup or a torrents.db
+    /// Checks if a candidate directory contains a BT_backup folder or a torrents.db
     pub fn inspect_dir(dir: &Path) -> (bool, bool) {
         if !dir.is_dir() {
             return (false, false);
@@ -34,24 +34,10 @@ impl DefaultLocator {
         let has_sqlite = sqlite_file.is_file();
 
         let bt_backup = dir.join("BT_backup");
-        let mut has_legacy = false;
-        if bt_backup.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&bt_backup) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_file() {
-                        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                            if ext.eq_ignore_ascii_case("fastresume")
-                                || ext.eq_ignore_ascii_case("torrent")
-                            {
-                                has_legacy = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let has_legacy = bt_backup.is_dir()
+            || dir.join("qBittorrent.ini").is_file()
+            || dir.join("categories.json").is_file()
+            || dir.join("logs").is_dir();
 
         (has_sqlite, has_legacy)
     }
@@ -157,7 +143,7 @@ impl LocatorTrait for DefaultLocator {
         let (has_sqlite, has_legacy) = Self::inspect_dir(&effective_dir);
         if !has_sqlite && !has_legacy {
             return Err(format!(
-                "The selected directory '{}' does not contain qBittorrent torrents.db or a non-empty BT_backup folder.",
+                "The selected directory '{}' does not appear to be a valid qBittorrent data directory (missing BT_backup or torrents.db).",
                 effective_dir.display()
             ));
         }

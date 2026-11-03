@@ -365,7 +365,7 @@ impl TransmissionRpcClient {
         };
 
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .build()
             .unwrap_or_default();
@@ -500,46 +500,90 @@ impl TransmissionRpcClient {
     }
 
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
-        let fields = vec![
-            "id",
-            "hashString",
-            "name",
-            "status",
-            "percentDone",
-            "downloadedEver",
-            "uploadedEver",
-            "secondsDownloading",
-            "secondsSeeding",
-            "rateDownload",
-            "rateUpload",
-            "sizeWhenDone",
-            "totalSize",
-            "leftUntilDone",
-            "pieceCount",
-            "pieceSize",
-            "downloadDir",
-            "addedDate",
-            "doneDate",
-            "eta",
-            "errorString",
-            "torrentFile",
-            "trackerStats",
-            "files",
-            "fileStats",
-            "peers",
-            "peerStats",
-            // Racing Mode state fields
-            "bandwidthPriority",
-            "honorsSessionLimits",
-            "peer-limit",
-            // Availability / health
-            "desiredAvailable",
-            "corruptEver",
-            "etaIdle",
-            // Verification / errors
-            "error",
-            "recheckProgress",
-        ];
+        let fields = if ids.is_some() {
+            vec![
+                "id",
+                "hashString",
+                "name",
+                "status",
+                "percentDone",
+                "downloadedEver",
+                "uploadedEver",
+                "secondsDownloading",
+                "secondsSeeding",
+                "rateDownload",
+                "rateUpload",
+                "sizeWhenDone",
+                "totalSize",
+                "leftUntilDone",
+                "pieceCount",
+                "pieceSize",
+                "downloadDir",
+                "addedDate",
+                "doneDate",
+                "eta",
+                "errorString",
+                "torrentFile",
+                "trackerStats",
+                "files",
+                "fileStats",
+                "peers",
+                "peerStats",
+                "peersConnected",
+                // Racing Mode state fields
+                "bandwidthPriority",
+                "honorsSessionLimits",
+                "peer-limit",
+                // Availability / health
+                "desiredAvailable",
+                "corruptEver",
+                "etaIdle",
+                // Verification / errors
+                "error",
+                "recheckProgress",
+            ]
+        } else {
+            // Client-wide overview: omit massive nested arrays (files, fileStats, peers, peerStats)
+            // to prevent JSON payload explosion, timeout, and response decode failures when
+            // hundreds of torrents or multi-disc sets are present.
+            vec![
+                "id",
+                "hashString",
+                "name",
+                "status",
+                "percentDone",
+                "downloadedEver",
+                "uploadedEver",
+                "secondsDownloading",
+                "secondsSeeding",
+                "rateDownload",
+                "rateUpload",
+                "sizeWhenDone",
+                "totalSize",
+                "leftUntilDone",
+                "pieceCount",
+                "pieceSize",
+                "downloadDir",
+                "addedDate",
+                "doneDate",
+                "eta",
+                "errorString",
+                "torrentFile",
+                "trackerStats",
+                "peersConnected",
+                // Racing Mode state fields
+                "bandwidthPriority",
+                "honorsSessionLimits",
+                "peer-limit",
+                // Availability / health
+                "desiredAvailable",
+                "corruptEver",
+                "etaIdle",
+                // Verification / errors
+                "error",
+                "recheckProgress",
+            ]
+        };
 
         let mut args = json!({ "fields": fields });
         if let Some(id_list) = ids {
@@ -1644,7 +1688,13 @@ impl TransmissionTorrentEngine {
         let peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        {
+        let is_linked = db
+            .get_setting("adc_linked")
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        if is_linked {
             let passkey_opt = get_secret(&passkey_secret_target())
                 .ok()
                 .filter(|p| !p.trim().is_empty())
@@ -1668,6 +1718,8 @@ impl TransmissionTorrentEngine {
                     info!("[enforcement] passkey empty — enforcement poller not started (link your ADC account)");
                 }
             }
+        } else {
+            info!("[enforcement] ADC account not linked — enforcement poller not started");
         }
 
         // 10. Load GeoLite2 resolver first so it can be passed to the eviction
@@ -1949,6 +2001,399 @@ impl TransmissionTorrentEngine {
         let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
         info!("transmission engine shut down gracefully");
     }
+
+    fn map_raw_torrent(
+        &self,
+        t: &Value,
+        cached: &HashMap<String, TorrentDbMetadata>,
+        is_ks: bool,
+        user_peer_limit: u32,
+        global_racing: bool,
+    ) -> TorrentItem {
+        let id = t
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .map(|i| i.to_string())
+            .unwrap_or_default();
+        let info_hash = t
+            .get("hashString")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_lowercase();
+        let name = t
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unnamed Torrent")
+            .to_string();
+
+        let meta = cached.get(&info_hash);
+
+        let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
+        let percent_done = t.get("percentDone").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let recheck_progress = t
+            .get("recheckProgress")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        let error_num = t.get("error").and_then(|v| v.as_i64()).unwrap_or(0);
+        let error_string = t.get("errorString").and_then(|v| v.as_str()).unwrap_or("");
+        let downloaded_ever = t
+            .get("downloadedEver")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let uploaded_ever = t.get("uploadedEver").and_then(|v| v.as_u64()).unwrap_or(0);
+        let seconds_downloading = t
+            .get("secondsDownloading")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let seconds_seeding = t
+            .get("secondsSeeding")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let rate_dl = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
+        let rate_ul = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
+        let total_bytes = t
+            .get("totalSize")
+            .or_else(|| t.get("sizeWhenDone"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let download_dir = t
+            .get("downloadDir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let added_on = t.get("addedDate").and_then(|v| v.as_u64()).unwrap_or(0);
+        let completed_on = t
+            .get("doneDate")
+            .and_then(|v| v.as_u64())
+            .filter(|&d| d > 0);
+        let piece_size = t
+            .get("pieceSize")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1048576) as u32;
+        let total_pieces = t.get("pieceCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+        let eta_raw = t.get("eta").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let eta_seconds = if eta_raw > 0 {
+            Some(eta_raw as u64)
+        } else {
+            None
+        };
+
+        let status = if is_ks {
+            "Paused".to_string()
+        } else if error_num == 3 {
+            "Error".to_string()
+        } else {
+            match status_num {
+                0 => "Paused".to_string(),
+                1 => "Queued for checking".to_string(),
+                2 => "Checking".to_string(),
+                3 | 4 => "Downloading".to_string(),
+                5 | 6 => "Seeding".to_string(),
+                _ => "Paused".to_string(),
+            }
+        };
+
+        let progress = match status_num {
+            1 => 0.0f32,
+            2 => recheck_progress,
+            _ => percent_done,
+        };
+
+        let ratio = if uploaded_ever == 0 {
+            0.0f32
+        } else if downloaded_ever > 0 {
+            uploaded_ever as f32 / downloaded_ever as f32
+        } else {
+            f32::INFINITY
+        };
+
+        // Files mapping
+        let mut files = Vec::new();
+        if let Some(raw_files) = t.get("files").and_then(|v| v.as_array()) {
+            let file_stats = t.get("fileStats").and_then(|v| v.as_array());
+            for (idx, f) in raw_files.iter().enumerate() {
+                let fname = f
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let fsize = f.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
+                let fdone = f
+                    .get("bytesCompleted")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let fprog = if fsize > 0 {
+                    (fdone as f64 / fsize as f64).min(1.0) as f32
+                } else {
+                    1.0
+                };
+
+                let wanted = file_stats
+                    .and_then(|fs| fs.get(idx))
+                    .and_then(|s| s.get("wanted"))
+                    .and_then(|w| w.as_bool())
+                    .unwrap_or(true);
+
+                let raw_prio = file_stats
+                    .and_then(|fs| fs.get(idx))
+                    .and_then(|s| s.get("priority"))
+                    .and_then(|p| p.as_i64())
+                    .unwrap_or(0);
+                let ui_prio = if !wanted {
+                    0
+                } else if raw_prio == 1 {
+                    2
+                } else {
+                    1
+                };
+
+                files.push(TorrentFileItem {
+                    index: idx as u32,
+                    name: fname,
+                    size_bytes: fsize,
+                    progress: fprog,
+                    priority: ui_prio,
+                });
+            }
+        }
+
+        // Trackers mapping and swarm counts
+        let mut trackers = Vec::new();
+        let mut max_seeds: Option<u32> = None;
+        let mut max_peers: u32 = 0;
+
+        if let Some(tr_stats) = t.get("trackerStats").and_then(|v| v.as_array()) {
+            for (tier, tr) in tr_stats.iter().enumerate() {
+                let url = tr
+                    .get("announce")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let seeder_count = tr
+                    .get("seederCount")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&s| s >= 0)
+                    .map(|s| s as u32);
+                let leecher_count = tr
+                    .get("leecherCount")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&l| l >= 0)
+                    .map(|l| l as u32);
+                let last_announce_res = tr
+                    .get("lastAnnounceResult")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if let Some(s) = seeder_count {
+                    max_seeds = Some(max_seeds.map_or(s, |m| m.max(s)));
+                }
+                if let Some(l) = leecher_count {
+                    max_peers = max_peers.max(l);
+                }
+
+                let last_announce_time = tr
+                    .get("lastAnnounceTime")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&s| s > 0);
+                let next_announce_time = tr
+                    .get("nextAnnounceTime")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&s| s > 0);
+
+                let last_announce_succeeded = tr
+                    .get("lastAnnounceSucceeded")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let has_announced = tr
+                    .get("hasAnnounced")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let tracker_status = if last_announce_succeeded {
+                    "Working".to_string()
+                } else if !has_announced || last_announce_time.is_none() {
+                    "Waiting for announce...".to_string()
+                } else {
+                    "Not working".to_string()
+                };
+
+                let tracker_message = if !last_announce_res.is_empty() {
+                    last_announce_res
+                } else if last_announce_succeeded {
+                    "Success".to_string()
+                } else {
+                    "Waiting for announce...".to_string()
+                };
+
+                trackers.push(TorrentTrackerItem {
+                    tier: tier as u32,
+                    url,
+                    status: tracker_status,
+                    seeds: seeder_count,
+                    peers: leecher_count,
+                    downloaded: 0,
+                    message: tracker_message,
+                    last_announce: last_announce_time,
+                    next_announce: next_announce_time,
+                });
+            }
+        }
+
+        // Connected peers count from peersConnected or peers array
+        let connected_peers = t
+            .get("peersConnected")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u32)
+            .or_else(|| {
+                t.get("peers")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len() as u32)
+            })
+            .unwrap_or(0);
+        let display_peers = max_peers.max(connected_peers);
+
+        let is_media = files.iter().any(|f| {
+            let lower = f.name.to_lowercase();
+            lower.ends_with(".mkv")
+                || lower.ends_with(".mp4")
+                || lower.ends_with(".avi")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".m2ts")
+                || lower.ends_with(".iso")
+                || lower.ends_with(".vob")
+        });
+
+        let bandwidth_priority = t
+            .get("bandwidthPriority")
+            .and_then(|v| v.as_i64())
+            .map(|p| p as i8);
+
+        let peer_limit = t
+            .get("peer-limit")
+            .and_then(|v| v.as_i64())
+            .map(|l| l as u32);
+
+        let is_downloading = status_num == 3 || status_num == 4;
+        let is_seeding = status_num == 5 || status_num == 6;
+
+        let want_racing = meta
+            .and_then(|m| m.racing_override)
+            .unwrap_or(global_racing);
+        let at_racing_preset = bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150;
+        let mut racing_now = at_racing_preset;
+
+        if is_downloading {
+            if want_racing && !at_racing_preset {
+                let applied = self
+                    .rpc_client
+                    .torrent_set(
+                        &id,
+                        serde_json::json!({
+                            "peer-limit": 150i64,
+                            "bandwidthPriority": 1i64,
+                            "honorsSessionLimits": true,
+                        }),
+                    )
+                    .is_ok();
+                racing_now = applied;
+            } else if !want_racing && at_racing_preset {
+                let restored = self
+                    .rpc_client
+                    .torrent_set(
+                        &id,
+                        serde_json::json!({
+                            "peer-limit": user_peer_limit as i64,
+                            "bandwidthPriority": 0i64,
+                            "honorsSessionLimits": true,
+                        }),
+                    )
+                    .is_ok();
+                racing_now = !restored;
+            }
+        } else if is_seeding && bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150 {
+            let _ = self.rpc_client.torrent_set(
+                &id,
+                serde_json::json!({
+                    "peer-limit": user_peer_limit as i64,
+                    "bandwidthPriority": 0i64,
+                    "honorsSessionLimits": true,
+                }),
+            );
+        }
+
+        let is_racing_applied = is_downloading && racing_now;
+        let racing_mode = Some(is_racing_applied);
+
+        let display_name = meta
+            .and_then(|m| m.user_display_title.clone())
+            .or_else(|| meta.and_then(|m| m.display_title.clone()))
+            .unwrap_or_else(|| name.clone());
+
+        let poster_url = meta.and_then(|m| m.poster_path.clone());
+
+        TorrentItem {
+            id,
+            name: display_name,
+            total_bytes,
+            downloaded_bytes: downloaded_ever,
+            uploaded_bytes: uploaded_ever,
+            download_rate: rate_dl,
+            upload_rate: rate_ul,
+            seconds_downloading,
+            seconds_seeding,
+            progress,
+            status,
+            eta_seconds,
+            seeds: max_seeds,
+            peers: display_peers,
+            ratio,
+            category: meta.and_then(|m| m.category.clone()).unwrap_or_default(),
+            is_media,
+            poster_url,
+            info_hash: info_hash.clone(),
+            save_path: meta
+                .and_then(|m| m.save_path.clone())
+                .unwrap_or(download_dir),
+            added_on,
+            completed_on,
+            comment: String::new(),
+            created_by: String::new(),
+            piece_size,
+            total_pieces,
+            sequential_download: meta.map(|m| m.sequential_download).unwrap_or(false),
+            first_last_piece_prio: meta.map(|m| m.first_last_piece_prio).unwrap_or(false),
+            sort_order: meta.and_then(|m| m.sort_order),
+            super_seeding: false,
+            last_checked: meta.and_then(|m| m.last_checked),
+            tags: meta
+                .and_then(|m| m.labels.as_ref())
+                .map(|l| {
+                    l.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            files,
+            trackers,
+            download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),
+            upload_limit_kib: meta.map(|m| m.upload_limit_kib).unwrap_or(0),
+            ratio_limit: meta.map(|m| m.ratio_limit).unwrap_or(-1.0),
+            bandwidth_priority,
+            peer_limit,
+            racing_mode,
+            error_string: if error_string.is_empty() {
+                None
+            } else {
+                Some(error_string.to_string())
+            },
+            media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
+                &name.clone(),
+            )),
+        }
+    }
 }
 
 impl TorrentEngine for TransmissionTorrentEngine {
@@ -1974,421 +2419,34 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let global_racing = user_settings.racing_mode_enabled;
 
         let mut items = Vec::new();
-
-        for t in raw_torrents {
-            let id = t
-                .get("id")
-                .and_then(|v| v.as_i64())
-                .map(|i| i.to_string())
-                .unwrap_or_default();
-            let info_hash = t
-                .get("hashString")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_lowercase();
-            let name = t
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unnamed Torrent")
-                .to_string();
-
-            let meta = cached.get(&info_hash);
-
-            let status_num = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
-            let percent_done = t.get("percentDone").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-            let recheck_progress = t
-                .get("recheckProgress")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0) as f32;
-            let error_num = t.get("error").and_then(|v| v.as_i64()).unwrap_or(0);
-            let error_string = t.get("errorString").and_then(|v| v.as_str()).unwrap_or("");
-            let downloaded_ever = t
-                .get("downloadedEver")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let uploaded_ever = t.get("uploadedEver").and_then(|v| v.as_u64()).unwrap_or(0);
-            // Cumulative ACTIVE seconds per direction - the denominators of the
-            // since-transfer-began average rates displayed in the Manager.
-            let seconds_downloading = t
-                .get("secondsDownloading")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let seconds_seeding = t
-                .get("secondsSeeding")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let rate_dl = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
-            let rate_ul = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
-            let total_bytes = t
-                .get("totalSize")
-                .or_else(|| t.get("sizeWhenDone"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let download_dir = t
-                .get("downloadDir")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let added_on = t.get("addedDate").and_then(|v| v.as_u64()).unwrap_or(0);
-            let completed_on = t
-                .get("doneDate")
-                .and_then(|v| v.as_u64())
-                .filter(|&d| d > 0);
-            let piece_size = t
-                .get("pieceSize")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1048576) as u32;
-            let total_pieces = t.get("pieceCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-            let eta_raw = t.get("eta").and_then(|v| v.as_i64()).unwrap_or(-1);
-            let eta_seconds = if eta_raw > 0 {
-                Some(eta_raw as u64)
-            } else {
-                None
-            };
-
-            // Status mapping per design note table:
-            // 0: Stopped -> "Paused"
-            // 1: Queued to check -> "Queued for checking"
-            // 2: Checking -> "Checking"
-            // 3: Queued to download, 4: Downloading -> "Downloading"
-            // 5: Queued to seed, 6: Seeding -> "Seeding"
-            // Local fatal errors (e.g. missing files on disk, permission denied) -> "Error"
-            // Tracker warnings (1) or tracker errors (2) do not override the transfer status.
-            let status = if is_ks {
-                "Paused".to_string()
-            } else if error_num == 3 {
-                "Error".to_string()
-            } else {
-                match status_num {
-                    0 => "Paused".to_string(),
-                    1 => "Queued for checking".to_string(),
-                    2 => "Checking".to_string(),
-                    3 | 4 => "Downloading".to_string(),
-                    5 | 6 => "Seeding".to_string(),
-                    _ => "Paused".to_string(),
-                }
-            };
-
-            // During checking or check-queueing, progress reflects verification
-            // progress (0.0 when queued, recheck_progress when checking), NOT
-            // percent_done. When not checking, progress is percent_done.
-            let progress = match status_num {
-                1 => 0.0f32,
-                2 => recheck_progress,
-                _ => percent_done,
-            };
-
-            // Honest ratio (owner correction): a torrent whose data was
-            // already on disk at add-time (verified to 100% with zero bytes
-            // downloaded) must NOT display a synthetic ratio of 1. Ratio is
-            // 0 until bytes have actually been uploaded; infinite (shown as
-            // ∞) only when upload happened with no recorded download.
-            let ratio = if uploaded_ever == 0 {
-                0.0f32
-            } else if downloaded_ever > 0 {
-                uploaded_ever as f32 / downloaded_ever as f32
-            } else {
-                f32::INFINITY
-            };
-
-            // Files mapping
-            let mut files = Vec::new();
-            if let Some(raw_files) = t.get("files").and_then(|v| v.as_array()) {
-                let file_stats = t.get("fileStats").and_then(|v| v.as_array());
-                for (idx, f) in raw_files.iter().enumerate() {
-                    let fname = f
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let fsize = f.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let fdone = f
-                        .get("bytesCompleted")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    let fprog = if fsize > 0 {
-                        (fdone as f64 / fsize as f64).min(1.0) as f32
-                    } else {
-                        1.0
-                    };
-
-                    let wanted = file_stats
-                        .and_then(|fs| fs.get(idx))
-                        .and_then(|s| s.get("wanted"))
-                        .and_then(|w| w.as_bool())
-                        .unwrap_or(true);
-
-                    // Transmission file priority: -1 low, 0 normal, 1 high.
-                    // UI scale: 0 = do not download, 1 = normal, 2 = high
-                    // (low displays as normal — the UI has no low bucket).
-                    let raw_prio = file_stats
-                        .and_then(|fs| fs.get(idx))
-                        .and_then(|s| s.get("priority"))
-                        .and_then(|p| p.as_i64())
-                        .unwrap_or(0);
-                    let ui_prio = if !wanted {
-                        0
-                    } else if raw_prio == 1 {
-                        2
-                    } else {
-                        1
-                    };
-
-                    files.push(TorrentFileItem {
-                        index: idx as u32,
-                        name: fname,
-                        size_bytes: fsize,
-                        progress: fprog,
-                        priority: ui_prio,
-                    });
-                }
-            }
-
-            // Trackers mapping and swarm counts
-            let mut trackers = Vec::new();
-            let mut max_seeds: Option<u32> = None;
-            let mut max_peers: u32 = 0;
-
-            if let Some(tr_stats) = t.get("trackerStats").and_then(|v| v.as_array()) {
-                for (tier, tr) in tr_stats.iter().enumerate() {
-                    let url = tr
-                        .get("announce")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let seeder_count = tr
-                        .get("seederCount")
-                        .and_then(|v| v.as_i64())
-                        .filter(|&s| s >= 0)
-                        .map(|s| s as u32);
-                    let leecher_count = tr
-                        .get("leecherCount")
-                        .and_then(|v| v.as_i64())
-                        .filter(|&l| l >= 0)
-                        .map(|l| l as u32);
-                    let last_announce_res = tr
-                        .get("lastAnnounceResult")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    if let Some(s) = seeder_count {
-                        max_seeds = Some(max_seeds.map_or(s, |m| m.max(s)));
-                    }
-                    if let Some(l) = leecher_count {
-                        max_peers = max_peers.max(l);
-                    }
-
-                    let last_announce_time = tr
-                        .get("lastAnnounceTime")
-                        .and_then(|v| v.as_i64())
-                        .filter(|&s| s > 0);
-                    let next_announce_time = tr
-                        .get("nextAnnounceTime")
-                        .and_then(|v| v.as_i64())
-                        .filter(|&s| s > 0);
-
-                    let last_announce_succeeded = tr
-                        .get("lastAnnounceSucceeded")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let has_announced = tr
-                        .get("hasAnnounced")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-
-                    let tracker_status = if last_announce_succeeded {
-                        "Working".to_string()
-                    } else if !has_announced || last_announce_time.is_none() {
-                        "Waiting for announce...".to_string()
-                    } else {
-                        "Not working".to_string()
-                    };
-
-                    let tracker_message = if !last_announce_res.is_empty() {
-                        last_announce_res
-                    } else if last_announce_succeeded {
-                        "Success".to_string()
-                    } else {
-                        "Waiting for announce...".to_string()
-                    };
-
-                    trackers.push(TorrentTrackerItem {
-                        tier: tier as u32,
-                        url,
-                        status: tracker_status,
-                        seeds: seeder_count,
-                        peers: leecher_count,
-                        downloaded: 0,
-                        message: tracker_message,
-                        last_announce: last_announce_time,
-                        next_announce: next_announce_time,
-                    });
-                }
-            }
-
-            // Connected peers count from peers array
-            let connected_peers = t
-                .get("peers")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len() as u32)
-                .unwrap_or(0);
-            let display_peers = max_peers.max(connected_peers);
-
-            let is_media = files.iter().any(|f| {
-                let lower = f.name.to_lowercase();
-                lower.ends_with(".mkv")
-                    || lower.ends_with(".mp4")
-                    || lower.ends_with(".avi")
-                    || lower.ends_with(".ts")
-                    || lower.ends_with(".m2ts")
-                    || lower.ends_with(".iso")
-                    || lower.ends_with(".vob")
-            });
-
-            let bandwidth_priority = t
-                .get("bandwidthPriority")
-                .and_then(|v| v.as_i64())
-                .map(|p| p as i8);
-
-            let peer_limit = t
-                .get("peer-limit")
-                .and_then(|v| v.as_i64())
-                .map(|l| l as u32);
-
-            let is_downloading = status_num == 3 || status_num == 4;
-            let is_seeding = status_num == 5 || status_num == 6;
-
-            // Racing Mode policy for this torrent: its own saved choice (the
-            // new-download option or a manual toggle) wins over the global
-            // preset; without one it follows the global preset.
-            let want_racing = meta
-                .and_then(|m| m.racing_override)
-                .unwrap_or(global_racing);
-            let at_racing_preset = bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150;
-            let mut racing_now = at_racing_preset;
-
-            // Policy synchronization:
-            // 1. Actively downloading torrents: apply Racing mode when wanted, restore when not
-            if is_downloading {
-                if want_racing && !at_racing_preset {
-                    let applied = self
-                        .rpc_client
-                        .torrent_set(
-                            &id,
-                            serde_json::json!({
-                                "peer-limit": 150i64,
-                                "bandwidthPriority": 1i64,
-                                "honorsSessionLimits": true,
-                            }),
-                        )
-                        .is_ok();
-                    racing_now = applied;
-                } else if !want_racing && at_racing_preset {
-                    let restored = self
-                        .rpc_client
-                        .torrent_set(
-                            &id,
-                            serde_json::json!({
-                                "peer-limit": user_peer_limit as i64,
-                                "bandwidthPriority": 0i64,
-                                "honorsSessionLimits": true,
-                            }),
-                        )
-                        .is_ok();
-                    racing_now = !restored;
-                }
-            } else if is_seeding {
-                // 2. Actively seeding torrents: must NEVER retain downloading Racing mode overrides
-                if bandwidth_priority == Some(1) && peer_limit.unwrap_or(0) >= 150 {
-                    let _ = self.rpc_client.torrent_set(
-                        &id,
-                        serde_json::json!({
-                            "peer-limit": user_peer_limit as i64,
-                            "bandwidthPriority": 0i64,
-                            "honorsSessionLimits": true,
-                        }),
-                    );
-                }
-            }
-
-            // Applied indicators (strictly following state applicability):
-            // Racing mode applied: actively downloading AND the preset is in
-            // effect on this torrent after the sync above (a torrent pinned off
-            // while the global preset is on correctly reports false).
-            let is_racing_applied = is_downloading && racing_now;
-            let racing_mode = Some(is_racing_applied);
-
-            items.push(TorrentItem {
-                id,
-                name: meta
-                    .and_then(|m| m.display_title.clone())
-                    .unwrap_or(name.clone()),
-                total_bytes,
-                downloaded_bytes: downloaded_ever,
-                uploaded_bytes: uploaded_ever,
-                download_rate: rate_dl,
-                upload_rate: rate_ul,
-                seconds_downloading,
-                seconds_seeding,
-                progress,
-                status,
-                eta_seconds,
-                seeds: max_seeds,
-                peers: display_peers,
-                ratio,
-                category: meta.and_then(|m| m.category.clone()).unwrap_or_default(),
-                is_media,
-                poster_url: None,
-                info_hash: info_hash.clone(),
-                save_path: meta
-                    .and_then(|m| m.save_path.clone())
-                    .unwrap_or(download_dir),
-                added_on,
-                completed_on,
-                comment: String::new(),
-                created_by: String::new(),
-                piece_size,
-                total_pieces,
-                sequential_download: meta.map(|m| m.sequential_download).unwrap_or(false),
-                first_last_piece_prio: meta.map(|m| m.first_last_piece_prio).unwrap_or(false),
-                // The inspected adapter does not perform an engine operation for
-                // superseeding, so no torrent is reported as superseeding. The
-                // stored flags (global setting and per-torrent column) are
-                // preferences, not engine state: they stay in the database as
-                // saved and are not shown as active behavior.
-                super_seeding: false,
-                last_checked: meta.and_then(|m| m.last_checked),
-                tags: meta
-                    .and_then(|m| m.labels.as_ref())
-                    .map(|l| {
-                        l.split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                files,
-                trackers,
-                download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),
-                upload_limit_kib: meta.map(|m| m.upload_limit_kib).unwrap_or(0),
-                ratio_limit: meta.map(|m| m.ratio_limit).unwrap_or(-1.0),
-                bandwidth_priority,
-                peer_limit,
-                racing_mode,
-                error_string: if error_string.is_empty() {
-                    None
-                } else {
-                    Some(error_string.to_string())
-                },
-                media_meta: Some(crate::utils::media_parser::MediaTitleParser::parse(
-                    &name.clone(),
-                )),
-            });
+        for t in &raw_torrents {
+            items.push(self.map_raw_torrent(t, &cached, is_ks, user_peer_limit, global_racing));
         }
 
         Ok(items)
+    }
+
+    fn get_torrent_details(&self, id: &str) -> Result<TorrentItem, String> {
+        let raw_torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let t = raw_torrents
+            .first()
+            .ok_or_else(|| format!("Torrent {id} not found in Transmission"))?;
+        let cached = self.metadata_cache.lock().unwrap().clone();
+        let is_ks = self.kill_switch_active.load(Ordering::SeqCst);
+
+        let user_settings = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
+            .unwrap_or_default();
+        let user_peer_limit = user_settings.max_connections_per_torrent.max(1);
+        let global_racing = user_settings.racing_mode_enabled;
+
+        Ok(self.map_raw_torrent(t, &cached, is_ks, user_peer_limit, global_racing))
     }
 
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {

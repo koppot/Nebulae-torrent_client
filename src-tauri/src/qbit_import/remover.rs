@@ -50,6 +50,12 @@ impl TrashProvider for DefaultTrashProvider {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::Win32::UI::Shell::{
+                SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+                FO_DELETE, SHFILEOPSTRUCTW,
+            };
+
             let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             let path_str = canon.to_string_lossy();
             let clean_path = if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
@@ -59,6 +65,28 @@ impl TrashProvider for DefaultTrashProvider {
             } else {
                 path_str.to_string()
             };
+
+            // SHFileOperationW requires a double-null-terminated wide string.
+            let mut wide: Vec<u16> = std::ffi::OsStr::new(&clean_path).encode_wide().collect();
+            wide.push(0);
+            wide.push(0);
+
+            let mut op = SHFILEOPSTRUCTW {
+                hwnd: windows::Win32::Foundation::HWND::default(),
+                wFunc: FO_DELETE,
+                pFrom: windows::core::PCWSTR(wide.as_ptr()),
+                pTo: windows::core::PCWSTR::null(),
+                fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
+                fAnyOperationsAborted: windows::Win32::Foundation::BOOL(0),
+                hNameMappings: std::ptr::null_mut(),
+                lpszProgressTitle: windows::core::PCWSTR::null(),
+            };
+
+            let ret = unsafe { SHFileOperationW(&mut op) };
+            if ret == 0 && !op.fAnyOperationsAborted.as_bool() {
+                return Ok(TrashMethod::RecycleBin);
+            }
+
             let script = format!(
                 "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{}', 'OnlyErrorDialogs', 'SendToRecycleBin')",
                 clean_path.replace('\'', "''")

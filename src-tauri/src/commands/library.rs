@@ -93,3 +93,69 @@ pub fn set_media_provider(
     db.set_media_provider(&info_hash, &provider, &provider_id)
         .map_err(|e| format!("set_media_provider: {e}"))
 }
+
+/// Persist a chosen poster path or URL for a torrent.
+#[tauri::command]
+pub fn set_torrent_poster(
+    info_hash: String,
+    poster_path: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    db.set_torrent_poster(&info_hash, &poster_path)
+        .map_err(|e| format!("set_torrent_poster: {e}"))
+}
+
+/// Retrieve the persisted poster path or URL for a torrent.
+#[tauri::command]
+pub fn get_torrent_poster(
+    info_hash: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<Option<String>, String> {
+    db.get_torrent_poster(&info_hash)
+        .map_err(|e| format!("get_torrent_poster: {e}"))
+}
+
+/// Unified metadata and poster saving command supporting Downloaded (info-hash)
+/// and External media (filepath).
+#[tauri::command]
+pub fn save_media_metadata_and_poster(
+    app: tauri::AppHandle,
+    id_or_hash_or_path: String,
+    title: String,
+    provider: String,
+    provider_id: String,
+    poster_url: Option<String>,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    let clean = id_or_hash_or_path.trim();
+    let is_hash = clean.len() == 40 && clean.chars().all(|c| c.is_ascii_hexdigit());
+
+    if is_hash {
+        let hash = clean.to_lowercase();
+        let _ = db.set_user_display_title(&hash, &title, true);
+        let _ = db.set_media_provider(&hash, &provider, &provider_id);
+        if let Some(ref p) = poster_url {
+            let _ = db.set_torrent_poster(&hash, p);
+        }
+    } else {
+        // External media path or title
+        let _ =
+            crate::commands::media::set_external_media_title(app, clean.to_string(), title.clone());
+
+        // Also check if any torrent_metadata row has matching save_path
+        if let Ok(all) = db.list_all_torrent_metadata() {
+            for (h, m) in all {
+                if let Some(ref sp) = m.save_path {
+                    if sp == clean || clean.starts_with(sp) {
+                        let _ = db.set_user_display_title(&h, &title, true);
+                        let _ = db.set_media_provider(&h, &provider, &provider_id);
+                        if let Some(ref p) = poster_url {
+                            let _ = db.set_torrent_poster(&h, p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}

@@ -4115,18 +4115,6 @@ pub fn list_external_media(
                 continue;
             }
 
-            // Reconstruct the content path from save_path.
-            let raw_path = match meta.save_path.as_deref() {
-                Some(p) if !p.is_empty() => p.to_string(),
-                _ => continue,
-            };
-            let norm_path = release_root_of(&raw_path);
-
-            // Skip if already covered by sidecar.
-            if !seen_paths.insert(norm_path.clone()) {
-                continue;
-            }
-
             // Use user-defined title if set; fall back to provider title, then info_hash.
             let title = meta
                 .user_display_title
@@ -4134,6 +4122,32 @@ pub fn list_external_media(
                 .or(meta.display_title.as_deref())
                 .unwrap_or(&meta.info_hash)
                 .to_string();
+
+            // Reconstruct the content path from save_path and display_title.
+            let raw_path = match meta.save_path.as_deref() {
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            };
+            let candidate_path = std::path::Path::new(raw_path);
+            let torrent_name = meta.display_title.as_deref().unwrap_or(&title);
+            let full_path = if candidate_path.ends_with(torrent_name)
+                || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
+            {
+                candidate_path.to_path_buf()
+            } else {
+                candidate_path.join(torrent_name)
+            };
+
+            let norm_path = if full_path.exists() {
+                full_path.to_string_lossy().to_string()
+            } else {
+                release_root_of(raw_path)
+            };
+
+            // Skip if already covered by sidecar.
+            if !seen_paths.insert(norm_path.clone()) {
+                continue;
+            }
 
             // Extract year from "Title (YYYY)" pattern.
             let year = title.rfind(" (").and_then(|i| {
@@ -4168,6 +4182,43 @@ pub fn list_external_media(
 pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let mut items = read_external_store(&app);
     items.retain(|m| m.path != path);
+    write_external_store(&app, &items)
+}
+
+/// Update the display title of an external media item.
+#[tauri::command]
+pub fn set_external_media_title(
+    app: tauri::AppHandle,
+    path: String,
+    title: String,
+) -> Result<(), String> {
+    let mut items = read_external_store(&app);
+    let norm = release_root_of(&path);
+    let mut found = false;
+    for m in &mut items {
+        if m.path == path || m.path == norm {
+            m.title = title.clone();
+            found = true;
+        }
+    }
+    if !found {
+        let year = title.rfind(" (").and_then(|i| {
+            let s = &title[i + 2..];
+            s.find(')').and_then(|j| s[..j].parse::<i32>().ok())
+        });
+        let kind = classify_external(&norm);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        items.push(ExternalMedia {
+            path: norm,
+            title,
+            year,
+            kind,
+            added_ms: now_ms,
+        });
+    }
     write_external_store(&app, &items)
 }
 

@@ -158,6 +158,7 @@ export interface TorrentItem {
   total_pieces: number;
   sequential_download: boolean;
   first_last_piece_prio: boolean;
+  sort_order?: number | null;
   bandwidthPriority?: number; // 1 = high, 0 = normal, -1 = low
   peerLimit?: number;
   racingMode?: boolean;

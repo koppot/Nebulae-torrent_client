@@ -102,7 +102,7 @@ export const folderOf = (t: TorrentItem): string => {
 };
 
 export const SimpleMediaView: React.FC = () => {
-  const { torrents, setSelectedId } = useTorrentStore();
+  const { torrents, setSelectedId, fetchTorrents } = useTorrentStore();
   const { setShowAddTorrent, setViewMode, searchQuery } = useUiStore();
   const { fetchSeedTimeRecords } = useTrackerStore();
   const {
@@ -230,6 +230,7 @@ export const SimpleMediaView: React.FC = () => {
   const [editingFor, setEditingFor] = useState<{ infoHash: string; title: string } | null>(null);
   /** Inline rename: tracks which item card is in rename mode + current input value. */
   const [renamingFor, setRenamingFor] = useState<string | null>(null);
+  const [renamingExtPath, setRenamingExtPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   // Poster order — applied to the readyToWatch groups in the Downloaded shelf.
   const [customOrder, setCustomOrder] = useState<string[]>([]);
@@ -244,15 +245,23 @@ export const SimpleMediaView: React.FC = () => {
   // Seed the local custom order when torrents change (new downloads complete
   // or app reloads). Existing positions are preserved; new IDs append at end.
   useEffect(() => {
-    const groups = groupItems(
-      (torrents ?? []).filter(
-        (t) =>
-          t.progress >= 1.0 &&
-          (t.status === 'Seeding' || t.status === 'Completed'),
-      ),
+    const rawReady = (torrents ?? []).filter(
+      (t) =>
+        t.progress >= 1.0 &&
+        (t.status === 'Seeding' || t.status === 'Completed'),
     );
+    const sortedReady = [...rawReady].sort((a, b) => {
+      const sa = a.sort_order ?? 999999;
+      const sb = b.sort_order ?? 999999;
+      if (sa !== sb) return sa - sb;
+      return (b.completed_on || b.added_on || 0) - (a.completed_on || a.added_on || 0);
+    });
+    const groups = groupItems(sortedReady);
     if (groups.length === 0) return;
     setCustomOrder((prev) => {
+      if (prev.length === 0) {
+        return groups.map((g) => g.id);
+      }
       const known = new Set(prev);
       const newIds = groups.filter((g) => !known.has(g.id)).map((g) => g.id);
       return newIds.length > 0 ? [...prev, ...newIds] : prev;
@@ -762,7 +771,7 @@ export const SimpleMediaView: React.FC = () => {
   const groupItems = (items: TorrentItem[]): MediaGroup[] => {
     if (!groupBoxsets) {
       return items.map((item) => ({
-        id: item.id,
+        id: item.info_hash || item.id,
         clean_title: item.media_meta?.clean_title || item.name,
         year: item.media_meta?.year,
         is_boxset: false,
@@ -789,7 +798,7 @@ export const SimpleMediaView: React.FC = () => {
       const activeIdx = selectedDiscs[key] !== undefined ? selectedDiscs[key] : 0;
 
       return {
-        id: key,
+        id: first.info_hash || key,
         clean_title: title,
         year: first.media_meta?.year,
         is_boxset: isBox,
@@ -1272,37 +1281,36 @@ export const SimpleMediaView: React.FC = () => {
               <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                 Downloaded
               </h3>
-              {readyToWatch.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    title={customOrderMode ? 'Exit custom order mode' : 'Enable drag-to-reorder'}
-                    onClick={() => setCustomOrderMode(!customOrderMode)}
-                    className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono transition ${
-                      customOrderMode
-                        ? 'bg-[#1a2a1a] border-[#22c55e] text-[#22c55e]'
-                        : 'bg-[#1a1a1a] border-[#333333] text-[#a3a3a3] hover:border-[#555]'
-                    }`}
-                  >
-                    <GripVertical className="w-3 h-3" />
-                    {customOrderMode ? 'Done' : 'Reorder'}
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <Sliders className="w-3 h-3 text-[#737373]" />
-                    <input
-                      type="range"
-                      min={2}
-                      max={12}
-                      step={1}
-                      value={postersPerRow}
-                      onChange={(e) => void setPostersPerRow(Number(e.target.value))}
-                      className="w-20 accent-white"
-                      title={`Posters per row: ${postersPerRow}`}
-                    />
-                    <span className="text-[11px] font-mono text-[#737373]">{postersPerRow}</span>
-                  </div>
-                </>
-              )}
+              <div className="ml-auto flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={readyToWatch.length === 0}
+                  title={customOrderMode ? 'Exit custom order mode' : 'Enable drag-to-reorder'}
+                  onClick={() => setCustomOrderMode(!customOrderMode)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                    customOrderMode
+                      ? 'bg-[#1a2a1a] border-[#22c55e] text-[#22c55e]'
+                      : 'bg-[#1a1a1a] border-[#333333] text-[#a3a3a3] hover:border-[#555]'
+                  }`}
+                >
+                  <GripVertical className="w-3 h-3" />
+                  {customOrderMode ? 'Done' : 'Reorder'}
+                </button>
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-3 h-3 text-[#737373]" />
+                  <input
+                    type="range"
+                    min={2}
+                    max={12}
+                    step={1}
+                    value={postersPerRow}
+                    onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                    className="w-20 accent-white"
+                    title={`Posters per row: ${postersPerRow}`}
+                  />
+                  <span className="text-[11px] font-mono text-[#737373]">{postersPerRow}</span>
+                </div>
+              </div>
             </div>
             {readyToWatch.length === 0 ? (
               <p className="text-xs text-[#737373] italic">
@@ -1492,10 +1500,63 @@ export const SimpleMediaView: React.FC = () => {
                     </div>
                     <div className="flex-1 min-w-0 space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-base font-bold text-white leading-tight">
-                          {extDetails.title}
-                          {extYear ? <span className="text-white font-normal"> ({extYear})</span> : null}
-                        </h3>
+                        {renamingExtPath === extDetails.path ? (
+                          <form
+                            className="flex-1 flex items-center gap-1.5"
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              const trimmed = renameValue.trim();
+                              if (trimmed) {
+                                await invoke('set_external_media_title', { path: extDetails.path, title: trimmed });
+                                extDetails.title = trimmed;
+                                void refreshExternalMedia();
+                              }
+                              setRenamingExtPath(null);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Escape' && setRenamingExtPath(null)}
+                              className="flex-1 bg-[#1a1a1a] border border-[#555] rounded px-2 py-0.5 text-sm text-white focus:outline-none focus:border-white"
+                            />
+                            <button
+                              type="submit"
+                              title="Save name"
+                              className="p-1 text-[#4ade80] hover:text-white transition"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              title="Cancel"
+                              onClick={() => setRenamingExtPath(null)}
+                              className="p-1 text-[#737373] hover:text-white transition"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </form>
+                        ) : (
+                          <h3 className="text-base font-bold text-white leading-tight group/title flex items-center gap-1.5">
+                            <span>
+                              {extDetails.title}
+                              {extYear ? <span className="text-white font-normal"> ({extYear})</span> : null}
+                            </span>
+                            <button
+                              type="button"
+                              title="Rename listing"
+                              onClick={() => {
+                                setRenameValue(extDetails.title);
+                                setRenamingExtPath(extDetails.path);
+                              }}
+                              className="opacity-0 group-hover/title:opacity-100 p-0.5 text-[#737373] hover:text-white transition"
+                            >
+                              <Pencil className="w-2.5 h-2.5" />
+                            </button>
+                          </h3>
+                        )}
                         <button
                           type="button"
                           onClick={() => setExtDetails(null)}
@@ -1516,6 +1577,20 @@ export const SimpleMediaView: React.FC = () => {
                             {extMeta.runtime} min
                           </span>
                         ) : null}
+                        <button
+                          type="button"
+                          title="Correct metadata (title, poster source)"
+                          onClick={() =>
+                            setEditingFor({
+                              infoHash: extDetails.path,
+                              title: extDetails.title,
+                            })
+                          }
+                          className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4] hover:border-[#555] transition flex items-center gap-1"
+                        >
+                          <Pencil className="w-2.5 h-2.5" />
+                          Edit
+                        </button>
                       </div>
                       {extMeta?.overview ? (
                         <p className="text-xs text-[#a3a3a3] leading-relaxed line-clamp-4">
@@ -1634,15 +1709,6 @@ export const SimpleMediaView: React.FC = () => {
                 <>
                   <button
                     className={act}
-                    onClick={() => {
-                      setExtCtx(null);
-                      void handleOpenFolder(extCtx.path);
-                    }}
-                  >
-                    <FolderOpen className="w-3.5 h-3.5" /> {isMac ? 'Show in Finder' : 'Show in Explorer'}
-                  </button>
-                  <button
-                    className={act}
                     onClick={async () => {
                       setExtCtx(null);
                       try {
@@ -1661,6 +1727,59 @@ export const SimpleMediaView: React.FC = () => {
                     }}
                   >
                     <Play className="w-3.5 h-3.5" /> Play
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      const item = externalMedia.find((m) => m.path === extCtx.path);
+                      setExtDetails({
+                        path: extCtx.path,
+                        title: extCtx.title,
+                        year: item?.year ?? null,
+                        kind: item?.kind || 'Disc',
+                      });
+                      setExtCtx(null);
+                    }}
+                  >
+                    <Info className="w-3.5 h-3.5" /> Details
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setEditingFor({
+                        infoHash: extCtx.path,
+                        title: extCtx.title,
+                      });
+                      setExtCtx(null);
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit Metadata
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setRenameValue(extCtx.title);
+                      setRenamingExtPath(extCtx.path);
+                      const item = externalMedia.find((m) => m.path === extCtx.path);
+                      setExtDetails({
+                        path: extCtx.path,
+                        title: extCtx.title,
+                        year: item?.year ?? null,
+                        kind: item?.kind || 'Disc',
+                      });
+                      setExtCtx(null);
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Rename Title
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setExtCtx(null);
+                      void handleOpenFolder(extCtx.path);
+                    }}
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" /> {isMac ? 'Show in Finder' : 'Show in Explorer'}
                   </button>
                   <button
                     className={act}
@@ -1913,16 +2032,17 @@ export const SimpleMediaView: React.FC = () => {
                     <div className="flex-1 min-w-0 space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         {/* F6: Inline rename — shows text input when active, title otherwise */}
-                        {renamingFor === item.id ? (
+                        {renamingFor === (item.info_hash || item.id) ? (
                           <form
                             className="flex-1 flex items-center gap-1.5"
                             onSubmit={async (e) => {
                               e.preventDefault();
                               const trimmed = renameValue.trim();
                               if (trimmed) {
-                                await setUserDisplayTitle(item.id, trimmed);
+                                await setUserDisplayTitle(item.info_hash || item.id, trimmed);
                                 // Reflect the new name immediately in local group state.
                                 group.clean_title = trimmed;
+                                void fetchTorrents();
                               }
                               setRenamingFor(null);
                             }}
@@ -1946,7 +2066,8 @@ export const SimpleMediaView: React.FC = () => {
                               type="button"
                               title="Reset to provider title"
                               onClick={async () => {
-                                await resetUserDisplayTitle(item.id);
+                                await resetUserDisplayTitle(item.info_hash || item.id);
+                                void fetchTorrents();
                                 setRenamingFor(null);
                               }}
                               className="p-1 text-[#737373] hover:text-[#f87171] transition"
@@ -1975,7 +2096,7 @@ export const SimpleMediaView: React.FC = () => {
                               title="Rename listing"
                               onClick={() => {
                                 setRenameValue(group.clean_title);
-                                setRenamingFor(item.id);
+                                setRenamingFor(item.info_hash || item.id);
                               }}
                               className="opacity-0 group-hover/title:opacity-100 p-0.5 text-[#737373] hover:text-white transition"
                             >
@@ -2009,7 +2130,7 @@ export const SimpleMediaView: React.FC = () => {
                           title="Correct metadata (title, poster source)"
                           onClick={() =>
                             setEditingFor({
-                              infoHash: item.id,
+                              infoHash: item.info_hash || item.id,
                               title: group.clean_title,
                             })
                           }
@@ -2208,10 +2329,23 @@ export const SimpleMediaView: React.FC = () => {
           infoHash={editingFor.infoHash}
           currentTitle={editingFor.title}
           onClose={() => setEditingFor(null)}
-          onConfirmed={(newTitle) => {
-            // Notify user via feedback banner then close
+          onConfirmed={(newTitle, _provider, _providerId, posterUrl) => {
+            if (posterUrl) {
+              setThumbMap((prev) => ({
+                ...prev,
+                [editingFor.infoHash]: posterUrl,
+                [editingFor.title]: posterUrl,
+                [newTitle]: posterUrl,
+              }));
+              setExternalPosterMap((prev) => ({
+                ...prev,
+                [editingFor.infoHash]: posterUrl,
+              }));
+            }
             setFeedbackNotice({ type: 'info', message: `Metadata updated: ${newTitle}` });
             setEditingFor(null);
+            void fetchTorrents();
+            void refreshExternalMedia();
           }}
         />
       )}

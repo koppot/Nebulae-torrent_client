@@ -279,6 +279,7 @@ impl QbitImporter {
                 user_display_title: None,
                 user_title_locked: false,
                 sort_order: None,
+                poster_path: None,
                 is_external: false,
                 sync_miss_count: 0,
                 last_checked: initial_last_checked,

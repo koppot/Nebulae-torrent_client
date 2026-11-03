@@ -484,7 +484,9 @@ export const QbitImportModal: React.FC = () => {
                     {filteredTorrents.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="py-12 text-center text-[#737373]">
-                          No matching torrents found
+                          {scanResult.torrents.length === 0
+                            ? '0 torrents found in qBittorrent profile'
+                            : 'No matching torrents found'}
                         </td>
                       </tr>
                     ) : (
