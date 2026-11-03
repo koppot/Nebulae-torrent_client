@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { useUiStore } from '../../stores/uiStore';
 import {
   Radio, ArrowUpRight, ArrowDownLeft, Clock, Link2, Unlink,
-  CheckCircle2, X, RefreshCw, Eye, EyeOff,
+  CheckCircle2, X, RefreshCw, Eye, EyeOff, Download,
 } from 'lucide-react';
 import { formatBytes } from '../../lib/formatters';
+
+/** Which sub-form is active when the account is not yet linked. */
+type LinkMode = 'import' | 'manual';
 
 export const TrackerModal: React.FC = () => {
   const { showTrackerDashboard, setShowTrackerDashboard } = useUiStore();
@@ -20,9 +24,12 @@ export const TrackerModal: React.FC = () => {
     syncStats,
   } = useTrackerStore();
 
+  const [linkMode, setLinkMode]       = useState<LinkMode>('import');
   const [usernameInput, setUsernameInput] = useState('');
-  const [passkeyInput, setPasskeyInput] = useState('');
-  const [isLinking, setIsLinking] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passkeyInput, setPasskeyInput]   = useState('');
+  const [isLinking, setIsLinking]         = useState(false);
+  const [linkError, setLinkError]         = useState<string | null>(null);
   const [passkeyRevealed, setPasskeyRevealed] = useState(false);
 
   useEffect(() => {
@@ -33,38 +40,62 @@ export const TrackerModal: React.FC = () => {
       // The underlying command is rate-limited server-side (1 call / 5 min).
       syncStats();
     } else {
+      // Reset local state when the modal closes.
       setPasskeyRevealed(false);
+      setLinkError(null);
+      setUsernameInput('');
+      setPasswordInput('');
+      setPasskeyInput('');
+      setLinkMode('import');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTrackerDashboard]);
 
   if (!showTrackerDashboard) return null;
 
-  const handleLink = async (e: React.FormEvent) => {
+  /** Import passkey from ADC using the user's ADC username + password. */
+  const handleImport = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!usernameInput.trim() || !passkeyInput.trim()) return;
+    if (!usernameInput.trim() || !passwordInput) return;
 
     setIsLinking(true);
+    setLinkError(null);
     try {
-      await linkAccount(usernameInput, passkeyInput);
+      // import_adc_passkey authenticates against ADC, validates credentials,
+      // retrieves the tracker passkey, and persists it locally.
+      await invoke('import_adc_passkey', {
+        username: usernameInput.trim(),
+        password: passwordInput,
+      });
+      // Re-fetch the profile so the store reflects the newly-linked state.
+      await fetchProfile();
       setUsernameInput('');
-      setPasskeyInput('');
-    } catch {
-      //
+      setPasswordInput('');
+    } catch (err: unknown) {
+      setLinkError(typeof err === 'string' ? err : 'Import failed. Check your ADC credentials.');
     } finally {
       setIsLinking(false);
     }
   };
 
-  /**
-   * The masked_passkey from the Rust layer already has the middle redacted
-   * (e.g. "adc_pk_••••••••••••••on1!").  When the user reveals it, we cannot
-   * un-redact it on the frontend — we need the Rust `get_stored_passkey`
-   * command for the full value.  For now the reveal toggle shows/hides the
-   * already-masked string so the user knows what is stored without exposing
-   * the raw secret unintentionally.  A future `get_stored_passkey(reveal:true)`
-   * Tauri command can replace this.
-   */
+  /** Manually enter a passkey (fallback path). */
+  const handleManualLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!usernameInput.trim() || !passkeyInput.trim()) return;
+
+    setIsLinking(true);
+    setLinkError(null);
+    try {
+      await linkAccount(usernameInput, passkeyInput);
+      setUsernameInput('');
+      setPasskeyInput('');
+    } catch (err: unknown) {
+      setLinkError(typeof err === 'string' ? err : 'Failed to link account.');
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
   const passkeyDisplay = profile?.masked_passkey ?? '—';
 
   return (
@@ -87,49 +118,131 @@ export const TrackerModal: React.FC = () => {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
           {!profile?.is_linked ? (
-            /* Unlinked Form */
+            /* Unlinked: two-tab form — Import from ADC (default) or manual passkey entry */
             <div className="p-5 rounded-lg border border-[#333333] bg-[#1f1f1f] space-y-4">
-              <div className="text-center max-w-sm mx-auto space-y-1.5">
-                <h3 className="text-sm font-bold text-white">Link Tracker Passkey</h3>
+              <div className="text-center max-w-sm mx-auto space-y-1">
+                <h3 className="text-sm font-bold text-white">Connect to ADC Tracker</h3>
                 <p className="text-xs text-[#a3a3a3]">
-                  Enter your passkey to monitor your community ratio and satisfy seed-time rules.
+                  Link your ADC account to monitor your community ratio and seed-time requirements.
                 </p>
               </div>
 
-              <form onSubmit={handleLink} className="max-w-sm mx-auto space-y-3">
-                <div>
-                  <label className="block text-[11px] text-[#a3a3a3] mb-1">Username</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="ADC Username"
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] text-[#a3a3a3] mb-1">Passkey</label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="32-character passkey"
-                    value={passkeyInput}
-                    onChange={(e) => setPasskeyInput(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none font-mono"
-                  />
-                </div>
-
+              {/* Mode tabs */}
+              <div className="flex max-w-sm mx-auto rounded overflow-hidden border border-[#333333]">
                 <button
-                  type="submit"
-                  disabled={isLinking}
-                  className="w-full flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded bg-[#e50914] hover:bg-[#f40612] text-white transition disabled:opacity-40"
+                  type="button"
+                  onClick={() => { setLinkMode('import'); setLinkError(null); }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-semibold transition ${
+                    linkMode === 'import'
+                      ? 'bg-[#e50914] text-white'
+                      : 'bg-[#141414] text-[#a3a3a3] hover:text-white'
+                  }`}
                 >
-                  <Link2 className="w-3.5 h-3.5" />
-                  <span>{isLinking ? 'Verifying...' : 'Link Account'}</span>
+                  <Download className="w-3 h-3" />
+                  Import from ADC
                 </button>
-              </form>
+                <button
+                  type="button"
+                  onClick={() => { setLinkMode('manual'); setLinkError(null); }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-semibold transition border-l border-[#333333] ${
+                    linkMode === 'manual'
+                      ? 'bg-[#e50914] text-white'
+                      : 'bg-[#141414] text-[#a3a3a3] hover:text-white'
+                  }`}
+                >
+                  <Link2 className="w-3 h-3" />
+                  Enter Passkey
+                </button>
+              </div>
+
+              {/* Error banner */}
+              {linkError && (
+                <div className="max-w-sm mx-auto px-3 py-2 rounded border border-[#e50914]/50 bg-[#e50914]/10 text-[11px] text-[#ff6b6b]">
+                  {linkError}
+                </div>
+              )}
+
+              {linkMode === 'import' ? (
+                /* Import tab: username + ADC password → server fetches the passkey */
+                <form onSubmit={handleImport} className="max-w-sm mx-auto space-y-3">
+                  <div>
+                    <label className="block text-[11px] text-[#a3a3a3] mb-1">ADC Username</label>
+                    <input
+                      type="text"
+                      required
+                      autoComplete="username"
+                      placeholder="Your ADC username"
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-[#a3a3a3] mb-1">ADC Password</label>
+                    <input
+                      type="password"
+                      required
+                      autoComplete="current-password"
+                      placeholder="Your ADC account password"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none"
+                    />
+                  </div>
+
+                  <p className="text-[10px] text-[#666] leading-relaxed">
+                    Your password is sent directly to asiandvdclub.org over HTTPS and is never stored by Nebulae.
+                    ADC returns your tracker passkey, which is what Nebulae stores locally.
+                  </p>
+
+                  <button
+                    type="submit"
+                    disabled={isLinking}
+                    className="w-full flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded bg-[#e50914] hover:bg-[#f40612] text-white transition disabled:opacity-40"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{isLinking ? 'Importing…' : 'Import Passkey from ADC'}</span>
+                  </button>
+                </form>
+              ) : (
+                /* Manual tab: username + passkey (fallback for users who have it handy) */
+                <form onSubmit={handleManualLink} className="max-w-sm mx-auto space-y-3">
+                  <div>
+                    <label className="block text-[11px] text-[#a3a3a3] mb-1">ADC Username</label>
+                    <input
+                      type="text"
+                      required
+                      autoComplete="username"
+                      placeholder="Your ADC username"
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-[#a3a3a3] mb-1">Tracker Passkey</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="32-character passkey from your ADC profile"
+                      value={passkeyInput}
+                      onChange={(e) => setPasskeyInput(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded border border-[#333333] bg-[#141414] text-white focus:border-[#e50914] focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLinking}
+                    className="w-full flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded bg-[#e50914] hover:bg-[#f40612] text-white transition disabled:opacity-40"
+                  >
+                    <Link2 className="w-3.5 h-3.5" />
+                    <span>{isLinking ? 'Verifying…' : 'Link Account'}</span>
+                  </button>
+                </form>
+              )}
             </div>
           ) : (
             /* Linked Dashboard */

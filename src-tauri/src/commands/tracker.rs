@@ -178,6 +178,12 @@ pub fn spawn_stats_poller(db: Arc<Database>) {
 
 #[tauri::command]
 pub fn get_adc_tracker_profile(db: State<Arc<Database>>) -> Result<AdcTrackerProfile, String> {
+    build_profile_from_db(&db)
+}
+
+/// Inner implementation shared between `get_adc_tracker_profile` and
+/// `import_adc_passkey`.  Accepts any type that derefs to `Database`.
+pub fn build_profile_from_db(db: &Database) -> Result<AdcTrackerProfile, String> {
     let is_linked = db
         .get_setting("adc_linked")
         .unwrap_or(None)
@@ -367,4 +373,148 @@ pub fn calculate_ratio_projection(
         downloaded,
         additional_download,
     ))
+}
+
+/// ADC response shape for POST /api/nebulae/passkey_import.
+#[derive(Debug, Deserialize)]
+struct AdcPasskeyImportResponse {
+    username: Option<String>,
+    passkey: Option<String>,
+    error: Option<String>,
+}
+
+/// Tauri command: import the ADC torrent passkey by authenticating with
+/// the user's ADC username and password.
+///
+/// Calls `POST https://asiandvdclub.org/api/nebulae/passkey_import`, which
+/// validates the credentials server-side using the same Argon2id path as
+/// the ADC login form, and returns the raw torrent passkey.
+///
+/// On success the passkey is stored (keychain + DB fallback) and the account
+/// is linked exactly as if the user had entered the passkey manually.
+/// The caller receives the full `AdcTrackerProfile` so the UI can update
+/// immediately without a second round-trip.
+#[tauri::command]
+pub async fn import_adc_passkey(
+    username: String,
+    password: String,
+    db: State<'_, Arc<Database>>,
+) -> Result<AdcTrackerProfile, String> {
+    if username.trim().is_empty() {
+        return Err("Username cannot be empty".to_string());
+    }
+    if password.is_empty() {
+        return Err("Password cannot be empty".to_string());
+    }
+
+    let db_arc = Arc::clone(&*db);
+    let username_clone = username.clone();
+    let password_clone = password.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .user_agent("Nebulae/0.2.5")
+            .build()
+            .map_err(|e| format!("HTTP client build error: {e}"))?;
+
+        let url = "https://asiandvdclub.org/api/nebulae/passkey_import";
+
+        let resp = client
+            .post(url)
+            .json(&serde_json::json!({
+                "username": username_clone.trim(),
+                "password": password_clone,
+            }))
+            .send()
+            .map_err(|e| format!("Request to ADC failed: {e}"))?;
+
+        let status = resp.status();
+
+        let body: AdcPasskeyImportResponse = resp
+            .json()
+            .map_err(|e| format!("Unexpected ADC response format: {e}"))?;
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(
+                "ADC is rate limiting this request. Please wait before trying again.".to_string(),
+            );
+        }
+
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
+            let kind = body.error.as_deref().unwrap_or("unknown");
+            return Err(match kind {
+                "account_banned" => "Your ADC account is banned.".to_string(),
+                _ => "Invalid ADC username or password.".to_string(),
+            });
+        }
+
+        if !status.is_success() {
+            let msg = body.error.unwrap_or_else(|| status.to_string());
+            return Err(format!("ADC returned an error: {msg}"));
+        }
+
+        let returned_username = body
+            .username
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| username_clone.trim().to_string());
+
+        let passkey = body
+            .passkey
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| "ADC did not return a passkey in its response.".to_string())?;
+
+        // Store the passkey and link the account using the same path as link_adc_account.
+        let masked = AdcTrackerProfile::mask_passkey(&passkey);
+        let secret_target = passkey_secret_target();
+        if let Err(e) = store_secret(&secret_target, &passkey) {
+            tracing::warn!("Failed to store imported passkey in OS keychain: {e}");
+        }
+        let _ = db_arc.set_setting("adc_passkey", &passkey);
+        db_arc
+            .set_setting("adc_linked", "true")
+            .map_err(|e| e.to_string())?;
+        db_arc
+            .set_setting("adc_username", &returned_username)
+            .map_err(|e| e.to_string())?;
+        db_arc
+            .set_setting("adc_masked_passkey", &masked)
+            .map_err(|e| e.to_string())?;
+        if db_arc.get_setting("adc_uploaded").unwrap_or(None).is_none() {
+            let _ = db_arc.set_setting("adc_uploaded", "0");
+        }
+        if db_arc
+            .get_setting("adc_downloaded")
+            .unwrap_or(None)
+            .is_none()
+        {
+            let _ = db_arc.set_setting("adc_downloaded", "0");
+        }
+        if db_arc
+            .get_setting("adc_bonus_points")
+            .unwrap_or(None)
+            .is_none()
+        {
+            let _ = db_arc.set_setting("adc_bonus_points", "0.0");
+        }
+        let _ = db_arc.set_setting("adc_freeleech", "false");
+        let _ = db_arc.set_setting("adc_required_seed_hours", "72");
+
+        // Trigger an immediate stats fetch so ratio/upload/download are populated.
+        {
+            let db_for_fetch = Arc::clone(&db_arc);
+            std::thread::spawn(move || {
+                if let Err(e) = fetch_and_persist_adc_stats(&db_for_fetch) {
+                    tracing::warn!("[import-passkey] post-import stats fetch: {e}");
+                }
+            });
+        }
+
+        // Build and return the profile the UI needs.
+        let profile =
+            crate::commands::tracker::build_profile_from_db(&db_arc).map_err(|e| e.to_string())?;
+        Ok(profile)
+    })
+    .await
+    .map_err(|e| format!("Internal task error: {e}"))?
 }
