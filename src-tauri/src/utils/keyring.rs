@@ -13,6 +13,10 @@ pub fn store_secret(target: &str, secret: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn trakt_client_id_target() -> String {
+    "trakt:client_id".to_string()
+}
+
 pub fn get_secret(target: &str) -> Result<String, String> {
     let entry = Entry::new(SERVICE_NAME, target)
         .map_err(|e| format!("Keyring initialization error for {target}: {e}"))?;

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { useUiStore } from '../../stores/uiStore';
-import { Radio, ArrowUpRight, ArrowDownLeft, Clock, Link2, Unlink, CheckCircle2, X } from 'lucide-react';
+import {
+  Radio, ArrowUpRight, ArrowDownLeft, Clock, Link2, Unlink,
+  CheckCircle2, X, RefreshCw, Eye, EyeOff,
+} from 'lucide-react';
 import { formatBytes } from '../../lib/formatters';
 
 export const TrackerModal: React.FC = () => {
@@ -9,22 +12,31 @@ export const TrackerModal: React.FC = () => {
   const {
     profile,
     seedTimeRecords,
+    isSyncing,
     fetchProfile,
     fetchSeedTimeRecords,
     linkAccount,
     unlinkAccount,
+    syncStats,
   } = useTrackerStore();
 
   const [usernameInput, setUsernameInput] = useState('');
   const [passkeyInput, setPasskeyInput] = useState('');
   const [isLinking, setIsLinking] = useState(false);
+  const [passkeyRevealed, setPasskeyRevealed] = useState(false);
 
   useEffect(() => {
     if (showTrackerDashboard) {
       fetchProfile();
       fetchSeedTimeRecords();
+      // Always attempt a live sync when the panel opens so numbers are fresh.
+      // The underlying command is rate-limited server-side (1 call / 5 min).
+      syncStats();
+    } else {
+      setPasskeyRevealed(false);
     }
-  }, [showTrackerDashboard, fetchProfile, fetchSeedTimeRecords]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTrackerDashboard]);
 
   if (!showTrackerDashboard) return null;
 
@@ -44,6 +56,17 @@ export const TrackerModal: React.FC = () => {
     }
   };
 
+  /**
+   * The masked_passkey from the Rust layer already has the middle redacted
+   * (e.g. "adc_pk_••••••••••••••on1!").  When the user reveals it, we cannot
+   * un-redact it on the frontend — we need the Rust `get_stored_passkey`
+   * command for the full value.  For now the reveal toggle shows/hides the
+   * already-masked string so the user knows what is stored without exposing
+   * the raw secret unintentionally.  A future `get_stored_passkey(reveal:true)`
+   * Tauri command can replace this.
+   */
+  const passkeyDisplay = profile?.masked_passkey ?? '—';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
       <div className="relative w-full max-w-2xl max-h-[85vh] flex flex-col bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden text-white">
@@ -51,7 +74,7 @@ export const TrackerModal: React.FC = () => {
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#333333] bg-[#1f1f1f]">
           <div className="flex items-center gap-2.5">
             <Radio className="w-4 h-4 text-[#e50914]" />
-            <h2 className="text-sm font-bold text-white">Tracker Integration & Ratio Coach</h2>
+            <h2 className="text-sm font-bold text-white">Tracker Integration &amp; Ratio Coach</h2>
           </div>
           <button
             onClick={() => setShowTrackerDashboard(false)}
@@ -120,18 +143,45 @@ export const TrackerModal: React.FC = () => {
                       Linked
                     </span>
                   </div>
-                  <p className="text-[11px] font-mono text-[#a3a3a3] mt-0.5">
-                    Passkey: {profile.masked_passkey}
-                  </p>
+
+                  {/* Passkey row with reveal toggle */}
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <p className="text-[11px] font-mono text-[#a3a3a3]">
+                      Passkey:&nbsp;
+                      {passkeyRevealed ? passkeyDisplay : '••••••••••••••••••••••••••••••••'}
+                    </p>
+                    <button
+                      onClick={() => setPasskeyRevealed((v) => !v)}
+                      className="text-[#a3a3a3] hover:text-white transition"
+                      title={passkeyRevealed ? 'Hide passkey' : 'Reveal passkey'}
+                    >
+                      {passkeyRevealed
+                        ? <EyeOff className="w-3 h-3" />
+                        : <Eye className="w-3 h-3" />}
+                    </button>
+                  </div>
                 </div>
 
-                <button
-                  onClick={() => unlinkAccount()}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-[#e50914] transition"
-                >
-                  <Unlink className="w-3 h-3" />
-                  <span>Unlink</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Live stats refresh */}
+                  <button
+                    onClick={() => syncStats()}
+                    disabled={isSyncing}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-white transition disabled:opacity-40"
+                    title="Refresh stats from ADC"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'Syncing…' : 'Refresh'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => unlinkAccount()}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-[#e50914] transition"
+                  >
+                    <Unlink className="w-3 h-3" />
+                    <span>Unlink</span>
+                  </button>
+                </div>
               </div>
 
               {/* Stats Grid */}
@@ -180,7 +230,10 @@ export const TrackerModal: React.FC = () => {
                   {seedTimeRecords.map((rec) => {
                     const currentHours = (rec.seeding_time_seconds / 3600).toFixed(1);
                     const reqHours = (rec.required_seeding_seconds / 3600).toFixed(0);
-                    const pct = Math.min(100, Math.round((rec.seeding_time_seconds / rec.required_seeding_seconds) * 100));
+                    const pct = Math.min(
+                      100,
+                      Math.round((rec.seeding_time_seconds / rec.required_seeding_seconds) * 100),
+                    );
 
                     return (
                       <div key={rec.info_hash} className="p-2.5 rounded border border-[#333333] bg-[#141414] space-y-1.5">

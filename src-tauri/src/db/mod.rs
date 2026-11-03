@@ -28,6 +28,7 @@ impl Database {
         conn.execute(schema::CREATE_TORRENT_METADATA_TABLE, [])?;
         conn.execute(schema::CREATE_VPN_PROFILES_TABLE, [])?;
         conn.execute(schema::CREATE_SEED_TIME_TABLE, [])?;
+        conn.execute(schema::CREATE_SNATCHED_RECORDS_TABLE, [])?;
 
         // Backward compatibility migration for torrent_metadata
         let extra_cols = [
@@ -42,6 +43,18 @@ impl Database {
             // Per-torrent Racing Mode choice: NULL = follow the global preset,
             // 1 = pinned on, 0 = pinned off.
             ("racing_override", "INTEGER"),
+            // Feature 6: user-defined listing name (authoritative over provider title)
+            ("user_display_title", "TEXT"),
+            ("user_title_locked", "INTEGER DEFAULT 0"),
+            // Feature 3: manual poster ordering
+            ("sort_order", "INTEGER"),
+            // Feature 8/9: metadata provider attribution
+            ("provider", "TEXT"),
+            ("provider_id", "TEXT"),
+            // Feature 5: external reclassification tracking
+            ("is_external", "INTEGER DEFAULT 0"),
+            ("external_moved_at", "INTEGER"),
+            ("sync_miss_count", "INTEGER DEFAULT 0"),
         ];
         for (col, col_type) in extra_cols {
             let sql = format!("ALTER TABLE torrent_metadata ADD COLUMN {col} {col_type}");

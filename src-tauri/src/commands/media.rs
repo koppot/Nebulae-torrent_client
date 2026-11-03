@@ -3486,6 +3486,32 @@ pub async fn fetch_tmdb_release(
     Ok(result)
 }
 
+/// MyAnimeList poster + metadata for anime releases (used as fallback for TMDB).
+/// Results are cached in the DB per title. Returns None silently when no match.
+#[tauri::command]
+pub async fn fetch_mal_anime(title: String) -> Result<Option<PathBuf>, String> {
+    let title_log = title.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let db_path = crate::utils::paths::AppPaths::init()
+            .map(|p| p.db_file)
+            .map_err(|e| format!("Paths init: {e}"))?;
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Data dir: {e}"))?;
+        }
+        let db = crate::db::Database::new(&db_path).map_err(|e| format!("Database: {e}"))?;
+        crate::utils::mal::fetch_anime_poster(&db, &title, &title)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join error: {e}"))?;
+
+    match &result {
+        Ok(Some(p)) => tracing::info!("[mal] match for {title_log:?}: poster={}", p.display()),
+        Ok(None) => tracing::warn!("[mal] no match for {title_log:?}"),
+        Err(e) => tracing::error!("[mal] error: {e}"),
+    }
+    result
+}
+
 /// Whether TMDB integration is configured (Settings pane indicator).
 #[tauri::command]
 pub fn tmdb_configured() -> bool {

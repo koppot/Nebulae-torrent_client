@@ -2778,6 +2778,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "urlencoding",
  "uuid",
  "windows",
  "x11-dl",

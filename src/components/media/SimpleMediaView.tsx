@@ -398,7 +398,10 @@ export const SimpleMediaView: React.FC = () => {
         )
         .then((res) => {
           if (!res) {
+            console.log('[tmdb] no match for', t.name);
             invoke('log_frontend', { message: `tmdb: no match for ${t.name}` }).catch(() => {});
+          } else {
+            console.log('[tmdb] match for', t.name, ': poster=', !!res.poster_webp, 'overview=', !!res.overview);
           }
           setTmdbMap((prev) => ({
             ...prev,
@@ -412,6 +415,7 @@ export const SimpleMediaView: React.FC = () => {
           }));
         })
         .catch((err) => {
+          console.error('[tmdb] fetch failed for', t.name, ':', err);
           invoke('log_frontend', {
             message: `tmdb fetch failed for ${t.name}: ${errorMessage(err, 'unknown')}`,
           }).catch(() => {});
@@ -552,11 +556,15 @@ export const SimpleMediaView: React.FC = () => {
     if (adcUrl) {
       try {
         adcText = await invoke<string>('fetch_adc_page', { url: adcUrl });
+        console.log('[details] ADC fetch successful for:', adcUrl);
       } catch (err) {
+        console.error('[details] ADC fetch error for', adcUrl, ':', err);
         invoke('log_frontend', {
           message: `adc details unavailable: ${errorMessage(err, 'unknown')}`,
         }).catch(() => {});
       }
+    } else {
+      console.log('[details] No ADC URL in torrent comment');
     }
 
     // TMDB/Trakt summary — DB-cached engine-side; the same call the poster
@@ -565,15 +573,34 @@ export const SimpleMediaView: React.FC = () => {
     let runtimeMin: number | null = null;
     try {
       const parsed = await invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: item.name });
+      console.log('[details] parsing result:', parsed);
       const res = await invoke<FetchTmdbResult | null>('fetch_tmdb_release', {
         title: parsed.clean_title,
         year: parsed.year ?? undefined,
       });
+      console.log('[details] tmdb response:', res);
       if (res) {
         overview = res.overview ?? null;
         runtimeMin = res.runtime ?? null;
+        console.log('[details] TMDB match: overview=', !!overview, 'runtime=', runtimeMin);
+      } else {
+        console.log('[details] No TMDB match for', item.name);
       }
-    } catch {
+      // Fall back to MAL if TMDB didn't find a match
+      if (!overview) {
+        console.log('[details] No TMDB overview, trying MAL...');
+        try {
+          const malPoster = await invoke<string | null>('fetch_mal_anime', { title: parsed.clean_title });
+          console.log('[details] MAL response:', malPoster);
+          if (malPoster) {
+            console.log('[details] MAL match: poster=', malPoster);
+          }
+        } catch (err) {
+          console.error('[details] MAL fetch error for', item.name, ':', err);
+        }
+      }
+    } catch (err) {
+      console.error('[details] TMDB fetch error for', item.name, ':', err);
       // Keep the ADC-only content; the popup says which source it used.
     }
 

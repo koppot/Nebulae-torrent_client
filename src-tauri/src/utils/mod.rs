@@ -3,6 +3,7 @@ pub mod geo;
 pub mod keyring;
 pub mod library_cleaner;
 pub mod logger;
+pub mod mal;
 pub mod media_parser;
 pub mod network;
 pub mod paths;

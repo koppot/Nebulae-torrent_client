@@ -5,6 +5,7 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod status_bar;
 pub mod tailscale;
 pub mod taskbar_windows;
 pub mod thumbs;
@@ -331,6 +332,7 @@ pub fn run() {
     let db_for_watcher = Arc::clone(&db);
     let engine_for_rss = Arc::clone(&engine);
     let db_for_rss = Arc::clone(&db);
+    let db_for_stats_poller = Arc::clone(&db);
 
     let app = tauri::Builder::default()
         // Single instance (owner): double-clicking another .torrent must
@@ -449,6 +451,7 @@ pub fn run() {
             engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
             engine::watcher::spawn_watched_folder_loop(engine_for_watcher, db_for_watcher);
             engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
+            commands::tracker::spawn_stats_poller(db_for_stats_poller);
 
             #[cfg(desktop)]
             {
@@ -595,6 +598,15 @@ pub fn run() {
             }
 
             let _ = tray_builder.build(app)?;
+
+            // Initialize status bar and set tray ID for macOS
+            #[cfg(target_os = "macos")]
+            {
+                use crate::status_bar;
+                status_bar::init_status_bar(app.handle());
+                // The tray ID is "nebulae-tray" as defined in the TrayIconBuilder
+                status_bar::set_tray_id("nebulae-tray".to_string());
+            }
 
             #[cfg(desktop)]
             {
@@ -804,6 +816,7 @@ pub fn run() {
             commands::tracker::unlink_adc_account,
             commands::tracker::get_seed_time_records,
             commands::tracker::calculate_ratio_projection,
+            commands::tracker::sync_adc_stats,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");

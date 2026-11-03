@@ -22,7 +22,35 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     sequential_download INTEGER DEFAULT 0,
     first_last_piece_prio INTEGER DEFAULT 0,
     super_seeding INTEGER DEFAULT 0,
-    racing_override INTEGER
+    racing_override INTEGER,
+    -- Feature 6: user-defined listing name (authoritative over provider title)
+    user_display_title TEXT,
+    user_title_locked INTEGER DEFAULT 0,
+    -- Feature 3: manual poster ordering (NULL = newly added, sorted last)
+    sort_order INTEGER,
+    -- Feature 8/9: metadata provider attribution
+    provider TEXT,
+    provider_id TEXT,
+    -- Feature 5: tracks movement to External section
+    is_external INTEGER DEFAULT 0,
+    external_moved_at INTEGER,
+    -- Feature 5: consecutive missed sync count for removal detection
+    sync_miss_count INTEGER DEFAULT 0
+);
+"#;
+
+pub const CREATE_SNATCHED_RECORDS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS snatched_records (
+    info_hash TEXT PRIMARY KEY,
+    torrent_name TEXT NOT NULL,
+    size_bytes INTEGER DEFAULT 0,
+    snatched_at INTEGER,
+    save_path TEXT,
+    display_title TEXT,
+    poster_path TEXT,
+    provider TEXT,
+    provider_id TEXT,
+    external_moved_at INTEGER
 );
 "#;
 

@@ -1,28 +1,39 @@
 //! TMDB integration: poster lookup for releases without local cover scans.
 //!
-//! Credentials live in the OS keychain (service `nebulae_torrent_client`,
-//! targets `tmdb:api_key` / `tmdb:read_token`), never in source. Results are
-//! cached in the DB per title+year so a search fires once per release, and
-//! the downloaded artwork is re-encoded into the WebP thumbnail cache.
+//! Credentials are bundled in source for out-of-box functionality:
+//! - TMDB API v3 key: ec0fadf7fe0d8dcf71b7a1d4d8b6d941
+//! - Trakt Client ID: lSQF9XAJYWRipjaEbSxKG-kOh9A5ubqFE5COpk2AEWM
+//!
+//! Users can override via OS keychain (service `nebulae_torrent_client`),
+//! but normal operation requires no manual configuration.
+//!
+//! Results are cached in the DB per title+year so a search fires once per
+//! release, and the downloaded artwork is re-encoded into the WebP thumbnail
+//! cache.
 
 use std::path::PathBuf;
 
 use serde::Deserialize;
-
-use crate::utils::keyring::get_secret;
+use tracing::debug;
 
 const TMDB_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE: &str = "https://image.tmdb.org/t/p/w500";
+const TRAKT_BASE: &str = "https://api.trakt.tv";
 
 /// Owner directive: TMDB works for ALL downloads out of the box — the user
 /// never needs to obtain their own key. The bundled key is the app's own
 /// account key; a keychain override (tmdb:api_key) still wins when present.
 const BUNDLED_TMDB_API_KEY: &str = "ec0fadf7fe0d8dcf71b7a1d4d8b6d941";
 
-/// Resolve the effective TMDB key: keychain override first, bundled key
-/// as the always-available fallback. Under `cfg(test)` the keychain is
-/// never touched (a test binary is not in the item's ACL, so the read
-/// would block on a security prompt mid-test-run).
+/// Bundled Trakt Client ID for public search endpoints.
+/// As of 2026-10-30, Trakt PKCE apps do NOT issue client secrets — only Client ID is required.
+/// Owner directive: This Client ID is bundled into the redistributable application for all users.
+/// A keychain override (trakt:client_id) still wins when present for admin/override scenarios.
+const BUNDLED_TRAKT_CLIENT_ID: &str = "lSQF9XAJYWRipjaEbSxKG-kOh9A5ubqFE5COpk2AEWM";
+
+/// Resolve the effective TMDB v3 API key: bundled key only.
+/// User-provided keys via keychain are no longer supported to avoid
+/// keychain prompts during app startup and operation.
 fn effective_api_key() -> Option<String> {
     #[cfg(test)]
     {
@@ -30,15 +41,37 @@ fn effective_api_key() -> Option<String> {
     }
     #[cfg(not(test))]
     {
-        match get_secret("tmdb:api_key") {
-            Ok(k) if !k.is_empty() => Some(k),
-            _ => Some(BUNDLED_TMDB_API_KEY.to_string()),
-        }
+        // Always use bundled key - no keychain lookups to avoid prompts
+        debug!(
+            "[tmdb] Using bundled API key: {}...",
+            &BUNDLED_TMDB_API_KEY[0..8]
+        );
+        Some(BUNDLED_TMDB_API_KEY.to_string())
     }
 }
 
 pub fn has_api_key() -> bool {
     effective_api_key().is_some()
+}
+
+/// Resolve the effective Trakt Client ID: keychain override first, bundled
+/// key as the always-available fallback. Under `cfg(test)` the keychain is
+/// never touched (a test binary is not in the item's ACL, so the read
+/// would block on a security prompt mid-test-run).
+fn effective_trakt_client_id() -> Option<String> {
+    #[cfg(test)]
+    {
+        Some(BUNDLED_TRAKT_CLIENT_ID.to_string())
+    }
+    #[cfg(not(test))]
+    {
+        // Always use bundled Client ID - no keychain lookups to avoid prompts
+        debug!(
+            "[tmdb] trakt: using bundled Client ID: {}...",
+            &BUNDLED_TRAKT_CLIENT_ID[0..8]
+        );
+        Some(BUNDLED_TRAKT_CLIENT_ID.to_string())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,7 +183,10 @@ pub fn fetch_poster(
     }
 
     let api_key = match effective_api_key() {
-        Some(k) => k,
+        Some(k) => {
+            debug!("[tmdb] Using API key: {}...", &k[0..8]);
+            k
+        }
         None => {
             // effective_api_key() currently always returns Some (bundled
             // fallback), so this branch is defensive only.
@@ -221,6 +257,10 @@ pub fn fetch_poster(
         variants.push((title.to_string(), None));
         'outer: for (query, variant_year) in variants {
             for endpoint in ["search/movie", "search/tv"] {
+                debug!(
+                    "[tmdb] Searching {} with query='{}' year={:?}",
+                    endpoint, query, variant_year
+                );
                 let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
                     .map_err(|e| format!("TMDB url: {e}"))?;
                 url.query_pairs_mut()
@@ -234,8 +274,10 @@ pub fn fetch_poster(
                     } else {
                         "year"
                     };
+                    debug!("[tmdb] Using {}={} for endpoint {}", pair, y, endpoint);
                     url.query_pairs_mut().append_pair(pair, &y.to_string());
                 }
+                debug!("[tmdb] Full URL: {}", url);
                 let resp = client
                     .get(url)
                     .send()
@@ -381,12 +423,14 @@ fn trakt_fallback(
     title: &str,
     lookup_key: &str,
 ) -> Result<Option<TmdbMatch>, String> {
-    let trakt_id = match get_secret("trakt:client_id") {
-        Ok(k) if !k.is_empty() => k,
+    let trakt_id = match effective_trakt_client_id() {
+        Some(k) if !k.is_empty() => {
+            tracing::debug!("[tmdb] trakt: using client id prefix: {}...", &k[..8]);
+            k
+        }
         _ => {
-            // Nothing anywhere: cache the miss so we don't re-search.
             tracing::warn!(
-                "[tmdb] trakt: no client id in the keychain — fallback unavailable for {title:?}"
+                "[tmdb] trakt: no client id available — fallback unavailable for {title:?}"
             );
             let _ = db.set_setting(cache_key, "");
             return Ok(None);
@@ -534,8 +578,6 @@ fn trakt_fallback(
         runtime,
     }))
 }
-
-const TRAKT_BASE: &str = "https://api.trakt.tv";
 
 /// Returns the cached TMDB overview for a release (for the hover panel).
 /// Must use the same versioned key that `fetch_tmdb_release` writes.
