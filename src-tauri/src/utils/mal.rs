@@ -189,3 +189,74 @@ fn hash_of(key: &str) -> u64 {
 pub fn mal_configured() -> bool {
     true
 }
+
+/// A single result row returned by [`search_mal_multi`].
+#[derive(Debug, serde::Serialize)]
+pub struct MalSearchEntry {
+    pub mal_id: i32,
+    pub title: String,
+    pub year: Option<i32>,
+    pub synopsis: Option<String>,
+    /// MAL medium-quality poster URL; None when the result has no picture.
+    pub poster_url: Option<String>,
+    pub media_type: Option<String>,
+}
+
+/// Search MyAnimeList for the given query and return up to `limit` results.
+///
+/// Uses the public `/v2/anime` search endpoint with the bundled Client ID.
+/// Does NOT cache or download posters — the frontend renders the raw URL.
+pub fn search_mal_multi(query: &str, limit: usize) -> Result<Vec<MalSearchEntry>, String> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("MAL client: {e}"))?;
+
+    let search_url = format!(
+        "{}/anime?q={}&limit={}&fields=id,title,main_picture,start_date,synopsis,media_type",
+        MAL_BASE,
+        urlencoding::encode(query),
+        limit.min(20)
+    );
+
+    debug!("[mal] search_mal_multi: {search_url}");
+
+    let resp = client
+        .get(&search_url)
+        .header("X-MAL-CLIENT-ID", BUNDLED_MAL_CLIENT_ID)
+        .send()
+        .map_err(|e| format!("MAL search request: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("MAL search returned HTTP {}", resp.status()));
+    }
+
+    let body: MalSearchResponse = resp.json().map_err(|e| format!("MAL parse: {e}"))?;
+
+    let entries = body
+        .data
+        .into_iter()
+        .map(|item| {
+            let node = item.node;
+            let year = node
+                .start_date
+                .as_deref()
+                .and_then(|d| d.get(0..4))
+                .and_then(|y| y.parse::<i32>().ok());
+            let poster_url = node
+                .main_picture
+                .as_ref()
+                .and_then(|p| p.medium.clone().or_else(|| p.large.clone()));
+            MalSearchEntry {
+                mal_id: node.id,
+                title: node.title,
+                year,
+                synopsis: node.synopsis,
+                poster_url,
+                media_type: node.media_type,
+            }
+        })
+        .collect();
+
+    Ok(entries)
+}

@@ -823,6 +823,19 @@ pub fn run() {
             commands::tracker::get_seed_time_records,
             commands::tracker::calculate_ratio_projection,
             commands::tracker::sync_adc_stats,
+            // Feature 6: editable listing names
+            commands::library::set_user_display_title,
+            commands::library::reset_user_display_title,
+            // Feature 3: poster ordering
+            commands::library::set_media_order,
+            // Feature 4: posters-per-row
+            commands::library::get_posters_per_row,
+            commands::library::set_posters_per_row,
+            // Feature 8/9: metadata provider attribution
+            commands::library::set_media_provider,
+            // Feature 8/9: multi-result metadata search
+            commands::media::search_tmdb_titles,
+            commands::media::search_mal_titles,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");

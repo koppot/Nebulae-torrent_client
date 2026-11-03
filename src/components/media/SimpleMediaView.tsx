@@ -1,7 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  arrayMove,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useUiStore } from '../../stores/uiStore';
 import { useTrackerStore } from '../../stores/trackerStore';
+import { useLibraryStore } from '../../stores/libraryStore';
+import { MetadataEditModal } from '../modals/MetadataEditModal';
 import { formatBytes } from '../../lib/formatters';
 import { errorMessage } from '../../utils/errors';
 import { resolvePoster } from '../../lib/posters';
@@ -31,7 +48,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy, Trash2 } from 'lucide-react';
+  Copy, Trash2, Pencil, GripVertical, Sliders } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -88,6 +105,14 @@ export const SimpleMediaView: React.FC = () => {
   const { torrents, setSelectedId } = useTorrentStore();
   const { setShowAddTorrent, setViewMode, searchQuery } = useUiStore();
   const { fetchSeedTimeRecords } = useTrackerStore();
+  const {
+    postersPerRow,
+    customOrderMode,
+    loadPreferences,
+    setPostersPerRow,
+    setCustomOrderMode,
+    saveMediaOrder,
+  } = useLibraryStore();
   const playerOpen = usePlayerStore().open;
 
   const [discMetaMap, setDiscMetaMap] = useState<Record<string, DiscStructureInfo | null>>({});
@@ -198,6 +223,38 @@ export const SimpleMediaView: React.FC = () => {
     const timer = setTimeout(() => setFeedbackNotice(null), 4000);
     return () => clearTimeout(timer);
   }, [feedbackNotice]);
+
+  // ── Feature 3/4/6: library preferences & custom ordering ─────────────────
+  const [editingFor, setEditingFor] = useState<{ infoHash: string; title: string } | null>(null);
+  // Poster order — applied to the readyToWatch groups in the Downloaded shelf.
+  const [customOrder, setCustomOrder] = useState<string[]>([]);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Load posters-per-row and seed the initial custom order from DB sort_order
+  // whenever the library changes.
+  useEffect(() => {
+    void loadPreferences();
+  }, [loadPreferences]);
+
+  // Seed the local custom order when torrents change (new downloads complete
+  // or app reloads). Existing positions are preserved; new IDs append at end.
+  useEffect(() => {
+    const groups = groupItems(
+      (torrents ?? []).filter(
+        (t) =>
+          t.progress >= 1.0 &&
+          (t.status === 'Seeding' || t.status === 'Completed'),
+      ),
+    );
+    if (groups.length === 0) return;
+    setCustomOrder((prev) => {
+      const known = new Set(prev);
+      const newIds = groups.filter((g) => !known.has(g.id)).map((g) => g.id);
+      return newIds.length > 0 ? [...prev, ...newIds] : prev;
+    });
+  // groupItems is a stable inner function; torrents is the real dep.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [torrents]);
 
   const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string }[]>([]);
   const [extHovered, setExtHovered] = useState<string | null>(null);
@@ -916,6 +973,61 @@ export const SimpleMediaView: React.FC = () => {
     );
   };
 
+  // ── Feature 3: SortableCard wrapper for drag-and-drop ordering ───────────
+  const SortableCard = ({ group, variant }: { group: MediaGroup; variant: 'active' | 'watch' | 'seeding' }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: group.id, disabled: !customOrderMode });
+
+    const style: React.CSSProperties = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+      position: 'relative',
+    };
+
+    return (
+      <div ref={setNodeRef} style={style}>
+        {customOrderMode && (
+          <div
+            {...attributes}
+            {...listeners}
+            className="absolute top-1 left-1 z-10 p-1 rounded bg-black/60 text-[#a3a3a3] cursor-grab active:cursor-grabbing"
+            title="Drag to reorder"
+          >
+            <GripVertical className="w-3 h-3" />
+          </div>
+        )}
+        {renderGroupCard(group, variant)}
+      </div>
+    );
+  };
+
+  // ── Feature 3: handle drag end — update local order + persist ─────────────
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      setCustomOrder((prev) => {
+        const oldIdx = prev.indexOf(String(active.id));
+        const newIdx = prev.indexOf(String(over.id));
+        if (oldIdx === -1 || newIdx === -1) return prev;
+        const next = arrayMove(prev, oldIdx, newIdx);
+        // Persist asynchronously — don't block render
+        void saveMediaOrder(next.map((hash, i) => ({ info_hash: hash, sort_order: i })));
+        return next;
+      });
+    },
+    [saveMediaOrder],
+  );
+
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-16 bg-[#141414] text-white select-none">
       {feedbackNotice && (
@@ -1150,20 +1262,79 @@ export const SimpleMediaView: React.FC = () => {
 
           {/* Shelf 2: Library (owner: no icon, no count). */}
           <div className="space-y-7">
-            <div className="flex items-center gap-2">
+            {/* Header row: title + custom-order toggle + posters-per-row slider */}
+            <div className="flex items-center gap-3 flex-wrap">
               <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
                 Downloaded
               </h3>
+              {readyToWatch.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    title={customOrderMode ? 'Exit custom order mode' : 'Enable drag-to-reorder'}
+                    onClick={() => setCustomOrderMode(!customOrderMode)}
+                    className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono transition ${
+                      customOrderMode
+                        ? 'bg-[#1a2a1a] border-[#22c55e] text-[#22c55e]'
+                        : 'bg-[#1a1a1a] border-[#333333] text-[#a3a3a3] hover:border-[#555]'
+                    }`}
+                  >
+                    <GripVertical className="w-3 h-3" />
+                    {customOrderMode ? 'Done' : 'Reorder'}
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-3 h-3 text-[#737373]" />
+                    <input
+                      type="range"
+                      min={2}
+                      max={12}
+                      step={1}
+                      value={postersPerRow}
+                      onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                      className="w-20 accent-white"
+                      title={`Posters per row: ${postersPerRow}`}
+                    />
+                    <span className="text-[11px] font-mono text-[#737373]">{postersPerRow}</span>
+                  </div>
+                </>
+              )}
             </div>
             {readyToWatch.length === 0 ? (
               <p className="text-xs text-[#737373] italic">
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
-            ) : (
-              <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-thin">
-                {visibleGroups(groupItems(readyToWatch)).map((g) => renderGroupCard(g, 'watch'))}
-              </div>
-            )}
+            ) : (() => {
+              // Apply custom sort order: groups with a stored position come first,
+              // then new/unordered groups appended at the end.
+              const allGroups = visibleGroups(groupItems(readyToWatch));
+              const ordered = customOrder.length > 0
+                ? [
+                    ...customOrder
+                      .map((id) => allGroups.find((g) => g.id === id))
+                      .filter((g): g is MediaGroup => g !== undefined),
+                    ...allGroups.filter((g) => !customOrder.includes(g.id)),
+                  ]
+                : allGroups;
+              return (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext items={ordered.map((g) => g.id)} strategy={rectSortingStrategy}>
+                    <div
+                      ref={gridRef}
+                      className="grid gap-4 pb-4"
+                      style={{ gridTemplateColumns: `repeat(${postersPerRow}, minmax(0, 1fr))` }}
+                    >
+                      {ordered.map((g) => (
+                        <SortableCard key={g.id} group={g} variant="watch" />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1762,6 +1933,21 @@ export const SimpleMediaView: React.FC = () => {
                             {detailsData.runtimeMin} min
                           </span>
                         ) : null}
+                        {/* F8: Edit button — matches badge visual style */}
+                        <button
+                          type="button"
+                          title="Correct metadata (title, poster source)"
+                          onClick={() =>
+                            setEditingFor({
+                              infoHash: item.id,
+                              title: group.clean_title,
+                            })
+                          }
+                          className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] text-[11px] text-[#d4d4d4] hover:border-[#555] transition flex items-center gap-1"
+                        >
+                          <Pencil className="w-2.5 h-2.5" />
+                          Edit
+                        </button>
                       </div>
                       {detailsLoading ? (
                         <p className="text-xs text-[#737373] italic">Fetching details…</p>
@@ -1924,6 +2110,19 @@ export const SimpleMediaView: React.FC = () => {
             </button>
           </div>
         </div>
+      )}
+      {/* F8/F9: Metadata correction modal */}
+      {editingFor && (
+        <MetadataEditModal
+          infoHash={editingFor.infoHash}
+          currentTitle={editingFor.title}
+          onClose={() => setEditingFor(null)}
+          onConfirmed={(newTitle, _provider, _providerId) => {
+            // Notify user via feedback banner then close
+            setFeedbackNotice({ type: 'info', message: `Metadata updated: ${newTitle}` });
+            setEditingFor(null);
+          }}
+        />
       )}
     </div>
   );

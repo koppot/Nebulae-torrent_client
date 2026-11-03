@@ -4357,3 +4357,32 @@ fn sha1_compress(h: &mut [u32; 5], block: &[u8; 64]) {
     h[3] = h[3].wrapping_add(d);
     h[4] = h[4].wrapping_add(e);
 }
+
+// ── Feature 8/9: Multi-result metadata search commands ────────────────────────
+
+/// Search TMDB and return multiple title matches for the metadata-correction UI.
+///
+/// Returns up to 20 results across both movie and TV endpoints. Posters are
+/// returned as raw TMDB URLs — no local caching or download is performed here.
+#[tauri::command]
+pub async fn search_tmdb_titles(
+    query: String,
+) -> Result<Vec<crate::utils::tmdb::TmdbSearchEntry>, String> {
+    tokio::task::spawn_blocking(move || crate::utils::tmdb::search_tmdb_multi(&query, 20))
+        .await
+        .map_err(|e| format!("search_tmdb_titles join: {e}"))
+        .and_then(|r| r)
+}
+
+/// Search MyAnimeList and return multiple anime matches for the metadata-correction UI.
+///
+/// Returns up to 20 results. Posters are returned as raw MAL URLs.
+#[tauri::command]
+pub async fn search_mal_titles(
+    query: String,
+) -> Result<Vec<crate::utils::mal::MalSearchEntry>, String> {
+    tokio::task::spawn_blocking(move || crate::utils::mal::search_mal_multi(&query, 20))
+        .await
+        .map_err(|e| format!("search_mal_titles join: {e}"))
+        .and_then(|r| r)
+}

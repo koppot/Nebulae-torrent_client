@@ -232,7 +232,10 @@ impl Database {
                 sequential_download, first_last_piece_prio, super_seeding, racing_override
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(info_hash) DO UPDATE SET
-                display_title = excluded.display_title,
+                -- Only update display_title when the user has not locked it.
+                display_title = CASE WHEN user_title_locked = 1
+                    THEN torrent_metadata.display_title
+                    ELSE excluded.display_title END,
                 category = excluded.category,
                 labels = excluded.labels,
                 is_watched = excluded.is_watched,
@@ -319,7 +322,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding, racing_override
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override,
+                    user_display_title, user_title_locked, sort_order, is_external, sync_miss_count
              FROM torrent_metadata WHERE info_hash = ?1",
         )?;
         let mut rows = stmt.query(params![info_hash])?;
@@ -334,6 +338,9 @@ impl Database {
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
+            let utl_int: i32 = row.get(17).unwrap_or(0);
+            let is_ext_int: i32 = row.get(19).unwrap_or(0);
+            let miss_count: i64 = row.get(20).unwrap_or(0);
 
             Ok(Some(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -352,6 +359,11 @@ impl Database {
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
                 racing_override: ro_opt.map(|v| v == 1),
+                user_display_title: row.get(16)?,
+                user_title_locked: utl_int == 1,
+                sort_order: row.get(18)?,
+                is_external: is_ext_int == 1,
+                sync_miss_count: miss_count,
             }))
         } else {
             Ok(None)
@@ -365,7 +377,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT info_hash, display_title, category, labels, is_watched, notes, added_at,
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
-                    sequential_download, first_last_piece_prio, super_seeding, racing_override
+                    sequential_download, first_last_piece_prio, super_seeding, racing_override,
+                    user_display_title, user_title_locked, sort_order, is_external, sync_miss_count
              FROM torrent_metadata",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -379,6 +392,9 @@ impl Database {
             let flp_int: i32 = row.get(13).unwrap_or(0);
             let ss_int: i32 = row.get(14).unwrap_or(0);
             let ro_opt: Option<i64> = row.get(15).unwrap_or(None);
+            let utl_int: i32 = row.get(17).unwrap_or(0);
+            let is_ext_int: i32 = row.get(19).unwrap_or(0);
+            let miss_count: i64 = row.get(20).unwrap_or(0);
 
             Ok(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -397,6 +413,11 @@ impl Database {
                 first_last_piece_prio: flp_int == 1,
                 super_seeding: ss_int == 1,
                 racing_override: ro_opt.map(|v| v == 1),
+                user_display_title: row.get(16)?,
+                user_title_locked: utl_int == 1,
+                sort_order: row.get(18)?,
+                is_external: is_ext_int == 1,
+                sync_miss_count: miss_count,
             })
         })?;
 
@@ -411,6 +432,234 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM torrent_metadata WHERE info_hash = ?1",
+            params![info_hash],
+        )?;
+        Ok(())
+    }
+
+    // ── Feature 6: user-defined listing names ────────────────────────────────
+
+    /// Set a user-chosen display name for a torrent entry.
+    /// `locked = true` prevents automatic metadata syncs from overwriting it.
+    pub fn set_user_display_title(&self, info_hash: &str, title: &str, locked: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let updated = conn.execute(
+            "UPDATE torrent_metadata
+             SET user_display_title = ?1, user_title_locked = ?2,
+                 display_title = ?1,
+                 added_at = COALESCE(added_at, ?3)
+             WHERE info_hash = ?4",
+            params![title, if locked { 1i64 } else { 0i64 }, now, info_hash],
+        )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT INTO torrent_metadata
+                 (info_hash, display_title, user_display_title, user_title_locked, added_at)
+                 VALUES (?1, ?2, ?2, ?3, ?4)",
+                params![info_hash, title, if locked { 1i64 } else { 0i64 }, now],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Clear the user-defined title lock, reverting to provider-supplied metadata
+    /// on the next sync.  The current display_title is left intact until the
+    /// next sync overwrites it naturally.
+    pub fn reset_user_display_title(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE torrent_metadata
+             SET user_display_title = NULL, user_title_locked = 0
+             WHERE info_hash = ?1",
+            params![info_hash],
+        )?;
+        Ok(())
+    }
+
+    // ── Feature 3: manual poster ordering ────────────────────────────────────
+
+    /// Persist a custom sort position for a single torrent poster.
+    /// `sort_order = NULL` means "newly added / unordered (sort last)".
+    pub fn set_torrent_sort_order(&self, info_hash: &str, sort_order: Option<i64>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let updated = conn.execute(
+            "UPDATE torrent_metadata
+             SET sort_order = ?1, added_at = COALESCE(added_at, ?2)
+             WHERE info_hash = ?3",
+            params![sort_order, now, info_hash],
+        )?;
+        if updated == 0 {
+            conn.execute(
+                "INSERT INTO torrent_metadata (info_hash, sort_order, added_at)
+                 VALUES (?1, ?2, ?3)",
+                params![info_hash, sort_order, now],
+            )?;
+        }
+        Ok(())
+    }
+
+    // ── Feature 5: removed-torrent → External reclassification ───────────────
+
+    /// Increment the consecutive missed-sync counter for a torrent.
+    /// Returns the new count so callers can threshold-check inline.
+    pub fn increment_sync_miss_count(&self, info_hash: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT INTO torrent_metadata (info_hash, sync_miss_count, added_at)
+             VALUES (?1, 1, ?2)
+             ON CONFLICT(info_hash) DO UPDATE SET
+                 sync_miss_count = COALESCE(sync_miss_count, 0) + 1",
+            params![info_hash, now],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT sync_miss_count FROM torrent_metadata WHERE info_hash = ?1",
+            params![info_hash],
+            |r| r.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Reset the miss counter after a torrent is seen again (re-added or
+    /// recovered from a client outage).
+    pub fn reset_sync_miss_count(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE torrent_metadata SET sync_miss_count = 0 WHERE info_hash = ?1",
+            params![info_hash],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a torrent entry as reclassified to External.
+    pub fn mark_as_external(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "UPDATE torrent_metadata
+             SET is_external = 1, external_moved_at = ?1, sync_miss_count = 0,
+                 -- Preserve user-defined title when moving to External
+                 user_title_locked = CASE WHEN user_display_title IS NOT NULL THEN 1 ELSE user_title_locked END
+             WHERE info_hash = ?2",
+            params![now, info_hash],
+        )?;
+        Ok(())
+    }
+
+    // ── Feature 10: snatched records persistence ──────────────────────────────
+
+    /// Upsert a snatched record.  Never deletes existing records — only the
+    /// user can explicitly remove snatch history.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_snatched_record(
+        &self,
+        info_hash: &str,
+        torrent_name: &str,
+        size_bytes: i64,
+        snatched_at: i64,
+        save_path: Option<&str>,
+        display_title: Option<&str>,
+        poster_path: Option<&str>,
+        provider: Option<&str>,
+        provider_id: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO snatched_records
+             (info_hash, torrent_name, size_bytes, snatched_at, save_path,
+              display_title, poster_path, provider, provider_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(info_hash) DO UPDATE SET
+                 torrent_name   = COALESCE(excluded.torrent_name, snatched_records.torrent_name),
+                 size_bytes     = COALESCE(excluded.size_bytes, snatched_records.size_bytes),
+                 save_path      = COALESCE(excluded.save_path, snatched_records.save_path),
+                 display_title  = COALESCE(excluded.display_title, snatched_records.display_title),
+                 poster_path    = COALESCE(excluded.poster_path, snatched_records.poster_path),
+                 provider       = COALESCE(excluded.provider, snatched_records.provider),
+                 provider_id    = COALESCE(excluded.provider_id, snatched_records.provider_id)",
+            params![
+                info_hash,
+                torrent_name,
+                size_bytes,
+                snatched_at,
+                save_path,
+                display_title,
+                poster_path,
+                provider,
+                provider_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Update the external_moved_at timestamp on a snatched record when the
+    /// torrent is reclassified to External.
+    pub fn mark_snatched_record_external(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        conn.execute(
+            "UPDATE snatched_records SET external_moved_at = ?1 WHERE info_hash = ?2",
+            params![now, info_hash],
+        )?;
+        Ok(())
+    }
+
+    // ── Feature 8/9: metadata provider attribution ────────────────────────────
+
+    /// Store the provider (tmdb / imdb / mal) and its ID on a torrent entry.
+    pub fn set_media_provider(
+        &self,
+        info_hash: &str,
+        provider: &str,
+        provider_id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE torrent_metadata
+             SET provider = ?1, provider_id = ?2
+             WHERE info_hash = ?3",
+            params![provider, provider_id, info_hash],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve the display_title stored in snatched_records.
+    pub fn get_snatched_display_title(&self, info_hash: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT display_title FROM snatched_records WHERE info_hash = ?1")?;
+        let mut rows = stmt.query(params![info_hash])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Clear the `is_external` flag when a torrent is re-added to the client.
+    pub fn clear_external_flag(&self, info_hash: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE torrent_metadata
+             SET is_external = 0, external_moved_at = NULL, sync_miss_count = 0
+             WHERE info_hash = ?1",
             params![info_hash],
         )?;
         Ok(())
@@ -435,6 +684,14 @@ pub struct TorrentDbMetadata {
     pub first_last_piece_prio: bool,
     pub super_seeding: bool,
     pub racing_override: Option<bool>,
+    // Feature 6: user-defined listing names
+    pub user_display_title: Option<String>,
+    pub user_title_locked: bool,
+    // Feature 3: manual poster ordering
+    pub sort_order: Option<i64>,
+    // Feature 5: removed-torrent tracking
+    pub is_external: bool,
+    pub sync_miss_count: i64,
 }
 
 #[cfg(test)]

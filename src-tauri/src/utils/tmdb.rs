@@ -113,6 +113,11 @@ struct TmdbDetail {
 struct TmdbItem {
     #[serde(default)]
     id: Option<i64>,
+    // Movie results use "title"; TV results use "name".
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     poster_path: Option<String>,
     #[serde(default)]
@@ -131,6 +136,92 @@ struct TmdbItem {
     // /tv/{id} detail only: total episode count for total-runtime calculation.
     #[serde(default)]
     number_of_episodes: Option<u32>,
+}
+
+/// A single result row returned by [`search_tmdb_multi`].
+#[derive(Debug, serde::Serialize)]
+pub struct TmdbSearchEntry {
+    pub tmdb_id: i64,
+    pub title: String,
+    pub year: Option<i32>,
+    pub overview: Option<String>,
+    /// Absolute TMDB poster URL (w500 size); None when the result has no art.
+    pub poster_url: Option<String>,
+    /// "movie" | "tv"
+    pub media_type: String,
+}
+
+/// Search TMDB for the given query and return up to `limit` results across
+/// both movie and TV endpoints, deduplicated by TMDB id.
+///
+/// This is the multi-result variant for the metadata-correction UI (F8/F9);
+/// it does NOT cache or download posters — the frontend renders the raw URL.
+pub fn search_tmdb_multi(query: &str, limit: usize) -> Result<Vec<TmdbSearchEntry>, String> {
+    let api_key = match effective_api_key() {
+        Some(k) => k,
+        None => return Err("No TMDB API key available".to_string()),
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("TMDB client: {e}"))?;
+
+    let mut seen_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut results: Vec<TmdbSearchEntry> = Vec::new();
+
+    for (endpoint, media_type) in [("search/movie", "movie"), ("search/tv", "tv")] {
+        if results.len() >= limit {
+            break;
+        }
+        let mut url = url::Url::parse(&format!("{TMDB_BASE}/{endpoint}"))
+            .map_err(|e| format!("TMDB url: {e}"))?;
+        url.query_pairs_mut()
+            .append_pair("api_key", &api_key)
+            .append_pair("query", query)
+            .append_pair("page", "1");
+        let resp = client
+            .get(url)
+            .send()
+            .map_err(|e| format!("TMDB search ({endpoint}): {e}"))?;
+        if !resp.status().is_success() {
+            continue; // skip endpoint on HTTP error; don't fail whole search
+        }
+        let body: TmdbSearchResult = resp
+            .json()
+            .map_err(|e| format!("TMDB parse ({endpoint}): {e}"))?;
+        for item in body.results {
+            if results.len() >= limit {
+                break;
+            }
+            let id = match item.id {
+                Some(i) => i,
+                None => continue,
+            };
+            if !seen_ids.insert(id) {
+                continue;
+            }
+            let title = item
+                .title
+                .or(item.name)
+                .unwrap_or_else(|| "Unknown".to_string());
+            let year = item
+                .release_date
+                .as_deref()
+                .or(item.first_air_date.as_deref())
+                .and_then(|d| d.get(0..4))
+                .and_then(|y| y.parse::<i32>().ok());
+            let poster_url = item.poster_path.map(|p| format!("{TMDB_IMAGE}{p}"));
+            results.push(TmdbSearchEntry {
+                tmdb_id: id,
+                title,
+                year,
+                overview: item.overview,
+                poster_url,
+                media_type: media_type.to_string(),
+            });
+        }
+    }
+    Ok(results)
 }
 
 #[derive(Debug, serde::Serialize)]
