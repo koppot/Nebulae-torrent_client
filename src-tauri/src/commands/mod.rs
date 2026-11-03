@@ -6,6 +6,7 @@ pub mod library;
 pub mod media;
 pub mod peering;
 pub mod posters;
+pub mod qbit_import;
 pub mod settings;
 pub mod tailscale;
 pub mod torrent;

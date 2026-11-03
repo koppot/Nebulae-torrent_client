@@ -74,6 +74,8 @@ pub struct TorrentItem {
     #[serde(default)]
     pub super_seeding: bool,
     #[serde(default)]
+    pub last_checked: Option<u64>,
+    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub files: Vec<TorrentFileItem>,

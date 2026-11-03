@@ -39,6 +39,13 @@ fn expand_tilde_path(path: &Path) -> Option<PathBuf> {
 
 /// Helper to normalize download directory paths (expand `~`, convert to absolute).
 fn normalize_download_dir(download_dir: Option<&str>) -> Result<Option<String>, String> {
+    normalize_download_dir_opts(download_dir, true)
+}
+
+fn normalize_download_dir_opts(
+    download_dir: Option<&str>,
+    create_if_missing: bool,
+) -> Result<Option<String>, String> {
     let Some(raw) = download_dir.map(str::trim).filter(|d| !d.is_empty()) else {
         return Ok(None);
     };
@@ -46,12 +53,14 @@ fn normalize_download_dir(download_dir: Option<&str>) -> Result<Option<String>, 
     let absolute = expand_tilde_path(Path::new(raw))
         .ok_or_else(|| "Cannot resolve home directory".to_string())?;
 
-    std::fs::create_dir_all(&absolute).map_err(|e| {
-        format!(
-            "Cannot use save destination '{}': {e}. Pick another folder under Save Destination.",
-            absolute.display()
-        )
-    })?;
+    if create_if_missing {
+        std::fs::create_dir_all(&absolute).map_err(|e| {
+            format!(
+                "Cannot use save destination '{}': {e}. Pick another folder under Save Destination.",
+                absolute.display()
+            )
+        })?;
+    }
 
     Ok(Some(absolute.to_string_lossy().to_string()))
 }
@@ -828,7 +837,7 @@ pub fn build_transmission_settings(
         "incomplete-dir": settings.temp_incomplete_directory,
         "incomplete-dir-enabled": settings.use_temp_incomplete_dir,
         "preallocation": prealloc,
-        "rename-partial-files": true,
+        "rename-partial-files": settings.append_neb_extension,
         // Nebulae manages watched folder via app watcher loop; disable daemon watcher to prevent duplicate competing importers
         "watch-dir": settings.watched_folder_directory,
         "watch-dir-enabled": false,
@@ -1856,6 +1865,65 @@ impl TransmissionTorrentEngine {
             info!("[racing_mode] per-torrent settings applied to {hash}");
         }
     }
+
+    fn add_torrent_from_bytes_internal(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+        paused_override: Option<bool>,
+    ) -> Result<String, String> {
+        if self.kill_switch_active.load(Ordering::SeqCst) {
+            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
+        }
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let create_dir = paused_override != Some(true);
+        let dest = normalize_download_dir_opts(download_dir, create_dir)?;
+
+        let effective_dest = if let Some(ref d) = dest {
+            if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(bytes) {
+                Some(resolve_transmission_download_dir(
+                    d,
+                    &parsed.name,
+                    parsed.is_multi_file,
+                ))
+            } else {
+                Some(d.clone())
+            }
+        } else {
+            None
+        };
+
+        let do_not_start = paused_override.unwrap_or_else(|| {
+            self.db
+                .get_setting("user_settings_json")
+                .ok()
+                .flatten()
+                .and_then(|raw| {
+                    serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+                })
+                .map(|s| s.do_not_start_automatically)
+                .unwrap_or(false)
+        });
+
+        let mut args = json!({
+            "metainfo": b64,
+            "paused": do_not_start
+        });
+        if let Some(ref d) = effective_dest {
+            args["download-dir"] = json!(d);
+        }
+
+        let (hash, duplicate) = self.rpc_client.torrent_add_ex(args)?;
+        if !duplicate {
+            self.apply_racing_mode_on_add(&hash);
+        }
+        info!(
+            "Added torrent {hash} from metainfo bytes via Transmission sidecar (paused={do_not_start})"
+        );
+        Ok(hash)
+    }
 }
 
 impl Drop for TransmissionTorrentEngine {
@@ -2291,7 +2359,16 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 // preferences, not engine state: they stay in the database as
                 // saved and are not shown as active behavior.
                 super_seeding: false,
-                tags: Vec::new(),
+                last_checked: meta.and_then(|m| m.last_checked),
+                tags: meta
+                    .and_then(|m| m.labels.as_ref())
+                    .map(|l| {
+                        l.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 files,
                 trackers,
                 download_limit_kib: meta.map(|m| m.download_limit_kib).unwrap_or(0),
@@ -2420,56 +2497,15 @@ impl TorrentEngine for TransmissionTorrentEngine {
         bytes: &[u8],
         download_dir: Option<&str>,
     ) -> Result<String, String> {
-        if self.kill_switch_active.load(Ordering::SeqCst) {
-            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
-        }
+        self.add_torrent_from_bytes_internal(bytes, download_dir, None)
+    }
 
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let dest = normalize_download_dir(download_dir)?;
-
-        let effective_dest = if let Some(ref d) = dest {
-            if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(bytes) {
-                Some(resolve_transmission_download_dir(
-                    d,
-                    &parsed.name,
-                    parsed.is_multi_file,
-                ))
-            } else {
-                Some(d.clone())
-            }
-        } else {
-            None
-        };
-
-        let do_not_start = self
-            .db
-            .get_setting("user_settings_json")
-            .ok()
-            .flatten()
-            .and_then(|raw| {
-                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
-            })
-            .map(|s| s.do_not_start_automatically)
-            .unwrap_or(false);
-
-        let mut args = json!({
-            "metainfo": b64,
-            "paused": do_not_start
-        });
-        if let Some(ref d) = effective_dest {
-            args["download-dir"] = json!(d);
-        }
-
-        let (hash, duplicate) = self.rpc_client.torrent_add_ex(args)?;
-        // Re-adding a torrent Transmission already has must not rewrite it.
-        if !duplicate {
-            self.apply_racing_mode_on_add(&hash);
-        }
-        info!(
-            "Added torrent {hash} from metainfo bytes via Transmission sidecar (active download)"
-        );
-        Ok(hash)
+    fn add_torrent_from_bytes_paused(
+        &self,
+        bytes: &[u8],
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        self.add_torrent_from_bytes_internal(bytes, download_dir, Some(true))
     }
 
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {

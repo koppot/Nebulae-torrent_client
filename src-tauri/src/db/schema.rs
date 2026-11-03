@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     is_external INTEGER DEFAULT 0,
     external_moved_at INTEGER,
     -- Feature 5: consecutive missed sync count for removal detection
-    sync_miss_count INTEGER DEFAULT 0
+    sync_miss_count INTEGER DEFAULT 0,
+    -- qBittorrent import last checked timestamp
+    last_checked INTEGER
 );
 "#;
 

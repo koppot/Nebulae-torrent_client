@@ -109,6 +109,7 @@ impl MockTorrentEngine {
                 sequential_download: false,
                 first_last_piece_prio: true,
                 super_seeding: false,
+                last_checked: None,
                 tags: vec![
                     "Japanese".to_string(),
                     "Classic".to_string(),
@@ -195,6 +196,7 @@ impl MockTorrentEngine {
                 sequential_download: true,
                 first_last_piece_prio: true,
                 super_seeding: false,
+                last_checked: None,
                 tags: vec!["Criterion".to_string(), "Kurosawa".to_string()],
                 files: vec![
                     TorrentFileItem {
@@ -402,6 +404,7 @@ impl MockTorrentEngine {
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
+            last_checked: None,
             tags: vec!["Active".to_string()],
             files: final_files,
             trackers: parsed.trackers,
@@ -596,6 +599,7 @@ impl TorrentEngine for MockTorrentEngine {
             sequential_download: false,
             first_last_piece_prio: false,
             super_seeding: false,
+            last_checked: None,
             tags: vec!["Active".to_string()],
             files,
             trackers: vec![TorrentTrackerItem {
@@ -632,7 +636,10 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn pause_torrent(&self, id: &str) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = "Paused".to_string();
             item.download_rate = 0;
             item.upload_rate = 0;
@@ -644,7 +651,9 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        let pos = list.iter().position(|t| t.id == id);
+        let pos = list
+            .iter()
+            .position(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id));
         let Some(idx) = pos else {
             return Ok(());
         };
@@ -728,7 +737,10 @@ impl TorrentEngine for MockTorrentEngine {
         }
 
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = if item.progress >= 1.0 {
                 "Seeding".to_string()
             } else {
@@ -812,8 +824,71 @@ impl TorrentEngine for MockTorrentEngine {
 
     fn force_recheck(&self, id: &str) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
-        if let Some(item) = list.iter_mut().find(|t| t.id == id) {
+        if let Some(item) = list
+            .iter_mut()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(id))
+        {
             item.status = "Checking".to_string();
+
+            let torrents_clone = Arc::clone(&self.torrents);
+            let target_id = item.id.clone();
+            let save_path = item.save_path.clone();
+            let total_bytes = item.total_bytes;
+            let files = item.files.clone();
+
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let mut list = torrents_clone.lock().unwrap();
+                if let Some(t) = list.iter_mut().find(|x| x.id == target_id) {
+                    let content_path = std::path::Path::new(&save_path);
+                    if !content_path.exists() {
+                        t.status = "Error".to_string();
+                        t.error_string = Some("Download path missing".to_string());
+                        t.progress = 0.0;
+                    } else {
+                        let mut is_corrupt = false;
+                        let mut sum_bytes = 0u64;
+
+                        if content_path.is_file() {
+                            if let Ok(bytes) = std::fs::read(content_path) {
+                                if bytes.windows(15).any(|w| w == b"CORRUPT_PAYLOAD") {
+                                    is_corrupt = true;
+                                }
+                                sum_bytes = bytes.len() as u64;
+                            }
+                        } else {
+                            for f in &files {
+                                let fp = content_path.join(&f.name);
+                                if fp.is_file() {
+                                    if let Ok(bytes) = std::fs::read(&fp) {
+                                        if bytes.windows(15).any(|w| w == b"CORRUPT_PAYLOAD") {
+                                            is_corrupt = true;
+                                        }
+                                        sum_bytes += bytes.len() as u64;
+                                    }
+                                }
+                            }
+                        }
+
+                        let verified_bytes = if is_corrupt {
+                            sum_bytes / 4
+                        } else {
+                            sum_bytes.min(total_bytes)
+                        };
+
+                        let progress = if total_bytes > 0 {
+                            (verified_bytes as f32 / total_bytes as f32).min(1.0)
+                        } else {
+                            0.0
+                        };
+
+                        t.downloaded_bytes = verified_bytes;
+                        t.progress = progress;
+                        t.status = "Paused".to_string();
+                    }
+                }
+            });
+
             Ok(())
         } else {
             Err(format!("Torrent with id '{id}' not found"))

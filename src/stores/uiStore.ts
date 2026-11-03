@@ -31,6 +31,8 @@ interface UiState {
   setShowConnectivityDoctor: (show: boolean) => void;
   setShowVpnManager: (show: boolean) => void;
   setShowTrackerDashboard: (show: boolean) => void;
+  showQbitImport: boolean;
+  setShowQbitImport: (show: boolean) => void;
   setSplashDismissed: (dismissed: boolean) => void;
   setActiveManagerTab: (tab: ManagerTab) => void;
   setManagerCategoryFilter: (filter: string) => void;
@@ -63,6 +65,7 @@ export const useUiStore = create<UiState>((set) => ({
   showConnectivityDoctor: false,
   showVpnManager: false,
   showTrackerDashboard: false,
+  showQbitImport: false,
   splashDismissed: false,
   activeManagerTab: 'general',
   managerCategoryFilter: 'all',
@@ -95,6 +98,7 @@ export const useUiStore = create<UiState>((set) => ({
   setShowConnectivityDoctor: (showConnectivityDoctor) => set({ showConnectivityDoctor }),
   setShowVpnManager: (showVpnManager) => set({ showVpnManager }),
   setShowTrackerDashboard: (showTrackerDashboard) => set({ showTrackerDashboard }),
+  setShowQbitImport: (showQbitImport) => set({ showQbitImport }),
   setSplashDismissed: (splashDismissed) => set({ splashDismissed }),
   setActiveManagerTab: (activeManagerTab) => set({ activeManagerTab }),
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),

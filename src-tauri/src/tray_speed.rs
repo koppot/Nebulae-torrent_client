@@ -157,6 +157,7 @@ mod tests {
             racing_mode: None,
             error_string: None,
             media_meta: None,
+            last_checked: None,
         }
     }
 

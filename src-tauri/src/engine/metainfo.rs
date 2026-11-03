@@ -253,29 +253,17 @@ pub fn ensure_torrent_storage(save_path: &Path, parsed: &ParsedTorrent) -> Resul
         save_path.to_path_buf()
     };
 
-    std::fs::create_dir_all(&content_dir).map_err(|e| {
-        format!(
-            "Failed to create download folder '{}': {e}",
-            content_dir.display()
-        )
-    })?;
+    if save_path.exists() {
+        let _ = std::fs::create_dir_all(&content_dir);
 
-    // Create subdirectories for files if any
-    for file in &parsed.files {
-        let file_path = content_dir.join(&file.name);
-        if let Some(parent) = file_path.parent() {
-            if !parent.exists() {
-                let _ = std::fs::create_dir_all(parent);
+        // Create subdirectories for files if any
+        for file in &parsed.files {
+            let file_path = content_dir.join(&file.name);
+            if let Some(parent) = file_path.parent() {
+                if !parent.exists() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
             }
-        }
-
-        // Touch placeholder file so user sees it in Finder
-        if !file_path.exists() {
-            let _ = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&file_path);
         }
     }
 

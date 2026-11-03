@@ -151,6 +151,7 @@ export interface TorrentItem {
   save_path: string;
   added_on: number;
   completed_on?: number;
+  last_checked?: number | null;
   comment: string;
   created_by: string;
   piece_size: number;
@@ -402,4 +403,82 @@ export * from './peering';
 export * from './connectivity';
 export * from './vpn';
 export * from './tracker';
+
+// qBittorrent Ingestion & Migration
+export interface QbitLocationDto {
+  data_dir: string;
+  config_dir?: string | null;
+  source_description: string;
+  has_sqlite_db: boolean;
+  has_legacy_backup: boolean;
+  is_qbit_running: boolean;
+  is_writable: boolean;
+}
+
+export interface QbitTorrentSummary {
+  info_hash: string;
+  name: string;
+  size_bytes: number;
+  save_path: string;
+  effective_path: string;
+  progress: number;
+  state: string;
+  category: string;
+  status_label: string;
+  already_in_nebula: boolean;
+  missing_path: boolean;
+  source_format: string;
+}
+
+export interface ScanResult {
+  qbit_dir: string;
+  storage_format: string;
+  torrents: QbitTorrentSummary[];
+  warnings: string[];
+  is_qbit_running: boolean;
+  is_writable: boolean;
+}
+
+export interface ImportOptions {
+  info_hashes: string[];
+  skip_recheck: boolean;
+  remove_from_qbit: boolean;
+}
+
+export interface TorrentSkipInfo {
+  info_hash: string;
+  name: string;
+  reason: string;
+}
+
+export interface TorrentFailInfo {
+  info_hash: string;
+  name: string;
+  error: string;
+}
+
+export interface TorrentNotRemovedInfo {
+  info_hash: string;
+  name: string;
+  reason: string;
+}
+
+export interface ImportSummaryReport {
+  total_selected: number;
+  imported_count: number;
+  skipped: TorrentSkipInfo[];
+  failed: TorrentFailInfo[];
+  removed_count: number;
+  not_removed: TorrentNotRemovedInfo[];
+  backup_dir?: string | null;
+  unsupported_settings: string[];
+  log_file: string;
+  log_preview: string;
+}
+
+export interface QbitProcessCheck {
+  is_running: boolean;
+  process_name?: string | null;
+  message: string;
+}
 

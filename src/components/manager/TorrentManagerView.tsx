@@ -427,6 +427,82 @@ export const TorrentManagerView: React.FC = () => {
       .sort((a, b) => b.count - a.count);
   })();
 
+  type SortField =
+    | 'name'
+    | 'size'
+    | 'progress'
+    | 'status'
+    | 'down_speed'
+    | 'up_speed'
+    | 'eta'
+    | 'ratio'
+    | 'seeds'
+    | 'peers'
+    | 'last_checked';
+
+  const [sortField, setSortField] = useState<SortField | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      if (sortDirection === 'asc') {
+        setSortDirection('desc');
+      } else {
+        setSortField(null);
+        setSortDirection('asc');
+      }
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const displayedTorrents = useMemo(() => {
+    if (!sortField) return filteredTorrents;
+    return [...filteredTorrents].sort((a, b) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'size':
+          comparison = a.total_bytes - b.total_bytes;
+          break;
+        case 'progress':
+          comparison = a.progress - b.progress;
+          break;
+        case 'status':
+          comparison = a.status.localeCompare(b.status);
+          break;
+        case 'down_speed':
+          comparison = a.download_rate - b.download_rate;
+          break;
+        case 'up_speed':
+          comparison = a.upload_rate - b.upload_rate;
+          break;
+        case 'eta':
+          comparison = (a.eta_seconds ?? 999999999) - (b.eta_seconds ?? 999999999);
+          break;
+        case 'ratio':
+          comparison = a.ratio - b.ratio;
+          break;
+        case 'seeds':
+          comparison = (a.seeds ?? 0) - (b.seeds ?? 0);
+          break;
+        case 'peers':
+          comparison = a.peers - b.peers;
+          break;
+        case 'last_checked': {
+          const aTime = a.last_checked ?? 0;
+          const bTime = b.last_checked ?? 0;
+          comparison = aTime - bTime;
+          break;
+        }
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [filteredTorrents, sortField, sortDirection]);
+
   // Keyboard navigation & actions
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -461,22 +537,22 @@ export const TorrentManagerView: React.FC = () => {
         }
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const currentIndex = filteredTorrents.findIndex((t) => t.id === selectedId);
-        if (currentIndex < filteredTorrents.length - 1) {
-          setSelectedId(filteredTorrents[currentIndex + 1].id);
+        const currentIndex = displayedTorrents.findIndex((t) => t.id === selectedId);
+        if (currentIndex < displayedTorrents.length - 1) {
+          setSelectedId(displayedTorrents[currentIndex + 1].id);
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        const currentIndex = filteredTorrents.findIndex((t) => t.id === selectedId);
+        const currentIndex = displayedTorrents.findIndex((t) => t.id === selectedId);
         if (currentIndex > 0) {
-          setSelectedId(filteredTorrents[currentIndex - 1].id);
+          setSelectedId(displayedTorrents[currentIndex - 1].id);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, torrents, filteredTorrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
+  }, [selectedId, torrents, displayedTorrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -489,7 +565,7 @@ export const TorrentManagerView: React.FC = () => {
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
 
-  const selectedTorrent = torrents.find((t) => t.id === selectedId) || filteredTorrents[0];
+  const selectedTorrent = torrents.find((t) => t.id === selectedId) || displayedTorrents[0];
 
   // Announce/scrape status for the General tab: prefer a tracker that is not
   // working (its failure message is what the user needs to see), otherwise
@@ -1021,22 +1097,45 @@ export const TorrentManagerView: React.FC = () => {
           <table className="w-full text-left border-collapse text-xs">
             <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#262626] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider z-10">
               <tr>
-                <th className="py-2 px-3">Name</th>
-                <th className="py-2 px-2.5 w-20">Size</th>
-                <th className="py-2 px-2.5 w-36">Progress</th>
-                <th className="py-2 px-2.5 w-24">Status</th>
-                <th className="py-2 px-2.5 w-24">Down Speed</th>
-                <th className="py-2 px-2.5 w-24">Up Speed</th>
-                <th className="py-2 px-2.5 w-20">ETA</th>
-                <th className="py-2 px-2.5 w-16">Ratio</th>
-                <th className="py-2 px-2.5 w-14">Seeds</th>
-                <th className="py-2 px-2.5 w-14">Peers</th>
+                <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none">
+                  Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                  Size {sortField === 'size' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-36 cursor-pointer hover:text-white select-none">
+                  Progress {sortField === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                  Status {sortField === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                  Down Speed {sortField === 'down_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                  Up Speed {sortField === 'up_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                  ETA {sortField === 'eta' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 cursor-pointer hover:text-white select-none">
+                  Ratio {sortField === 'ratio' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                  Seeds {sortField === 'seeds' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                  Peers {sortField === 'peers' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
+                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-32 cursor-pointer hover:text-white select-none">
+                  Last Checked {sortField === 'last_checked' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#262626] font-mono">
-              {filteredTorrents.length === 0 && (
+              {displayedTorrents.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-24 text-center">
+                  <td colSpan={11} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <HardDrive className="w-8 h-8 text-[#333333]" />
                       <p className="text-sm font-sans font-medium text-white">No torrents in list</p>
@@ -1049,7 +1148,7 @@ export const TorrentManagerView: React.FC = () => {
                   </td>
                 </tr>
               )}
-              {filteredTorrents.map((t) => {
+              {displayedTorrents.map((t) => {
                 const isSelected = selectedId === t.id;
                 const progressPct = Math.round(t.progress * 100);
                 // Not connected: the torrent itself errored, or every one of
@@ -1150,6 +1249,18 @@ export const TorrentManagerView: React.FC = () => {
                       {trackersAllFailing ? '—' : (t.seeds ?? '—')}
                     </td>
                     <td className="py-2 px-2.5">{trackersAllFailing ? '—' : t.peers}</td>
+                    <td
+                      className="py-2 px-2.5 text-white whitespace-nowrap text-[11px]"
+                      title={t.last_checked && t.last_checked > 0 ? new Date(t.last_checked * 1000).toLocaleString() : undefined}
+                    >
+                      {t.status === 'Queued for checking'
+                        ? 'Queued'
+                        : t.status === 'Checking'
+                          ? `Checking… (${progressPct}%)`
+                          : t.last_checked && t.last_checked > 0
+                            ? new Date(t.last_checked * 1000).toLocaleString()
+                            : '—'}
+                    </td>
                   </tr>
                 );
               })}
@@ -1429,6 +1540,16 @@ export const TorrentManagerView: React.FC = () => {
                               <span className="text-white">
                                 {selectedTorrent.completed_on && selectedTorrent.completed_on > 0
                                   ? new Date(selectedTorrent.completed_on * 1000).toLocaleString()
+                                  : '—'}
+                              </span>
+                            </div>
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
+                                Last Checked
+                              </span>
+                              <span className="text-white">
+                                {selectedTorrent.last_checked && selectedTorrent.last_checked > 0
+                                  ? new Date(selectedTorrent.last_checked * 1000).toLocaleString()
                                   : '—'}
                               </span>
                             </div>

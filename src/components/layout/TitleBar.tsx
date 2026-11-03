@@ -29,6 +29,7 @@ import {
   ChevronDown,
   Folder,
   Disc,
+  FolderInput,
 } from 'lucide-react';
 
 export const TitleBar: React.FC = () => {
@@ -42,6 +43,7 @@ export const TitleBar: React.FC = () => {
     setShowConnectivityDoctor,
     setShowVpnManager,
     setShowTrackerDashboard,
+    setShowQbitImport,
     searchQuery,
     setSearchQuery,
     setDeleteModalTarget,
@@ -472,6 +474,18 @@ export const TitleBar: React.FC = () => {
                 >
                   <Radio className="w-3.5 h-3.5 text-[#e50914]" />
                   <span>ADC Tracker Dashboard</span>
+                </button>
+                <div className="h-[1px] bg-[#262626] my-1" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowToolsMenu(false);
+                    setShowQbitImport(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-white hover:bg-[#262626] transition text-left"
+                >
+                  <FolderInput className="w-3.5 h-3.5 text-[#e50914]" />
+                  <span>Import from qBittorrent…</span>
                 </button>
               </div>
             )}
