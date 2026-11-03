@@ -41,7 +41,7 @@ impl Default for TraySpeedState {
         Self {
             last_update: now - Duration::from_secs(1), // allow immediate first update
             last_rates: None,
-            last_active: now,
+            last_active: now - Duration::from_secs(STALE_AFTER_SECS + 1), // start in idle state
             is_custom_icon: false,
         }
     }
