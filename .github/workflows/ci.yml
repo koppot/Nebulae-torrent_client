@@ -66,3 +66,22 @@ jobs:
       - name: Windows unit tests
         run: cargo test --lib
         working-directory: ./src-tauri
+
+  # macOS compile + test gate: compiles and tests macOS-specific code paths
+  # (objc2 AppKit/Foundation/QuartzCore, macOS status bar, keyrings, paths).
+  macos-tests:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: macOS compile check
+        run: cargo check --lib
+        working-directory: ./src-tauri
+
+      - name: macOS unit tests
+        run: cargo test
+        working-directory: ./src-tauri

@@ -1,6 +1,7 @@
 use crate::engine::SharedEngine;
 use std::time::Instant;
 use tauri::AppHandle;
+#[cfg(target_os = "macos")]
 use tracing::info;
 
 /// Global state for status bar management
@@ -19,7 +20,6 @@ impl StatusBarState {
 }
 
 /// Thread-safe wrapper for status bar state
-#[cfg(target_os = "macos")]
 pub(crate) static STATUS_BAR_STATE: std::sync::OnceLock<
     std::sync::Arc<std::sync::Mutex<StatusBarState>>,
 > = std::sync::OnceLock::new();
@@ -132,6 +132,11 @@ pub fn clear_status_bar(app_handle: &AppHandle) {
         } else {
             info!("[status_bar] Tray not found for clear");
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_handle;
     }
 }
 

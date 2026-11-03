@@ -2208,7 +2208,7 @@ export const SimpleMediaView: React.FC = () => {
           infoHash={editingFor.infoHash}
           currentTitle={editingFor.title}
           onClose={() => setEditingFor(null)}
-          onConfirmed={(newTitle, _provider, _providerId) => {
+          onConfirmed={(newTitle) => {
             // Notify user via feedback banner then close
             setFeedbackNotice({ type: 'info', message: `Metadata updated: ${newTitle}` });
             setEditingFor(null);
