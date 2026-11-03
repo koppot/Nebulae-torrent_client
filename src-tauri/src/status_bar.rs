@@ -5,6 +5,7 @@ use tauri::AppHandle;
 use tracing::info;
 
 /// Global state for status bar management
+#[allow(dead_code)]
 pub(crate) struct StatusBarState {
     last_update: Instant,
     tray_id: Option<String>,
