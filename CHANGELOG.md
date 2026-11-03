@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.4] - 2026-10-28
+## [0.2.4] - 2026-10-30
 
 ### Fixed
+- **Windows Full-Bleed Branding & Multi-Resolution Icons**: Replaced padded and downscaled icon assets across application, installer, and web surfaces with official unpadded full-bleed branding. Generated multi-layer Windows `.ico` containing 16, 24, 32, 48, 64, 128, and 256 pixel layers, providing a dedicated 24×24 pixel bitmap for standard Windows taskbar buttons without downsampling distortion.
+- **Windows Shortcut & Jump List Icon Binding**: Pointed desktop and start menu shortcuts directly to `$INSTDIR\app.ico, 0` and pinned `AppUserModelId`. Configured Jump List tasks (`Quit Nebulae`, `Open Nebulae`) to explicitly resolve their icons from `$INSTDIR\app.ico`.
+- **Shell Icon Cache Notifications & Stale Jump List Eviction**: Added `taskbar_windows::flush_icon_cache()` calling `SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT)` at application launch and updater execution. Added `dest_list.DeleteList(APP_ID)` before building Jump Lists to clear stale destination bitmaps cached by Windows Explorer. Updated NSIS post-install and pre-uninstall hooks to purge `%APPDATA%\Microsoft\Windows\Recent\CustomDestinations\36134c10a5336e21.customDestinations-ms` and broadcast shell cache updates via `SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_FLUSH, 0, 0)`.
+- **Preserved Playback Engine & Video Surface Fixes**: Preserved the DVD playback startup delay fix, Fuuka Blu-ray interactive menu navigation, and the black loading video surface preventing white flashes during player initialization on Windows.
 - **Blu-ray Menu Navigation and Input Control**: Resolved an issue where manual menu invocation during feature playback could fail or briefly appear without accepting input. Added a ground-truth menu visibility check via `libvlc_media_player_get_bluray_menu_open()` and scoped UO Disabled menu opening on disc mount. The fix ensures menu commands only execute when the disc's graphics controller is ready to accept input, and that subsequent menu commands don't replay warnings on re-entry.
 - **Runtime Dependency Completeness**: Verified all bundled libraries, plugins, and runtime data are present in Release builds including patched VLC with the working Blu-ray menu fix, libbluray with BD-J JARs, bundled Java runtime, Transmission with its complete dependency chain, Tailnet/Tailscale and required assets, fonts/fontconfig, and all license notices.
 

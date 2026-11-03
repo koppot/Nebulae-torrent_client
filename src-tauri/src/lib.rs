@@ -5,10 +5,13 @@ pub mod db;
 pub mod engine;
 pub mod models;
 pub mod player;
+pub mod speed_format;
 pub mod status_bar;
 pub mod tailscale;
 pub mod taskbar_windows;
 pub mod thumbs;
+#[cfg(target_os = "windows")]
+pub mod tray_speed;
 pub mod updater;
 pub mod utils;
 pub mod webview_recovery;
@@ -438,6 +441,9 @@ pub fn run() {
                 .decorations(false)
                 .transparent(true)
                 .center();
+                if let Some(icon) = app.default_window_icon() {
+                    builder = builder.icon(icon.clone())?;
+                }
                 if std::env::var("NEBULAE_TEST_CDP").as_deref() == Ok("1") {
                     builder = builder.additional_browser_args(
                         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222 --remote-allow-origins=*",

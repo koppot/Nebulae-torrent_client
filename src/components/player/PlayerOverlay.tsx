@@ -1259,6 +1259,8 @@ export default function PlayerOverlay() {
     invoke('player_toggle_fullscreen').catch(() => {});
   };
 
+  const hasStarted = poll.playing || poll.time_ms > 0 || poll.at_menu;
+
   return (
     <div className="fixed inset-0 z-[100] flex flex-col select-none" style={{ background: 'transparent' }}>
       {/* Video hole: the native video view sits BELOW this transparent
@@ -1273,6 +1275,11 @@ export default function PlayerOverlay() {
         onDoubleClick={onVideoDoubleClick}
         onWheel={onVideoWheel}
       />
+
+      {/* Black surface while preparing playback so unpainted native window surface does not flash white */}
+      {!hasStarted && (
+        <div className="absolute inset-0 bg-black pointer-events-none transition-opacity duration-300" />
+      )}
 
       {ended && (
         <div className="absolute inset-x-0 top-0 flex-1 flex items-center justify-center pointer-events-none">

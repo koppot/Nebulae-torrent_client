@@ -394,7 +394,7 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
 
 #[tauri::command]
 pub fn save_user_settings(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     mut settings: UserSettings,
     db: State<Arc<Database>>,
     engine: State<crate::engine::SharedEngine>,
@@ -436,7 +436,7 @@ pub fn save_user_settings(
     let _ = engine.apply_global_settings(&settings);
 
     #[cfg(target_os = "macos")]
-    crate::player::embed_macos::update_blackout_state(&app);
+    crate::player::embed_macos::update_blackout_state(&_app);
 
     Ok(())
 }

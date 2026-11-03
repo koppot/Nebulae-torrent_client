@@ -734,6 +734,17 @@ fn start_playback_inner(
                             let menu_gen =
                                 state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
                             let menu_mp = session.media_player;
+                            let is_bluray_disc = resolved.is_disc
+                                && {
+                                    let p = std::path::Path::new(&resolved.resolved_path);
+                                    if p.is_dir() {
+                                        p.join("BDMV").exists() || p.join("bdmv").exists()
+                                    } else {
+                                        crate::utils::disc_detector::DiscDetector::inspect(p)
+                                        .map(|d| matches!(d.disc_type, crate::utils::disc_detector::DiscType::BluRay | crate::utils::disc_detector::DiscType::UhdBluRay))
+                                        .unwrap_or(false)
+                                    }
+                                };
                             std::thread::spawn(move || {
                                 use tauri::Manager;
                                 let max_wait_attempts = 150; // 150 * 20ms = 3s
@@ -824,8 +835,11 @@ fn start_playback_inner(
                                 // Outcome A: If already at menu (e.g. DVD VMGM or discs starting directly at menu), done.
                                 // On Blu-ray the demuxer's menu-visible ground truth must agree:
                                 // the title report alone can be the announce of a refused set_title.
+                                // On DVD or non-Blu-ray discs, the title report alone decides.
                                 if unsafe { engine::is_menu_title(&lib, mp) }
-                                    && unsafe { engine::bluray_menu_open(&lib, mp) } != Some(false)
+                                    && (!is_bluray_disc
+                                        || unsafe { engine::bluray_menu_open(&lib, mp) }
+                                            != Some(false))
                                 {
                                     tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
@@ -917,7 +931,11 @@ fn start_playback_inner(
                                     }
                                     let sample = menu_watch::Sample {
                                         at_menu: kind == engine::TitleKind::Menu,
-                                        menu_open: unsafe { engine::bluray_menu_open(&lib, mp) },
+                                        menu_open: if is_bluray_disc {
+                                            unsafe { engine::bluray_menu_open(&lib, mp) }
+                                        } else {
+                                            None
+                                        },
                                         has_menu,
                                         kind,
                                         feature_active: unsafe {
@@ -1018,9 +1036,12 @@ fn start_playback_inner(
                                 };
                                 // Same ground-truth rule as the watch loop: on
                                 // Blu-ray a title report that the demuxer does
-                                // not confirm is not "at menu".
+                                // not confirm is not "at menu". On DVD/other discs,
+                                // the title report alone decides.
                                 let at_menu = unsafe { engine::is_menu_title(&lib, mp) }
-                                    && unsafe { engine::bluray_menu_open(&lib, mp) } != Some(false);
+                                    && (!is_bluray_disc
+                                        || unsafe { engine::bluray_menu_open(&lib, mp) }
+                                            != Some(false));
                                 let keep_playing = is_playing
                                     && (cur_len >= 120_000
                                         || unsafe { engine::is_active_feature_playback(&lib, mp) });
@@ -1037,48 +1058,13 @@ fn start_playback_inner(
                                     );
                                     }
                                     menu_watch::WindowEnd::DirectFeature => {
-                                        // Outcome C: Menu startup did not complete and no usable playback is active.
-                                        // Safe bounded main-feature fallback: reopen the disc ONCE with
-                                        // bypass_menu=true. That session starts no menu or warning
-                                        // watcher (menu_watch::startup_watchers_enabled), so this
-                                        // fallback cannot trigger itself again.
-                                        let disc_path = poison(&state.current_resolved)
-                                            .clone()
-                                            .or_else(|| poison(&state.current_path).clone());
-                                        if let Some(path) = disc_path {
-                                            tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): menu startup incomplete on static/intro title {cur_title}; falling back to direct main-feature playback [Outcome C]"
+                                        // Outcome C: Menu startup did not complete.
+                                        // User policy: Do not silently fall back to direct feature playback.
+                                        // Preserve the actual failure reason and report the limitation.
+                                        tracing::warn!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms on title {cur_title} (length_ms={cur_len}); preserving player state without silent fallback to direct feature playback [Outcome C]",
+                                            menu_watch::WINDOW_MS
                                         );
-                                            let app_fallback = app_menu.clone();
-                                            tauri::async_runtime::spawn(async move {
-                                                use tauri::Manager;
-                                                let s = app_fallback.state::<PlayerState>();
-                                                // Something else may have been opened while this task was queued;
-                                                // never replace it with the disc that timed out.
-                                                if s.session_gen
-                                                    .load(std::sync::atomic::Ordering::SeqCst)
-                                                    != menu_gen
-                                                {
-                                                    tracing::info!(
-                                                    "[menu-diag] menu watcher (session_gen={menu_gen}): session changed before the fallback reopen; dropping it"
-                                                );
-                                                    return;
-                                                }
-                                                let _ = player_open_inner(
-                                                    &app_fallback,
-                                                    &s,
-                                                    path,
-                                                    false,
-                                                    None,
-                                                    menu_watch::FALLBACK_BYPASS_MENU,
-                                                )
-                                                .await;
-                                            });
-                                        } else {
-                                            tracing::warn!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): exited after 15s without authored menu and no disc path found [Outcome None]; leaving recoverable player state"
-                                        );
-                                        }
                                     }
                                 }
                             });

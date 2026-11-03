@@ -488,9 +488,14 @@ pub async fn get_tailscale_status() -> Result<TailscaleStatus, String> {
     tokio::task::spawn_blocking(|| {
         if crate::utils::network::detect_tailscale().is_none() {
             // Stopped at login (observed after network-extension updates):
-            // one bounded auto-heal attempt, then re-detect.
-            if let Some(heal) = crate::utils::network::heal_stopped_tailscale() {
-                tracing::info!("[tailscale] {heal}");
+            // one bounded auto-heal attempt, then re-detect. Uses the
+            // EMBEDDED tailscale CLI, never a system one on PATH.
+            if let Ok(paths) = crate::tailscale::Paths::resolve() {
+                if let Some(heal) =
+                    crate::utils::network::heal_stopped_tailscale(&paths.tailscale())
+                {
+                    tracing::info!("[tailscale] {heal}");
+                }
             }
         }
         Ok(match crate::utils::network::detect_tailscale() {

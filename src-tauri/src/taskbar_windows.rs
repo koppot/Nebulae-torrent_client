@@ -21,8 +21,9 @@ use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Shell::{
-    DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, SHStrDupW,
-    SetCurrentProcessExplicitAppUserModelID, ShellLink,
+    DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW,
+    SHChangeNotify, SHStrDupW, SetCurrentProcessExplicitAppUserModelID, ShellLink,
+    SHCNE_ASSOCCHANGED, SHCNF_FLUSHNOWAIT, SHCNF_IDLIST,
 };
 
 #[cfg(target_os = "windows")]
@@ -35,12 +36,28 @@ const PKEY_TITLE: PROPERTYKEY = PROPERTYKEY {
     pid: 2,
 };
 
+/// Flushes the Windows Shell icon and association cache.
+/// Ensures Windows Explorer immediately reloads updated icons for the taskbar,
+/// Start Menu, Desktop, and Jump Lists upon installation or auto-update.
+pub fn flush_icon_cache() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST | SHCNF_FLUSHNOWAIT,
+            None,
+            None,
+        );
+    }
+}
+
 /// Sets the explicit AppUserModelID for the current process on Windows.
 /// This ensures taskbar grouping and custom Jump Lists bind to the correct taskbar icon.
 pub fn init_taskbar_app_id() {
     #[cfg(target_os = "windows")]
     unsafe {
         let _ = SetCurrentProcessExplicitAppUserModelID(APP_ID);
+        flush_icon_cache();
     }
 }
 
@@ -66,11 +83,27 @@ pub fn update_taskbar_jump_list() {
 fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
     let current_exe = std::env::current_exe()?;
     let exe_path_str = current_exe.to_string_lossy().to_string();
+
+    // Determine preferred icon source: app.ico in the application directory if present,
+    // otherwise index 0 of current_exe.
+    let icon_path_str = current_exe
+        .parent()
+        .map(|p| p.join("app.ico"))
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| exe_path_str.clone());
+
     let exe_wide: Vec<u16> = exe_path_str
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
     let exe_pcwstr = PCWSTR::from_raw(exe_wide.as_ptr());
+
+    let icon_wide: Vec<u16> = icon_path_str
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let icon_pcwstr = PCWSTR::from_raw(icon_wide.as_ptr());
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -78,6 +111,10 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
         let dest_list: ICustomDestinationList =
             CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER)?;
         dest_list.SetAppID(APP_ID)?;
+
+        // Delete any stale custom destination list cache first so Windows Explorer
+        // purges cached task icons from previous installations or versions.
+        let _ = dest_list.DeleteList(APP_ID);
 
         let mut min_slots = 0u32;
         let _removed: IObjectArray = dest_list.BeginList(&mut min_slots)?;
@@ -90,7 +127,7 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
             let quit_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             quit_link.SetPath(exe_pcwstr)?;
             quit_link.SetArguments(w!("--quit"))?;
-            quit_link.SetIconLocation(exe_pcwstr, 0)?;
+            quit_link.SetIconLocation(icon_pcwstr, 0)?;
             quit_link.SetDescription(w!("Quit Nebulae completely"))?;
 
             let prop_store: IPropertyStore = quit_link.cast()?;
@@ -110,7 +147,7 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
             let open_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             open_link.SetPath(exe_pcwstr)?;
             open_link.SetArguments(w!(""))?;
-            open_link.SetIconLocation(exe_pcwstr, 0)?;
+            open_link.SetIconLocation(icon_pcwstr, 0)?;
             open_link.SetDescription(w!("Open Nebulae window"))?;
 
             let prop_store: IPropertyStore = open_link.cast()?;
@@ -128,6 +165,9 @@ fn populate_jump_list_inner() -> Result<(), Box<dyn std::error::Error>> {
         let tasks_array: IObjectArray = collection.cast()?;
         dest_list.AddUserTasks(&tasks_array)?;
         dest_list.CommitList()?;
+
+        // Flush icon cache to notify Explorer that Jump List icons are refreshed
+        flush_icon_cache();
     }
 
     Ok(())

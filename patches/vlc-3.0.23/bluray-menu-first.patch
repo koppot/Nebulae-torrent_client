@@ -86,25 +86,7 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
      var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
  
      /* Open BluRay */
-@@ -953,6 +960,17 @@
-         if (bd_play(p_sys->bluray) == 0)
-             BLURAY_ERROR(_("Failed to start bluray playback. Please try without menu support."));
- 
-+        /* bd_play() always lands on First Play, and commercial discs chain
-+         * studio logos and FBI warnings there before (or instead of) the
-+         * top menu. The HDMV VM does not execute the First Play object
-+         * until the first bd_read(), so requesting the top menu now
-+         * re-targets the VM before a single intro packet is decoded: the
-+         * disc opens on its authored menu, not on its warning reel. When
-+         * the disc has no usable top menu this call fails and First Play
-+         * proceeds as authored. */
-+        if (blurayTopMenuCall(p_demux) == 0)
-+            msg_Warn(p_demux, "bluray: no top menu at open; following First Play");
-+
-     } else {
-         /* set start title number */
-         if (bluraySetTitle(p_demux, p_sys->i_longest_title) != VLC_SUCCESS) {
-@@ -2166,6 +2184,27 @@
+@@ -2166,6 +2173,27 @@
  }
  
  /*****************************************************************************

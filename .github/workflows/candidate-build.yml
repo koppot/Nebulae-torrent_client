@@ -359,7 +359,7 @@ jobs:
           }
 
           if ((Test-Path 'Nebulae-Setup-x64.exe') -and (Test-Path 'Nebulae-Setup-x64.exe.sig')) {
-            cargo run --manifest-path src-tauri/Cargo.toml --bin verify-payload-signature Nebulae-Setup-x64.exe Nebulae-Setup-x64.exe.sig
+            cargo run --manifest-path src-tauri/Cargo.toml --features ci-verify-payload-signature --bin verify-payload-signature Nebulae-Setup-x64.exe Nebulae-Setup-x64.exe.sig
           } else {
             throw "FATAL: candidate installer or its signature missing!"
           }

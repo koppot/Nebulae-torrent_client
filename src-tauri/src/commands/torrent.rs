@@ -1393,7 +1393,9 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
         })
         .status();
     match opened {
-        Ok(s) if s.success() => Ok(()),
+        // Windows: explorer.exe exits 1 on success for some invocations.
+        // Treat 0 or 1 as success; anything else is a real failure.
+        Ok(s) if s.success() || s.code() == Some(1) => Ok(()),
         Ok(s) => Err(format!("File manager exited with {s}")),
         Err(e) => Err(format!("Failed to open folder: {e}")),
     }

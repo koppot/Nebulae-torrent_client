@@ -1111,11 +1111,10 @@ impl VlcSession {
             // (libvlc_log_set C callback). The --file-logging / --logfile args
             // are VLC application flags and are silently ignored by libvlc_new.
             CString::new("--verbose=2").unwrap(),
-            // Network share & high-bitrate UHD Blu-ray buffer tuning:
-            // Default libvlc caching (300ms) starves on SMB shares. 3000ms prevents stutter and freezes.
+            // Disc and media buffer tuning: 1000ms prevents stutter while avoiding excessive startup lag.
             CString::new("--file-caching=3000").unwrap(),
             CString::new("--network-caching=3000").unwrap(),
-            CString::new("--disc-caching=3000").unwrap(),
+            CString::new("--disc-caching=1000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
             // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
             // SDR): handled by the vout's OpenGL tone-mapping shader
@@ -1139,6 +1138,22 @@ impl VlcSession {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
                     args.push(arg);
                 }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Probe whether any audio output devices are active.
+            // On headless servers, VMs, or RDP sessions without redirected audio,
+            // waveOutGetNumDevs() returns 0. If 0, VLC's default mmdevice audio output
+            // fails and crashes during playback. Passing --aout=adummy avoids the crash.
+            #[link(name = "winmm")]
+            extern "system" {
+                fn waveOutGetNumDevs() -> u32;
+            }
+            let audio_devs = unsafe { waveOutGetNumDevs() };
+            if audio_devs == 0 {
+                tracing::warn!("No active audio playback devices detected on Windows (waveOutGetNumDevs=0); using --aout=adummy to prevent mmdevice crash");
+                args.push(CString::new("--aout=adummy").unwrap());
             }
         }
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
