@@ -7,8 +7,7 @@ use std::time::Duration;
 
 /// Number of consecutive 5-second missed polls before a torrent is considered
 /// confirmed-removed.  3 misses ≈ 15 seconds — well inside the margin of a
-/// normal client restart, so this is conservative.  The threshold avoids
-/// false-positive reclassification during transient client outages.
+/// normal client restart.
 const MISS_THRESHOLD: i64 = 3;
 
 pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
@@ -17,15 +16,17 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
         loop {
             interval.tick().await;
 
+            // `list_torrents` returns Err on connection/auth failure — skip
+            // the whole cycle.  Ok(vec![]) is a valid successful response
+            // meaning the client has no torrents; we MUST process it so that
+            // the last remaining torrent can be reclassified when removed.
             let torrents = match engine.list_torrents() {
                 Ok(t) => t,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::debug!("[seeding] list_torrents error (skipping cycle): {e}");
+                    continue;
+                }
             };
-
-            // Guard: an empty list from the client most likely means a
-            // connection failure, not that every torrent was removed.
-            // Only do miss-count processing when the list is non-empty.
-            let client_reported_results = !torrents.is_empty();
 
             // ── Active-torrent processing ─────────────────────────────────────
             let mut active_hashes: HashSet<String> = HashSet::new();
@@ -84,43 +85,56 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
             }
 
             // ── Removed-torrent detection (F5) ────────────────────────────────
-            // Only run when the client gave us a real (non-empty) response.
-            if client_reported_results {
-                if let Ok(all_meta) = db.list_all_torrent_metadata() {
-                    for (hash, meta) in &all_meta {
-                        // Skip entries already reclassified as External.
-                        if meta.is_external {
-                            // If the torrent is re-added, clear the external flag.
-                            if active_hashes.contains(hash) {
-                                let _ = db.clear_external_flag(hash);
-                            }
-                            continue;
-                        }
-
+            //
+            // We always run this block — `list_torrents` returning Ok([]) is a
+            // legitimate "client has no torrents" state, not an outage.
+            // Outages are signalled by Err (handled above with `continue`).
+            //
+            // Safety gate: only increment miss counts for entries that have
+            // `completed_on IS NOT NULL`, meaning they were fully downloaded at
+            // least once.  Entries that are still purely in-progress (e.g. a
+            // downloading torrent that the user cancelled before completion)
+            // never accumulate misses and are never auto-reclassified.
+            if let Ok(all_meta) = db.list_all_torrent_metadata() {
+                for (hash, meta) in &all_meta {
+                    // Skip entries already reclassified as External.
+                    if meta.is_external {
+                        // If the torrent is re-added, reconcile: clear External
+                        // flag so it reappears in the Downloaded shelf.
                         if active_hashes.contains(hash) {
-                            // Present — already reset above.
-                            continue;
+                            tracing::info!("[seeding] {hash} re-added — clearing external flag");
+                            let _ = db.clear_external_flag(hash);
                         }
+                        continue;
+                    }
 
-                        // Absent — increment miss counter.
-                        let count = db.increment_sync_miss_count(hash).unwrap_or(0);
-                        tracing::debug!(
-                            "[seeding] {hash} absent from client ({count}/{MISS_THRESHOLD})"
+                    if active_hashes.contains(hash) {
+                        // Present — miss counter already reset above.
+                        continue;
+                    }
+
+                    // Only reclassify completed downloads, not in-progress ones.
+                    if meta.completed_on.is_none() {
+                        continue;
+                    }
+
+                    // Absent from client — increment miss counter.
+                    let count = db.increment_sync_miss_count(hash).unwrap_or(0);
+                    tracing::debug!(
+                        "[seeding] {hash} absent from client ({count}/{MISS_THRESHOLD})"
+                    );
+
+                    if count >= MISS_THRESHOLD {
+                        tracing::info!(
+                            "[seeding] {hash} confirmed removed after {MISS_THRESHOLD} misses — marking external"
                         );
-
-                        if count >= MISS_THRESHOLD {
-                            tracing::info!(
-                                "[seeding] {hash} confirmed removed — marking is_external"
-                            );
-                            let _ = db.mark_as_external(hash);
-                            let _ = db.mark_snatched_record_external(hash);
-                            // Note: The JSON external_media sidecar is not updated
-                            // here because `seeding.rs` does not hold an AppHandle.
-                            // The frontend will see `is_external = true` via the
-                            // next `list_all_torrent_metadata` call and can show the
-                            // entry in the External section.  A dedicated
-                            // `list_external_from_db` Tauri command exposes this.
-                        }
+                        let _ = db.mark_as_external(hash);
+                        let _ = db.mark_snatched_record_external(hash);
+                        // The JSON sidecar (external_media.json) is not updated
+                        // here because seeding.rs has no AppHandle.  The Tauri
+                        // command `list_external_media` now merges the DB
+                        // is_external rows with the sidecar so the frontend
+                        // always sees a unified list.
                     }
                 }
             }

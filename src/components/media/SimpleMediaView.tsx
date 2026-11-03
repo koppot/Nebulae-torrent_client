@@ -48,7 +48,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy, Trash2, Pencil, GripVertical, Sliders } from 'lucide-react';
+  Copy, Trash2, Pencil, GripVertical, Sliders, Check, RotateCcw } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -112,6 +112,8 @@ export const SimpleMediaView: React.FC = () => {
     setPostersPerRow,
     setCustomOrderMode,
     saveMediaOrder,
+    setUserDisplayTitle,
+    resetUserDisplayTitle,
   } = useLibraryStore();
   const playerOpen = usePlayerStore().open;
 
@@ -226,6 +228,9 @@ export const SimpleMediaView: React.FC = () => {
 
   // ── Feature 3/4/6: library preferences & custom ordering ─────────────────
   const [editingFor, setEditingFor] = useState<{ infoHash: string; title: string } | null>(null);
+  /** Inline rename: tracks which item card is in rename mode + current input value. */
+  const [renamingFor, setRenamingFor] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   // Poster order — applied to the readyToWatch groups in the Downloaded shelf.
   const [customOrder, setCustomOrder] = useState<string[]>([]);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -1907,12 +1912,77 @@ export const SimpleMediaView: React.FC = () => {
                     </div>
                     <div className="flex-1 min-w-0 space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-base font-bold text-white leading-tight">
-                          {group.clean_title}
-                          {group.year ? (
-                            <span className="text-white font-normal"> ({group.year})</span>
-                          ) : null}
-                        </h3>
+                        {/* F6: Inline rename — shows text input when active, title otherwise */}
+                        {renamingFor === item.id ? (
+                          <form
+                            className="flex-1 flex items-center gap-1.5"
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              const trimmed = renameValue.trim();
+                              if (trimmed) {
+                                await setUserDisplayTitle(item.id, trimmed);
+                                // Reflect the new name immediately in local group state.
+                                group.clean_title = trimmed;
+                              }
+                              setRenamingFor(null);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              type="text"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Escape' && setRenamingFor(null)}
+                              className="flex-1 bg-[#1a1a1a] border border-[#555] rounded px-2 py-0.5 text-sm text-white focus:outline-none focus:border-white"
+                            />
+                            <button
+                              type="submit"
+                              title="Save name"
+                              className="p-1 text-[#4ade80] hover:text-white transition"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              title="Reset to provider title"
+                              onClick={async () => {
+                                await resetUserDisplayTitle(item.id);
+                                setRenamingFor(null);
+                              }}
+                              className="p-1 text-[#737373] hover:text-[#f87171] transition"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              title="Cancel"
+                              onClick={() => setRenamingFor(null)}
+                              className="p-1 text-[#737373] hover:text-white transition"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </form>
+                        ) : (
+                          <h3 className="text-base font-bold text-white leading-tight group/title flex items-center gap-1.5">
+                            <span>
+                              {group.clean_title}
+                              {group.year ? (
+                                <span className="text-white font-normal"> ({group.year})</span>
+                              ) : null}
+                            </span>
+                            <button
+                              type="button"
+                              title="Rename listing"
+                              onClick={() => {
+                                setRenameValue(group.clean_title);
+                                setRenamingFor(item.id);
+                              }}
+                              className="opacity-0 group-hover/title:opacity-100 p-0.5 text-[#737373] hover:text-white transition"
+                            >
+                              <Pencil className="w-2.5 h-2.5" />
+                            </button>
+                          </h3>
+                        )}
                         <button
                           type="button"
                           onClick={() => setDetailsFor(null)}
@@ -2101,6 +2171,27 @@ export const SimpleMediaView: React.FC = () => {
                   className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
                 />
               </label>
+              {/* F4: Posters-per-row preference — also surfaced in Media Preferences */}
+              <div className="space-y-1 pt-1 border-t border-[#262626]">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                  Posters per row
+                </span>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={2}
+                    max={12}
+                    step={1}
+                    value={postersPerRow}
+                    onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                    className="flex-1 accent-white"
+                  />
+                  <span className="text-xs font-mono text-white w-4 text-right">{postersPerRow}</span>
+                </div>
+                <p className="text-[10px] text-[#737373]">
+                  Controls the Downloaded shelf grid. Also adjustable inline on the shelf header.
+                </p>
+              </div>
             </div>
             <button
               onClick={savePlayerPrefs}

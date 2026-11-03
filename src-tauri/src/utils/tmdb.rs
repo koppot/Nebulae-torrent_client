@@ -149,6 +149,9 @@ pub struct TmdbSearchEntry {
     pub poster_url: Option<String>,
     /// "movie" | "tv"
     pub media_type: String,
+    /// IMDb ID (e.g. "tt1234567") from TMDb's external_ids endpoint; None for TV
+    /// results or when TMDb has no IMDb mapping.
+    pub imdb_id: Option<String>,
 }
 
 /// Search TMDB for the given query and return up to `limit` results across
@@ -211,6 +214,33 @@ pub fn search_tmdb_multi(query: &str, limit: usize) -> Result<Vec<TmdbSearchEntr
                 .and_then(|d| d.get(0..4))
                 .and_then(|y| y.parse::<i32>().ok());
             let poster_url = item.poster_path.map(|p| format!("{TMDB_IMAGE}{p}"));
+
+            // Fetch IMDb ID from TMDb's external_ids endpoint (movies only;
+            // TV results may or may not have one). Best-effort — failure is
+            // silently ignored so the overall search still returns results.
+            let imdb_id: Option<String> = if media_type == "movie" {
+                let mut ext_url =
+                    url::Url::parse(&format!("{TMDB_BASE}/movie/{id}/external_ids")).ok();
+                if let Some(ref mut u) = ext_url {
+                    u.query_pairs_mut().append_pair("api_key", &api_key);
+                }
+                ext_url.and_then(|u| {
+                    #[derive(serde::Deserialize)]
+                    struct ExtIds {
+                        #[serde(default)]
+                        imdb_id: Option<String>,
+                    }
+                    client
+                        .get(u)
+                        .send()
+                        .ok()
+                        .and_then(|r| r.json::<ExtIds>().ok())
+                        .and_then(|e| e.imdb_id)
+                })
+            } else {
+                None
+            };
+
             results.push(TmdbSearchEntry {
                 tmdb_id: id,
                 title,
@@ -218,6 +248,7 @@ pub fn search_tmdb_multi(query: &str, limit: usize) -> Result<Vec<TmdbSearchEntr
                 overview: item.overview,
                 poster_url,
                 media_type: media_type.to_string(),
+                imdb_id,
             });
         }
     }

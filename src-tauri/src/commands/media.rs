@@ -4081,11 +4081,18 @@ pub fn add_external_media(
 /// pruned on read ("saved as long as it's present in the original
 /// directory").
 #[tauri::command]
-pub fn list_external_media(app: tauri::AppHandle) -> Result<Vec<ExternalMedia>, String> {
-    let items = read_external_store(&app);
-    // Heal legacy disc-level paths to the release root on read (same
-    // normalization add_external_media applies).
-    let live: Vec<ExternalMedia> = items
+pub fn list_external_media(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<Vec<ExternalMedia>, String> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    // Source 1: JSON sidecar (user-added external media).
+    let sidecar_items = read_external_store(&app);
+    let mut live: Vec<ExternalMedia> = sidecar_items
         .into_iter()
         .map(|mut m| {
             m.path = release_root_of(&m.path);
@@ -4094,9 +4101,68 @@ pub fn list_external_media(app: tauri::AppHandle) -> Result<Vec<ExternalMedia>, 
         .filter(|m| std::path::Path::new(&m.path).exists())
         .collect();
     let _ = write_external_store(&app, &live);
+
+    // Track paths already in sidecar to avoid duplicates from DB source.
+    let mut seen_paths: std::collections::HashSet<String> =
+        live.iter().map(|m| m.path.clone()).collect();
+
+    // Source 2: DB rows with is_external = 1 (auto-reclassified by seeding.rs).
+    // These include the user's custom title, poster associations, and all
+    // metadata imported before the torrent was removed.
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (_, meta) in all_meta {
+            if !meta.is_external {
+                continue;
+            }
+
+            // Reconstruct the content path from save_path.
+            let raw_path = match meta.save_path.as_deref() {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => continue,
+            };
+            let norm_path = release_root_of(&raw_path);
+
+            // Skip if already covered by sidecar.
+            if !seen_paths.insert(norm_path.clone()) {
+                continue;
+            }
+
+            // Use user-defined title if set; fall back to provider title, then info_hash.
+            let title = meta
+                .user_display_title
+                .as_deref()
+                .or(meta.display_title.as_deref())
+                .unwrap_or(&meta.info_hash)
+                .to_string();
+
+            // Extract year from "Title (YYYY)" pattern.
+            let year = title.rfind(" (").and_then(|i| {
+                let s = &title[i + 2..];
+                s.find(')').and_then(|j| s[..j].parse::<i32>().ok())
+            });
+
+            let path_exists = std::path::Path::new(&norm_path).exists();
+            let kind = if path_exists {
+                classify_external(&norm_path)
+            } else {
+                // Payload missing but metadata remains — include as metadata-only entry.
+                "File".to_string()
+            };
+
+            let added_ms = meta.completed_on.map(|c| c as i64 * 1000).unwrap_or(now_ms);
+
+            live.push(ExternalMedia {
+                path: norm_path,
+                title,
+                year,
+                kind,
+                added_ms,
+            });
+        }
+    }
+
     Ok(live)
 }
-
 /// Remove an entry explicitly (owner-initiated delete in the collection).
 #[tauri::command]
 pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), String> {

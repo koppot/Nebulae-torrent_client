@@ -837,6 +837,7 @@ pub fn run() {
             // Feature 8/9: multi-result metadata search
             commands::media::search_tmdb_titles,
             commands::media::search_mal_titles,
+            commands::media::fetch_mal_anime,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");

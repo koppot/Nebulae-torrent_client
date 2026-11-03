@@ -22,6 +22,8 @@ interface TmdbSearchResult {
   overview: string | null;
   poster_url: string | null; // raw TMDB URL (w500)
   media_type: string; // 'movie' | 'tv'
+  /** IMDb ID (e.g. "tt1234567") when available from TMDb's external_ids. */
+  imdb_id: string | null;
 }
 
 interface MalSearchResult {
@@ -122,16 +124,37 @@ export const MetadataEditModal: React.FC<Props> = ({
           ? String(selected.data.tmdb_id)
           : String(selected.data.mal_id);
 
+      const newTitle = resultTitle(selected);
+
+      // 1. Store user-defined title (locks it so rescans don't overwrite it).
       await invoke('set_user_display_title', {
         infoHash,
-        title: resultTitle(selected),
+        title: newTitle,
       });
+
+      // 2. Store provider attribution.
       await invoke('set_media_provider', {
         infoHash,
         provider: selected.provider,
         providerId: pid,
       });
-      onConfirmed(resultTitle(selected), selected.provider, pid);
+
+      // 3. Fetch and cache the correct poster from the selected provider.
+      //    This overwrites any previously cached poster for this entry.
+      //    Poster fetch is best-effort — a failure does not block the confirm.
+      try {
+        if (selected.provider === 'tmdb') {
+          const year = resultYear(selected);
+          await invoke('fetch_tmdb_release', { title: newTitle, year });
+        } else {
+          await invoke('fetch_mal_anime', { title: newTitle });
+        }
+      } catch (posterErr) {
+        // Non-fatal: title and provider are already committed.
+        console.warn('[MetadataEditModal] poster fetch failed:', posterErr);
+      }
+
+      onConfirmed(newTitle, selected.provider, pid);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -277,6 +300,25 @@ export const MetadataEditModal: React.FC<Props> = ({
                             ? (r.data as TmdbSearchResult).media_type || 'tmdb'
                             : 'anime'}
                         </span>
+                        {/* IMDb ID badge — shown when TMDb provides the mapping */}
+                        {r.provider === 'tmdb' && (r.data as TmdbSearchResult).imdb_id && (
+                          <a
+                            href={`https://www.imdb.com/title/${(r.data as TmdbSearchResult).imdb_id}/`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-block text-[9px] px-1.5 py-0.5 rounded bg-[#1a1400] border border-[#f5c518]/30 text-[#f5c518] font-mono hover:border-[#f5c518]/60 transition"
+                            title="Open on IMDb"
+                          >
+                            {(r.data as TmdbSearchResult).imdb_id}
+                          </a>
+                        )}
+                        {/* MAL ID badge */}
+                        {r.provider === 'mal' && (
+                          <span className="inline-block text-[9px] px-1.5 py-0.5 rounded bg-[#262626] text-[#4a90d9] font-mono">
+                            MAL #{(r.data as MalSearchResult).mal_id}
+                          </span>
+                        )}
                       </div>
                     </button>
                   );
