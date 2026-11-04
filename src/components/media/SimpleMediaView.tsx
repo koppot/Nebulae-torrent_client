@@ -1798,6 +1798,19 @@ export const SimpleMediaView: React.FC = () => {
                   </button>
                   <button
                     className={act}
+                    onClick={() => {
+                      setExtCtx(null);
+                      void navigator.clipboard?.writeText(extCtx.path);
+                      setFeedbackNotice({
+                        type: 'info',
+                        message: 'Path copied to clipboard',
+                      });
+                    }}
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Copy Path
+                  </button>
+                  <button
+                    className={act}
                     onClick={async () => {
                       setExtCtx(null);
                       try {
