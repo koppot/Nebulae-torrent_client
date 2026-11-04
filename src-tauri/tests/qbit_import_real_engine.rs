@@ -1,3 +1,5 @@
+#![cfg(any(target_os = "macos", target_os = "windows"))]
+
 use nebulae_torrent_client_lib::commands::settings::UserSettings;
 use nebulae_torrent_client_lib::db::Database;
 use nebulae_torrent_client_lib::engine::metainfo::{build_torrent_file, ParsedTorrent};
