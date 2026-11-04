@@ -159,6 +159,7 @@ mod tests {
             error_string: None,
             media_meta: None,
             last_checked: None,
+            historical_save_path: None,
         }
     }
 
