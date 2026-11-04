@@ -2,7 +2,9 @@ use nebulae_torrent_client_lib::db::{Database, TorrentDbMetadata};
 use nebulae_torrent_client_lib::engine::{MockTorrentEngine, SharedEngine, TorrentEngine};
 use nebulae_torrent_client_lib::qbit_import::bencode::BVal;
 use nebulae_torrent_client_lib::qbit_import::importer::run_recheck_queue;
+use nebulae_torrent_client_lib::qbit_import::locator::{DefaultLocator, LocatorTrait};
 use nebulae_torrent_client_lib::qbit_import::mapper::{ContentLayout, QbitMapper, RenameOperation};
+use nebulae_torrent_client_lib::qbit_import::reader::QbitReader;
 use nebulae_torrent_client_lib::qbit_import::remover::{
     DefaultTrashProvider, ProcessChecker, QbitRemover, RestoreMode, TrashMethod, TrashProvider,
     WHOLE_PROFILE_ROLLBACK_CONFIRMATION_PHRASE,
@@ -11,7 +13,7 @@ use nebulae_torrent_client_lib::qbit_import::types::{ImportOptions, QbitSourceTy
 use nebulae_torrent_client_lib::qbit_import::QbitImporter;
 use rusqlite::Connection;
 use sha1::{Digest, Sha1};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -1429,6 +1431,265 @@ async fn test_acceptance_genuine_hash_checking_and_last_checked_states() {
         inventory_before, inventory_after,
         "Hash check must not modify payload files on disk!"
     );
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn test_acceptance_direct_fastresume_folder_scan_and_tilde() {
+    let temp_root = std::env::temp_dir().join(format!("test_qbit_direct_{}", uuid::Uuid::new_v4()));
+    let _ = fs::create_dir_all(&temp_root);
+
+    // Create a custom direct folder with .fastresume and .torrent files directly inside (no BT_backup subfolder)
+    let direct_folder = temp_root.join("my_qbt_backup");
+    let _ = fs::create_dir_all(&direct_folder);
+
+    let (bytes, hash) =
+        create_synthetic_metainfo("DirectScan_Movie", false, &[("movie.mkv", b"test content")]);
+    let torrent_file = direct_folder.join(format!("{hash}.torrent"));
+    let fastresume_file = direct_folder.join(format!("{hash}.fastresume"));
+    fs::write(&torrent_file, &bytes).unwrap();
+    fs::write(&fastresume_file, b"d12:qBt-savePath15:/path/to/moviese").unwrap();
+
+    let locator = DefaultLocator::new();
+    let (has_sqlite, has_legacy) = DefaultLocator::inspect_dir(&direct_folder);
+    assert!(
+        has_legacy,
+        "inspect_dir must recognize folder with direct .fastresume files"
+    );
+    assert!(!has_sqlite);
+
+    let validated = locator
+        .validate_dir(&direct_folder)
+        .expect("validate_dir must succeed on direct fastresume folder");
+    assert_eq!(validated.data_dir, direct_folder);
+
+    let category_paths = HashMap::new();
+    let read_torrents = QbitReader::read_legacy_bt_backup(&direct_folder, &category_paths);
+    assert_eq!(
+        read_torrents.len(),
+        1,
+        "read_legacy_bt_backup must read direct fastresume directory"
+    );
+    assert_eq!(
+        read_torrents[0].info_hash.to_lowercase(),
+        hash.to_lowercase()
+    );
+
+    // Tilde expansion test
+    if let Some(_home) = dirs::home_dir() {
+        let tilde_path = PathBuf::from("~/");
+        let validated_tilde = locator.validate_dir(&tilde_path);
+        assert!(
+            validated_tilde.is_err(),
+            "Home dir alone lacks torrents, but should error on content, not 'does not exist'"
+        );
+        let err_str = validated_tilde.unwrap_err();
+        assert!(
+            !err_str.contains("Directory does not exist"),
+            "Tilde path must be expanded to real home dir: {err_str}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn test_acceptance_import_interruption_preserves_existing_database_records() {
+    let temp_root =
+        std::env::temp_dir().join(format!("test_qbit_interrupt_{}", uuid::Uuid::new_v4()));
+    let _ = fs::create_dir_all(&temp_root);
+    let db_path = temp_root.join("nebulae.db");
+    let db = Arc::new(Database::new(&db_path).unwrap());
+
+    // Step 1: Pre-populate database with pre-existing user records
+    let existing_hashes = [
+        "1111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222",
+    ];
+    for (i, h) in existing_hashes.iter().enumerate() {
+        let meta = TorrentDbMetadata {
+            info_hash: h.to_string(),
+            display_title: Some(format!("Existing Movie {i}")),
+            category: Some("Movies".to_string()),
+            labels: Some("pre-existing".to_string()),
+            is_watched: true,
+            notes: Some("Important user note".to_string()),
+            added_at: 1700000000 + i as u64,
+            completed_on: Some(1700001000),
+            save_path: Some(format!("/downloads/movie_{i}")),
+            download_limit_kib: 100,
+            upload_limit_kib: 50,
+            ratio_limit: 2.0,
+            sequential_download: true,
+            first_last_piece_prio: true,
+            super_seeding: false,
+            racing_override: Some(true),
+            user_display_title: Some(format!("Custom Renamed Movie {i}")),
+            user_title_locked: true,
+            sort_order: Some(i as i64),
+            poster_path: Some(format!("/posters/movie_{i}.jpg")),
+            is_external: false,
+            sync_miss_count: 0,
+            last_checked: Some(1700002000),
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+        db.set_user_display_title(h, &format!("Custom Renamed Movie {i}"), true)
+            .unwrap();
+        db.set_torrent_poster(h, &format!("/posters/movie_{i}.jpg"))
+            .unwrap();
+    }
+
+    // Verify initial state
+    assert_eq!(db.list_all_torrent_metadata().unwrap().len(), 2);
+
+    // Step 2: Prepare new import batch of 3 torrents
+    let (b1, h1) = create_synthetic_metainfo("Batch_Item_1", false, &[("f1.mkv", b"content1")]);
+    let (b2, h2) = create_synthetic_metainfo("Batch_Item_2", false, &[("f2.mkv", b"content2")]);
+    let (b3, h3) = create_synthetic_metainfo("Batch_Item_3", false, &[("f3.mkv", b"content3")]);
+
+    let save_dir = temp_root.join("downloads");
+    let _ = fs::create_dir_all(&save_dir);
+
+    let create_t = |name: &str, h: &str, bytes: &[u8]| QbitTorrent {
+        info_hash: h.to_string(),
+        name: name.to_string(),
+        save_path: save_dir.to_string_lossy().to_string(),
+        download_path: None,
+        category: Some("New".to_string()),
+        tags: vec!["new".to_string()],
+        content_layout: None,
+        paused: true,
+        auto_managed: false,
+        sequential_download: false,
+        first_last_piece_prio: false,
+        ratio_limit: -1.0,
+        seeding_time_limit: None,
+        upload_limit_kib: 0,
+        download_limit_kib: 0,
+        added_time: 1700005000,
+        completed_time: Some(1700006000),
+        total_size: bytes.len() as u64,
+        progress: 1.0,
+        state_string: "Seeding".to_string(),
+        trackers: Vec::new(),
+        mapped_files: Vec::new(),
+        file_priorities: vec![1],
+        raw_torrent_bytes: bytes.to_vec(),
+        source: QbitSourceType::LegacyFile {
+            torrent_path: temp_root.join(format!("{h}.torrent")),
+            fastresume_path: temp_root.join(format!("{h}.fastresume")),
+        },
+        already_in_nebula: false,
+        missing_path: false,
+    };
+
+    let batch = vec![
+        create_t("Batch_Item_1", &h1, &b1),
+        create_t("Batch_Item_2", &h2, &b2),
+        create_t("Batch_Item_3", &h3, &b3),
+    ];
+
+    let engine: SharedEngine = Arc::new(MockTorrentEngine::new());
+    let logs_dir = temp_root.join("logs");
+    let _ = fs::create_dir_all(&logs_dir);
+    let options = ImportOptions {
+        info_hashes: vec![h1.clone(), h2.clone(), h3.clone()],
+        skip_recheck: true,
+        remove_from_qbit: false,
+    };
+
+    // Step 3: Simulate import interruption!
+    // We execute import of only the first 2 items (simulating a kill / interruption before item 3)
+    let partial_batch = vec![batch[0].clone(), batch[1].clone()];
+    let (report1, _) = QbitImporter::execute_import(
+        partial_batch,
+        options.clone(),
+        &temp_root,
+        &temp_root.join("backup"),
+        engine.clone(),
+        db.clone(),
+        &logs_dir,
+    );
+    assert_eq!(report1.imported_count, 2);
+
+    // Step 4: Simulate application crash / force-quit and restart
+    // Drop database connection and recreate connection from disk file
+    drop(db);
+    let restarted_db = Arc::new(Database::new(&db_path).unwrap());
+
+    // CRITICAL ASSERTION: All pre-existing user records remain 100% intact!
+    for (i, h) in existing_hashes.iter().enumerate() {
+        let meta = restarted_db
+            .get_torrent_metadata(h)
+            .unwrap()
+            .expect("Existing record must survive");
+        assert_eq!(
+            meta.user_display_title,
+            Some(format!("Custom Renamed Movie {i}"))
+        );
+        assert!(
+            meta.user_title_locked,
+            "user_title_locked must be preserved across interruption"
+        );
+        assert_eq!(
+            meta.poster_path,
+            Some(format!("/posters/movie_{i}.jpg")),
+            "poster_path must be preserved"
+        );
+        assert_eq!(meta.notes, Some("Important user note".to_string()));
+    }
+
+    // Verify imported canonical records are present in DB
+    assert!(restarted_db
+        .get_torrent_metadata(&h1.to_lowercase())
+        .unwrap()
+        .is_some());
+    assert!(restarted_db
+        .get_torrent_metadata(&h2.to_lowercase())
+        .unwrap()
+        .is_some());
+
+    // Step 5: Retry the full batch import (items 1, 2, 3)
+    // Items 1 and 2 already exist in engine; item 3 is new
+    let (report2, _) = QbitImporter::execute_import(
+        batch,
+        options,
+        &temp_root,
+        &temp_root.join("backup"),
+        engine.clone(),
+        restarted_db.clone(),
+        &logs_dir,
+    );
+
+    // Assert: Items 1 and 2 were skipped as duplicates, item 3 was imported
+    assert_eq!(
+        report2.skipped.len(),
+        2,
+        "Previously imported items must be skipped"
+    );
+    assert_eq!(
+        report2.imported_count, 1,
+        "Only remaining item 3 should be imported"
+    );
+
+    // All 3 canonical imported hashes exist plus 2 pre-existing
+    for h in &[h1.to_lowercase(), h2.to_lowercase(), h3.to_lowercase()] {
+        assert!(
+            restarted_db.get_torrent_metadata(h).unwrap().is_some(),
+            "Canonical imported hash must exist"
+        );
+    }
+    for (i, h) in existing_hashes.iter().enumerate() {
+        let meta = restarted_db
+            .get_torrent_metadata(h)
+            .unwrap()
+            .expect("Existing record must survive");
+        assert_eq!(
+            meta.user_display_title,
+            Some(format!("Custom Renamed Movie {i}"))
+        );
+    }
 
     let _ = fs::remove_dir_all(&temp_root);
 }

@@ -34,10 +34,24 @@ impl DefaultLocator {
         let has_sqlite = sqlite_file.is_file();
 
         let bt_backup = dir.join("BT_backup");
+        let has_direct_fastresume = std::fs::read_dir(dir)
+            .ok()
+            .map(|entries| {
+                entries.flatten().any(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|s| s.eq_ignore_ascii_case("fastresume"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
         let has_legacy = bt_backup.is_dir()
             || dir.join("qBittorrent.ini").is_file()
             || dir.join("categories.json").is_file()
-            || dir.join("logs").is_dir();
+            || dir.join("logs").is_dir()
+            || has_direct_fastresume;
 
         (has_sqlite, has_legacy)
     }
@@ -126,6 +140,23 @@ impl LocatorTrait for DefaultLocator {
     }
 
     fn validate_dir(&self, dir: &Path) -> Result<QbitLocation, String> {
+        let dir_buf = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                if dir == Path::new("~") {
+                    home
+                } else if let Ok(stripped) = dir.strip_prefix("~") {
+                    home.join(stripped)
+                } else {
+                    dir.to_path_buf()
+                }
+            } else {
+                dir.to_path_buf()
+            }
+        } else {
+            dir.to_path_buf()
+        };
+        let dir = dir_buf.as_path();
+
         if !dir.exists() {
             return Err(format!("Directory does not exist: {}", dir.display()));
         }

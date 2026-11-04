@@ -70,7 +70,11 @@ impl QbitReader {
         data_dir: &Path,
         category_paths: &HashMap<String, String>,
     ) -> Vec<QbitTorrent> {
-        let bt_backup = data_dir.join("BT_backup");
+        let bt_backup = if data_dir.join("BT_backup").is_dir() {
+            data_dir.join("BT_backup")
+        } else {
+            data_dir.to_path_buf()
+        };
         if !bt_backup.is_dir() {
             return Vec::new();
         }
