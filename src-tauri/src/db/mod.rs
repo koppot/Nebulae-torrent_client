@@ -66,7 +66,8 @@ impl Database {
         // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash)
         let _ = conn.execute(
             "DELETE FROM settings
-             WHERE value LIKE '%93758aeca10f8450%'
+             WHERE (key LIKE 'tmdb_poster:%' OR key LIKE 'mal_poster:%')
+               AND value LIKE '%93758aeca10f8450%'
                AND LOWER(key) NOT LIKE '%fuuka%'",
             [],
         );
@@ -76,6 +77,7 @@ impl Database {
             "UPDATE torrent_metadata
              SET poster_path = NULL
              WHERE poster_path LIKE '%93758aeca10f8450%'
+               AND COALESCE(user_title_locked, 0) = 0
                AND LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) NOT LIKE '%fuuka%'",
             [],
         );
@@ -1291,6 +1293,129 @@ mod tests {
         );
 
         drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn test_custom_locked_posters_and_non_provider_settings_preserved_across_inits() {
+        let path = std::env::temp_dir().join(format!(
+            "nebulae_test_locked_preserve_{}.db",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE torrent_metadata (
+                     info_hash TEXT PRIMARY KEY, display_title TEXT, category TEXT,
+                     labels TEXT, is_watched INTEGER DEFAULT 0, notes TEXT,
+                     added_at INTEGER, completed_on INTEGER, save_path TEXT,
+                     download_limit_kib INTEGER DEFAULT 0,
+                     upload_limit_kib INTEGER DEFAULT 0,
+                     ratio_limit REAL DEFAULT -1.0,
+                     sequential_download INTEGER DEFAULT 0,
+                     first_last_piece_prio INTEGER DEFAULT 0,
+                     super_seeding INTEGER DEFAULT 0,
+                     user_display_title TEXT, user_title_locked INTEGER DEFAULT 0,
+                     sort_order INTEGER, poster_path TEXT, is_external INTEGER DEFAULT 0,
+                     sync_miss_count INTEGER DEFAULT 0, last_checked INTEGER
+                 );
+                 CREATE TABLE snatched_records (
+                     info_hash TEXT PRIMARY KEY, torrent_name TEXT NOT NULL,
+                     size_bytes INTEGER DEFAULT 0, snatched_at INTEGER,
+                     save_path TEXT, display_title TEXT, poster_path TEXT,
+                     provider TEXT, provider_id TEXT, external_moved_at INTEGER
+                 );
+
+                 -- Non-provider setting containing hash
+                 INSERT INTO settings (key, value) VALUES ('custom_user_config', '{\"token\":\"93758aeca10f8450\"}');
+                 -- Provider setting containing contaminated hash
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
+                 INSERT INTO settings (key, value) VALUES ('mal_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
+
+                 -- Item 1: Locked custom poster (even if file path contains hash)
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_locked_hash', 'Special Edition', 1, '/custom/art_93758aeca10f8450.png', 10);
+
+                 -- Item 2: Locked custom poster (arbitrary path)
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_locked_custom', 'My Custom Title', 1, '/Users/user/Pictures/custom.jpg', 20);
+
+                 -- Item 3: Unlocked item with contaminated hash
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_unlocked_contam', 'Regular Item', 0, '/thumbs/93758aeca10f8450.webp', 30);",
+            )
+            .unwrap();
+        }
+
+        // Pass 1: First startup init
+        {
+            let db = Database::new(&path).unwrap();
+
+            // Non-provider setting must remain intact
+            assert_eq!(
+                db.get_setting("custom_user_config").unwrap().as_deref(),
+                Some("{\"token\":\"93758aeca10f8450\"}")
+            );
+
+            // Provider contaminated settings must be purged
+            assert_eq!(
+                db.get_setting("tmdb_poster:v3:another title").unwrap(),
+                None
+            );
+            assert_eq!(db.get_setting("mal_poster:v3:another title").unwrap(), None);
+
+            // Locked items must be completely preserved
+            let m1 = db.get_torrent_metadata("h_locked_hash").unwrap().unwrap();
+            assert_eq!(
+                m1.poster_path.as_deref(),
+                Some("/custom/art_93758aeca10f8450.png")
+            );
+            assert!(m1.user_title_locked);
+
+            let m2 = db.get_torrent_metadata("h_locked_custom").unwrap().unwrap();
+            assert_eq!(
+                m2.poster_path.as_deref(),
+                Some("/Users/user/Pictures/custom.jpg")
+            );
+            assert!(m2.user_title_locked);
+
+            // Unlocked contaminated item must be reset to NULL
+            let m3 = db
+                .get_torrent_metadata("h_unlocked_contam")
+                .unwrap()
+                .unwrap();
+            assert_eq!(m3.poster_path, None);
+        }
+
+        // Pass 2: Second startup init (assert idempotence)
+        {
+            let db = Database::new(&path).unwrap();
+
+            assert_eq!(
+                db.get_setting("custom_user_config").unwrap().as_deref(),
+                Some("{\"token\":\"93758aeca10f8450\"}")
+            );
+
+            let m1 = db.get_torrent_metadata("h_locked_hash").unwrap().unwrap();
+            assert_eq!(
+                m1.poster_path.as_deref(),
+                Some("/custom/art_93758aeca10f8450.png")
+            );
+
+            let m2 = db.get_torrent_metadata("h_locked_custom").unwrap().unwrap();
+            assert_eq!(
+                m2.poster_path.as_deref(),
+                Some("/Users/user/Pictures/custom.jpg")
+            );
+        }
+
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
