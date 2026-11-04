@@ -149,6 +149,7 @@ export interface TorrentItem {
   poster_url?: string;
   info_hash: string;
   save_path: string;
+  historical_save_path?: string;
   added_on: number;
   completed_on?: number;
   last_checked?: number | null;

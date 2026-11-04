@@ -149,6 +149,7 @@ impl RtorrentRemoteEngine {
             poster_url: None,
             info_hash: text(0).to_lowercase(),
             save_path: text(2),
+            historical_save_path: None,
             added_on: int(14).max(0) as u64,
             completed_on: None,
             comment: String::new(),

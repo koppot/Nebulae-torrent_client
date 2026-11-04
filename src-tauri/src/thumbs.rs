@@ -140,10 +140,48 @@ fn cache_path(cache_dir: &Path, source: &Path) -> PathBuf {
     cache_dir.join(format!("{hash:016x}.webp"))
 }
 
+/// Produce (or reuse) a WebP poster thumbnail for a single image file.
+/// Does NOT search the parent directory — it converts the exact image file provided.
+pub fn convert_single_image(thumbs_dir: &Path, source_file: &Path) -> Result<PathBuf, ThumbError> {
+    if !source_file.is_file() {
+        return Err(ThumbError::Decode(format!(
+            "Not a file: {}",
+            source_file.display()
+        )));
+    }
+    fs::create_dir_all(thumbs_dir).map_err(|e| ThumbError::CacheDir(e.to_string()))?;
+    let dest = cache_path(thumbs_dir, source_file);
+    if dest.exists() {
+        return Ok(dest);
+    }
+
+    let img = image::open(source_file)
+        .map_err(|e| ThumbError::Decode(format!("{}: {e}", source_file.display())))?;
+    let (w, _) = img.dimensions();
+    let scaled = if w > THUMB_WIDTH {
+        img.resize(THUMB_WIDTH, u32::MAX, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+
+    let rgb = scaled.to_rgb8();
+    let webp = image::DynamicImage::ImageRgb8(rgb);
+    webp.save_with_format(&dest, image::ImageFormat::WebP)
+        .map_err(|e| ThumbError::Encode(e.to_string()))?;
+    Ok(dest)
+}
+
 /// Produce (or reuse) a WebP poster thumbnail for a torrent directory.
 /// Returns the cache file path on success. Accepts a file path too (a
 /// single-file torrent) — its parent folder is searched.
 pub fn ensure_thumbnail(app_cache_dir: &Path, torrent_path: &Path) -> Result<PathBuf, ThumbError> {
+    let thumbs_dir = app_cache_dir.join("thumbnails");
+    // If the path is already an image file (e.g. downloaded artwork), convert it directly
+    // without scanning its parent directory.
+    if torrent_path.is_file() && is_image(torrent_path) {
+        return convert_single_image(&thumbs_dir, torrent_path);
+    }
+
     let torrent_dir = if torrent_path.is_file() {
         torrent_path.parent().unwrap_or(torrent_path).to_path_buf()
     } else if torrent_path.is_dir() {
@@ -153,7 +191,6 @@ pub fn ensure_thumbnail(app_cache_dir: &Path, torrent_path: &Path) -> Result<Pat
     };
     let source = find_poster(&torrent_dir).ok_or(ThumbError::NoCover)?;
 
-    let thumbs_dir = app_cache_dir.join("thumbnails");
     fs::create_dir_all(&thumbs_dir).map_err(|e| ThumbError::CacheDir(e.to_string()))?;
     let dest = cache_path(&thumbs_dir, &source);
     if dest.exists() {
@@ -198,5 +235,53 @@ mod tests {
     #[test]
     fn missing_dir_is_an_error_not_a_panic() {
         assert!(ensure_thumbnail(Path::new("/nonexistent-ro"), Path::new("/nonexistent")).is_err());
+    }
+
+    #[test]
+    fn convert_single_image_converts_target_without_parent_scan() {
+        use image::{ImageBuffer, Rgb};
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("neb_thumb_single_test_{}", std::process::id()));
+        let source_dir = temp_dir.join("media_sources");
+        let app_cache_dir = temp_dir.join("cache");
+        let thumbs_dir = app_cache_dir.join("thumbnails");
+        let _ = fs::create_dir_all(&source_dir);
+        let _ = fs::create_dir_all(&thumbs_dir);
+
+        let target_file = source_dir.join("shana_poster.png");
+        let distractor_file = source_dir.join("fuuka_cover.png");
+
+        // Target image is 16x16 red
+        let target_img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(16, 16, Rgb([255, 0, 0]));
+        target_img.save(&target_file).expect("save target");
+
+        // Distractor image is 64x64 blue (larger, so find_poster would pick it if scanning parent)
+        let distractor_img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(64, 64, Rgb([0, 0, 255]));
+        distractor_img
+            .save(&distractor_file)
+            .expect("save distractor");
+
+        let result = convert_single_image(&thumbs_dir, &target_file).expect("convert single image");
+        assert!(result.exists(), "Thumbnail should exist");
+
+        // Verify the thumb was created specifically from the target
+        let expected_dest = cache_path(&thumbs_dir, &target_file);
+        assert_eq!(result, expected_dest);
+
+        // Open resulting thumb and verify it kept the 16x16 dimension and did not become 64x64 distractor
+        let decoded = image::open(&result).expect("open decoded thumb");
+        let (w, h) = decoded.dimensions();
+        assert_eq!(w, 16);
+        assert_eq!(h, 16);
+
+        // Also test ensure_thumbnail with a single image file passes through to thumbs_dir
+        let ensure_result =
+            ensure_thumbnail(&app_cache_dir, &target_file).expect("ensure_thumbnail single file");
+        assert_eq!(ensure_result, expected_dest);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

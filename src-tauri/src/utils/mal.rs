@@ -159,7 +159,7 @@ fn download_and_cache_poster(
     std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
 
     // Convert to WebP
-    let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
+    let webp = crate::thumbs::convert_single_image(&thumbs_dir, &raw_path).ok();
     let webp_path = webp.as_ref().cloned().unwrap_or(raw_path.clone());
 
     if webp.is_some() {

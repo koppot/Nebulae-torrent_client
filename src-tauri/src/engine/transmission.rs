@@ -2084,6 +2084,121 @@ impl TransmissionTorrentEngine {
             }
     }
 
+    /// Check whether a path belongs to an operating system foreign to `target_windows`.
+    pub fn is_cross_os_path_for_target(path_str: &str, target_windows: bool) -> bool {
+        let trimmed = path_str.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        if target_windows {
+            // On Windows, a Unix path starting with '/' (and not UNC \\) belongs to Unix/macOS
+            trimmed.starts_with('/') && !trimmed.starts_with("//")
+        } else {
+            // On Unix/macOS, a Windows drive letter (e.g. C:\ or C:/) or UNC path belongs to Windows
+            let b = trimmed.as_bytes();
+            (b.len() >= 3
+                && b[0].is_ascii_alphabetic()
+                && b[1] == b':'
+                && (b[2] == b'\\' || b[2] == b'/'))
+                || trimmed.starts_with("\\\\")
+        }
+    }
+
+    pub fn is_cross_os_path(path_str: &str) -> bool {
+        Self::is_cross_os_path_for_target(path_str, cfg!(windows))
+    }
+
+    /// Resolve the active save_path and preserve foreign/stale paths as historical.
+    ///
+    /// Ensures that:
+    /// 1. Stale or cross-OS metadata paths (e.g. macOS `/Users/dev/Downloads` on Windows)
+    ///    NEVER override the active engine's local location.
+    /// 2. If the active engine's download directory contains the payload, it takes precedence.
+    /// 3. Valid local paths are respected without blind translation.
+    /// 4. Historical foreign paths are preserved in `historical_save_path`.
+    pub fn resolve_torrent_save_path_for_target(
+        meta_save_path: Option<&str>,
+        engine_download_dir: &str,
+        torrent_name: &str,
+        target_windows: bool,
+    ) -> (String, Option<String>) {
+        let meta_path = meta_save_path.map(|p| p.trim()).filter(|p| !p.is_empty());
+        let engine_dir = engine_download_dir.trim();
+
+        if let Some(mp) = meta_path {
+            if Self::is_cross_os_path_for_target(mp, target_windows) {
+                // Foreign OS path: preserve as historical; use engine_dir for active local operations
+                let active = if !engine_dir.is_empty() {
+                    engine_dir.to_string()
+                } else {
+                    mp.to_string()
+                };
+                return (active, Some(mp.to_string()));
+            }
+
+            // Native/local path format on this platform
+            let meta_exists = Path::new(mp).exists();
+            let engine_exists = !engine_dir.is_empty() && Path::new(engine_dir).exists();
+
+            let payload_in_engine = if engine_exists && !torrent_name.is_empty() {
+                Path::new(engine_dir).join(torrent_name).exists()
+            } else {
+                false
+            };
+
+            let payload_in_meta = if meta_exists && !torrent_name.is_empty() {
+                let p = Path::new(mp);
+                p.exists()
+                    && (p.join(torrent_name).exists()
+                        || p.file_name().is_some_and(|f| f == torrent_name))
+            } else {
+                false
+            };
+
+            if payload_in_engine {
+                let hist = if mp != engine_dir {
+                    Some(mp.to_string())
+                } else {
+                    None
+                };
+                return (engine_dir.to_string(), hist);
+            }
+
+            if payload_in_meta {
+                return (mp.to_string(), None);
+            }
+
+            if !meta_exists && engine_exists {
+                return (engine_dir.to_string(), Some(mp.to_string()));
+            }
+
+            if meta_exists {
+                return (mp.to_string(), None);
+            }
+
+            if !engine_dir.is_empty() {
+                return (engine_dir.to_string(), Some(mp.to_string()));
+            }
+
+            return (mp.to_string(), None);
+        }
+
+        (engine_dir.to_string(), None)
+    }
+
+    pub fn resolve_torrent_save_path(
+        meta_save_path: Option<&str>,
+        engine_download_dir: &str,
+        torrent_name: &str,
+    ) -> (String, Option<String>) {
+        Self::resolve_torrent_save_path_for_target(
+            meta_save_path,
+            engine_download_dir,
+            torrent_name,
+            cfg!(windows),
+        )
+    }
+
     fn map_raw_torrent(
         &self,
         t: &Value,
@@ -2406,6 +2521,12 @@ impl TransmissionTorrentEngine {
 
         let poster_url = meta.and_then(|m| m.poster_path.clone());
 
+        let (resolved_save_path, hist_save_path) = Self::resolve_torrent_save_path(
+            meta.and_then(|m| m.save_path.as_deref()),
+            &download_dir,
+            &name,
+        );
+
         TorrentItem {
             id,
             name: display_name,
@@ -2426,9 +2547,8 @@ impl TransmissionTorrentEngine {
             is_media,
             poster_url,
             info_hash: info_hash.clone(),
-            save_path: meta
-                .and_then(|m| m.save_path.clone())
-                .unwrap_or(download_dir),
+            save_path: resolved_save_path,
+            historical_save_path: hist_save_path,
             added_on,
             completed_on,
             comment: String::new(),
@@ -2754,7 +2874,14 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String> {
-        self.rpc_client.torrent_set_location(id, new_path, true)
+        self.rpc_client.torrent_set_location(id, new_path, true)?;
+        if let Ok(mut cache) = self.metadata_cache.lock() {
+            if let Some(meta) = cache.get_mut(id) {
+                meta.save_path = Some(new_path.to_string());
+                let _ = self.db.upsert_torrent_metadata(meta);
+            }
+        }
+        Ok(())
     }
 
     fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
@@ -4047,5 +4174,110 @@ mod tests {
             "documents_archive.zip",
             1024 * 1024
         ));
+    }
+
+    #[test]
+    fn test_cross_os_path_detection() {
+        // macOS path on Windows target
+        assert!(TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "/Users/dev/Downloads/Shakugan no Shana S",
+            true
+        ));
+        assert!(TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "/Volumes/Media/Disc",
+            true
+        ));
+        // Windows path on Windows target is NOT cross-OS
+        assert!(!TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "C:\\Users\\administrator\\Downloads",
+            true
+        ));
+        assert!(!TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "V:\\Blu-ray\\Shakugan no Shana",
+            true
+        ));
+
+        // Windows path on macOS/Unix target
+        assert!(TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "C:\\Users\\administrator\\Downloads",
+            false
+        ));
+        assert!(TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "V:\\Blu-ray\\Movie",
+            false
+        ));
+        assert!(TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "\\\\server\\share\\media",
+            false
+        ));
+        // Unix path on macOS target is NOT cross-OS
+        assert!(!TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "/Users/dev/Downloads",
+            false
+        ));
+        assert!(!TransmissionTorrentEngine::is_cross_os_path_for_target(
+            "/tmp/test",
+            false
+        ));
+    }
+
+    #[test]
+    fn test_resolve_torrent_save_path_stale_macos_on_windows() {
+        // Reproduces the exact Shakugan no Shana S issue:
+        // Metadata has macOS path "/Users/dev/Downloads"
+        // Active Windows engine has downloadDir "C:\\Users\\administrator\\Downloads"
+        let (active, hist) = TransmissionTorrentEngine::resolve_torrent_save_path_for_target(
+            Some("/Users/dev/Downloads"),
+            "C:\\Users\\administrator\\Downloads",
+            "Shakugan no Shana S",
+            true, // target is Windows
+        );
+
+        assert_eq!(active, "C:\\Users\\administrator\\Downloads");
+        assert_eq!(hist, Some("/Users/dev/Downloads".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_torrent_save_path_stale_windows_on_macos() {
+        // Stale Windows path on macOS
+        let (active, hist) = TransmissionTorrentEngine::resolve_torrent_save_path_for_target(
+            Some("C:\\Users\\administrator\\Downloads"),
+            "/Users/dev/Downloads",
+            "Shakugan no Shana S",
+            false, // target is macOS
+        );
+
+        assert_eq!(active, "/Users/dev/Downloads");
+        assert_eq!(
+            hist,
+            Some("C:\\Users\\administrator\\Downloads".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_torrent_save_path_prefers_existing_engine_payload() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("neb_engine_payload_test_{}", std::process::id()));
+        let engine_dir = temp_dir.join("engine_dl");
+        let meta_dir = temp_dir.join("stale_meta_dl");
+        let _ = std::fs::create_dir_all(&engine_dir);
+        let _ = std::fs::create_dir_all(&meta_dir);
+
+        let torrent_name = "RealMovie (2020)";
+        // Create payload inside engine_dir
+        let payload_file = engine_dir.join(torrent_name);
+        std::fs::write(&payload_file, b"sample content").unwrap();
+
+        let (active, hist) = TransmissionTorrentEngine::resolve_torrent_save_path_for_target(
+            Some(meta_dir.to_str().unwrap()),
+            engine_dir.to_str().unwrap(),
+            torrent_name,
+            cfg!(windows),
+        );
+
+        assert_eq!(active, engine_dir.to_str().unwrap());
+        assert_eq!(hist, Some(meta_dir.to_str().unwrap().to_string()));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

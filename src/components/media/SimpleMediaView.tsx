@@ -48,7 +48,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy, Trash2, Pencil, GripVertical, Sliders, Check, RotateCcw } from 'lucide-react';
+  Copy, Trash2, Pencil, GripVertical, Sliders, Check, RotateCcw, Link } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -212,13 +212,47 @@ export const SimpleMediaView: React.FC = () => {
   const [organizeDestPath, setOrganizeDestPath] = useState<string>('');
   const [organizeReport, setOrganizeReport] = useState<OrganizeMediaReport | null>(null);
   const [isOrganizing, setIsOrganizing] = useState<boolean>(false);
-  const [externalDiscError, setExternalDiscError] = useState<string | null>(null);
   const [externalTitlePrompt, setExternalTitlePrompt] = useState<{ path: string; guess: string } | null>(null);
   const [externalTitleInput, setExternalTitleInput] = useState('');
   const [feedbackNotice, setFeedbackNotice] = useState<{
     type: 'info' | 'error';
     message: string;
+    relinkTarget?: {
+      kind: 'torrent' | 'external';
+      id: string;
+      name: string;
+      path: string;
+    };
   } | null>(null);
+
+  const handleRelink = async (target: {
+    kind: 'torrent' | 'external';
+    id: string;
+    name: string;
+    path: string;
+  }) => {
+    try {
+      const selected = await invoke<string | null>('select_disc_source', { kind: null });
+      if (!selected) return;
+      if (target.kind === 'torrent') {
+        await invoke('relink_torrent_media', { infoHash: target.id, newPath: selected });
+        const list = await invoke<TorrentItem[]>('list_torrents');
+        useTorrentStore.setState({ torrents: list });
+      } else {
+        await invoke('relink_external_media', { oldPath: target.path, newPath: selected });
+        await refreshExternalMedia();
+      }
+      setFeedbackNotice({
+        type: 'info',
+        message: `Relinked "${target.name}" to ${selected}`,
+      });
+    } catch (err: unknown) {
+      setFeedbackNotice({
+        type: 'error',
+        message: errorMessage(err, 'Failed to relink media.'),
+      });
+    }
+  };
 
   useEffect(() => {
     if (!feedbackNotice || feedbackNotice.type === 'error') return;
@@ -558,13 +592,28 @@ export const SimpleMediaView: React.FC = () => {
         rememberLastDisc(groupId, info.resolved_path || playPath);
       }
       setFeedbackNotice(null);
-      setExternalDiscError(null);
     } catch (err: unknown) {
       // Surface the failure - a silently swallowed error looks like a dead button.
       const msg = errorMessage(err, 'Could not launch the disc.');
       invoke('log_frontend', { message: `disc open failed: ${msg}` }).catch(() => {});
-      setFeedbackNotice({ type: 'error', message: msg });
-      setExternalDiscError(msg);
+      const isPathErr =
+        msg.includes('path') ||
+        msg.includes('exist') ||
+        msg.includes('operating system') ||
+        msg.includes('not found') ||
+        msg.includes('disconnected');
+      setFeedbackNotice({
+        type: 'error',
+        message: msg,
+        relinkTarget: isPathErr
+          ? {
+              kind: 'torrent',
+              id: torrent.info_hash || torrent.id,
+              name: torrent.name,
+              path: playPath,
+            }
+          : undefined,
+      });
     } finally {
       setIsLaunchingDisc(false);
     }
@@ -589,12 +638,31 @@ export const SimpleMediaView: React.FC = () => {
       const info = await resumeInPlayer(resumePath, savedMs, displayTitle, resolvedYear);
       rememberLastDisc(groupId, info.resolved_path || resumePath);
       setFeedbackNotice(null);
-      setExternalDiscError(null);
     } catch (err: unknown) {
       const msg = errorMessage(err, 'Could not resume the disc.');
       invoke('log_frontend', { message: `resume failed: ${msg}` }).catch(() => {});
-      setFeedbackNotice({ type: 'error', message: msg });
-      setExternalDiscError(msg);
+      const allGroups = groupItems([...activeDownloads, ...readyToWatch]);
+      const g = allGroups.find((x) => x.id === groupId);
+      const t = g?.items[0];
+      const isPathErr =
+        msg.includes('path') ||
+        msg.includes('exist') ||
+        msg.includes('operating system') ||
+        msg.includes('not found') ||
+        msg.includes('disconnected');
+      setFeedbackNotice({
+        type: 'error',
+        message: msg,
+        relinkTarget:
+          isPathErr && t
+            ? {
+                kind: 'torrent',
+                id: t.info_hash || t.id,
+                name: t.name,
+                path: resumePath,
+              }
+            : undefined,
+      });
     }
   };
 
@@ -750,7 +818,7 @@ export const SimpleMediaView: React.FC = () => {
         await invoke('add_external_media', { path: p, title: known });
         await refreshExternalMedia();
       } catch (err: unknown) {
-        setExternalDiscError(errorMessage(err, 'Could not add external media.'));
+        setFeedbackNotice({ type: 'error', message: errorMessage(err, 'Could not add external media.') });
       }
     } else {
       const name = p.split(/[/\\]/).filter(Boolean).pop() || '';
@@ -761,13 +829,12 @@ export const SimpleMediaView: React.FC = () => {
   // The dialog accepts the release ROOT folder (holding all disc folders,
   // like a torrent download) OR an ISO disc image.
   const handlePlayExternalDisc = async (kind?: 'folder' | 'file') => {
-    setExternalDiscError(null);
     try {
       const src = await invoke<string | null>('select_disc_source', { kind: kind || null });
       if (!src) return;
       await importExternal(src);
     } catch (err: unknown) {
-      setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+      setFeedbackNotice({ type: 'error', message: errorMessage(err, 'Could not launch the disc.') });
     }
   };
 
@@ -1079,22 +1146,24 @@ export const SimpleMediaView: React.FC = () => {
               : 'bg-[#152a18]/95 border border-[#22c55e] text-[#bbf7d0]'
           }`}
         >
-          <div className="flex items-center gap-2 text-xs font-medium">
+          <div className="flex items-center gap-2 text-xs font-medium flex-1">
             <span>{feedbackNotice.type === 'error' ? '⚠️' : '✓'}</span>
-            <span>{feedbackNotice.message}</span>
+            <span className="flex-1">{feedbackNotice.message}</span>
           </div>
+          {feedbackNotice.relinkTarget && (
+            <button
+              onClick={() => void handleRelink(feedbackNotice.relinkTarget!)}
+              className="px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#b80710] text-white text-xs font-semibold shrink-0 transition"
+            >
+              Relink / Locate...
+            </button>
+          )}
           <button
             onClick={() => setFeedbackNotice(null)}
             className="text-current opacity-70 hover:opacity-100 text-sm font-bold ml-2"
           >
             ✕
           </button>
-        </div>
-      )}
-
-      {externalDiscError && (
-        <div className="p-2.5 rounded-lg bg-[#2a1518] border border-[#e50914]/40 text-[11px] text-[#ffb3b3]">
-          {externalDiscError}
         </div>
       )}
 
@@ -1124,7 +1193,7 @@ export const SimpleMediaView: React.FC = () => {
                   await invoke('add_external_media', { path, title });
                   await refreshExternalMedia();
                 } catch (err) {
-                  setExternalDiscError(errorMessage(err, 'Could not add external media.'));
+                  setFeedbackNotice({ type: 'error', message: errorMessage(err, 'Could not add external media.') });
                 }
               }}
             />
@@ -1145,7 +1214,7 @@ export const SimpleMediaView: React.FC = () => {
                     await invoke('add_external_media', { path, title });
                     await refreshExternalMedia();
                   } catch (err) {
-                    setExternalDiscError(errorMessage(err, 'Could not add external media.'));
+                    setFeedbackNotice({ type: 'error', message: errorMessage(err, 'Could not add external media.') });
                   }
                 }}
                 className="px-3 py-1.5 rounded-lg bg-[#e50914] hover:bg-[#e50914]/90 text-xs font-semibold text-white transition"
@@ -1205,8 +1274,27 @@ export const SimpleMediaView: React.FC = () => {
                                   year: m.year ?? externalMetaMap[m.path]?.year,
                                 });
                                 void refreshExternalMedia();
+                                setFeedbackNotice(null);
                               } catch (err) {
-                                setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                                const msg = errorMessage(err, 'Could not launch the disc.');
+                                const isPathErr =
+                                  msg.includes('path') ||
+                                  msg.includes('exist') ||
+                                  msg.includes('operating system') ||
+                                  msg.includes('not found') ||
+                                  msg.includes('disconnected');
+                                setFeedbackNotice({
+                                  type: 'error',
+                                  message: msg,
+                                  relinkTarget: isPathErr
+                                    ? {
+                                        kind: 'external',
+                                        id: m.path,
+                                        name: m.title,
+                                        path: m.path,
+                                      }
+                                    : undefined,
+                                });
                               }
                             }}
                             className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
@@ -1680,12 +1768,33 @@ export const SimpleMediaView: React.FC = () => {
                     <button
                       type="button"
                       onClick={async () => {
+                        const targetPath = extDetails.path;
+                        const targetTitle = extDetails.title;
                         setExtDetails(null);
                         try {
-                          await openInPlayer(extDetails.path, { displayTitle: extDetails.title, year: extYear });
+                          await openInPlayer(targetPath, { displayTitle: targetTitle, year: extYear });
                           void refreshExternalMedia();
+                          setFeedbackNotice(null);
                         } catch (err) {
-                          setExternalDiscError(errorMessage(err, 'Could not launch the disc.'));
+                          const msg = errorMessage(err, 'Could not launch the disc.');
+                          const isPathErr =
+                            msg.includes('path') ||
+                            msg.includes('exist') ||
+                            msg.includes('operating system') ||
+                            msg.includes('not found') ||
+                            msg.includes('disconnected');
+                          setFeedbackNotice({
+                            type: 'error',
+                            message: msg,
+                            relinkTarget: isPathErr
+                              ? {
+                                  kind: 'external',
+                                  id: targetPath,
+                                  name: targetTitle,
+                                  path: targetPath,
+                                }
+                              : undefined,
+                          });
                         }
                       }}
                       className="w-full py-2.5 rounded-lg bg-[#e5e5e5] hover:bg-white text-black text-xs font-semibold transition text-center"
@@ -1746,9 +1855,24 @@ export const SimpleMediaView: React.FC = () => {
                         void refreshExternalMedia();
                         setFeedbackNotice(null);
                       } catch (err) {
+                        const msg = errorMessage(err, 'Could not launch the disc.');
+                        const isPathErr =
+                          msg.includes('path') ||
+                          msg.includes('exist') ||
+                          msg.includes('operating system') ||
+                          msg.includes('not found') ||
+                          msg.includes('disconnected');
                         setFeedbackNotice({
                           type: 'error',
-                          message: errorMessage(err, 'Could not launch the disc.'),
+                          message: msg,
+                          relinkTarget: isPathErr
+                            ? {
+                                kind: 'external',
+                                id: extCtx.path,
+                                name: extCtx.title,
+                                path: extCtx.path,
+                              }
+                            : undefined,
                         });
                       }
                     }}
@@ -1820,6 +1944,21 @@ export const SimpleMediaView: React.FC = () => {
                     }}
                   >
                     <Copy className="w-3.5 h-3.5" /> Copy Path
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      const target = {
+                        kind: 'external' as const,
+                        id: extCtx.path,
+                        name: extCtx.title,
+                        path: extCtx.path,
+                      };
+                      setExtCtx(null);
+                      void handleRelink(target);
+                    }}
+                  >
+                    <Link className="w-3.5 h-3.5" /> Relink Media...
                   </button>
                   <button
                     className={act}
@@ -1966,6 +2105,20 @@ export const SimpleMediaView: React.FC = () => {
                     }}
                   >
                     <Copy className="w-3.5 h-3.5" /> Copy Path
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      void handleRelink({
+                        kind: 'torrent',
+                        id: item.info_hash || item.id,
+                        name: group.clean_title,
+                        path: item.save_path || '',
+                      });
+                    }}
+                  >
+                    <Link className="w-3.5 h-3.5" /> Relink Media...
                   </button>
                   <button
                     className={act}

@@ -18,11 +18,123 @@ pub fn parse_media_title(raw_title: String) -> Result<ParsedMediaMetadata, Strin
     Ok(MediaTitleParser::parse(&raw_title))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PathDiagnosticKind {
+    ForeignOs,
+    DisconnectedDrive,
+    PermissionDenied,
+    MissingFile,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathDiagnostic {
+    pub path: String,
+    pub kind: PathDiagnosticKind,
+    pub message: String,
+    pub can_relink: bool,
+}
+
+pub fn diagnose_media_path_internal(path_str: &str, target_windows: bool) -> PathDiagnostic {
+    if crate::engine::transmission::TransmissionTorrentEngine::is_cross_os_path_for_target(
+        path_str,
+        target_windows,
+    ) {
+        let msg = if target_windows {
+            format!("Path belongs to another operating system (macOS/Unix): {path_str}. Please relink this media to its Windows location.")
+        } else {
+            format!("Path belongs to another operating system (Windows): {path_str}. Please relink this media to its macOS location.")
+        };
+        return PathDiagnostic {
+            path: path_str.to_string(),
+            kind: PathDiagnosticKind::ForeignOs,
+            message: msg,
+            can_relink: true,
+        };
+    }
+
+    let p = Path::new(path_str);
+
+    // Check for disconnected drive / unmounted volume
+    if target_windows {
+        let bytes = path_str.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            let drive_root = format!("{}:\\", (bytes[0] as char).to_ascii_uppercase());
+            if !Path::new(&drive_root).exists() {
+                return PathDiagnostic {
+                    path: path_str.to_string(),
+                    kind: PathDiagnosticKind::DisconnectedDrive,
+                    message: format!(
+                        "Drive {} is disconnected or unavailable for: {path_str}",
+                        drive_root
+                    ),
+                    can_relink: true,
+                };
+            }
+        }
+    } else if path_str.starts_with("/Volumes/") {
+        let segments: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
+        if segments.len() >= 2 {
+            let vol_root = format!("/Volumes/{}", segments[1]);
+            if !Path::new(&vol_root).exists() {
+                return PathDiagnostic {
+                    path: path_str.to_string(),
+                    kind: PathDiagnosticKind::DisconnectedDrive,
+                    message: format!(
+                        "Volume '{}' is not mounted or disconnected for: {path_str}",
+                        segments[1]
+                    ),
+                    can_relink: true,
+                };
+            }
+        }
+    }
+
+    // Check parent presence
+    if let Some(parent) = p.parent() {
+        if parent.exists() {
+            return PathDiagnostic {
+                path: path_str.to_string(),
+                kind: PathDiagnosticKind::MissingFile,
+                message: format!("Media file or folder not found: {path_str}"),
+                can_relink: true,
+            };
+        }
+    }
+
+    PathDiagnostic {
+        path: path_str.to_string(),
+        kind: PathDiagnosticKind::NotFound,
+        message: format!("Media path does not exist: {path_str}"),
+        can_relink: true,
+    }
+}
+
+pub fn diagnose_media_path(path_str: &str) -> PathDiagnostic {
+    diagnose_media_path_internal(path_str, cfg!(windows))
+}
+
+#[tauri::command]
+pub fn check_media_path(file_path: String) -> PathDiagnostic {
+    let path = Path::new(&file_path);
+    if path.exists() {
+        PathDiagnostic {
+            path: file_path,
+            kind: PathDiagnosticKind::NotFound,
+            message: "Path exists".to_string(),
+            can_relink: false,
+        }
+    } else {
+        diagnose_media_path(&file_path)
+    }
+}
+
 #[tauri::command]
 pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>, String> {
     let path = Path::new(&file_path);
     if !path.exists() {
-        return Err(format!("Media path does not exist: {file_path}"));
+        let diag = diagnose_media_path(&file_path);
+        return Err(diag.message);
     }
     Ok(DiscDetector::inspect(path))
 }
@@ -34,8 +146,9 @@ pub async fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
         if !path.exists() {
-            tracing::warn!("[disc-set] path missing: {file_path}");
-            return Err(format!("Media path does not exist: {file_path}"));
+            let diag = diagnose_media_path(&file_path);
+            tracing::warn!("[disc-set] path missing: {file_path} - {}", diag.message);
+            return Err(diag.message);
         }
         let set = DiscDetector::inspect_all(path);
         tracing::info!(
@@ -57,7 +170,8 @@ pub async fn scan_disc_artwork(file_path: String) -> Result<Option<String>, Stri
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
         if !path.exists() {
-            return Err(format!("Media path does not exist: {file_path}"));
+            let diag = diagnose_media_path(&file_path);
+            return Err(diag.message);
         }
         Ok(DiscDetector::find_cover_image(path))
     })
@@ -198,7 +312,8 @@ fn best_display_title_for_disc(path: &Path, default_title: &str) -> String {
 fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     let path = Path::new(file_path);
     if !path.exists() {
-        return Err(format!("Media path does not exist: {file_path}"));
+        let diag = diagnose_media_path(file_path);
+        return Err(diag.message);
     }
     if let Some(disc) = DiscDetector::inspect(path) {
         let title = best_display_title_for_disc(path, &disc.title);
@@ -4239,6 +4354,68 @@ pub fn set_external_media_title(
     title: String,
 ) -> Result<(), String> {
     set_external_media_metadata_and_poster(app, path, title, None)
+}
+
+/// Relink an external media item from an old path to a new verified path.
+/// Preserves title, year, poster, and external record history.
+#[tauri::command]
+pub fn relink_external_media(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    old_path: String,
+    new_path: String,
+) -> Result<(), String> {
+    let new_root = release_root_of(&new_path);
+    let old_norm = release_root_of(&old_path);
+
+    let mut items = read_external_store(&app);
+    let mut found = false;
+    for m in &mut items {
+        if m.path == old_path || m.path == old_norm {
+            m.path = new_root.clone();
+            m.kind = classify_external(&new_root);
+            found = true;
+        }
+    }
+    if found {
+        write_external_store(&app, &items)?;
+    }
+
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (_, mut meta) in all_meta {
+            if meta.is_external {
+                if let Some(sp) = &meta.save_path {
+                    if sp == &old_path || sp == &old_norm {
+                        meta.save_path = Some(new_root.clone());
+                        let _ = db.upsert_torrent_metadata(&meta);
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("[relink] external media relinked from '{old_path}' to '{new_root}'");
+    Ok(())
+}
+
+/// Relink a torrent item from an old/stale path to a new verified path.
+/// Preserves info_hash, display_title, user_display_title, poster_path, and history.
+#[tauri::command]
+pub fn relink_torrent_media(
+    engine: tauri::State<'_, crate::engine::SharedEngine>,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    info_hash: String,
+    new_path: String,
+) -> Result<(), String> {
+    let _ = engine.set_location(&info_hash, &new_path);
+
+    if let Ok(Some(mut meta)) = db.get_torrent_metadata(&info_hash) {
+        meta.save_path = Some(new_path.clone());
+        let _ = db.upsert_torrent_metadata(&meta);
+    }
+
+    tracing::info!("[relink] torrent {info_hash} relinked to '{new_path}'");
+    Ok(())
 }
 
 /// Toggle the player window's always-on-top pin (owner: a little mark in

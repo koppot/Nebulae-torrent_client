@@ -63,6 +63,8 @@ pub struct TorrentItem {
     // qBittorrent metadata & control fields
     pub info_hash: String,
     pub save_path: String,
+    #[serde(default)]
+    pub historical_save_path: Option<String>,
     pub added_on: u64,
     pub completed_on: Option<u64>,
     pub comment: String,

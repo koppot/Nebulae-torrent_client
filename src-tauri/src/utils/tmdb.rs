@@ -492,7 +492,7 @@ pub fn fetch_poster(
             }
             None => None,
         };
-        let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
+        let webp = crate::thumbs::convert_single_image(&thumbs_dir, &raw_path).ok();
         let webp_path = webp.clone().unwrap_or(raw_path.clone());
         // Only remove the raw JPEG when the WebP conversion actually succeeded.
         // If ensure_thumbnail failed, webp_path IS raw_path — deleting it would
@@ -651,7 +651,7 @@ fn trakt_fallback(
     std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
     let raw_path = thumbs_dir.join(format!("trakt-{}.jpg", hash_of(lookup_key)));
     std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
-    let webp = crate::thumbs::ensure_thumbnail(&thumbs_dir, &raw_path).ok();
+    let webp = crate::thumbs::convert_single_image(&thumbs_dir, &raw_path).ok();
     let webp_path = webp.as_ref().cloned().unwrap_or(raw_path.clone());
     // Only remove the raw JPEG when conversion succeeded; otherwise
     // webp_path == raw_path and we would return a deleted file path.

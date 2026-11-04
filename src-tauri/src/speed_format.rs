@@ -307,6 +307,7 @@ mod tests {
             racing_mode: None,
             error_string: None,
             media_meta: None,
+            historical_save_path: None,
         }
     }
 
