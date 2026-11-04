@@ -2002,6 +2002,82 @@ impl TransmissionTorrentEngine {
         info!("transmission engine shut down gracefully");
     }
 
+    /// Classify whether a torrent represents media (video, optical disc, audio)
+    /// for shelf filtering and category tallies.
+    ///
+    /// 1. Detail-mode polls carry the `files` list: inspect individual extensions.
+    /// 2. Overview polls omit `files` to prevent RPC payload explosion: fall back to
+    ///    release name heuristics, optical disc indicators, year tokens, or release size.
+    pub(crate) fn compute_is_media(
+        files: &[crate::commands::torrent::TorrentFileItem],
+        name: &str,
+        total_bytes: u64,
+    ) -> bool {
+        let is_media_from_files = files.iter().any(|f| {
+            let lower = f.name.to_lowercase();
+            lower.ends_with(".mkv")
+                || lower.ends_with(".mp4")
+                || lower.ends_with(".avi")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".m2ts")
+                || lower.ends_with(".iso")
+                || lower.ends_with(".vob")
+        });
+
+        if !files.is_empty() {
+            return is_media_from_files;
+        }
+
+        let lower_name = name.to_lowercase();
+        lower_name.ends_with(".mkv")
+            || lower_name.ends_with(".mp4")
+            || lower_name.ends_with(".avi")
+            || lower_name.ends_with(".iso")
+            || lower_name.ends_with(".m2ts")
+            || lower_name.ends_with(".vob")
+            || lower_name.ends_with(".ts")
+            || lower_name.contains(" jdm")
+            || lower_name.contains(" r2j")
+            || lower_name.contains(" r1")
+            || lower_name.contains("blu-ray")
+            || lower_name.contains("bluray")
+            || lower_name.contains("bdrip")
+            || lower_name.contains("bdremux")
+            || lower_name.contains("remux")
+            || lower_name.contains("hdtv")
+            || lower_name.contains("web-dl")
+            || lower_name.contains("webrip")
+            || lower_name.contains("dvdrip")
+            || lower_name.contains("dvd")
+            || lower_name.contains("bd-box")
+            || lower_name.contains("ova")
+            || lower_name.contains("movie")
+            || lower_name.contains("film")
+            || lower_name.contains("1080p")
+            || lower_name.contains("720p")
+            || lower_name.contains("2160p")
+            || lower_name.contains("4k")
+            || lower_name.contains("uhd")
+            || total_bytes >= 100 * 1024 * 1024
+            || {
+                let mut found_year = false;
+                let bytes = lower_name.as_bytes();
+                for i in 0..bytes.len().saturating_sub(5) {
+                    if bytes[i] == b'('
+                        && bytes[i + 5] == b')'
+                        && bytes[i + 1..i + 5].iter().all(|b| b.is_ascii_digit())
+                    {
+                        let yr: u32 = lower_name[i + 1..i + 5].parse().unwrap_or(0);
+                        if (1950..=2100).contains(&yr) {
+                            found_year = true;
+                            break;
+                        }
+                    }
+                }
+                found_year
+            }
+    }
+
     fn map_raw_torrent(
         &self,
         t: &Value,
@@ -2254,16 +2330,7 @@ impl TransmissionTorrentEngine {
             .unwrap_or(0);
         let display_peers = max_peers.max(connected_peers);
 
-        let is_media = files.iter().any(|f| {
-            let lower = f.name.to_lowercase();
-            lower.ends_with(".mkv")
-                || lower.ends_with(".mp4")
-                || lower.ends_with(".avi")
-                || lower.ends_with(".ts")
-                || lower.ends_with(".m2ts")
-                || lower.ends_with(".iso")
-                || lower.ends_with(".vob")
-        });
+        let is_media = Self::compute_is_media(&files, &name, total_bytes);
 
         let bandwidth_priority = t
             .get("bandwidthPriority")
@@ -3869,5 +3936,110 @@ mod tests {
         const UNSUPPORTED: &str =
             "First/last piece priority is not supported by the current engine.";
         assert!(UNSUPPORTED.contains("not supported"));
+    }
+
+    #[test]
+    fn test_compute_is_media_heuristics_and_file_inspection() {
+        use crate::commands::torrent::TorrentFileItem;
+
+        // 1. Files present with media extension -> true
+        let media_files = vec![TorrentFileItem {
+            index: 0,
+            name: "feature.mkv".into(),
+            size_bytes: 1000,
+            progress: 1.0,
+            priority: 1,
+        }];
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &media_files,
+            "anything",
+            0
+        ));
+
+        let iso_files = vec![TorrentFileItem {
+            index: 0,
+            name: "disc1.iso".into(),
+            size_bytes: 1000,
+            progress: 1.0,
+            priority: 1,
+        }];
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &iso_files, "random", 0
+        ));
+
+        // 2. Files present with non-media extension only -> false
+        let text_files = vec![TorrentFileItem {
+            index: 0,
+            name: "notes.txt".into(),
+            size_bytes: 1000,
+            progress: 1.0,
+            priority: 1,
+        }];
+        assert!(!TransmissionTorrentEngine::compute_is_media(
+            &text_files,
+            "some_doc",
+            1000
+        ));
+
+        // 3. Files empty (overview poll) -> fallback heuristics
+        let empty_files: Vec<TorrentFileItem> = Vec::new();
+
+        // Release name extensions
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "My.Movie.mkv",
+            1000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "DISC1.ISO",
+            1000
+        ));
+
+        // ADC tracker release patterns
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Banner of the Stars III OVA (2005) R2J",
+            5000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Banner of the Stars III - OVA (2005) JDM",
+            5000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Fuuka (2017) JDM",
+            5000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Fuuka BD-BOX",
+            5000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Patlabor 2 the Movie",
+            5000
+        ));
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Suzume (2022)",
+            5000
+        ));
+
+        // Total size >= 100 MiB (ADC optical disc image / video encode)
+        assert!(TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "Unknown Japanese Title",
+            150 * 1024 * 1024
+        ));
+
+        // Small non-media torrent with empty files
+        assert!(!TransmissionTorrentEngine::compute_is_media(
+            &empty_files,
+            "documents_archive.zip",
+            1024 * 1024
+        ));
     }
 }
