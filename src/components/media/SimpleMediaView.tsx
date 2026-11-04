@@ -443,13 +443,20 @@ export const SimpleMediaView: React.FC = () => {
   // tracker already shows on torrents.php, matched by name and cached
   // locally per info-hash), 2) the WebP pipeline (cover scan → downscale →
   // cache → ffmpeg frame → TMDB when a key exists). Only missing entries
-  // are fetched.
+  // are fetched. When resolution fails temporarily, avoid poisoning thumbMap
+  // with a permanent null so retry after temporary provider recovery works.
   useEffect(() => {
     torrents.forEach((t) => {
-      if (t.id in thumbMap) return;
+      if (thumbMap[t.id]) return;
       resolvePoster(t.info_hash, t.name, contentPath(t))
-        .then((src) => setThumbMap((prev) => ({ ...prev, [t.id]: src })))
-        .catch(() => setThumbMap((prev) => ({ ...prev, [t.id]: null })));
+        .then((src) => {
+          if (src) {
+            setThumbMap((prev) => ({ ...prev, [t.id]: src }));
+          }
+        })
+        .catch(() => {
+          // Do not permanently lock out future retries with permanent null
+        });
     });
   }, [torrents, thumbMap]);
 
@@ -505,7 +512,12 @@ export const SimpleMediaView: React.FC = () => {
           invoke('log_frontend', {
             message: `tmdb fetch failed for ${t.name}: ${errorMessage(err, 'unknown')}`,
           }).catch(() => {});
-          setTmdbMap((prev) => ({ ...prev, [t.id]: {} }));
+          // Allow future retries after temporary network or provider error
+          setTmdbMap((prev) => {
+            const next = { ...prev };
+            delete next[t.id];
+            return next;
+          });
         });
     });
   }, [activeDownloads, readyToWatch, discMetaMap, thumbMap, tmdbMap]);

@@ -63,6 +63,26 @@ impl Database {
             let _ = conn.execute(&sql, []);
         }
 
+        // Idempotent backfill of torrent_metadata.poster_path from settings cache
+        // when poster_path is NULL or empty, preserving existing selections.
+        let _ = conn.execute(
+            "UPDATE torrent_metadata
+             SET poster_path = (
+                 SELECT s.value FROM settings s
+                 WHERE s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                 LIMIT 1
+             )
+             WHERE (poster_path IS NULL OR poster_path = '')
+               AND COALESCE(user_title_locked, 0) = 0
+               AND EXISTS (
+                 SELECT 1 FROM settings s
+                 WHERE s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+               )",
+            [],
+        );
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -567,16 +587,79 @@ impl Database {
     }
 
     /// Retrieve the persisted poster path or URL for a torrent.
+    /// Checks torrent_metadata first, then snatched_records, and falls back to
+    /// resolving from the settings cache by title when poster_path is null.
     pub fn get_torrent_poster(&self, info_hash: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
             conn.prepare("SELECT poster_path FROM torrent_metadata WHERE info_hash = ?1")?;
         let mut rows = stmt.query(params![info_hash])?;
         if let Some(row) = rows.next()? {
-            Ok(row.get(0)?)
-        } else {
-            Ok(None)
+            let p: Option<String> = row.get(0)?;
+            if let Some(path) = p {
+                if !path.trim().is_empty() {
+                    return Ok(Some(path));
+                }
+            }
         }
+
+        // Fallback: check snatched_records
+        let mut s_stmt =
+            conn.prepare("SELECT poster_path FROM snatched_records WHERE info_hash = ?1")?;
+        let mut s_rows = s_stmt.query(params![info_hash])?;
+        if let Some(row) = s_rows.next()? {
+            let p: Option<String> = row.get(0)?;
+            if let Some(path) = p {
+                if !path.trim().is_empty() {
+                    return Ok(Some(path));
+                }
+            }
+        }
+
+        // Settings cache resolution when poster_path is null:
+        // Lookup title from torrent_metadata or snatched_records
+        let mut t_stmt = conn.prepare(
+            "SELECT COALESCE(user_display_title, display_title) FROM torrent_metadata WHERE info_hash = ?1
+             UNION ALL
+             SELECT COALESCE(display_title, torrent_name) FROM snatched_records WHERE info_hash = ?1
+             LIMIT 1",
+        )?;
+        let mut t_rows = t_stmt.query(params![info_hash])?;
+        if let Some(row) = t_rows.next()? {
+            let title_opt: Option<String> = row.get(0)?;
+            if let Some(title) = title_opt {
+                let trimmed = title.trim();
+                if !trimmed.is_empty() {
+                    let mut keys = vec![
+                        format!("tmdb_poster:v3:{}", trimmed.to_lowercase()),
+                        format!("tmdb_poster:v2:{}", trimmed.to_lowercase()),
+                    ];
+                    let cleaned = trimmed
+                        .trim_end_matches(|c: char| c.is_whitespace())
+                        .trim_end_matches("OVA")
+                        .trim_end_matches("ova")
+                        .trim_end_matches(|c: char| c.is_whitespace())
+                        .to_string();
+                    if !cleaned.is_empty() && !cleaned.eq_ignore_ascii_case(trimmed) {
+                        keys.push(format!("tmdb_poster:v3:{}", cleaned.to_lowercase()));
+                        keys.push(format!("tmdb_poster:v2:{}", cleaned.to_lowercase()));
+                    }
+                    for k in keys {
+                        let mut cache_stmt =
+                            conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+                        let mut cache_rows = cache_stmt.query(params![k])?;
+                        if let Some(c_row) = cache_rows.next()? {
+                            let val: String = c_row.get(0)?;
+                            if !val.trim().is_empty() {
+                                return Ok(Some(val));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     // ── Feature 5: removed-torrent → External reclassification ───────────────
@@ -939,5 +1022,129 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[test]
+    fn test_get_torrent_poster_resolves_from_settings_cache_when_poster_path_is_null() {
+        let db = memory_db();
+        let hash = "1111222233334444555566667777888899990000";
+
+        // 1. Initially no metadata and no settings -> None
+        assert_eq!(db.get_torrent_poster(hash).unwrap(), None);
+
+        // 2. Insert metadata with title "Suzume (2022)" but poster_path = NULL
+        let meta = TorrentDbMetadata {
+            info_hash: hash.to_string(),
+            display_title: Some("Suzume (2022)".to_string()),
+            poster_path: None,
+            added_at: 100,
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+
+        // Still None because settings has no matching poster
+        assert_eq!(db.get_torrent_poster(hash).unwrap(), None);
+
+        // 3. Cache poster in settings under tmdb_poster:v3:suzume (2022)
+        let expected_path = "/path/to/suzume_poster.webp";
+        db.set_setting("tmdb_poster:v3:suzume (2022)", expected_path)
+            .unwrap();
+
+        // Resolves from settings cache!
+        assert_eq!(
+            db.get_torrent_poster(hash).unwrap().as_deref(),
+            Some(expected_path)
+        );
+
+        // 4. If explicit custom poster is set, it overrides the settings cache
+        let custom_path = "/path/to/custom_suzume.jpg";
+        db.set_torrent_poster(hash, custom_path).unwrap();
+        assert_eq!(
+            db.get_torrent_poster(hash).unwrap().as_deref(),
+            Some(custom_path)
+        );
+    }
+
+    #[test]
+    fn test_idempotent_backfill_from_settings_preserves_custom_and_locked_posters() {
+        let path =
+            std::env::temp_dir().join(format!("nebulae-backfill-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE torrent_metadata (
+                     info_hash TEXT PRIMARY KEY, display_title TEXT, category TEXT,
+                     labels TEXT, is_watched INTEGER DEFAULT 0, notes TEXT,
+                     added_at INTEGER, completed_on INTEGER, save_path TEXT,
+                     download_limit_kib INTEGER DEFAULT 0,
+                     upload_limit_kib INTEGER DEFAULT 0,
+                     ratio_limit REAL DEFAULT -1.0,
+                     sequential_download INTEGER DEFAULT 0,
+                     first_last_piece_prio INTEGER DEFAULT 0,
+                     super_seeding INTEGER DEFAULT 0,
+                     user_display_title TEXT, user_title_locked INTEGER DEFAULT 0,
+                     sort_order INTEGER, poster_path TEXT, is_external INTEGER DEFAULT 0,
+                     sync_miss_count INTEGER DEFAULT 0, last_checked INTEGER
+                 );
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:fuuka', '/cache/fuuka.webp');
+                 -- Item 1: null poster -> should be backfilled
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h1', 'Fuuka', NULL, 1);
+                 -- Item 2: custom poster -> must NOT be overwritten
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h2', 'Fuuka', '/custom/custom_fuuka.png', 2);
+                 -- Item 3: user locked title with null poster -> must NOT be overwritten
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                    VALUES ('h3', 'Fuuka', 1, NULL, 3);",
+            )
+            .unwrap();
+        }
+
+        // Initialize Database which runs migration backfill
+        let db = Database::new(&path).unwrap();
+
+        let m1 = db.get_torrent_metadata("h1").unwrap().unwrap();
+        assert_eq!(m1.poster_path.as_deref(), Some("/cache/fuuka.webp"));
+
+        let m2 = db.get_torrent_metadata("h2").unwrap().unwrap();
+        assert_eq!(m2.poster_path.as_deref(), Some("/custom/custom_fuuka.png"));
+
+        let m3 = db.get_torrent_metadata("h3").unwrap().unwrap();
+        assert_eq!(m3.poster_path, None);
+
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn test_corrupted_database_preserves_file_without_replacement() {
+        let path = std::env::temp_dir().join(format!(
+            "nebulae-corrupt-preserve-{}.db",
+            std::process::id()
+        ));
+        let corrupt_content = b"THIS_IS_DEFINITELY_NOT_A_VALID_SQLITE_DATABASE_FILE";
+        std::fs::write(&path, corrupt_content).unwrap();
+
+        // Attempting to open with Database::new must fail with error
+        let res = Database::new(&path);
+        assert!(
+            res.is_err(),
+            "Database::new must return Err on corrupt database"
+        );
+
+        // The corrupt file MUST NOT be deleted, replaced, or truncated
+        assert!(path.exists(), "Original corrupt file must remain on disk");
+        let surviving_bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            surviving_bytes, corrupt_content,
+            "File bytes must be strictly preserved without replacement"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

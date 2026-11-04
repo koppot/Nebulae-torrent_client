@@ -139,7 +139,11 @@ async function fetchAdcMap(): Promise<AdcPosterCache | null> {
       }
       return cache;
     })
-    .catch(() => null);
+    .catch(() => {
+      // Clear pending promise on failure so subsequent calls can retry after temporary provider error
+      adcFetch = null;
+      return null;
+    });
   return adcFetch;
 }
 
@@ -200,6 +204,9 @@ export async function resolvePoster(
           } catch {
             /* ignore */
           }
+          if (infoHash) {
+            invoke('set_torrent_poster', { infoHash, posterPath: local }).catch(() => {});
+          }
           // RAW local path — the renderer converts via convertFileSrc exactly
           // once. Returning an asset:// URL here caused double conversion
           // (asset://localhost/%2Fasset%3A%2F%2F...) and a 403 from the
@@ -208,6 +215,9 @@ export async function resolvePoster(
         }
       } catch {
         /* fall back to the raw URL; the img may still load */
+      }
+      if (infoHash) {
+        invoke('set_torrent_poster', { infoHash, posterPath: absolute }).catch(() => {});
       }
       return absolute;
     }
@@ -224,7 +234,12 @@ export async function resolvePoster(
       title: parsed.clean_title,
       year: parsed.year ?? undefined,
     });
-    if (res?.poster_webp) return res.poster_webp;
+    if (res?.poster_webp) {
+      if (infoHash) {
+        invoke('set_torrent_poster', { infoHash, posterPath: res.poster_webp }).catch(() => {});
+      }
+      return res.poster_webp;
+    }
   } catch {
     /* fall through to the local pipeline */
   }
