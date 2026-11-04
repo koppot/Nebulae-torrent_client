@@ -1523,7 +1523,7 @@ export const SimpleMediaView: React.FC = () => {
                               const trimmed = renameValue.trim();
                               if (trimmed) {
                                 await invoke('set_external_media_title', { path: extDetails.path, title: trimmed });
-                                extDetails.title = trimmed;
+                                setExtDetails({ ...extDetails, title: trimmed });
                                 void refreshExternalMedia();
                               }
                               setRenamingExtPath(null);
@@ -2394,6 +2394,11 @@ export const SimpleMediaView: React.FC = () => {
                 [editingFor.title]: posterUrl,
                 [newTitle]: posterUrl,
               }));
+            }
+            // If the External details popup is open for the same item, update its
+            // title so the popup re-renders immediately without needing to close/reopen.
+            if (extDetails && extDetails.path === editingFor.infoHash) {
+              setExtDetails({ ...extDetails, title: newTitle });
             }
             setFeedbackNotice({ type: 'info', message: `Metadata updated: ${newTitle}` });
             setEditingFor(null);
