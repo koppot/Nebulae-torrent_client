@@ -3885,6 +3885,8 @@ pub struct ExternalMedia {
     /// "Blu-ray UHD" | "Blu-ray" | "DVD" | "ISO" | "File"
     pub kind: String,
     pub added_ms: i64,
+    #[serde(default)]
+    pub poster_url: Option<String>,
 }
 
 fn external_media_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -4073,6 +4075,7 @@ pub fn add_external_media(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0),
+        poster_url: None,
     });
     write_external_store(&app, &items)
 }
@@ -4165,12 +4168,14 @@ pub fn list_external_media(
 
             let added_ms = meta.completed_on.map(|c| c as i64 * 1000).unwrap_or(now_ms);
 
+            let poster_url = meta.poster_path;
             live.push(ExternalMedia {
                 path: norm_path,
                 title,
                 year,
                 kind,
                 added_ms,
+                poster_url,
             });
         }
     }
@@ -4185,12 +4190,12 @@ pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), 
     write_external_store(&app, &items)
 }
 
-/// Update the display title of an external media item.
-#[tauri::command]
-pub fn set_external_media_title(
+/// Update the display title and optional poster of an external media item.
+pub fn set_external_media_metadata_and_poster(
     app: tauri::AppHandle,
     path: String,
     title: String,
+    poster_url: Option<String>,
 ) -> Result<(), String> {
     let mut items = read_external_store(&app);
     let norm = release_root_of(&path);
@@ -4198,6 +4203,9 @@ pub fn set_external_media_title(
     for m in &mut items {
         if m.path == path || m.path == norm {
             m.title = title.clone();
+            if poster_url.is_some() {
+                m.poster_url = poster_url.clone();
+            }
             found = true;
         }
     }
@@ -4217,9 +4225,20 @@ pub fn set_external_media_title(
             year,
             kind,
             added_ms: now_ms,
+            poster_url,
         });
     }
     write_external_store(&app, &items)
+}
+
+/// Update the display title of an external media item.
+#[tauri::command]
+pub fn set_external_media_title(
+    app: tauri::AppHandle,
+    path: String,
+    title: String,
+) -> Result<(), String> {
+    set_external_media_metadata_and_poster(app, path, title, None)
 }
 
 /// Toggle the player window's always-on-top pin (owner: a little mark in

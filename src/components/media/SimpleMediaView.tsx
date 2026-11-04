@@ -270,13 +270,24 @@ export const SimpleMediaView: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [torrents]);
 
-  const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string }[]>([]);
+  const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string; poster_url?: string | null }[]>([]);
+  // Library banners for external titles: same TMDB pipeline as downloads.
+  const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
   const [extHovered, setExtHovered] = useState<string | null>(null);
   const [extCtx, setExtCtx] = useState<{ x: number; y: number; path: string; title: string } | null>(null);
   const refreshExternalMedia = useCallback(async () => {
     try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
   }, []);
   useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia]);
+
+  // Seed external posters from database-persisted poster_url
+  useEffect(() => {
+    externalMedia.forEach((m) => {
+      if (m.poster_url && !externalPosterMap[m.path]) {
+        setExternalPosterMap((prev) => ({ ...prev, [m.path]: m.poster_url || undefined }));
+      }
+    });
+  }, [externalMedia, externalPosterMap]);
   // Title-bar controls (media mode): Add Movie + Player prefs live in the
   // top bar and reach this component through window events.
   useEffect(() => {
@@ -293,8 +304,6 @@ export const SimpleMediaView: React.FC = () => {
       window.removeEventListener('nebulae:player-prefs', onPrefs);
     };
   }, []);
-  // Library banners for external titles: same TMDB pipeline as downloads.
-  const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
   // TMDB metadata per external path: overview / runtime / canonical year —
   // the SAME source the library Details popup uses.
   const [externalMetaMap, setExternalMetaMap] = useState<
@@ -303,6 +312,12 @@ export const SimpleMediaView: React.FC = () => {
   useEffect(() => {
     if (playerOpen) return;
     externalMedia.forEach((m) => {
+      if (m.poster_url) {
+        if (!externalPosterMap[m.path]) {
+          setExternalPosterMap((prev) => ({ ...prev, [m.path]: m.poster_url || undefined }));
+        }
+        return;
+      }
       if (m.path in externalPosterMap) return;
       setExternalPosterMap((prev) => ({ ...prev, [m.path]: undefined }));
       invoke<ParsedMediaMetadata>('parse_media_title', { rawTitle: m.title })
@@ -2340,6 +2355,8 @@ export const SimpleMediaView: React.FC = () => {
               setExternalPosterMap((prev) => ({
                 ...prev,
                 [editingFor.infoHash]: posterUrl,
+                [editingFor.title]: posterUrl,
+                [newTitle]: posterUrl,
               }));
             }
             setFeedbackNotice({ type: 'info', message: `Metadata updated: ${newTitle}` });

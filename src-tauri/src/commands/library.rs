@@ -139,8 +139,12 @@ pub fn save_media_metadata_and_poster(
         }
     } else {
         // External media path or title
-        let _ =
-            crate::commands::media::set_external_media_title(app, clean.to_string(), title.clone());
+        let _ = crate::commands::media::set_external_media_metadata_and_poster(
+            app,
+            clean.to_string(),
+            title.clone(),
+            poster_url.clone(),
+        );
 
         // Also check if any torrent_metadata row has matching save_path
         if let Ok(all) = db.list_all_torrent_metadata() {
