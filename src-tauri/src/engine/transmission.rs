@@ -1695,6 +1695,12 @@ impl TransmissionTorrentEngine {
             .unwrap_or(false);
 
         if is_linked {
+            #[cfg(target_os = "macos")]
+            let passkey_opt = get_secret(&passkey_secret_target())
+                .ok()
+                .filter(|p| !p.trim().is_empty());
+
+            #[cfg(not(target_os = "macos"))]
             let passkey_opt = get_secret(&passkey_secret_target())
                 .ok()
                 .filter(|p| !p.trim().is_empty())

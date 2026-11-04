@@ -34,8 +34,12 @@ pub fn fetch_and_persist_adc_stats(db: &Database) -> Result<bool, String> {
         return Ok(false);
     }
 
-    // Prefer keychain; fall back to DB setting (stored as plaintext for
-    // compatibility with existing installs that pre-date keychain adoption).
+    // On macOS: memory-only session storage (zero Keychain and zero plaintext SQLite).
+    #[cfg(target_os = "macos")]
+    let passkey = crate::utils::keyring::get_secret(&passkey_secret_target()).ok();
+
+    // On non-macOS (Windows): Windows Credential Manager with fallback to DB setting.
+    #[cfg(not(target_os = "macos"))]
     let passkey = crate::utils::keyring::get_secret(&passkey_secret_target())
         .ok()
         .or_else(|| {
@@ -293,11 +297,12 @@ pub fn link_adc_account(
 
     let masked = AdcTrackerProfile::mask_passkey(&passkey);
 
-    // Securely route passkey to OS Keychain (macOS Keychain / Windows Credential Manager)
+    // Securely route passkey to credential store (memory-only on macOS, Windows Credential Manager on Windows)
     let secret_target = passkey_secret_target();
     if let Err(e) = store_secret(&secret_target, &passkey) {
-        tracing::warn!("Failed to store passkey in OS keychain: {e}");
+        tracing::warn!("Failed to store passkey in credential store: {e}");
     }
+    #[cfg(not(target_os = "macos"))]
     let _ = db.set_setting("adc_passkey", &passkey);
 
     db.set_setting("adc_linked", "true")
@@ -468,8 +473,9 @@ pub async fn import_adc_passkey(
         let masked = AdcTrackerProfile::mask_passkey(&passkey);
         let secret_target = passkey_secret_target();
         if let Err(e) = store_secret(&secret_target, &passkey) {
-            tracing::warn!("Failed to store imported passkey in OS keychain: {e}");
+            tracing::warn!("Failed to store imported passkey in credential store: {e}");
         }
+        #[cfg(not(target_os = "macos"))]
         let _ = db_arc.set_setting("adc_passkey", &passkey);
         db_arc
             .set_setting("adc_linked", "true")
