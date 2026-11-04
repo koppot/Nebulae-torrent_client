@@ -350,7 +350,7 @@ fn probe_macos_profile_cmdline() -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn parse_profile_flag_from_cmd(cmd: &str) -> Option<PathBuf> {
     let flag = "--profile=";
     if let Some(idx) = cmd.find(flag) {
