@@ -755,3 +755,426 @@ fn test_real_engine_removal_and_selective_recovery_round_trip() {
     engine.shutdown_engine();
     let _ = fs::remove_dir_all(&temp_root);
 }
+
+#[test]
+fn test_real_engine_process_interruption_preserves_database() {
+    // -------------------------------------------------------------------------
+    // WORKER MODE: executed as a separate child process with its own PID
+    // -------------------------------------------------------------------------
+    if let Ok(worker_dir_str) = std::env::var("REAL_ENGINE_INTERRUPTION_WORKER_DIR") {
+        let temp_root = PathBuf::from(worker_dir_str);
+        let pid = std::process::id();
+        fs::write(temp_root.join("worker.pid"), pid.to_string()).unwrap();
+
+        let (engine, db, paths, _default_dl) = match setup_isolated_engine(&temp_root) {
+            Some(ctx) => ctx,
+            None => {
+                eprintln!("Worker: engine setup failed or skipped");
+                std::process::exit(1);
+            }
+        };
+
+        // Assert database and engine paths are strictly isolated inside temp_root
+        assert!(
+            paths.db_file.starts_with(&temp_root),
+            "Worker DB path must be inside temp_root"
+        );
+        assert!(
+            paths.engine_dir.starts_with(&temp_root),
+            "Worker engine dir must be inside temp_root"
+        );
+
+        let save_dir = temp_root.join("downloads");
+        let torrents_out = temp_root.join("meta_out");
+        let qbit_dir = temp_root.join("qbit_profile");
+        let qbit_bt_backup = qbit_dir.join("BT_backup");
+
+        // Build 2 torrents for the worker batch
+        let p1 = save_dir.join("Worker1");
+        fs::create_dir_all(&p1).unwrap();
+        fs::write(p1.join("file1.bin"), vec![0x11u8; 16384]).unwrap();
+        let (_, parsed1, bytes1) = create_test_torrent(&torrents_out, &p1, "Worker 1");
+        let h1 = parsed1.info_hash.to_lowercase();
+
+        let qbt1 = QbitTorrent {
+            info_hash: h1.clone(),
+            name: parsed1.name.clone(),
+            save_path: save_dir.to_string_lossy().to_string(),
+            download_path: None,
+            total_size: parsed1.total_bytes,
+            progress: 1.0,
+            state_string: "paused".to_string(),
+            category: Some("WorkerCategory".to_string()),
+            tags: vec![],
+            paused: true,
+            added_time: 1700000000,
+            completed_time: Some(1700001000),
+            ratio_limit: 1.0,
+            seeding_time_limit: None,
+            download_limit_kib: 0,
+            upload_limit_kib: 0,
+            sequential_download: false,
+            first_last_piece_prio: false,
+            auto_managed: false,
+            content_layout: Some("Original".to_string()),
+            mapped_files: vec![],
+            file_priorities: vec![1],
+            trackers: vec![],
+            source: QbitSourceType::LegacyFile {
+                torrent_path: qbit_bt_backup.join(format!("{h1}.torrent")),
+                fastresume_path: qbit_bt_backup.join(format!("{h1}.fastresume")),
+            },
+            raw_torrent_bytes: bytes1,
+            already_in_nebula: false,
+            missing_path: false,
+        };
+
+        // Worker writes item 1, commits it
+        let (rep1, _) = QbitImporter::execute_import(
+            vec![qbt1],
+            ImportOptions {
+                info_hashes: vec![],
+                skip_recheck: true,
+                remove_from_qbit: false,
+            },
+            &qbit_dir,
+            &temp_root.join("backup"),
+            engine.clone(),
+            db.clone(),
+            &temp_root.join("logs"),
+        );
+        assert_eq!(rep1.imported_count, 1);
+
+        // Signal parent that item 1 is committed and item 2 is in-flight
+        fs::write(temp_root.join("item2_in_flight.marker"), "item2_in_flight").unwrap();
+
+        // Worker simulates processing item 2 when killed mid-operation
+        let deadline = std::time::Instant::now() + Duration::from_secs(45);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        std::process::exit(0);
+    }
+
+    // -------------------------------------------------------------------------
+    // PARENT TEST CONTROLLER
+    // -------------------------------------------------------------------------
+    let temp_root = std::env::temp_dir().join(format!(
+        "nebulae_real_interruption_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_root).unwrap();
+
+    let save_dir = temp_root.join("downloads");
+    fs::create_dir_all(&save_dir).unwrap();
+    let torrents_out = temp_root.join("meta_out");
+    fs::create_dir_all(&torrents_out).unwrap();
+    let qbit_dir = temp_root.join("qbit_profile");
+    let qbit_bt_backup = qbit_dir.join("BT_backup");
+    fs::create_dir_all(&qbit_bt_backup).unwrap();
+
+    // 1. Setup isolated database and pre-populate baseline user records
+    let nebulae_data = temp_root.join("nebulae_data");
+    let db_dir = nebulae_data.join("db");
+    fs::create_dir_all(&db_dir).unwrap();
+    let db_path = db_dir.join("nebulae.db");
+    let db = Arc::new(Database::new(&db_path).expect("Failed to initialize baseline database"));
+
+    // Populate 3 baseline records with custom titles, locked status, and posters
+    let mut baseline_hashes = Vec::new();
+    for i in 0..3 {
+        let h = format!("baseline{:032x}", i);
+        let meta = nebulae_torrent_client_lib::db::TorrentDbMetadata {
+            info_hash: h.clone(),
+            display_title: Some(format!("Baseline Torrent {i}")),
+            category: Some("Movies".to_string()),
+            labels: None,
+            is_watched: false,
+            notes: Some("Pre-existing baseline record".to_string()),
+            added_at: 1690000000 + i as u64,
+            completed_on: Some(1690001000),
+            save_path: Some(format!("C:\\Downloads\\Baseline_{i}")),
+            download_limit_kib: 0,
+            upload_limit_kib: 0,
+            ratio_limit: 1.5,
+            sequential_download: false,
+            first_last_piece_prio: false,
+            super_seeding: false,
+            racing_override: None,
+            user_display_title: Some(format!("Custom Renamed Baseline {i}")),
+            user_title_locked: true,
+            sort_order: Some(i as i64),
+            poster_path: Some(format!("/posters/base_{i}.png")),
+            is_external: false,
+            sync_miss_count: 0,
+            last_checked: None,
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+        db.set_user_display_title(&h, &format!("Custom Renamed Baseline {i}"), true)
+            .unwrap();
+        db.set_torrent_poster(&h, &format!("/posters/base_{i}.png"))
+            .unwrap();
+        db.set_torrent_sort_order(&h, Some(i as i64)).unwrap();
+        baseline_hashes.push(h);
+    }
+    drop(db); // Close connection so worker child process can open it
+
+    // Verify baseline integrity
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let check: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            check, "ok",
+            "Database PRAGMA integrity_check must be ok before test"
+        );
+    }
+
+    // 2. Spawn worker child process
+    let current_exe = std::env::current_exe().expect("current_exe failed");
+    let mut child = std::process::Command::new(current_exe)
+        .arg("test_real_engine_process_interruption_preserves_database")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("REAL_ENGINE_INTERRUPTION_WORKER_DIR", &temp_root)
+        .spawn()
+        .expect("Failed to spawn interruption worker child process");
+
+    let child_pid = child.id();
+    assert_ne!(
+        child_pid,
+        std::process::id(),
+        "Child PID must be distinct from parent PID"
+    );
+
+    // 3. Wait for worker PID file and verify isolation
+    let worker_pid_file = temp_root.join("worker.pid");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !worker_pid_file.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(worker_pid_file.exists(), "Worker PID file must be written");
+    let recorded_pid: u32 = fs::read_to_string(&worker_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        recorded_pid, child_pid,
+        "Recorded PID must match spawned child PID"
+    );
+
+    // 4. Wait for item 2 in-flight signal
+    let marker = temp_root.join("item2_in_flight.marker");
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        marker.exists(),
+        "Worker must have reached in-flight state for item 2"
+    );
+
+    // 5. Forcibly terminate ONLY the isolated candidate child process by its verified PID
+    #[cfg(target_os = "windows")]
+    {
+        println!(
+            "Terminating worker child process by verified PID: {}",
+            child_pid
+        );
+        let status = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &child_pid.to_string()])
+            .output()
+            .expect("taskkill failed");
+        println!(
+            "taskkill output: {}",
+            String::from_utf8_lossy(&status.stdout)
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+
+    // 6. POST-INTERRUPTION ASSERTIONS: SQLite Integrity and Pre-existing Records
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let check: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            check, "ok",
+            "Database PRAGMA integrity_check must be ok immediately after abrupt kill"
+        );
+    }
+
+    let restarted_db =
+        Arc::new(Database::new(&db_path).expect("Failed to reopen database after kill"));
+
+    // Assert ALL 3 baseline records are 100% intact with their locked titles and sort orders
+    for (i, h) in baseline_hashes.iter().enumerate() {
+        let meta = restarted_db
+            .get_torrent_metadata(h)
+            .unwrap()
+            .expect("Baseline record must survive uncorrupted");
+        assert_eq!(
+            meta.user_display_title,
+            Some(format!("Custom Renamed Baseline {i}")),
+            "user_display_title must survive abrupt kill"
+        );
+        assert!(
+            meta.user_title_locked,
+            "user_title_locked must survive abrupt kill"
+        );
+        assert_eq!(
+            meta.sort_order,
+            Some(i as i64),
+            "sort_order must survive abrupt kill"
+        );
+        assert_eq!(
+            meta.poster_path,
+            Some(format!("/posters/base_{i}.png")),
+            "poster_path must survive"
+        );
+    }
+
+    // 7. Initialize parent isolated engine and RESTART the import of the batch
+    let (parent_engine, _, _, _) = match setup_isolated_engine(&temp_root) {
+        Some(ctx) => ctx,
+        None => panic!("Failed to setup parent engine for restart"),
+    };
+
+    // Reconstruct the batch of 2 torrents
+    let p1 = save_dir.join("Worker1");
+    let (_, parsed1, bytes1) = create_test_torrent(&torrents_out, &p1, "Worker 1");
+    let h1 = parsed1.info_hash.to_lowercase();
+    let p2 = save_dir.join("Worker2");
+    fs::create_dir_all(&p2).unwrap();
+    fs::write(p2.join("file2.bin"), vec![0x22u8; 16384]).unwrap();
+    let (_, parsed2, bytes2) = create_test_torrent(&torrents_out, &p2, "Worker 2");
+    let h2 = parsed2.info_hash.to_lowercase();
+
+    let qbt1 = QbitTorrent {
+        info_hash: h1.clone(),
+        name: parsed1.name.clone(),
+        save_path: save_dir.to_string_lossy().to_string(),
+        download_path: None,
+        total_size: parsed1.total_bytes,
+        progress: 1.0,
+        state_string: "paused".to_string(),
+        category: Some("WorkerCategory".to_string()),
+        tags: vec![],
+        paused: true,
+        added_time: 1700000000,
+        completed_time: Some(1700001000),
+        ratio_limit: 1.0,
+        seeding_time_limit: None,
+        download_limit_kib: 0,
+        upload_limit_kib: 0,
+        sequential_download: false,
+        first_last_piece_prio: false,
+        auto_managed: false,
+        content_layout: Some("Original".to_string()),
+        mapped_files: vec![],
+        file_priorities: vec![1],
+        trackers: vec![],
+        source: QbitSourceType::LegacyFile {
+            torrent_path: qbit_bt_backup.join(format!("{h1}.torrent")),
+            fastresume_path: qbit_bt_backup.join(format!("{h1}.fastresume")),
+        },
+        raw_torrent_bytes: bytes1,
+        already_in_nebula: false,
+        missing_path: false,
+    };
+
+    let qbt2 = QbitTorrent {
+        info_hash: h2.clone(),
+        name: parsed2.name.clone(),
+        save_path: save_dir.to_string_lossy().to_string(),
+        download_path: None,
+        total_size: parsed2.total_bytes,
+        progress: 1.0,
+        state_string: "paused".to_string(),
+        category: Some("WorkerCategory".to_string()),
+        tags: vec![],
+        paused: true,
+        added_time: 1700000000,
+        completed_time: Some(1700001000),
+        ratio_limit: 1.0,
+        seeding_time_limit: None,
+        download_limit_kib: 0,
+        upload_limit_kib: 0,
+        sequential_download: false,
+        first_last_piece_prio: false,
+        auto_managed: false,
+        content_layout: Some("Original".to_string()),
+        mapped_files: vec![],
+        file_priorities: vec![1],
+        trackers: vec![],
+        source: QbitSourceType::LegacyFile {
+            torrent_path: qbit_bt_backup.join(format!("{h2}.torrent")),
+            fastresume_path: qbit_bt_backup.join(format!("{h2}.fastresume")),
+        },
+        raw_torrent_bytes: bytes2,
+        already_in_nebula: false,
+        missing_path: false,
+    };
+
+    // Execute Restarted Import
+    let (restart_report, _) = QbitImporter::execute_import(
+        vec![qbt1, qbt2],
+        ImportOptions {
+            info_hashes: vec![],
+            skip_recheck: true,
+            remove_from_qbit: false,
+        },
+        &qbit_dir,
+        &temp_root.join("backup"),
+        parent_engine.clone(),
+        restarted_db.clone(),
+        &temp_root.join("logs"),
+    );
+
+    println!(
+        "RESTART REPORT: imported={}, skipped={:?}, failed={:?}",
+        restart_report.imported_count, restart_report.skipped, restart_report.failed
+    );
+
+    // Item 1 was committed before the kill, so it MUST be skipped with zero duplicates
+    assert_eq!(
+        restart_report.skipped.len(),
+        1,
+        "Item 1 must be skipped as already present"
+    );
+    assert_eq!(restart_report.skipped[0].info_hash, h1);
+
+    // Item 2 must be imported cleanly
+    assert_eq!(
+        restart_report.imported_count, 1,
+        "Item 2 must be imported on restart"
+    );
+
+    // Final database assertions
+    let all_meta = restarted_db.list_all_torrent_metadata().unwrap();
+    println!("ALL_META ROWS ({}):", all_meta.len());
+    for (h, m) in &all_meta {
+        println!(
+            " - {} (user_title: {:?}, locked: {})",
+            h, m.user_display_title, m.user_title_locked
+        );
+    }
+    assert_eq!(
+        all_meta.len(),
+        3 + 2,
+        "Total rows must be exactly 3 baseline + 2 imported = 5"
+    );
+
+    parent_engine.shutdown_engine();
+    let _ = fs::remove_dir_all(&temp_root);
+}
