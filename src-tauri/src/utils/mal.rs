@@ -147,24 +147,24 @@ fn download_and_cache_poster(
 
     let bytes = resp.bytes().map_err(|e| format!("MAL poster body: {e}"))?;
 
-    // Save as JPEG (will be converted to WebP)
+    // Convert in-memory bytes directly to WebP without temporary files or directory scanning
     let thumbs_dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
         .join("thumbnails");
     std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
 
-    let hash = hash_of(cache_key);
-    let raw_path = thumbs_dir.join(format!("mal-{}{}.jpg", hash, hash_of(poster_url)));
-    std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
-
-    // Convert to WebP
-    let webp = crate::thumbs::convert_single_image(&thumbs_dir, &raw_path).ok();
-    let webp_path = webp.as_ref().cloned().unwrap_or(raw_path.clone());
-
-    if webp.is_some() {
-        let _ = std::fs::remove_file(&raw_path);
-    }
+    let webp_path = match crate::thumbs::convert_image_bytes(&thumbs_dir, "mal", cache_key, &bytes)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("[mal] convert_image_bytes failed: {e}");
+            let hash = hash_of(cache_key);
+            let raw_path = thumbs_dir.join(format!("mal-{}{}.jpg", hash, hash_of(poster_url)));
+            let _ = std::fs::write(&raw_path, &bytes);
+            raw_path
+        }
+    };
 
     // Cache the path and synopsis
     let _ = db.set_setting(cache_key, &webp_path.display().to_string());

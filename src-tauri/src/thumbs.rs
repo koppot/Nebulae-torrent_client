@@ -171,6 +171,41 @@ pub fn convert_single_image(thumbs_dir: &Path, source_file: &Path) -> Result<Pat
     Ok(dest)
 }
 
+/// Produce (or reuse) a WebP thumbnail directly from in-memory image bytes with a deterministic key.
+/// Zero disk-read round trips, zero temporary files, and zero directory scanning.
+pub fn convert_image_bytes(
+    thumbs_dir: &Path,
+    prefix: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, ThumbError> {
+    fs::create_dir_all(thumbs_dir).map_err(|e| ThumbError::CacheDir(e.to_string()))?;
+    let mut hash: u64 = 1469598103934665603;
+    for b in key.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    let dest = thumbs_dir.join(format!("{prefix}-{hash:016x}.webp"));
+    if dest.exists() {
+        return Ok(dest);
+    }
+
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| ThumbError::Decode(format!("Decode {prefix} {key}: {e}")))?;
+    let (w, _) = img.dimensions();
+    let scaled = if w > THUMB_WIDTH {
+        img.resize(THUMB_WIDTH, u32::MAX, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+
+    let rgb = scaled.to_rgb8();
+    let webp = image::DynamicImage::ImageRgb8(rgb);
+    webp.save_with_format(&dest, image::ImageFormat::WebP)
+        .map_err(|e| ThumbError::Encode(e.to_string()))?;
+    Ok(dest)
+}
+
 /// Produce (or reuse) a WebP poster thumbnail for a torrent directory.
 /// Returns the cache file path on success. Accepts a file path too (a
 /// single-file torrent) — its parent folder is searched.
@@ -189,6 +224,14 @@ pub fn ensure_thumbnail(app_cache_dir: &Path, torrent_path: &Path) -> Result<Pat
     } else {
         return Err(ThumbError::NotADirectory);
     };
+
+    // Anti-contamination guard: Never scan the thumbnail cache directory for cover art.
+    if torrent_dir.starts_with(app_cache_dir)
+        || torrent_dir.ends_with("thumbnails")
+        || torrent_dir == thumbs_dir
+    {
+        return Err(ThumbError::NoCover);
+    }
     let source = find_poster(&torrent_dir).ok_or(ThumbError::NoCover)?;
 
     fs::create_dir_all(&thumbs_dir).map_err(|e| ThumbError::CacheDir(e.to_string()))?;
@@ -281,6 +324,142 @@ mod tests {
         let ensure_result =
             ensure_thumbnail(&app_cache_dir, &target_file).expect("ensure_thumbnail single file");
         assert_eq!(ensure_result, expected_dest);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn convert_image_bytes_isolates_distinct_titles_and_reuses_cache() {
+        use image::{ImageBuffer, Rgb};
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("neb_thumb_bytes_test_{}", std::process::id()));
+        let thumbs_dir = temp_dir.join("thumbnails");
+        let _ = fs::create_dir_all(&thumbs_dir);
+
+        // Generate synthetic image bytes for four titles
+        let make_png_bytes = |w: u32, h: u32, color: [u8; 3]| -> Vec<u8> {
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(w, h, Rgb(color));
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png)
+                .expect("encode png");
+            buf.into_inner()
+        };
+
+        let fuuka_bytes = make_png_bytes(20, 20, [255, 0, 0]);
+        let mary_bytes = make_png_bytes(30, 30, [0, 255, 0]);
+        let patlabor_bytes = make_png_bytes(40, 40, [0, 0, 255]);
+        let suzume_bytes = make_png_bytes(50, 50, [255, 255, 0]);
+
+        // Convert each title
+        let p_fuuka =
+            convert_image_bytes(&thumbs_dir, "tmdb", "fuuka", &fuuka_bytes).expect("convert fuuka");
+        let p_mary = convert_image_bytes(
+            &thumbs_dir,
+            "tmdb",
+            "mary and a witch's flower",
+            &mary_bytes,
+        )
+        .expect("convert mary");
+        let p_patlabor =
+            convert_image_bytes(&thumbs_dir, "tmdb", "patlabor 2 the movie", &patlabor_bytes)
+                .expect("convert patlabor");
+        let p_suzume = convert_image_bytes(&thumbs_dir, "tmdb", "suzume", &suzume_bytes)
+            .expect("convert suzume");
+
+        // Verify all 4 destination paths are unique
+        let mut paths = std::collections::HashSet::new();
+        assert!(paths.insert(p_fuuka.clone()), "Fuuka path must be unique");
+        assert!(paths.insert(p_mary.clone()), "Mary path must be unique");
+        assert!(
+            paths.insert(p_patlabor.clone()),
+            "Patlabor path must be unique"
+        );
+        assert!(paths.insert(p_suzume.clone()), "Suzume path must be unique");
+
+        // Verify each WebP file exists and has its own dimensions
+        let d_fuuka = image::open(&p_fuuka).expect("open fuuka").dimensions();
+        let d_mary = image::open(&p_mary).expect("open mary").dimensions();
+        let d_patlabor = image::open(&p_patlabor)
+            .expect("open patlabor")
+            .dimensions();
+        let d_suzume = image::open(&p_suzume).expect("open suzume").dimensions();
+
+        assert_eq!(d_fuuka, (20, 20));
+        assert_eq!(d_mary, (30, 30));
+        assert_eq!(d_patlabor, (40, 40));
+        assert_eq!(d_suzume, (50, 50));
+
+        // Reusing existing cache returns identical path without error
+        let p_fuuka_again = convert_image_bytes(&thumbs_dir, "tmdb", "fuuka", &fuuka_bytes)
+            .expect("convert fuuka again");
+        assert_eq!(p_fuuka, p_fuuka_again);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn convert_image_bytes_concurrent_threads_produce_isolated_results() {
+        use image::{ImageBuffer, Rgb};
+        use std::sync::Arc;
+        use std::thread;
+
+        let temp_dir = Arc::new(
+            std::env::temp_dir().join(format!("neb_thumb_concurrent_test_{}", std::process::id())),
+        );
+        let thumbs_dir = Arc::new(temp_dir.join("thumbnails"));
+        let _ = fs::create_dir_all(&*thumbs_dir);
+
+        let titles = vec![
+            ("fuuka", [255, 0, 0]),
+            ("mary and a witch's flower", [0, 255, 0]),
+            ("patlabor 2 the movie", [0, 0, 255]),
+            ("suzume", [255, 255, 0]),
+            ("heroic age", [255, 0, 255]),
+            ("busou renkin", [0, 255, 255]),
+        ];
+
+        let mut handles = vec![];
+        for (title, color) in titles {
+            let t_dir = Arc::clone(&thumbs_dir);
+            let handle = thread::spawn(move || {
+                let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+                    ImageBuffer::from_pixel(32, 32, Rgb(color));
+                let mut buf = std::io::Cursor::new(Vec::new());
+                img.write_to(&mut buf, image::ImageFormat::Png)
+                    .expect("encode");
+                let bytes = buf.into_inner();
+                let path = convert_image_bytes(&t_dir, "tmdb", title, &bytes).expect("convert");
+                assert!(path.exists());
+                path
+            });
+            handles.push(handle);
+        }
+
+        let mut produced_paths = std::collections::HashSet::new();
+        for h in handles {
+            let p = h.join().expect("thread join");
+            assert!(
+                produced_paths.insert(p),
+                "Paths across concurrent threads must be distinct"
+            );
+        }
+
+        assert_eq!(produced_paths.len(), 6);
+        let _ = fs::remove_dir_all(&*temp_dir);
+    }
+
+    #[test]
+    fn ensure_thumbnail_never_scans_cache_directory() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("neb_thumb_cache_scan_guard_{}", std::process::id()));
+        let app_cache_dir = temp_dir.join("cache");
+        let thumbs_dir = app_cache_dir.join("thumbnails");
+        let _ = fs::create_dir_all(&thumbs_dir);
+
+        // Attempting to scan the cache directory itself must return NoCover, never find any files inside
+        let err = ensure_thumbnail(&app_cache_dir, &thumbs_dir);
+        assert!(matches!(err, Err(ThumbError::NoCover)));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

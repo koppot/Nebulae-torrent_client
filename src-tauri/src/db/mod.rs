@@ -63,22 +63,41 @@ impl Database {
             let _ = conn.execute(&sql, []);
         }
 
+        // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash)
+        let _ = conn.execute(
+            "DELETE FROM settings
+             WHERE value LIKE '%93758aeca10f8450%'
+               AND LOWER(key) NOT LIKE '%fuuka%'",
+            [],
+        );
+
+        // Reset any contaminated poster_path in torrent_metadata so it safely re-resolves genuine artwork
+        let _ = conn.execute(
+            "UPDATE torrent_metadata
+             SET poster_path = NULL
+             WHERE poster_path LIKE '%93758aeca10f8450%'
+               AND LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) NOT LIKE '%fuuka%'",
+            [],
+        );
+
         // Idempotent backfill of torrent_metadata.poster_path from settings cache
         // when poster_path is NULL or empty, preserving existing selections.
         let _ = conn.execute(
             "UPDATE torrent_metadata
              SET poster_path = (
                  SELECT s.value FROM settings s
-                 WHERE s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
-                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                 WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
+                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
                  LIMIT 1
              )
              WHERE (poster_path IS NULL OR poster_path = '')
                AND COALESCE(user_title_locked, 0) = 0
                AND EXISTS (
                  SELECT 1 FROM settings s
-                 WHERE s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
-                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                 WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
+                    OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
+                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
                )",
             [],
         );
@@ -651,6 +670,12 @@ impl Database {
                         if let Some(c_row) = cache_rows.next()? {
                             let val: String = c_row.get(0)?;
                             if !val.trim().is_empty() {
+                                // Guard against Fuuka poster contamination for non-Fuuka entries
+                                if val.contains("93758aeca10f8450")
+                                    && !trimmed.to_lowercase().contains("fuuka")
+                                {
+                                    continue;
+                                }
                                 return Ok(Some(val));
                             }
                         }
@@ -1146,5 +1171,128 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_contaminated_fuuka_poster_cleanup_and_isolation() {
+        let path = std::env::temp_dir().join(format!(
+            "nebulae-contamination-cleanup-{}.db",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE torrent_metadata (
+                     info_hash TEXT PRIMARY KEY, display_title TEXT, category TEXT,
+                     labels TEXT, is_watched INTEGER DEFAULT 0, notes TEXT,
+                     added_at INTEGER, completed_on INTEGER, save_path TEXT,
+                     download_limit_kib INTEGER DEFAULT 0,
+                     upload_limit_kib INTEGER DEFAULT 0,
+                     ratio_limit REAL DEFAULT -1.0,
+                     sequential_download INTEGER DEFAULT 0,
+                     first_last_piece_prio INTEGER DEFAULT 0,
+                     super_seeding INTEGER DEFAULT 0,
+                     user_display_title TEXT, user_title_locked INTEGER DEFAULT 0,
+                     sort_order INTEGER, poster_path TEXT, is_external INTEGER DEFAULT 0,
+                     sync_miss_count INTEGER DEFAULT 0, last_checked INTEGER
+                 );
+                 CREATE TABLE snatched_records (
+                     info_hash TEXT PRIMARY KEY, torrent_name TEXT NOT NULL,
+                     size_bytes INTEGER DEFAULT 0, snatched_at INTEGER,
+                     save_path TEXT, display_title TEXT, poster_path TEXT,
+                     provider TEXT, provider_id TEXT, external_moved_at INTEGER
+                 );
+
+                 -- 1. Insert settings with Fuuka poster and contaminated entries
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:fuuka', '/thumbs/93758aeca10f8450.webp');
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:mary and a witch''s flower', '/thumbs/93758aeca10f8450.webp');
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:patlabor 2 the movie', '/thumbs/93758aeca10f8450.webp');
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:suzume', '/thumbs/3256ca8029bbbfd4.webp');
+
+                 -- 2. Insert torrent_metadata entries
+                 -- Fuuka with null poster
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h_fuuka', 'Fuuka', NULL, 1);
+                 -- Mary with contaminated Fuuka poster
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h_mary', 'Mary and a witch''s flower', '/thumbs/93758aeca10f8450.webp', 2);
+                 -- Patlabor with null poster
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h_patlabor', 'Patlabor 2 the movie', NULL, 3);
+                 -- Suzume with null poster
+                 INSERT INTO torrent_metadata (info_hash, display_title, poster_path, added_at)
+                    VALUES ('h_suzume', 'Suzume', NULL, 4);
+                 -- Custom locked poster on Mary
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                    VALUES ('h_custom', 'Mary and a witch''s flower', 1, '/custom/custom_mary.jpg', 5);",
+            )
+            .unwrap();
+        }
+
+        // Opening the Database executes startup purge and safe backfill
+        let db = Database::new(&path).unwrap();
+
+        // 1. Settings assertions:
+        // Fuuka entry must be preserved
+        assert_eq!(
+            db.get_setting("tmdb_poster:v3:fuuka").unwrap().as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+        // Suzume entry must be preserved
+        assert_eq!(
+            db.get_setting("tmdb_poster:v3:suzume").unwrap().as_deref(),
+            Some("/thumbs/3256ca8029bbbfd4.webp")
+        );
+        // Contaminated non-Fuuka entries must be deleted
+        assert_eq!(
+            db.get_setting("tmdb_poster:v3:mary and a witch's flower")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            db.get_setting("tmdb_poster:v3:patlabor 2 the movie")
+                .unwrap(),
+            None
+        );
+
+        // 2. Metadata assertions:
+        // Fuuka should be backfilled with Fuuka poster
+        let m_fuuka = db.get_torrent_metadata("h_fuuka").unwrap().unwrap();
+        assert_eq!(
+            m_fuuka.poster_path.as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+
+        // Mary's contaminated poster was reset to NULL
+        let m_mary = db.get_torrent_metadata("h_mary").unwrap().unwrap();
+        assert_eq!(m_mary.poster_path, None);
+
+        // Patlabor was NOT backfilled with Fuuka poster
+        let m_patlabor = db.get_torrent_metadata("h_patlabor").unwrap().unwrap();
+        assert_eq!(m_patlabor.poster_path, None);
+
+        // Suzume was backfilled with genuine Suzume poster
+        let m_suzume = db.get_torrent_metadata("h_suzume").unwrap().unwrap();
+        assert_eq!(
+            m_suzume.poster_path.as_deref(),
+            Some("/thumbs/3256ca8029bbbfd4.webp")
+        );
+
+        // Custom locked poster was preserved unchanged
+        let m_custom = db.get_torrent_metadata("h_custom").unwrap().unwrap();
+        assert_eq!(
+            m_custom.poster_path.as_deref(),
+            Some("/custom/custom_mary.jpg")
+        );
+
+        drop(db);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }
 }

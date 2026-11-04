@@ -283,7 +283,11 @@ pub fn fetch_poster(
     let cache_key = format!("tmdb_poster:v3:{}", lookup_key.to_lowercase());
     if let Ok(Some(cached)) = db.get_setting(&cache_key) {
         let p = PathBuf::from(&cached);
-        if p.exists() {
+        // Anti-contamination guard: 93758aeca10f8450.webp was an erroneously cross-mapped Fuuka poster.
+        // Invalidate it for any non-Fuuka entry so it cleanly re-fetches genuine artwork.
+        let is_contaminated =
+            cached.contains("93758aeca10f8450") && !lookup_key.to_lowercase().contains("fuuka");
+        if p.exists() && !is_contaminated {
             return Ok(Some(TmdbMatch {
                 poster_webp: p,
                 overview: db
@@ -443,8 +447,6 @@ pub fn fetch_poster(
             .join("Nebulae")
             .join("thumbnails");
         std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("Cache dir: {e}"))?;
-        let raw_path = thumbs_dir.join(format!("tmdb-{}.jpg", hash_of(lookup_key)));
-        std::fs::write(&raw_path, &bytes).map_err(|e| format!("Write poster: {e}"))?;
 
         let year: Option<i32> = item
             .release_date
@@ -492,14 +494,17 @@ pub fn fetch_poster(
             }
             None => None,
         };
-        let webp = crate::thumbs::convert_single_image(&thumbs_dir, &raw_path).ok();
-        let webp_path = webp.clone().unwrap_or(raw_path.clone());
-        // Only remove the raw JPEG when the WebP conversion actually succeeded.
-        // If ensure_thumbnail failed, webp_path IS raw_path — deleting it would
-        // return a path to a file that no longer exists.
-        if webp.is_some() {
-            let _ = std::fs::remove_file(&raw_path);
-        }
+        // Convert in-memory bytes directly to WebP without temporary files or directory scanning
+        let webp_path =
+            match crate::thumbs::convert_image_bytes(&thumbs_dir, "tmdb", lookup_key, &bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("[tmdb] convert_image_bytes failed: {e}");
+                    let raw_path = thumbs_dir.join(format!("tmdb-{}.jpg", hash_of(lookup_key)));
+                    let _ = std::fs::write(&raw_path, &bytes);
+                    raw_path
+                }
+            };
 
         // 4. Persist the match (+ the overview for the hover panel).
         let _ = db.set_setting(&cache_key, &webp_path.display().to_string());
