@@ -2382,17 +2382,17 @@ export const SimpleMediaView: React.FC = () => {
           onClose={() => setEditingFor(null)}
           onConfirmed={(newTitle, _provider, _providerId, posterUrl) => {
             if (posterUrl) {
+              // Key exclusively by stable identity: torrent id/info_hash for Downloaded
+              // items; file path for External items. Title-keyed entries are omitted
+              // because title strings are not unique across items and caused cross-item
+              // poster contamination (all External titles showing Fuuka's poster).
               setThumbMap((prev) => ({
                 ...prev,
                 [editingFor.infoHash]: posterUrl,
-                [editingFor.title]: posterUrl,
-                [newTitle]: posterUrl,
               }));
               setExternalPosterMap((prev) => ({
                 ...prev,
                 [editingFor.infoHash]: posterUrl,
-                [editingFor.title]: posterUrl,
-                [newTitle]: posterUrl,
               }));
             }
             // If the External details popup is open for the same item, update its
