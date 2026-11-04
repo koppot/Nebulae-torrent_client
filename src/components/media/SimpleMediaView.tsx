@@ -1566,7 +1566,7 @@ export const SimpleMediaView: React.FC = () => {
                                 setRenameValue(extDetails.title);
                                 setRenamingExtPath(extDetails.path);
                               }}
-                              className="opacity-0 group-hover/title:opacity-100 p-0.5 text-[#737373] hover:text-white transition"
+                              className="p-0.5 text-[#737373] hover:text-white transition"
                             >
                               <Pencil className="w-2.5 h-2.5" />
                             </button>
@@ -1927,6 +1927,29 @@ export const SimpleMediaView: React.FC = () => {
                     className={act}
                     onClick={() => {
                       setCtxMenu(null);
+                      setEditingFor({
+                        infoHash: item.info_hash || item.id,
+                        title: group.clean_title,
+                      });
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit Metadata
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
+                      setRenameValue(group.clean_title);
+                      setRenamingFor(item.info_hash || item.id);
+                      openDetailsPopup(group.id, item);
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Rename Title
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      setCtxMenu(null);
                       void handleCopyPath(item);
                     }}
                   >
@@ -2126,7 +2149,7 @@ export const SimpleMediaView: React.FC = () => {
                                 setRenameValue(group.clean_title);
                                 setRenamingFor(item.info_hash || item.id);
                               }}
-                              className="opacity-0 group-hover/title:opacity-100 p-0.5 text-[#737373] hover:text-white transition"
+                              className="p-0.5 text-[#737373] hover:text-white transition"
                             >
                               <Pencil className="w-2.5 h-2.5" />
                             </button>

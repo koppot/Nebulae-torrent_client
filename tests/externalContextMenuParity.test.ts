@@ -20,12 +20,16 @@ function getDownloadedActions(isMac: boolean, mocks: {
   openInPlayer: (path: string) => Promise<void>;
   reveal: (path: string) => void;
   openDetails: (id: string) => void;
+  editMetadata?: (item: any) => void;
+  renameTitle?: (item: any) => void;
   copyPath: (path: string) => void;
 }): ContextMenuAction[] {
   return [
     { id: 'reveal', label: isMac ? 'Show in Finder' : 'Show in Explorer', handler: (item) => mocks.reveal(item.save_path) },
     { id: 'play', label: 'Play', handler: (item) => mocks.openInPlayer(item.save_path) },
     { id: 'details', label: 'Details', handler: (item) => mocks.openDetails(item.id) },
+    { id: 'edit_metadata', label: 'Edit Metadata', handler: (item) => mocks.editMetadata?.(item) },
+    { id: 'rename_title', label: 'Rename Title', handler: (item) => mocks.renameTitle?.(item) },
     { id: 'copy_path', label: 'Copy Path', handler: (item) => mocks.copyPath(item.save_path) },
   ];
 }
