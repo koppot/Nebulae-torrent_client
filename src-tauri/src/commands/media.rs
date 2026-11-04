@@ -3809,9 +3809,28 @@ mod tests {
 
     #[test]
     fn test_launch_nonexistent_media() {
-        let res = resolve_playback("/nonexistent/movie/file.mkv");
+        let path = if cfg!(windows) {
+            r"C:\nonexistent\movie\file.mkv"
+        } else {
+            "/nonexistent/movie/file.mkv"
+        };
+        let res = resolve_playback(path);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("does not exist"));
+        let err = res.unwrap_err();
+        assert!(err.contains("does not exist") || err.contains("not found"));
+    }
+
+    #[test]
+    fn test_launch_cross_os_media_path_diagnosed() {
+        let path = if cfg!(windows) {
+            "/Users/dev/Downloads/Shakugan no Shana S"
+        } else {
+            r"C:\Users\administrator\Downloads\Shakugan no Shana S"
+        };
+        let res = resolve_playback(path);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("operating system") && err.contains("relink"));
     }
 
     #[test]
