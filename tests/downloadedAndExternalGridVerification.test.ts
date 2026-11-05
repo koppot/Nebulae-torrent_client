@@ -588,3 +588,70 @@ test('Test Scenario 9: Persistence Roundtrip and State Sanitization', () => {
   const restored = restartBackend.get_external_media_order();
   assert.deepEqual(restored, sanitized, 'Sanitized unique order persists across restarts');
 });
+
+test('Test Scenario 10: Settings Exclusivity, Store Hydration on Startup, and Acceptance Example', async () => {
+  const backend = new MockSqliteBackend();
+
+  // 1. Initial defaults
+  assert.equal(backend.get_posters_per_row(), 5, 'Default max posters per row is 5');
+  assert.equal(backend.get_poster_size(), 150, 'Default poster size is 150px');
+
+  // Acceptance Example from user specification:
+  // With 12 items and room for the selected poster size:
+  // A limit of 5 produces rows of 5, 5, and 2.
+  const geom5 = computeGridGeometry(5, 150, 12, 1600);
+  assert.deepEqual(geom5.rows, [5, 5, 2], 'Limit of 5 produces rows of 5, 5, and 2');
+  assert.equal(geom5.cardWidthPx, 150, 'Poster dimension is 150px');
+
+  // Changing the limit to 4 produces rows of 4, 4, and 4.
+  // Poster dimensions remain identical throughout.
+  backend.set_posters_per_row(4);
+  const geom4 = computeGridGeometry(backend.get_posters_per_row(), backend.get_poster_size(), 12, 1600);
+  assert.deepEqual(geom4.rows, [4, 4, 4], 'Changing limit to 4 produces rows of 4, 4, and 4');
+  assert.equal(geom4.cardWidthPx, 150, 'Poster dimensions remain identical throughout (150px)');
+
+  // Changing poster size afterward leaves the saved per-row limit unchanged.
+  backend.set_poster_size(240);
+  assert.equal(backend.get_posters_per_row(), 4, 'Saved per-row limit remains strictly 4');
+  assert.equal(backend.get_poster_size(), 240, 'Poster size updated to 240px');
+
+  const geomResized = computeGridGeometry(backend.get_posters_per_row(), backend.get_poster_size(), 12, 1600);
+  assert.deepEqual(geomResized.rows, [4, 4, 4], 'Row wrapping remains 4, 4, 4');
+  assert.equal(geomResized.cardWidthPx, 240, 'Poster dimensions updated to 240px');
+
+  // A narrower window may wrap earlier, but must not shrink posters to force the configured count.
+  const geomNarrow = computeGridGeometry(backend.get_posters_per_row(), backend.get_poster_size(), 12, 700);
+  assert.equal(geomNarrow.columns, 2, 'Narrow window wraps earlier to 2 columns');
+  assert.deepEqual(geomNarrow.rows, [2, 2, 2, 2, 2, 2], 'Rows wrap to 2, 2, 2, 2, 2, 2');
+  assert.equal(geomNarrow.cardWidthPx, 240, 'Posters do not shrink to force the configured count');
+
+  // Persistence across restart:
+  const restarted = new MockSqliteBackend();
+  restarted.settings.set('media_posters_per_row', backend.settings.get('media_posters_per_row')!);
+  restarted.settings.set('media_poster_size', backend.settings.get('media_poster_size')!);
+  assert.equal(restarted.get_posters_per_row(), 4, 'Restored max posters per row is 4');
+  assert.equal(restarted.get_poster_size(), 240, 'Restored poster size is 240px');
+
+  // Verify Media screen has NO duplicate poster count / size controls
+  const fs = await import('node:fs');
+  const mediaViewSource = fs.readFileSync('src/components/media/SimpleMediaView.tsx', 'utf-8');
+  assert.ok(
+    !mediaViewSource.includes('Posters per row'),
+    'SimpleMediaView does not contain duplicate "Posters per row" control'
+  );
+
+  // Verify SettingsModal contains BOTH independent controls
+  const settingsSource = fs.readFileSync('src/components/modals/SettingsModal.tsx', 'utf-8');
+  assert.ok(
+    settingsSource.includes('Poster size:'),
+    'SettingsModal contains "Poster size:" control'
+  );
+  assert.ok(
+    settingsSource.includes('Maximum posters per row:'),
+    'SettingsModal contains "Maximum posters per row:" control'
+  );
+  assert.ok(
+    settingsSource.includes('loadPreferences'),
+    'SettingsModal calls loadPreferences to synchronize persisted SQLite state'
+  );
+});

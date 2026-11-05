@@ -66,7 +66,7 @@ export const SettingsModal: React.FC = () => {
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
-  const { postersPerRow, setPostersPerRow, posterSize, setPosterSize } = useLibraryStore();
+  const { postersPerRow, setPostersPerRow, posterSize, setPosterSize, loadPreferences } = useLibraryStore();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     () => (new URLSearchParams(window.location.search).get('tab') as SettingsTab) || 'behavior',
@@ -176,6 +176,12 @@ export const SettingsModal: React.FC = () => {
       .catch(() => {});
     probePlayer();
   }, []);
+
+  useEffect(() => {
+    if (showSettings) {
+      void loadPreferences();
+    }
+  }, [showSettings, loadPreferences]);
 
   useEffect(() => {
     if (showSettings && activeTab === 'bittorrent') {

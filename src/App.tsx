@@ -7,6 +7,7 @@ import { useTorrentStore, averageTransferSpeeds, reconcileRecheckState } from '.
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
+import { useLibraryStore } from './stores/libraryStore';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
 import { StatusBar } from './components/layout/StatusBar';
@@ -274,6 +275,7 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
+    void useLibraryStore.getState().loadPreferences();
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];

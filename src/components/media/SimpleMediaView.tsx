@@ -116,7 +116,6 @@ export const SimpleMediaView: React.FC = () => {
     downloadedOrder,
     externalOrder,
     loadPreferences,
-    setPostersPerRow,
     setCustomOrderMode,
     setExternalReorderMode,
     saveDownloadedOrder,
@@ -2823,27 +2822,6 @@ export const SimpleMediaView: React.FC = () => {
                   className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
                 />
               </label>
-              {/* F4: Posters-per-row preference — also surfaced in Media Preferences */}
-              <div className="space-y-1 pt-1 border-t border-[#262626]">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                  Posters per row
-                </span>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={2}
-                    max={12}
-                    step={1}
-                    value={postersPerRow}
-                    onChange={(e) => void setPostersPerRow(Number(e.target.value))}
-                    className="flex-1 accent-white"
-                  />
-                  <span className="text-xs font-mono text-white w-4 text-right">{postersPerRow}</span>
-                </div>
-                <p className="text-[10px] text-[#737373]">
-                  Controls the Downloaded shelf grid. Also adjustable inline on the shelf header.
-                </p>
-              </div>
             </div>
             <button
               onClick={savePlayerPrefs}
