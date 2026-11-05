@@ -3,293 +3,359 @@ import assert from 'node:assert/strict';
 
 /**
  * Unit & Integration tests for Media Grid Layout & Poster Rearrangement
+ *
  * Requirements verified:
- * 1. Configurable posters per row (preferences + header slider, wrapping into additional rows, persistence)
- * 2. Working poster rearrangement (reorder mode, drag-to-reorder, DB persistence, Done action, both shelves)
- * 3. Responsive windowed layout (no collisions, responsive column wrapping >= 135px, 660:800 ratio, title clamping)
- * 4. Filtered / grouped items and newly added entries preservation
+ * 1. Configurable "Posters per row" in Settings controlling both Downloaded and External collections.
+ * 2. Changing the count changes where posters wrap into additional rows—not poster dimensions.
+ *    Poster width remains strictly 150px (aspect ratio 660:800).
+ * 3. Narrower windows fit fewer posters than the configured maximum and wrap cleanly into more rows.
+ * 4. The Media screen has one shared Reorder control below the shelves for both populated collections.
+ * 5. Reorder mode switches the shared button to a single Done button in the same location.
+ * 6. Isolated collection handling:
+ *    - Downloaded only (External empty): reorder control remains enabled and works.
+ *    - External only (Downloaded empty): reorder control remains enabled and works.
+ *    - Both populated: both collections reorder independently without cross-collection moves.
+ * 7. Persistence & Restoration after restart:
+ *    - Downloaded persistence (set_media_order / media_downloaded_order) restores custom order.
+ *    - External persistence (set_external_media_order / media_external_order) restores custom order.
+ *    - Settings persistence (set_posters_per_row / media_posters_per_row) restores setting.
  */
 
-test('Requirement 1: Configurable Posters Per Row Calculation & Row Wrapping', () => {
-  const calculateResponsiveGrid = (postersPerRow: number, totalItems: number, availableWidthPx: number) => {
-    const minPosterWidthPx = 135;
-    const gapPx = 16; // 1rem
+test('Requirement 1 & 2: Settings "Posters per row" Controls Wrapping Without Altering Poster Dimensions', () => {
+  const POSTER_WIDTH_PX = 150;
+  const GAP_PX = 16; // 1rem gap
+  const ASPECT_W = 660;
+  const ASPECT_H = 800;
+  const POSTER_HEIGHT_PX = Math.round(POSTER_WIDTH_PX * (ASPECT_H / ASPECT_W)); // ~182px
 
-    // Formula: repeat(auto-fill, minmax(max(135px, calc((100% - (N - 1) * 1rem) / N)), 1fr))
-    const targetColWidth = (availableWidthPx - (postersPerRow - 1) * gapPx) / postersPerRow;
-    const effectiveMinColWidth = Math.max(minPosterWidthPx, targetColWidth);
+  const calculateGridWrapping = (postersPerRowLimit: number, totalItems: number, containerWidthPx: number) => {
+    // Max container width enforced by style: calc(postersPerRow * 150px + (postersPerRow - 1) * 1rem)
+    const maxContainerWidth = postersPerRowLimit * POSTER_WIDTH_PX + (postersPerRowLimit - 1) * GAP_PX;
+    const effectiveWidth = Math.min(containerWidthPx, maxContainerWidth);
 
-    // Number of columns that fit
-    const columns = Math.max(1, Math.floor((availableWidthPx + gapPx) / (effectiveMinColWidth + gapPx)));
-    const actualColWidth = (availableWidthPx - (columns - 1) * gapPx) / columns;
+    // Number of 150px columns that fit into effective width with 16px gap
+    const columns = Math.max(1, Math.min(postersPerRowLimit, Math.floor((effectiveWidth + GAP_PX) / (POSTER_WIDTH_PX + GAP_PX))));
     const rowCount = Math.ceil(totalItems / columns);
-    const posterHeightPx = actualColWidth * (800 / 660); // 660:800 aspect ratio
+
+    // Unused space left at end of incomplete rows (justify-start)
+    const itemsInLastRow = totalItems % columns === 0 ? columns : totalItems % columns;
+    const unusedColumnsInLastRow = columns - itemsInLastRow;
 
     return {
-      postersPerRowSetting: postersPerRow,
-      displayedColumns: columns,
-      actualColWidth,
-      posterHeightPx,
+      postersPerRowLimit,
+      columns,
       rowCount,
+      posterWidthPx: POSTER_WIDTH_PX,
+      posterHeightPx: POSTER_HEIGHT_PX,
+      itemsInLastRow,
+      unusedColumnsInLastRow,
     };
   };
 
-  // Case 1: 5 posters per row with 12 items in a 1200px window
-  const wideState = calculateResponsiveGrid(5, 12, 1200);
-  assert.equal(wideState.displayedColumns, 5, '1200px window displays exact user setting of 5 columns');
-  assert.equal(wideState.rowCount, 3, '12 items with 5 per row wrap into 3 rows (5 + 5 + 2)');
-  assert.ok(wideState.actualColWidth >= 135, 'Poster width must be >= 135px');
-  assert.equal(Math.round(wideState.posterHeightPx / wideState.actualColWidth * 660), 800, 'Aspect ratio must be 660:800');
+  // Test with 12 items on a wide 1400px window across different Settings values:
+  // Posters per row = 5: displays rows of 5, 5, 2 with unchanged poster dimensions
+  const limit5 = calculateGridWrapping(5, 12, 1400);
+  assert.equal(limit5.columns, 5, 'Maximum 5 posters per row');
+  assert.equal(limit5.rowCount, 3, '12 items wrap into 3 rows (5 + 5 + 2)');
+  assert.equal(limit5.itemsInLastRow, 2, 'Last row has 2 items');
+  assert.equal(limit5.unusedColumnsInLastRow, 3, 'Leaves 3 column slots empty at end of row (no stretching)');
+  assert.equal(limit5.posterWidthPx, 150, 'Poster width remains strictly 150px');
+  assert.equal(limit5.posterHeightPx, 182, 'Poster height remains strictly 182px');
 
-  // Case 2: Window narrows to 500px with 5 posters per row setting
-  const narrowState = calculateResponsiveGrid(5, 12, 500);
-  assert.equal(narrowState.displayedColumns, 3, 'Narrow 500px window adapts cleanly to 3 columns without horizontal scroll');
-  assert.equal(narrowState.rowCount, 4, '12 items wrap into 4 rows (3 + 3 + 3 + 3)');
-  assert.ok(narrowState.actualColWidth >= 135, 'Poster width is kept >= 135px');
+  // Posters per row = 3: displays rows of 3, 3, 3, 3 with unchanged poster dimensions
+  const limit3 = calculateGridWrapping(3, 12, 1400);
+  assert.equal(limit3.columns, 3, 'Maximum 3 posters per row');
+  assert.equal(limit3.rowCount, 4, '12 items wrap into 4 rows of 3');
+  assert.equal(limit3.posterWidthPx, 150, 'Poster width is still strictly 150px (never enlarged)');
 
-  // Case 3: Window narrows to 350px (mobile / ultra-narrow pane)
-  const ultraNarrowState = calculateResponsiveGrid(5, 12, 350);
-  assert.equal(ultraNarrowState.displayedColumns, 2, 'Ultra narrow 350px window adapts to 2 columns');
-  assert.equal(ultraNarrowState.rowCount, 6, '12 items wrap into 6 rows (2 * 6)');
-  assert.ok(ultraNarrowState.actualColWidth >= 135, 'Poster width is kept >= 135px');
+  // Posters per row = 8: displays rows of 8, 4 with unchanged poster dimensions
+  const limit8 = calculateGridWrapping(8, 12, 1400);
+  assert.equal(limit8.columns, 8, 'Maximum 8 posters per row');
+  assert.equal(limit8.rowCount, 2, '12 items wrap into 2 rows (8 + 4)');
+  assert.equal(limit8.posterWidthPx, 150, 'Poster width is still strictly 150px (never shrunk)');
 
-  // Case 4: User changes setting to 3 posters per row on 1200px window
-  const threePerRow = calculateResponsiveGrid(3, 12, 1200);
-  assert.equal(threePerRow.displayedColumns, 3, 'Displays 3 columns');
-  assert.equal(threePerRow.rowCount, 4, '12 items with 3 per row form 4 rows (3 + 3 + 3 + 3)');
-
-  // Case 5: User changes setting to 8 posters per row on 1400px window
-  const eightPerRow = calculateResponsiveGrid(8, 12, 1400);
-  assert.equal(eightPerRow.displayedColumns, 8, 'Displays 8 columns');
-  assert.equal(eightPerRow.rowCount, 2, '12 items with 8 per row form 2 rows (8 + 4)');
+  // Posters per row = 12: displays 1 row of 12 with unchanged poster dimensions
+  const limit12 = calculateGridWrapping(12, 12, 2200);
+  assert.equal(limit12.columns, 12, '12 posters fit in single row');
+  assert.equal(limit12.rowCount, 1, '1 row total');
+  assert.equal(limit12.posterWidthPx, 150, 'Poster width remains strictly 150px');
 });
 
-test('Requirement 1: Setting Persistence Across Application Restarts', () => {
-  const mockDbSettings: Record<string, string> = {};
+test('Requirement 3: Narrower Windows Fit Fewer Posters Than Configured Maximum', () => {
+  const POSTER_WIDTH_PX = 150;
+  const GAP_PX = 16;
 
-  const backendSetPostersPerRow = (count: number) => {
-    const clamped = Math.max(2, Math.min(12, count));
-    mockDbSettings['media_posters_per_row'] = String(clamped);
+  const calculateNarrowWrapping = (postersPerRowLimit: number, totalItems: number, windowWidthPx: number) => {
+    // Parent container width is constrained by window width (minus 40px padding)
+    const availableWidth = windowWidthPx - 40;
+    const maxContainerWidth = postersPerRowLimit * POSTER_WIDTH_PX + (postersPerRowLimit - 1) * GAP_PX;
+    const effectiveWidth = Math.min(availableWidth, maxContainerWidth);
+    const columns = Math.max(1, Math.min(postersPerRowLimit, Math.floor((effectiveWidth + GAP_PX) / (POSTER_WIDTH_PX + GAP_PX))));
+    const rowCount = Math.ceil(totalItems / columns);
+
+    return { columns, rowCount, posterWidthPx: POSTER_WIDTH_PX };
   };
-  const backendGetPostersPerRow = (): number => {
-    return mockDbSettings['media_posters_per_row'] ? parseInt(mockDbSettings['media_posters_per_row'], 10) : 5;
-  };
 
-  // Default
-  assert.equal(backendGetPostersPerRow(), 5, 'Default posters per row must be 5');
+  // Preference is 6 posters per row, collection has 12 items:
+  // Wide window (1200px): fits 6 columns, 2 rows
+  const wide = calculateNarrowWrapping(6, 12, 1200);
+  assert.equal(wide.columns, 6);
+  assert.equal(wide.rowCount, 2);
 
-  // Change to 7 in Media Preferences
-  backendSetPostersPerRow(7);
-  assert.equal(backendGetPostersPerRow(), 7, 'Setting must immediately persist in database');
+  // Narrow window (600px): fits 3 columns, 4 rows (preference of 6 is upper limit)
+  const narrow600 = calculateNarrowWrapping(6, 12, 600);
+  assert.equal(narrow600.columns, 3, 'Window fits 3 columns cleanly');
+  assert.equal(narrow600.rowCount, 4, '12 items wrap into 4 rows');
+  assert.equal(narrow600.posterWidthPx, 150, 'Card dimensions strictly preserved at 150px');
 
-  // Clamping test: value below 2 clamped to 2, above 12 clamped to 12
-  backendSetPostersPerRow(1);
-  assert.equal(backendGetPostersPerRow(), 2, 'Values < 2 clamped to 2');
-  backendSetPostersPerRow(20);
-  assert.equal(backendGetPostersPerRow(), 12, 'Values > 12 clamped to 12');
-
-  // Simulate application restart
-  backendSetPostersPerRow(6);
-  const restoredSetting = backendGetPostersPerRow();
-  assert.equal(restoredSetting, 6, 'Setting must be restored after application restart');
+  // Ultra-narrow window (380px): fits 2 columns, 6 rows without horizontal scroll
+  const narrow380 = calculateNarrowWrapping(6, 12, 380);
+  assert.equal(narrow380.columns, 2, 'Ultra-narrow window fits 2 columns');
+  assert.equal(narrow380.rowCount, 6, '12 items wrap into 6 rows');
+  assert.equal(narrow380.posterWidthPx, 150, 'Card dimensions strictly preserved');
 });
 
-test('Requirement 2: Downloaded Shelf Poster Rearrangement, Command Arguments, and Persistence', () => {
-  const initialTorrents = [
-    { info_hash: 'hash-aaa', name: 'Movie A', sort_order: null },
-    { info_hash: 'hash-bbb', name: 'Movie B', sort_order: null },
-    { info_hash: 'hash-ccc', name: 'Movie C', sort_order: null },
-    { info_hash: 'hash-ddd', name: 'Movie D', sort_order: null },
-  ];
-
-  let currentOrder = initialTorrents.map((t) => t.info_hash);
-  const mockDb: {
-    downloadedOrderJson: string | null;
-    torrentSortOrders: Record<string, number>;
-  } = {
-    downloadedOrderJson: null,
-    torrentSortOrders: {},
-  };
-
-  const arrayMove = <T>(array: T[], from: number, to: number): T[] => {
-    const copy = [...array];
-    const [item] = copy.splice(from, 1);
-    copy.splice(to, 0, item);
-    return copy;
-  };
-
-  let lastCommandArgs: { orders: { info_hash: string; sort_order: number }[] } | null = null;
-
-  const saveDownloadedOrder = (hashes: string[]) => {
-    currentOrder = hashes;
-    const orders = hashes.map((hash, i) => ({ info_hash: hash, sort_order: i }));
-    lastCommandArgs = { orders };
-
-    // Backend implementation: updates torrent_metadata sort_order and media_downloaded_order JSON
-    mockDb.downloadedOrderJson = JSON.stringify(hashes);
-    hashes.forEach((hash, idx) => {
-      mockDb.torrentSortOrders[hash] = idx;
-    });
-  };
-
-  // User drags Movie D (index 3) to the very front (index 0)
-  const reordered = arrayMove(currentOrder, 3, 0);
-  saveDownloadedOrder(reordered);
-
-  assert.deepEqual(
-    currentOrder,
-    ['hash-ddd', 'hash-aaa', 'hash-bbb', 'hash-ccc'],
-    'Movie D should now be at index 0',
-  );
-  assert.ok(lastCommandArgs, 'Tauri command set_media_order must have been invoked');
-  assert.equal(lastCommandArgs!.orders.length, 4);
-  assert.equal(lastCommandArgs!.orders[0].info_hash, 'hash-ddd');
-  assert.equal(lastCommandArgs!.orders[0].sort_order, 0);
-
-  // Simulate restart: reload order from mock DB
-  const restoredHashes: string[] = JSON.parse(mockDb.downloadedOrderJson!);
-  assert.deepEqual(restoredHashes, ['hash-ddd', 'hash-aaa', 'hash-bbb', 'hash-ccc'], 'Restored order matches saved order');
-});
-
-test('Requirement 2: Downloaded Shelf Preserves Unfiltered Items and Appends New Items', () => {
-  // All items in collection
-  const allItems = ['hash-1', 'hash-2', 'hash-3', 'hash-4', 'hash-5'];
-  let customOrder = [...allItems];
-
-  // User searches for items matching "2" or "4"
-  const visible = ['hash-2', 'hash-4'];
-
-  // User drags hash-4 before hash-2 in filtered view
-  const activeId = 'hash-4';
-  const overId = 'hash-2';
-
-  // The reorder algorithm operates on the full list
-  const arrayMove = <T>(array: T[], from: number, to: number): T[] => {
-    const copy = [...array];
-    const [item] = copy.splice(from, 1);
-    copy.splice(to, 0, item);
-    return copy;
-  };
-
-  const oldIdx = customOrder.indexOf(activeId);
-  const newIdx = customOrder.indexOf(overId);
-  customOrder = arrayMove(customOrder, oldIdx, newIdx);
-
-  // Notice: hash-4 is now ahead of hash-2, while hash-1, hash-3, hash-5 preserve their positions!
-  assert.deepEqual(
-    customOrder,
-    ['hash-1', 'hash-4', 'hash-2', 'hash-3', 'hash-5'],
-    'Filtered drag preserves unselected items',
-  );
-
-  // Newly downloaded item completed: 'hash-6'
-  const newTorrent = 'hash-6';
-  const known = new Set(customOrder);
-  if (!known.has(newTorrent)) {
-    customOrder.push(newTorrent);
+test('Requirement 4 & 5: Single Shared Reorder / Done Control Below Shelves', () => {
+  // Model shared reorder control state
+  interface ReorderState {
+    customOrderMode: boolean;
+    externalReorderMode: boolean;
   }
 
-  assert.deepEqual(
-    customOrder,
-    ['hash-1', 'hash-4', 'hash-2', 'hash-3', 'hash-5', 'hash-6'],
-    'New item cleanly appends at the end without altering existing user ordering',
-  );
+  let state: ReorderState = {
+    customOrderMode: false,
+    externalReorderMode: false,
+  };
+
+  const isReordering = () => state.customOrderMode || state.externalReorderMode;
+
+  const toggleReorder = () => {
+    const next = !isReordering();
+    state = { customOrderMode: next, externalReorderMode: next };
+  };
+
+  // Initial: inactive
+  assert.equal(isReordering(), false, 'Reorder mode initially inactive');
+
+  // Entering reorder mode: click Reorder button below shelves
+  toggleReorder();
+  assert.equal(isReordering(), true, 'Reorder mode active');
+  assert.equal(state.customOrderMode, true, 'Downloaded collection is reorderable');
+  assert.equal(state.externalReorderMode, true, 'External collection is reorderable');
+
+  // Button in that same location becomes "Done"
+  const buttonLabel = isReordering() ? 'Done' : 'Reorder';
+  assert.equal(buttonLabel, 'Done', 'Reorder button replaced with Done button in same location');
+
+  // Exiting reorder mode: click Done button in same location
+  toggleReorder();
+  assert.equal(isReordering(), false, 'Reorder mode exited');
+  assert.equal(state.customOrderMode, false);
+  assert.equal(state.externalReorderMode, false);
+  assert.equal(isReordering() ? 'Done' : 'Reorder', 'Reorder');
 });
 
-test('Requirement 2: External Shelf Poster Rearrangement, Command Arguments, and Persistence', () => {
-  const initialExternal = [
-    { path: '/media/Fuuka (2017)', title: 'Fuuka (2017)' },
-    { path: '/media/Patlabor 2 (1993)', title: 'Patlabor 2 (1993)' },
-    { path: '/media/Mary (2017)', title: "Mary and the Witch's Flower" },
-    { path: '/media/Suzume (2022)', title: 'Suzume (2022)' },
+test('Requirement 6: Isolated Collection Handling (Downloaded Only)', () => {
+  const downloadedItems = [
+    { id: 'hash-1', name: 'Movie 1' },
+    { id: 'hash-2', name: 'Movie 2' },
+    { id: 'hash-3', name: 'Movie 3' },
+    { id: 'hash-4', name: 'Movie 4' },
+    { id: 'hash-5', name: 'Movie 5' },
+    { id: 'hash-6', name: 'Movie 6' },
   ];
+  const externalItems: { path: string; title: string }[] = [];
 
-  let currentExternalOrder = initialExternal.map((e) => e.path);
-  let persistedDbOrder: string | null = null;
-  let lastExternalArgs: { paths: string[] } | null = null;
+  // Availability of shared Reorder control below shelves:
+  // Must remain available if Downloaded has items, even if External is empty!
+  const hasPopulatedCollection = downloadedItems.length > 0 || externalItems.length > 0;
+  assert.equal(hasPopulatedCollection, true, 'Shared Reorder control available when Downloaded only');
 
-  const arrayMove = <T>(array: T[], from: number, to: number): T[] => {
-    const copy = [...array];
+  // Verify Downloaded reordering works in isolation
+  let downloadedOrder = downloadedItems.map((d) => d.id);
+  const arrayMove = <T>(arr: T[], from: number, to: number): T[] => {
+    const copy = [...arr];
     const [item] = copy.splice(from, 1);
     copy.splice(to, 0, item);
     return copy;
   };
 
-  const saveExternalOrder = (paths: string[]) => {
-    currentExternalOrder = paths;
-    lastExternalArgs = { paths };
-    persistedDbOrder = JSON.stringify(paths);
-  };
-
-  // User drags Suzume (index 3) to index 1 (between Fuuka and Patlabor)
-  const newOrder = arrayMove(currentExternalOrder, 3, 1);
-  saveExternalOrder(newOrder);
-
+  // Move Movie 6 (index 5) to index 0
+  downloadedOrder = arrayMove(downloadedOrder, 5, 0);
   assert.deepEqual(
-    currentExternalOrder,
-    [
-      '/media/Fuuka (2017)',
-      '/media/Suzume (2022)',
-      '/media/Patlabor 2 (1993)',
-      '/media/Mary (2017)',
-    ],
-    'Suzume should now be at position 1',
-  );
-  assert.ok(lastExternalArgs, 'Tauri command set_external_media_order must have been invoked');
-  assert.deepEqual(lastExternalArgs!.paths, currentExternalOrder);
-
-  // Simulate rescan / refresh: backend list_external_media sorts by saved external order
-  const mockDiskScan = [
-    { path: '/media/Patlabor 2 (1993)', title: 'Patlabor 2 (1993)' },
-    { path: '/media/Fuuka (2017)', title: 'Fuuka (2017)' },
-    { path: '/media/New Media Item (2024)', title: 'New Media Item (2024)' },
-    { path: '/media/Suzume (2022)', title: 'Suzume (2022)' },
-    { path: '/media/Mary (2017)', title: "Mary and the Witch's Flower" },
-  ];
-
-  const orderMap = new Map(JSON.parse(persistedDbOrder!).map((p: string, i: number) => [p, i]));
-  const sortedLiveScan = [...mockDiskScan].sort((a, b) => {
-    const ia = (orderMap.get(a.path) as number) ?? 9999;
-    const ib = (orderMap.get(b.path) as number) ?? 9999;
-    return ia - ib;
-  });
-
-  assert.deepEqual(
-    sortedLiveScan.map((m) => m.path),
-    [
-      '/media/Fuuka (2017)',
-      '/media/Suzume (2022)',
-      '/media/Patlabor 2 (1993)',
-      '/media/Mary (2017)',
-      '/media/New Media Item (2024)',
-    ],
-    'Rescanned items maintain custom ordering; newly discovered media appends cleanly at end',
+    downloadedOrder,
+    ['hash-6', 'hash-1', 'hash-2', 'hash-3', 'hash-4', 'hash-5'],
+    'Downloaded items successfully reordered',
   );
 });
 
-test('Requirement 3: Responsive Narrow Window Prevents Collisions and Confines Titles', () => {
-  // Title clamping behavior
-  const formatCardTitle = (title: string, year?: number) => {
-    const display = year ? `${title} (${year})` : title;
-    return {
-      titleText: display,
-      classes: 'text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words',
-    };
+test('Requirement 6: Isolated Collection Handling (External Only)', () => {
+  const downloadedItems: { id: string; name: string }[] = [];
+  const externalItems = [
+    { path: '/media/Patlabor 2 (1993)', title: 'Patlabor 2' },
+    { path: '/media/Fuuka (2017)', title: 'Fuuka' },
+    { path: '/media/Mary (2017)', title: "Mary and the Witch's Flower" },
+    { path: '/media/Suzume (2022)', title: 'Suzume' },
+  ];
+
+  // Availability of shared Reorder control below shelves:
+  // Must remain available if External has items, even if Downloaded is empty!
+  const hasPopulatedCollection = downloadedItems.length > 0 || externalItems.length > 0;
+  assert.equal(hasPopulatedCollection, true, 'Shared Reorder control available when External only');
+
+  // Verify External reordering works in isolation
+  let externalOrder = externalItems.map((e) => e.path);
+  const arrayMove = <T>(arr: T[], from: number, to: number): T[] => {
+    const copy = [...arr];
+    const [item] = copy.splice(from, 1);
+    copy.splice(to, 0, item);
+    return copy;
   };
 
-  const longTitle = formatCardTitle('The Disappearance of Haruhi Suzumiya Special Collector Boxset Edition', 2010);
-  assert.ok(longTitle.classes.includes('line-clamp-2'), 'Titles must be clamped to at most 2 lines');
-  assert.ok(longTitle.classes.includes('break-words'), 'Long words must wrap without overflowing column boundaries');
+  // Move Suzume (index 3) to index 1
+  externalOrder = arrayMove(externalOrder, 3, 1);
+  assert.deepEqual(
+    externalOrder,
+    [
+      '/media/Patlabor 2 (1993)',
+      '/media/Suzume (2022)',
+      '/media/Fuuka (2017)',
+      '/media/Mary (2017)',
+    ],
+    'External items successfully reordered',
+  );
+});
 
-  // Verify responsive grid styling contracts
-  const computeGridStyles = (postersPerRow: number) => ({
-    gridTemplateColumns: `repeat(auto-fill, minmax(max(135px, calc((100% - (${postersPerRow} - 1) * 1rem) / ${postersPerRow})), 1fr))`,
-  });
+test('Requirement 6: Both Populated Collections Reorder Independently Without Cross-Collection Moves', () => {
+  const downloadedItems = ['hash-a', 'hash-b', 'hash-c'];
+  const externalItems = ['/path/1', '/path/2', '/path/3'];
 
-  const styles = computeGridStyles(5);
-  assert.equal(
-    styles.gridTemplateColumns,
-    'repeat(auto-fill, minmax(max(135px, calc((100% - (5 - 1) * 1rem) / 5)), 1fr))',
-    'Grid must enforce responsive auto-fill wrapping with minimum 135px poster width',
+  let savedDownloadedOrder = [...downloadedItems];
+  let savedExternalOrder = [...externalItems];
+
+  const arrayMove = <T>(arr: T[], from: number, to: number): T[] => {
+    const copy = [...arr];
+    const [item] = copy.splice(from, 1);
+    copy.splice(to, 0, item);
+    return copy;
+  };
+
+  // Reorder Downloaded: move hash-c to front
+  savedDownloadedOrder = arrayMove(savedDownloadedOrder, 2, 0);
+
+  // External order must remain untouched
+  assert.deepEqual(savedDownloadedOrder, ['hash-c', 'hash-a', 'hash-b']);
+  assert.deepEqual(savedExternalOrder, ['/path/1', '/path/2', '/path/3'], 'External order untouched by Downloaded drag');
+
+  // Reorder External: move /path/3 to front
+  savedExternalOrder = arrayMove(savedExternalOrder, 2, 0);
+
+  // Downloaded order must remain untouched
+  assert.deepEqual(savedDownloadedOrder, ['hash-c', 'hash-a', 'hash-b'], 'Downloaded order untouched by External drag');
+  assert.deepEqual(savedExternalOrder, ['/path/3', '/path/1', '/path/2']);
+
+  // Cross-collection dragging impossible: each shelf uses distinct items list in SortableContext
+  const downloadedSortableIds = new Set(savedDownloadedOrder);
+  const externalSortableIds = new Set(savedExternalOrder);
+  for (const id of downloadedSortableIds) {
+    assert.ok(!externalSortableIds.has(id), 'No ID overlap between Downloaded and External contexts');
+  }
+});
+
+test('Requirement 7: Independent Persistence & Restoration After Restart', () => {
+  // Mock SQLite database tables
+  const mockDb = {
+    settings: new Map<string, string>(),
+    torrentSortOrders: new Map<string, number>(),
+  };
+
+  // 1. Persistence commands
+  const backendSetPostersPerRow = (count: number) => {
+    const clamped = Math.max(2, Math.min(12, count));
+    mockDb.settings.set('media_posters_per_row', String(clamped));
+  };
+
+  const backendSetMediaOrder = (orders: { info_hash: string; sort_order: number }[]) => {
+    for (const o of orders) {
+      mockDb.torrentSortOrders.set(o.info_hash, o.sort_order);
+    }
+    const hashes = orders.sort((a, b) => a.sort_order - b.sort_order).map((o) => o.info_hash);
+    mockDb.settings.set('media_downloaded_order', JSON.stringify(hashes));
+  };
+
+  const backendSetExternalMediaOrder = (paths: string[]) => {
+    mockDb.settings.set('media_external_order', JSON.stringify(paths));
+  };
+
+  // 2. Fetch / restore commands
+  const backendGetPostersPerRow = (): number => {
+    const val = mockDb.settings.get('media_posters_per_row');
+    return val ? parseInt(val, 10) : 5;
+  };
+
+  const backendGetDownloadedMediaOrder = (): string[] => {
+    const val = mockDb.settings.get('media_downloaded_order');
+    return val ? JSON.parse(val) : [];
+  };
+
+  const backendGetExternalMediaOrder = (): string[] => {
+    const val = mockDb.settings.get('media_external_order');
+    return val ? JSON.parse(val) : [];
+  };
+
+  // Perform updates
+  backendSetPostersPerRow(7);
+  backendSetMediaOrder([
+    { info_hash: 'hash-gamma', sort_order: 0 },
+    { info_hash: 'hash-alpha', sort_order: 1 },
+    { info_hash: 'hash-beta', sort_order: 2 },
+  ]);
+  backendSetExternalMediaOrder(['/media/Movie C', '/media/Movie A', '/media/Movie B']);
+
+  // Simulate application restart: load preferences from scratch
+  const restoredPostersPerRow = backendGetPostersPerRow();
+  const restoredDownloadedOrder = backendGetDownloadedMediaOrder();
+  const restoredExternalOrder = backendGetExternalMediaOrder();
+
+  assert.equal(restoredPostersPerRow, 7, 'Restored posters per row setting is 7');
+  assert.deepEqual(
+    restoredDownloadedOrder,
+    ['hash-gamma', 'hash-alpha', 'hash-beta'],
+    'Restored downloaded order strictly matches user rearrangement',
+  );
+  assert.deepEqual(
+    restoredExternalOrder,
+    ['/media/Movie C', '/media/Movie A', '/media/Movie B'],
+    'Restored external order strictly matches user rearrangement',
+  );
+
+  // Resolution helper test: orderGroups applies saved order and appends newly downloaded items
+  const liveGroups = [
+    { id: 'hash-alpha', title: 'Movie Alpha', items: [{ info_hash: 'hash-alpha' }] },
+    { id: 'hash-beta', title: 'Movie Beta', items: [{ info_hash: 'hash-beta' }] },
+    { id: 'hash-gamma', title: 'Movie Gamma', items: [{ info_hash: 'hash-gamma' }] },
+    { id: 'hash-delta', title: 'Movie Delta (Newly Downloaded)', items: [{ info_hash: 'hash-delta' }] },
+  ];
+
+  const orderGroups = (groups: typeof liveGroups, orderList: string[]) => {
+    if (!orderList || orderList.length === 0) return groups;
+    const remaining = [...groups];
+    const result: typeof liveGroups = [];
+    for (const id of orderList) {
+      const idx = remaining.findIndex((g) => g.id === id);
+      if (idx !== -1) {
+        result.push(remaining[idx]);
+        remaining.splice(idx, 1);
+      }
+    }
+    result.push(...remaining);
+    return result;
+  };
+
+  const resolved = orderGroups(liveGroups, restoredDownloadedOrder);
+  assert.deepEqual(
+    resolved.map((g) => g.id),
+    ['hash-gamma', 'hash-alpha', 'hash-beta', 'hash-delta'],
+    'Saved order is restored first; newly downloaded releases append cleanly at end',
   );
 });

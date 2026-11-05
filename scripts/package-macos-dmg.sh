@@ -89,7 +89,7 @@ trap cleanup EXIT
 log "=== Packaging DMG: $(basename "$OUTPUT") ==="
 
 # --- Stage the payload --------------------------------------------------------
-cp -R "$APP_DIR" "$STAGING_DIR/Nebulae.app"
+ditto "$APP_DIR" "$STAGING_DIR/Nebulae.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 # Carry over the bundler's .DS_Store so the DMG window layout configured in
