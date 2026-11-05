@@ -110,6 +110,7 @@ export const SimpleMediaView: React.FC = () => {
   const { fetchSeedTimeRecords } = useTrackerStore();
   const {
     postersPerRow,
+    posterSize,
     customOrderMode,
     externalReorderMode,
     downloadedOrder,
@@ -1228,6 +1229,7 @@ export const SimpleMediaView: React.FC = () => {
       transition,
       opacity: isDragging ? 0.3 : 1,
       position: 'relative',
+      width: `${posterSize}px`,
     };
 
     return (
@@ -1236,7 +1238,7 @@ export const SimpleMediaView: React.FC = () => {
         style={style}
         {...(isReordering ? attributes : {})}
         {...(isReordering ? listeners : {})}
-        className={`w-[150px] flex-shrink-0 ${isReordering ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        className={`flex-shrink-0 ${isReordering ? 'cursor-grab active:cursor-grabbing' : ''}`}
       >
         {renderGroupCard(group, variant, isReordering)}
       </div>
@@ -1262,6 +1264,7 @@ export const SimpleMediaView: React.FC = () => {
       transition,
       opacity: isDragging ? 0.3 : 1,
       position: 'relative',
+      width: `${posterSize}px`,
     };
 
     return (
@@ -1270,7 +1273,7 @@ export const SimpleMediaView: React.FC = () => {
         style={style}
         {...(isReordering ? attributes : {})}
         {...(isReordering ? listeners : {})}
-        className={`w-[150px] flex-shrink-0 ${isReordering ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        className={`flex-shrink-0 ${isReordering ? 'cursor-grab active:cursor-grabbing' : ''}`}
       >
         {renderExternalCard(item, isReordering)}
       </div>
@@ -1530,7 +1533,7 @@ export const SimpleMediaView: React.FC = () => {
               </div>
               <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-thin">
                 {visibleGroups(groupItems(activeDownloads)).map((g) => (
-                  <div key={g.id} className="w-[150px] flex-shrink-0">
+                  <div key={g.id} style={{ width: `${posterSize}px` }} className="flex-shrink-0">
                     {renderGroupCard(g, 'active')}
                   </div>
                 ))}
@@ -1570,8 +1573,8 @@ export const SimpleMediaView: React.FC = () => {
                       data-testid="downloaded-grid"
                       className="grid gap-4"
                       style={{
-                        gridTemplateColumns: 'repeat(auto-fill, 150px)',
-                        maxWidth: `calc(${postersPerRow} * 150px + (${postersPerRow} - 1) * 1rem)`,
+                        gridTemplateColumns: `repeat(auto-fill, ${posterSize}px)`,
+                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * 1rem)`,
                         justifyContent: 'start',
                       }}
                     >
@@ -1583,7 +1586,10 @@ export const SimpleMediaView: React.FC = () => {
                 </SortableContext>
                 <DragOverlay dropAnimation={defaultDropAnimation}>
                   {activeDownloadedGroup ? (
-                    <div className="w-[150px] pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95">
+                    <div
+                      style={{ width: `${posterSize}px` }}
+                      className="pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95"
+                    >
                       {renderGroupCard(activeDownloadedGroup, 'watch', true)}
                     </div>
                   ) : null}
@@ -1619,8 +1625,8 @@ export const SimpleMediaView: React.FC = () => {
                       data-testid="external-grid"
                       className="grid gap-4"
                       style={{
-                        gridTemplateColumns: 'repeat(auto-fill, 150px)',
-                        maxWidth: `calc(${postersPerRow} * 150px + (${postersPerRow} - 1) * 1rem)`,
+                        gridTemplateColumns: `repeat(auto-fill, ${posterSize}px)`,
+                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * 1rem)`,
                         justifyContent: 'start',
                       }}
                     >
@@ -1632,7 +1638,10 @@ export const SimpleMediaView: React.FC = () => {
                 </SortableContext>
                 <DragOverlay dropAnimation={defaultDropAnimation}>
                   {activeExternalItem ? (
-                    <div className="w-[150px] pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95">
+                    <div
+                      style={{ width: `${posterSize}px` }}
+                      className="pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95"
+                    >
                       {renderExternalCard(activeExternalItem, true)}
                     </div>
                   ) : null}

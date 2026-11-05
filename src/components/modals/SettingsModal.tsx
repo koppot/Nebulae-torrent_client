@@ -66,7 +66,7 @@ export const SettingsModal: React.FC = () => {
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
-  const { postersPerRow, setPostersPerRow } = useLibraryStore();
+  const { postersPerRow, setPostersPerRow, posterSize, setPosterSize } = useLibraryStore();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     () => (new URLSearchParams(window.location.search).get('tab') as SettingsTab) || 'behavior',
@@ -2028,21 +2028,70 @@ export const SettingsModal: React.FC = () => {
                 </div>
 
                 {/* Media Grid & Posters Layout */}
-                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3">
+                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-[#2a2a2a]">
                     <div>
                       <span className="text-xs font-semibold text-white">Media Grid & Posters Layout</span>
                       <p className="text-[11px] text-[#8c8c8c] mt-0.5">
-                        Controls how many poster columns appear across each row in the Media library.
+                        Configure poster dimensions and row wrapping limits for Downloaded and External media shelves.
                       </p>
                     </div>
                   </div>
+
+                  {/* Setting 1: Poster size */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#a3a3a3]">Posters per row:</span>
-                      <span className="text-xs font-mono font-bold text-white bg-[#141414] border border-[#333333] px-2.5 py-0.5 rounded">
-                        {postersPerRow}
-                      </span>
+                      <span className="text-xs text-[#a3a3a3]">Poster size:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={100}
+                          max={300}
+                          step={10}
+                          value={posterSize}
+                          onChange={(e) => void setPosterSize(Number(e.target.value))}
+                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                          title="Poster width in pixels (100–300 px)"
+                        />
+                        <span className="text-xs text-[#737373] font-mono">px</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#737373]">Small</span>
+                      <input
+                        type="range"
+                        min={100}
+                        max={300}
+                        step={10}
+                        value={posterSize}
+                        onChange={(e) => void setPosterSize(Number(e.target.value))}
+                        className="flex-1 accent-[#e50914] cursor-pointer"
+                        title={`Poster size: ${posterSize} px`}
+                      />
+                      <span className="text-[10px] font-mono text-[#737373]">Large</span>
+                    </div>
+                    <p className="text-[10px] text-[#737373]">
+                      Changes poster dimensions while preserving the configured maximum posters per row.
+                    </p>
+                  </div>
+
+                  {/* Setting 2: Maximum posters per row */}
+                  <div className="space-y-2 pt-2 border-t border-[#2a2a2a]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#a3a3a3]">Maximum posters per row:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={2}
+                          max={12}
+                          step={1}
+                          value={postersPerRow}
+                          onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                          title="Maximum posters per row (2–12)"
+                        />
+                        <span className="text-xs text-[#737373] font-mono">posters</span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-[10px] font-mono text-[#737373]">2</span>
@@ -2054,12 +2103,12 @@ export const SettingsModal: React.FC = () => {
                         value={postersPerRow}
                         onChange={(e) => void setPostersPerRow(Number(e.target.value))}
                         className="flex-1 accent-[#e50914] cursor-pointer"
-                        title={`Posters per row: ${postersPerRow}`}
+                        title={`Maximum posters per row: ${postersPerRow}`}
                       />
                       <span className="text-[10px] font-mono text-[#737373]">12</span>
                     </div>
                     <p className="text-[10px] text-[#737373]">
-                      Posters automatically wrap into additional rows as your collection grows or when the window narrows, preserving your preferred column count on wider windows.
+                      Limits how many posters appear in each row without changing poster size. When this limit is reached or when the window narrows, posters wrap into additional rows.
                     </p>
                   </div>
                 </div>

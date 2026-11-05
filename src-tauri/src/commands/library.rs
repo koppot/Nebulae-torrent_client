@@ -87,7 +87,7 @@ pub fn set_external_media_order(
         .map_err(|e| format!("set_external_media_order: {e}"))
 }
 
-// ── Feature 4: Posters-per-row preference ────────────────────────────────────
+// ── Feature 4: Posters-per-row & Poster-size preferences ────────────────────
 
 /// Read the stored posters-per-row preference (default 5).
 #[tauri::command]
@@ -107,6 +107,27 @@ pub fn set_posters_per_row(count: u32, db: State<'_, Arc<Database>>) -> Result<(
     let clamped = count.clamp(2, 12);
     db.set_setting("media_posters_per_row", &clamped.to_string())
         .map_err(|e| format!("set_posters_per_row: {e}"))
+}
+
+/// Read the stored poster size preference in pixels (default 150).
+#[tauri::command]
+pub fn get_poster_size(db: State<'_, Arc<Database>>) -> Result<u32, String> {
+    let val = db
+        .get_setting("media_poster_size")
+        .map_err(|e| format!("get_poster_size: {e}"))?
+        .and_then(|v| v.parse::<u32>().ok())
+        .map(|s| if s < 50 { 150 } else { s.clamp(100, 300) })
+        .unwrap_or(150);
+    Ok(val)
+}
+
+/// Persist the poster size preference in pixels.
+/// Clamped to 100–300; values outside this range are clamped silently.
+#[tauri::command]
+pub fn set_poster_size(size: u32, db: State<'_, Arc<Database>>) -> Result<(), String> {
+    let clamped = size.clamp(100, 300);
+    db.set_setting("media_poster_size", &clamped.to_string())
+        .map_err(|e| format!("set_poster_size: {e}"))
 }
 
 // ── Feature 8/9: Metadata provider attribution ────────────────────────────────

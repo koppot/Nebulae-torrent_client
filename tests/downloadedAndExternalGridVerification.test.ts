@@ -38,6 +38,16 @@ class MockSqliteBackend {
     return val ? parseInt(val, 10) : 5;
   }
 
+  set_poster_size(size: number): void {
+    const clamped = Math.max(100, Math.min(300, size));
+    this.settings.set('media_poster_size', String(clamped));
+  }
+
+  get_poster_size(): number {
+    const val = this.settings.get('media_poster_size');
+    return val ? parseInt(val, 10) : 150;
+  }
+
   set_media_order(orders: { info_hash: string; sort_order: number | null }[]): void {
     for (const entry of orders) {
       const existing = this.torrentMetadata.get(entry.info_hash) || { sort_order: null, added_at: Date.now() };
@@ -114,13 +124,12 @@ function orderExternal<T extends { path: string }>(items: T[], orderList: string
   return result;
 }
 
-// Grid layout geometry calculator
-function computeGridGeometry(postersPerRow: number, totalItems: number, availableWidthPx: number) {
-  const CARD_WIDTH_PX = 150;
+// Grid layout geometry calculator matching SimpleMediaView.tsx CSS grid
+function computeGridGeometry(maxPostersPerRow: number, posterSizePx: number, totalItems: number, availableWidthPx: number) {
   const GAP_PX = 16;
-  const maxAllowedWidth = postersPerRow * CARD_WIDTH_PX + (postersPerRow - 1) * GAP_PX;
+  const maxAllowedWidth = maxPostersPerRow * posterSizePx + (maxPostersPerRow - 1) * GAP_PX;
   const effectiveWidth = Math.min(availableWidthPx, maxAllowedWidth);
-  const columns = Math.max(1, Math.min(postersPerRow, Math.floor((effectiveWidth + GAP_PX) / (CARD_WIDTH_PX + GAP_PX))));
+  const columns = Math.max(1, Math.min(maxPostersPerRow, Math.floor((effectiveWidth + GAP_PX) / (posterSizePx + GAP_PX))));
   const rowCount = Math.ceil(totalItems / columns);
   const rows: number[] = [];
   let remaining = totalItems;
@@ -133,8 +142,8 @@ function computeGridGeometry(postersPerRow: number, totalItems: number, availabl
     columns,
     rowCount,
     rows,
-    cardWidthPx: CARD_WIDTH_PX,
-    cardHeightPx: Math.round(CARD_WIDTH_PX * (800 / 660)),
+    cardWidthPx: posterSizePx,
+    cardHeightPx: Math.round(posterSizePx * (800 / 660)),
     unusedColumnsInLastRow: columns - rows[rows.length - 1],
   };
 }
@@ -154,8 +163,8 @@ test('Test Scenario 1: Isolated Downloaded Media Only (External Empty)', () => {
   const hasPopulatedCollection = downloadedTorrents.length > 0 || externalMedia.length > 0;
   assert.equal(hasPopulatedCollection, true, 'Reorder control must be available when Downloaded is populated');
 
-  // Verify multiple rows with default 5 posters per row
-  const layout = computeGridGeometry(backend.get_posters_per_row(), downloadedTorrents.length, 1200);
+  // Verify multiple rows with default 5 posters per row and default 150px poster size
+  const layout = computeGridGeometry(backend.get_posters_per_row(), backend.get_poster_size(), downloadedTorrents.length, 1200);
   assert.equal(layout.columns, 5, '5 posters per row');
   assert.equal(layout.rowCount, 3, '12 items wrap into 3 rows');
   assert.deepEqual(layout.rows, [5, 5, 2], 'Rows contain 5, 5, and 2 items');
@@ -199,16 +208,18 @@ test('Test Scenario 2: Isolated External Media Only (Downloaded Empty)', () => {
   const hasPopulatedCollection = downloadedTorrents.length > 0 || externalMedia.length > 0;
   assert.equal(hasPopulatedCollection, true, 'Reorder control must be available when External is populated even if Downloaded is empty');
 
-  // Set Posters per row to 3
+  // Set Posters per row to 3 and poster size to 180px
   backend.set_posters_per_row(3);
+  backend.set_poster_size(180);
   assert.equal(backend.get_posters_per_row(), 3);
+  assert.equal(backend.get_poster_size(), 180);
 
-  // Verify multiple rows with 3 posters per row for 8 items
-  const layout = computeGridGeometry(3, externalMedia.length, 1200);
+  // Verify multiple rows with 3 posters per row for 8 items at 180px size
+  const layout = computeGridGeometry(3, 180, externalMedia.length, 1200);
   assert.equal(layout.columns, 3, '3 posters per row');
   assert.equal(layout.rowCount, 3, '8 items wrap into 3 rows (3 + 3 + 2)');
   assert.deepEqual(layout.rows, [3, 3, 2], 'Rows contain 3, 3, and 2 items');
-  assert.equal(layout.cardWidthPx, 150, 'Poster dimensions remain strictly 150px at 3 per row');
+  assert.equal(layout.cardWidthPx, 180, 'Poster dimensions match selected 180px size');
 
   // Perform drag rearrangement: move Suzume (/media/Suzume (2022), index 3) to index 0
   const currentPaths = externalMedia.map((m) => m.path);
@@ -231,6 +242,7 @@ test('Test Scenario 2: Isolated External Media Only (Downloaded Empty)', () => {
 test('Test Scenario 3: Both Populated Collections Reorder Independently and Wrap Consistently', () => {
   const backend = new MockSqliteBackend();
   backend.set_posters_per_row(4);
+  backend.set_poster_size(160);
 
   const downloadedTorrents = [
     { id: 'dl-1', info_hash: 'dl-1', name: 'DL 1' },
@@ -274,33 +286,83 @@ test('Test Scenario 3: Both Populated Collections Reorder Independently and Wrap
   assert.deepEqual(backend.get_external_media_order(), ['/ext/5', '/ext/1', '/ext/2', '/ext/3', '/ext/4']);
 
   // Verify grid wrapping for both collections:
-  // Downloaded: 6 items with limit 4 -> rows [4, 2]
-  const dlLayout = computeGridGeometry(4, downloadedTorrents.length, 1200);
+  // Downloaded: 6 items with limit 4 -> rows [4, 2] at 160px
+  const dlLayout = computeGridGeometry(4, 160, downloadedTorrents.length, 1200);
   assert.deepEqual(dlLayout.rows, [4, 2]);
-  assert.equal(dlLayout.cardWidthPx, 150);
+  assert.equal(dlLayout.cardWidthPx, 160);
 
-  // External: 5 items with limit 4 -> rows [4, 1]
-  const extLayout = computeGridGeometry(4, externalMedia.length, 1200);
+  // External: 5 items with limit 4 -> rows [4, 1] at 160px
+  const extLayout = computeGridGeometry(4, 160, externalMedia.length, 1200);
   assert.deepEqual(extLayout.rows, [4, 1]);
-  assert.equal(extLayout.cardWidthPx, 150);
+  assert.equal(extLayout.cardWidthPx, 160);
 });
 
 test('Test Scenario 4: Window Narrowing Adapts Columns While Preserving Preference Upper Limit', () => {
-  // Preference: 6 posters per row
+  // Preference: 6 posters per row at 150px poster size
   // Wide window (1400px): fits 6 columns
-  const wide = computeGridGeometry(6, 12, 1400);
+  const wide = computeGridGeometry(6, 150, 12, 1400);
   assert.equal(wide.columns, 6);
   assert.equal(wide.rowCount, 2);
+  assert.equal(wide.cardWidthPx, 150);
 
   // Medium window (700px): fits 4 columns (4 * 150 + 3 * 16 = 648px <= 700px)
-  const med = computeGridGeometry(6, 12, 700);
+  const med = computeGridGeometry(6, 150, 12, 700);
   assert.equal(med.columns, 4, 'Adapts to 4 columns');
   assert.equal(med.rowCount, 3, '12 items wrap into 3 rows of 4');
-  assert.equal(med.cardWidthPx, 150, 'Card width remains 150px');
+  assert.equal(med.cardWidthPx, 150, 'Card width remains 150px without shrinking');
 
   // Narrow window (500px): fits 3 columns (3 * 150 + 2 * 16 = 482px <= 500px)
-  const narrow = computeGridGeometry(6, 12, 500);
+  const narrow = computeGridGeometry(6, 150, 12, 500);
   assert.equal(narrow.columns, 3, 'Adapts to 3 columns');
   assert.equal(narrow.rowCount, 4, '12 items wrap into 4 rows of 3');
-  assert.equal(narrow.cardWidthPx, 150, 'Card width remains 150px');
+  assert.equal(narrow.cardWidthPx, 150, 'Card width remains 150px without shrinking');
+});
+
+test('Test Scenario 5: Independent Poster Size and Max Posters Per Row Interaction', () => {
+  const backend = new MockSqliteBackend();
+
+  // Initial preferences
+  backend.set_posters_per_row(5);
+  backend.set_poster_size(150);
+
+  // 12 posters at max 5 per row on wide screen: 5, 5, 2
+  const initial = computeGridGeometry(5, 150, 12, 1400);
+  assert.deepEqual(initial.rows, [5, 5, 2], 'Rows are 5, 5, 2');
+  assert.equal(initial.cardWidthPx, 150, 'Card width is 150px');
+
+  // 1. Changing poster size (150 -> 220) leaves maximum posters per row unchanged (remains 5)
+  backend.set_poster_size(220);
+  assert.equal(backend.get_poster_size(), 220, 'Poster size updated to 220px');
+  assert.equal(backend.get_posters_per_row(), 5, 'Max posters per row remains 5');
+
+  const afterResize = computeGridGeometry(5, 220, 12, 1600);
+  assert.deepEqual(afterResize.rows, [5, 5, 2], 'Per-row limit still produces rows of 5, 5, 2');
+  assert.equal(afterResize.cardWidthPx, 220, 'Card width enlarged to 220px');
+
+  // 2. Changing maximum posters per row (5 -> 4) leaves poster dimensions unchanged (remains 220px)
+  backend.set_posters_per_row(4);
+  assert.equal(backend.get_posters_per_row(), 4, 'Max posters per row updated to 4');
+  assert.equal(backend.get_poster_size(), 220, 'Poster size remains 220px');
+
+  const afterMaxChange = computeGridGeometry(4, 220, 12, 1600);
+  assert.deepEqual(afterMaxChange.rows, [4, 4, 4], 'Row wrapping changed to 4, 4, 4');
+  assert.equal(afterMaxChange.cardWidthPx, 220, 'Poster dimensions remain exactly 220px');
+
+  // 3. Excess space leaves room rather than adding extra posters or stretching
+  const excessWidth = computeGridGeometry(4, 220, 12, 3000); // 3000px wide
+  assert.equal(excessWidth.columns, 4, 'Capped at maximum 4 columns even with 3000px width');
+  assert.equal(excessWidth.cardWidthPx, 220, 'Cards do not stretch to fill 3000px');
+
+  // 4. Narrow window wraps earlier without shrinking posters
+  const narrowWidth = computeGridGeometry(4, 220, 12, 600); // 600px width fits 2 columns (456px <= 600px)
+  assert.equal(narrowWidth.columns, 2, 'Wraps earlier to 2 columns');
+  assert.deepEqual(narrowWidth.rows, [2, 2, 2, 2, 2, 2], '12 items wrap into 6 rows of 2');
+  assert.equal(narrowWidth.cardWidthPx, 220, 'Cards remain 220px without shrinking');
+
+  // 5. Restart persistence
+  const restartBackend = new MockSqliteBackend();
+  restartBackend.settings.set('media_poster_size', backend.settings.get('media_poster_size')!);
+  restartBackend.settings.set('media_posters_per_row', backend.settings.get('media_posters_per_row')!);
+  assert.equal(restartBackend.get_poster_size(), 220, 'Poster size survived restart');
+  assert.equal(restartBackend.get_posters_per_row(), 4, 'Max posters per row survived restart');
 });

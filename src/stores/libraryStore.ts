@@ -15,8 +15,10 @@ export interface MediaOrderEntry {
 }
 
 interface LibraryState {
-  /** Number of poster columns (default 5, range 2–12). */
+  /** Maximum number of poster columns per row (default 5, range 2–12). */
   postersPerRow: number;
+  /** Poster card width in pixels (default 150, range 100–300). */
+  posterSize: number;
   /** Whether the Downloaded shelf grid is in custom-ordering mode. */
   customOrderMode: boolean;
   /** Whether the External shelf grid is in custom-ordering mode. */
@@ -30,6 +32,7 @@ interface LibraryState {
   // Actions
   loadPreferences: () => Promise<void>;
   setPostersPerRow: (count: number) => Promise<void>;
+  setPosterSize: (size: number) => Promise<void>;
   setCustomOrderMode: (enabled: boolean) => void;
   setExternalReorderMode: (enabled: boolean) => void;
   saveDownloadedOrder: (hashes: string[]) => Promise<void>;
@@ -41,6 +44,7 @@ interface LibraryState {
 
 export const useLibraryStore = create<LibraryState>((set) => ({
   postersPerRow: 5,
+  posterSize: 150,
   customOrderMode: false,
   externalReorderMode: false,
   downloadedOrder: [],
@@ -50,13 +54,15 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   loadPreferences: async () => {
     set({ isLoading: true });
     try {
-      const [count, downloadedOrder, externalOrder] = await Promise.all([
+      const [count, size, downloadedOrder, externalOrder] = await Promise.all([
         invoke<number>('get_posters_per_row').catch(() => 5),
+        invoke<number>('get_poster_size').catch(() => 150),
         invoke<string[]>('get_downloaded_media_order').catch(() => []),
         invoke<string[]>('get_external_media_order').catch(() => []),
       ]);
       set({
         postersPerRow: count || 5,
+        posterSize: size || 150,
         downloadedOrder: downloadedOrder || [],
         externalOrder: externalOrder || [],
       });
@@ -72,6 +78,16 @@ export const useLibraryStore = create<LibraryState>((set) => ({
     set({ postersPerRow: clamped });
     try {
       await invoke('set_posters_per_row', { count: clamped });
+    } catch {
+      // Silently keep the in-memory value; will retry on next load.
+    }
+  },
+
+  setPosterSize: async (size: number) => {
+    const clamped = Math.max(100, Math.min(300, size));
+    set({ posterSize: clamped });
+    try {
+      await invoke('set_poster_size', { size: clamped });
     } catch {
       // Silently keep the in-memory value; will retry on next load.
     }

@@ -836,9 +836,11 @@ pub fn run() {
             commands::library::get_downloaded_media_order,
             commands::library::get_external_media_order,
             commands::library::set_external_media_order,
-            // Feature 4: posters-per-row
+            // Feature 4: posters-per-row & poster-size
             commands::library::get_posters_per_row,
             commands::library::set_posters_per_row,
+            commands::library::get_poster_size,
+            commands::library::set_poster_size,
             // Feature 8/9: metadata provider attribution
             commands::library::set_media_provider,
             commands::library::set_torrent_poster,

@@ -1525,6 +1525,30 @@ mod tests {
     }
 
     #[test]
+    fn test_poster_size_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_poster_size").unwrap(), None);
+
+        // Persist 200
+        db.set_setting("media_poster_size", "200").unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_size").unwrap().as_deref(),
+            Some("200")
+        );
+
+        // Clamped preference write (bounds 100 to 300)
+        let size: u32 = 450;
+        let clamped = size.clamp(100, 300);
+        db.set_setting("media_poster_size", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_size").unwrap().as_deref(),
+            Some("300")
+        );
+    }
+
+    #[test]
     fn test_downloaded_media_order_roundtrip_and_fallback() {
         let db = memory_db();
 
