@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore } from '../../stores/torrentStore';
+import { useLibraryStore } from '../../stores/libraryStore';
 import {
   DiagnosticSummary,
   AssociationStatus,
@@ -65,7 +66,11 @@ export const SettingsModal: React.FC = () => {
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
+  const { postersPerRow, setPostersPerRow } = useLibraryStore();
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    () => (new URLSearchParams(window.location.search).get('tab') as SettingsTab) || 'behavior',
+  );
   const [skipSplash, setSkipSplash] = useState(
     () => localStorage.getItem('nebulae_pref_skip_splash') === '1',
   );
@@ -2020,6 +2025,43 @@ export const SettingsModal: React.FC = () => {
                       ? `System Java Virtual Machine detected at ${discPlayerStatus.java_home}. Full interactive BD-J menus and extras enabled.`
                       : 'No Java Runtime Environment (JAVA_HOME) detected. Standard playlist and title navigation will operate cleanly; advanced BD-J animated menus are limited.'}
                   </p>
+                </div>
+
+                {/* Media Grid & Posters Layout */}
+                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#2a2a2a]">
+                    <div>
+                      <span className="text-xs font-semibold text-white">Media Grid & Posters Layout</span>
+                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                        Controls how many poster columns appear across each row in the Media library.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#a3a3a3]">Posters per row:</span>
+                      <span className="text-xs font-mono font-bold text-white bg-[#141414] border border-[#333333] px-2.5 py-0.5 rounded">
+                        {postersPerRow}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#737373]">2</span>
+                      <input
+                        type="range"
+                        min={2}
+                        max={12}
+                        step={1}
+                        value={postersPerRow}
+                        onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                        className="flex-1 accent-[#e50914] cursor-pointer"
+                        title={`Posters per row: ${postersPerRow}`}
+                      />
+                      <span className="text-[10px] font-mono text-[#737373]">12</span>
+                    </div>
+                    <p className="text-[10px] text-[#737373]">
+                      Posters automatically wrap into additional rows as your collection grows or when the window narrows, preserving your preferred column count on wider windows.
+                    </p>
+                  </div>
                 </div>
 
                 {/* Fullscreen & Display Settings */}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -6,6 +6,9 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+  defaultDropAnimation,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -108,10 +111,15 @@ export const SimpleMediaView: React.FC = () => {
   const {
     postersPerRow,
     customOrderMode,
+    externalReorderMode,
+    downloadedOrder,
+    externalOrder,
     loadPreferences,
     setPostersPerRow,
     setCustomOrderMode,
-    saveMediaOrder,
+    setExternalReorderMode,
+    saveDownloadedOrder,
+    saveExternalOrder,
     setUserDisplayTitle,
     resetUserDisplayTitle,
   } = useLibraryStore();
@@ -304,7 +312,42 @@ export const SimpleMediaView: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [torrents]);
 
+  useEffect(() => {
+    if (downloadedOrder.length > 0) {
+      setCustomOrder((prev) => {
+        if (prev.length === 0) return downloadedOrder;
+        const known = new Set(prev);
+        const missing = downloadedOrder.filter((h) => !known.has(h));
+        return missing.length > 0 ? [...prev, ...missing] : prev;
+      });
+    }
+  }, [downloadedOrder]);
+
+  const [extCustomOrder, setExtCustomOrder] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (externalOrder.length > 0) {
+      setExtCustomOrder((prev) => {
+        if (prev.length === 0) return externalOrder;
+        const known = new Set(prev);
+        const missing = externalOrder.filter((p) => !known.has(p));
+        return missing.length > 0 ? [...prev, ...missing] : prev;
+      });
+    }
+  }, [externalOrder]);
+
   const [externalMedia, setExternalMedia] = useState<{ path: string; title: string; year?: number | null; kind: string; poster_url?: string | null }[]>([]);
+
+  useEffect(() => {
+    if (externalMedia.length > 0) {
+      setExtCustomOrder((prev) => {
+        if (prev.length === 0) return externalMedia.map((m) => m.path);
+        const known = new Set(prev);
+        const missing = externalMedia.filter((m) => !known.has(m.path)).map((m) => m.path);
+        return missing.length > 0 ? [...prev, ...missing] : prev;
+      });
+    }
+  }, [externalMedia]);
   // Library banners for external titles: same TMDB pipeline as downloads.
   const [externalPosterMap, setExternalPosterMap] = useState<Record<string, string | undefined>>({});
   const [extHovered, setExtHovered] = useState<string | null>(null);
@@ -919,7 +962,7 @@ export const SimpleMediaView: React.FC = () => {
     const layerLabel = (ls?: string) =>
     (({ Dvd5: 'DVD-5', Dvd9: 'DVD-9', Bd25: 'BD-25', Bd50: 'BD-50', UhdBd66: 'UHD-66', UhdBd100: 'UHD-100' }) as Record<string, string>)[ls || ''] || 'Disc';
 
-  const renderGroupCard = (group: MediaGroup, variant: 'active' | 'watch' | 'seeding') => {
+  const renderGroupCard = (group: MediaGroup, variant: 'active' | 'watch' | 'seeding', isReordering?: boolean) => {
     // A remembered last-played disc wins as the card's face (and what
     // "Resume" re-opens) until the owner picks a different disc tab.
     const currentItem = group.items[group.active_index] || group.items[0];
@@ -978,11 +1021,12 @@ export const SimpleMediaView: React.FC = () => {
       <img
         src={localSrc(coverImage)}
         alt={currentItem.name}
-        className="w-full h-full object-cover rounded-lg"
+        className="w-full h-full object-cover rounded-lg pointer-events-none"
+        draggable={false}
         onError={(e) => (e.target as HTMLElement).style.display = 'none'}
       />
     ) : (
-      <div className="flex flex-col items-center justify-center text-[#333333] space-y-1 h-full">
+      <div className="flex flex-col items-center justify-center text-[#333333] space-y-1 h-full pointer-events-none">
         <Disc className="w-10 h-10" />
         <span className="text-[9px] font-mono uppercase tracking-widest text-[#737373]">
           No Art Yet
@@ -997,62 +1041,62 @@ export const SimpleMediaView: React.FC = () => {
     return (
       <div
         key={group.id}
-        onMouseEnter={() => setHoveredId(group.id)}
-        onMouseLeave={() => setHoveredId((prev) => (prev === group.id ? null : prev))}
+        onMouseEnter={() => {
+          if (!isReordering) setHoveredId(group.id);
+        }}
+        onMouseLeave={() => {
+          if (!isReordering) setHoveredId((prev) => (prev === group.id ? null : prev));
+        }}
         onContextMenu={(e) => {
+          if (isReordering) return;
           e.preventDefault();
           setCtxMenu({ x: e.clientX, y: e.clientY, groupId: group.id, itemId: currentItem.id });
         }}
-        className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
+        className={`group relative rounded-lg w-full flex flex-col select-none ${
+          isReordering ? '' : 'cursor-pointer'
+        }`}
       >
         <div className="rounded-lg overflow-hidden">
-          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden">
+          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626]">
             {posterArt}
 
-            {/* Hover: only Play + Details, floating on the poster side by
-                side — no panel background, no data (owner). Play ALWAYS
-                starts at the disc's interactive menu (owner: "when user is
-                clicking play, the media player window should start with
-                menu first"); resuming past the menu stays an explicit
-                action (the right-click menu's Resume). */}
-            {hoveredId === group.id && (
-              <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
-                {(() => {
-                  const onPrimary = () => {
-                    // Do NOT clear the saved position here. clearPositionMs was previously
-                    // called on every library Play click, which destroyed the resume point
-                    // written by X-btn / pause / Menu before the user even reached the
-                    // authored disc menu — causing the ARM to always read savedMs=0.
-                    // The ARM mechanism already handles a missing save correctly (reads 0,
-                    // does not arm, feature plays from beginning). A saved position is
-                    // restored only when the user selects the same feature from the
-                    // authored menu (wasAtMenuRef → justLeftMenuRef → ARM → seek).
-                    handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
-                  };
-                  return (
-                    <button
-                      onClick={onPrimary}
-                      className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                      title="Play (interactive disc menus)"
-                    >
-                      <Play className="w-3 h-3 fill-black" />
-                      <span>Play</span>
-                    </button>
-                  );
-                })()}
-                <button
-                  onClick={() => openDetailsPopup(group.id, currentItem)}
-                  className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
-                  title="Name, year, duration, disc sizes and summary"
-                >
-                  Details
-                </button>
+            {isReordering ? (
+              <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded bg-black/80 border border-white/20 text-white flex items-center gap-1 shadow text-[10px] font-semibold pointer-events-none">
+                <GripVertical className="w-3 h-3 text-[#e50914]" />
+                <span>Move</span>
               </div>
+            ) : (
+              hoveredId === group.id && (
+                <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
+                  {(() => {
+                    const onPrimary = () => {
+                      handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
+                    };
+                    return (
+                      <button
+                        onClick={onPrimary}
+                        className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                        title="Play (interactive disc menus)"
+                      >
+                        <Play className="w-3 h-3 fill-black" />
+                        <span>Play</span>
+                      </button>
+                    );
+                  })()}
+                  <button
+                    onClick={() => openDetailsPopup(group.id, currentItem)}
+                    className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
+                    title="Name, year, duration, disc sizes and summary"
+                  >
+                    Details
+                  </button>
+                </div>
+              )
             )}
           </div>
 
           {/* Title on the midline BELOW the poster (owner). */}
-          <div className="pt-2">
+          <div className="pt-2 w-full px-0.5 overflow-hidden">
             <h4
               className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
               title={group.clean_title}
@@ -1081,6 +1125,120 @@ export const SimpleMediaView: React.FC = () => {
     );
   };
 
+  const renderExternalCard = (
+    m: { path: string; title: string; year?: number | null; kind: string; poster_url?: string | null },
+    isReordering?: boolean,
+  ) => {
+    const discInfo = discMetaMap[m.path];
+    const extCover = discInfo?.cover_image || externalPosterMap[m.path];
+    const displayYear = externalMetaMap[m.path]?.year ?? m.year;
+
+    return (
+      <div
+        key={m.path}
+        className={`group relative rounded-lg w-full flex flex-col select-none ${
+          isReordering ? '' : 'cursor-pointer'
+        }`}
+        onMouseEnter={() => {
+          if (!isReordering) setExtHovered(m.path);
+        }}
+        onMouseLeave={() => {
+          if (!isReordering) setExtHovered((prev) => (prev === m.path ? null : prev));
+        }}
+        onContextMenu={(e) => {
+          if (isReordering) return;
+          e.preventDefault();
+          setExtCtx({ x: e.clientX, y: e.clientY, path: m.path, title: m.title });
+        }}
+      >
+        <div className="rounded-lg overflow-hidden">
+          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
+            {extCover ? (
+              <img
+                src={localSrc(extCover as string)}
+                alt={m.title}
+                className="w-full h-full object-cover pointer-events-none"
+                draggable={false}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-[#0d0d0d] pointer-events-none">
+                <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
+              </div>
+            )}
+            {isReordering ? (
+              <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded bg-black/80 border border-white/20 text-white flex items-center gap-1 shadow text-[10px] font-semibold pointer-events-none">
+                <GripVertical className="w-3 h-3 text-[#e50914]" />
+                <span>Move</span>
+              </div>
+            ) : (
+              extHovered === m.path && (
+                <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await openInPlayer(m.path, {
+                          displayTitle: m.title,
+                          year: displayYear,
+                        });
+                        void refreshExternalMedia();
+                        setFeedbackNotice(null);
+                      } catch (err) {
+                        const msg = errorMessage(err, 'Could not launch the disc.');
+                        const isPathErr =
+                          msg.includes('path') ||
+                          msg.includes('exist') ||
+                          msg.includes('operating system') ||
+                          msg.includes('not found') ||
+                          msg.includes('disconnected');
+                        setFeedbackNotice({
+                          type: 'error',
+                          message: msg,
+                          relinkTarget: isPathErr
+                            ? {
+                                kind: 'external',
+                                id: m.path,
+                                name: m.title,
+                                path: m.path,
+                              }
+                            : undefined,
+                        });
+                      }
+                    }}
+                    className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                    title="Play (interactive disc menus)"
+                  >
+                    <Play className="w-3 h-3 fill-black" />
+                    <span>Play</span>
+                  </button>
+                  <button
+                    onClick={() =>
+                      setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
+                    }
+                    className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
+                    title="Detailed movie information"
+                  >
+                    Details
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+        <div className="pt-2 w-full px-0.5 overflow-hidden">
+          <h4
+            className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
+            title={m.title}
+          >
+            {m.title}
+            {displayYear ? (
+              <span className="text-white font-normal"> ({displayYear})</span>
+            ) : null}
+          </h4>
+        </div>
+      </div>
+    );
+  };
+
   // ── Feature 3: SortableCard wrapper for drag-and-drop ordering ───────────
   const SortableCard = ({ group, variant }: { group: MediaGroup; variant: 'active' | 'watch' | 'seeding' }) => {
     const {
@@ -1095,46 +1253,177 @@ export const SimpleMediaView: React.FC = () => {
     const style: React.CSSProperties = {
       transform: CSS.Transform.toString(transform),
       transition,
-      opacity: isDragging ? 0.5 : 1,
+      opacity: isDragging ? 0.3 : 1,
       position: 'relative',
     };
 
     return (
-      <div ref={setNodeRef} style={style}>
-        {customOrderMode && (
-          <div
-            {...attributes}
-            {...listeners}
-            className="absolute top-1 left-1 z-10 p-1 rounded bg-black/60 text-[#a3a3a3] cursor-grab active:cursor-grabbing"
-            title="Drag to reorder"
-          >
-            <GripVertical className="w-3 h-3" />
-          </div>
-        )}
-        {renderGroupCard(group, variant)}
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...(customOrderMode ? attributes : {})}
+        {...(customOrderMode ? listeners : {})}
+        className={`w-full ${customOrderMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      >
+        {renderGroupCard(group, variant, customOrderMode)}
       </div>
     );
   };
 
-  // ── Feature 3: handle drag end — update local order + persist ─────────────
+  const SortableExternalCard = ({
+    item,
+  }: {
+    item: { path: string; title: string; year?: number | null; kind: string; poster_url?: string | null };
+  }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: item.path, disabled: !externalReorderMode });
+
+    const style: React.CSSProperties = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.3 : 1,
+      position: 'relative',
+    };
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...(externalReorderMode ? attributes : {})}
+        {...(externalReorderMode ? listeners : {})}
+        className={`w-full ${externalReorderMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      >
+        {renderExternalCard(item, externalReorderMode)}
+      </div>
+    );
+  };
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const handleDragEnd = useCallback(
+  const [activeDownloadedId, setActiveDownloadedId] = useState<string | null>(null);
+  const [activeExternalId, setActiveExternalId] = useState<string | null>(null);
+
+  const handleDownloadedDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDownloadedId(String(event.active.id));
+  }, []);
+
+  const handleDownloadedDragEnd = useCallback(
     (event: DragEndEvent) => {
+      setActiveDownloadedId(null);
       const { active, over } = event;
       if (!over || active.id === over.id) return;
       setCustomOrder((prev) => {
-        const oldIdx = prev.indexOf(String(active.id));
-        const newIdx = prev.indexOf(String(over.id));
+        const fullList = [...prev];
+        const activeIdStr = String(active.id);
+        const overIdStr = String(over.id);
+        if (!fullList.includes(activeIdStr)) fullList.push(activeIdStr);
+        if (!fullList.includes(overIdStr)) fullList.push(overIdStr);
+        const oldIdx = fullList.indexOf(activeIdStr);
+        const newIdx = fullList.indexOf(overIdStr);
         if (oldIdx === -1 || newIdx === -1) return prev;
-        const next = arrayMove(prev, oldIdx, newIdx);
-        // Persist asynchronously — don't block render
-        void saveMediaOrder(next.map((hash, i) => ({ info_hash: hash, sort_order: i })));
+        const next = arrayMove(fullList, oldIdx, newIdx);
+        void saveDownloadedOrder(next);
         return next;
       });
     },
-    [saveMediaOrder],
+    [saveDownloadedOrder],
   );
+
+  const handleDownloadedDragCancel = useCallback(() => {
+    setActiveDownloadedId(null);
+  }, []);
+
+  const handleExternalDragStart = useCallback((event: DragStartEvent) => {
+    setActiveExternalId(String(event.active.id));
+  }, []);
+
+  const handleExternalDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setActiveExternalId(null);
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      setExtCustomOrder((prev) => {
+        const fullList = [...prev];
+        const activeIdStr = String(active.id);
+        const overIdStr = String(over.id);
+        if (!fullList.includes(activeIdStr)) fullList.push(activeIdStr);
+        if (!fullList.includes(overIdStr)) fullList.push(overIdStr);
+        const oldIdx = fullList.indexOf(activeIdStr);
+        const newIdx = fullList.indexOf(overIdStr);
+        if (oldIdx === -1 || newIdx === -1) return prev;
+        const next = arrayMove(fullList, oldIdx, newIdx);
+        void saveExternalOrder(next);
+        return next;
+      });
+    },
+    [saveExternalOrder],
+  );
+
+  const handleExternalDragCancel = useCallback(() => {
+    setActiveExternalId(null);
+  }, []);
+
+  const allReadyGroups = useMemo(() => {
+    return visibleGroups(groupItems(readyToWatch));
+  }, [readyToWatch, searchQuery, groupBoxsets]);
+
+  const ordered = useMemo(() => {
+    if (customOrder.length > 0) {
+      const groupMap = new Map(allReadyGroups.map((g) => [g.id, g]));
+      const result: MediaGroup[] = [];
+      for (const id of customOrder) {
+        const g = groupMap.get(id);
+        if (g) {
+          result.push(g);
+          groupMap.delete(id);
+        }
+      }
+      for (const g of allReadyGroups) {
+        if (groupMap.has(g.id)) {
+          result.push(g);
+        }
+      }
+      return result;
+    }
+    return allReadyGroups;
+  }, [allReadyGroups, customOrder]);
+
+  const orderedExternal = useMemo(() => {
+    if (extCustomOrder.length > 0) {
+      const mediaMap = new Map(externalMedia.map((m) => [m.path, m]));
+      const result: typeof externalMedia = [];
+      for (const p of extCustomOrder) {
+        const item = mediaMap.get(p);
+        if (item) {
+          result.push(item);
+          mediaMap.delete(p);
+        }
+      }
+      for (const m of externalMedia) {
+        if (mediaMap.has(m.path)) {
+          result.push(m);
+        }
+      }
+      return result;
+    }
+    return externalMedia;
+  }, [externalMedia, extCustomOrder]);
+
+  const activeDownloadedGroup = useMemo(() => {
+    if (!activeDownloadedId) return null;
+    return ordered.find((g) => g.id === activeDownloadedId) || null;
+  }, [activeDownloadedId, ordered]);
+
+  const activeExternalItem = useMemo(() => {
+    if (!activeExternalId) return null;
+    return orderedExternal.find((m) => m.path === activeExternalId) || null;
+  }, [activeExternalId, orderedExternal]);
 
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-16 bg-[#141414] text-white select-none">
@@ -1229,109 +1518,88 @@ export const SimpleMediaView: React.FC = () => {
       {/* External media collection (owner): below the downloaded section;
           entries persist while their source path exists. */}
       {externalMedia.length > 0 && (
-        <div className="mt-8">
-          <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3] mb-3">
-            External
-          </h3>
-          {/* Same card geometry and options as the Library shelf (owner):
-              150px posters, hover Play, right-click menu. */}
-          <div className="flex flex-wrap gap-4">
-            {externalMedia.map((m) => {
-              const discInfo = discMetaMap[m.path];
-              const extCover = discInfo?.cover_image || externalPosterMap[m.path];
-              return (
+        <div className="mt-8 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
+                External
+              </h3>
+              {externalReorderMode && (
+                <span className="text-[11px] px-2 py-0.5 rounded bg-[#e50914]/20 border border-[#e50914]/40 text-[#ffb3b3] font-medium animate-pulse">
+                  Reorder mode active
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                title={externalReorderMode ? 'Finish external poster rearrangement' : 'Rearrange external poster positions'}
+                onClick={() => setExternalReorderMode(!externalReorderMode)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition ${
+                  externalReorderMode
+                    ? 'bg-[#e50914] hover:bg-[#b80710] text-white shadow'
+                    : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white'
+                }`}
+              >
+                {externalReorderMode ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Done</span>
+                  </>
+                ) : (
+                  <>
+                    <GripVertical className="w-3.5 h-3.5" />
+                    <span>Reorder</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {externalReorderMode && (
+            <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#1c1c1c] border border-[#333333] text-xs text-[#cccccc]">
+              <div className="flex items-center gap-2">
+                <GripVertical className="w-4 h-4 text-[#e50914]" />
+                <span>Drag any poster to reorder your external media collection. Changes are saved automatically.</span>
+              </div>
+              <button
+                onClick={() => setExternalReorderMode(false)}
+                className="px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#b80710] text-white text-xs font-semibold transition"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleExternalDragStart}
+            onDragEnd={handleExternalDragEnd}
+            onDragCancel={handleExternalDragCancel}
+          >
+            <SortableContext items={orderedExternal.map((m) => m.path)} strategy={rectSortingStrategy}>
+              <div className="w-full pb-4 pt-1 px-1 -mx-1">
                 <div
-                  key={m.path}
-                  className="group relative rounded-lg cursor-pointer w-[150px] flex-shrink-0"
-                  onMouseEnter={() => setExtHovered(m.path)}
-                  onMouseLeave={() => setExtHovered((prev) => (prev === m.path ? null : prev))}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setExtCtx({ x: e.clientX, y: e.clientY, path: m.path, title: m.title });
+                  className="grid gap-4"
+                  style={{
+                    gridTemplateColumns: `repeat(auto-fill, minmax(max(135px, calc((100% - (${postersPerRow} - 1) * 1rem) / ${postersPerRow})), 1fr))`,
                   }}
                 >
-                  <div className="rounded-lg overflow-hidden">
-                    <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
-                      {extCover ? (
-                        <img
-                          src={localSrc(extCover as string)}
-                          alt={m.title}
-                          className="w-full h-full object-cover"
-                          draggable={false}
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-[#0d0d0d]">
-                          <Disc className="w-8 h-8 text-[#333333] group-hover:text-[#e50914]/60 transition" />
-                        </div>
-                      )}
-                      {extHovered === m.path && (
-                        <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
-                          <button
-                            onClick={async () => {
-                              try {
-                                await openInPlayer(m.path, {
-                                  displayTitle: m.title,
-                                  year: m.year ?? externalMetaMap[m.path]?.year,
-                                });
-                                void refreshExternalMedia();
-                                setFeedbackNotice(null);
-                              } catch (err) {
-                                const msg = errorMessage(err, 'Could not launch the disc.');
-                                const isPathErr =
-                                  msg.includes('path') ||
-                                  msg.includes('exist') ||
-                                  msg.includes('operating system') ||
-                                  msg.includes('not found') ||
-                                  msg.includes('disconnected');
-                                setFeedbackNotice({
-                                  type: 'error',
-                                  message: msg,
-                                  relinkTarget: isPathErr
-                                    ? {
-                                        kind: 'external',
-                                        id: m.path,
-                                        name: m.title,
-                                        path: m.path,
-                                      }
-                                    : undefined,
-                                });
-                              }
-                            }}
-                            className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                            title="Play (interactive disc menus)"
-                          >
-                            <Play className="w-3 h-3 fill-black" />
-                            <span>Play</span>
-                          </button>
-                          <button
-                            onClick={() =>
-                              setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
-                            }
-                            className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
-                            title="Detailed movie information"
-                          >
-                            Details
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="pt-2">
-                    <h4
-                      className="text-[12px] font-medium text-white text-center leading-tight line-clamp-2 break-words"
-                      title={m.title}
-                    >
-                      {m.title}
-                      {(externalMetaMap[m.path]?.year ?? m.year) ? (
-                        <span className="text-white font-normal"> ({externalMetaMap[m.path]?.year ?? m.year})</span>
-                      ) : null}
-                    </h4>
-
-                  </div>
+                  {orderedExternal.map((m) => (
+                    <SortableExternalCard key={m.path} item={m} />
+                  ))}
                 </div>
-              );
-            })}
-          </div>
+              </div>
+            </SortableContext>
+            <DragOverlay dropAnimation={defaultDropAnimation}>
+              {activeExternalItem ? (
+                <div className="w-[160px] pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95">
+                  {renderExternalCard(activeExternalItem, true)}
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         </div>
       )}
 
@@ -1384,7 +1652,11 @@ export const SimpleMediaView: React.FC = () => {
                 </h3>
               </div>
               <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-thin">
-                {visibleGroups(groupItems(activeDownloads)).map((g) => renderGroupCard(g, 'active'))}
+                {visibleGroups(groupItems(activeDownloads)).map((g) => (
+                  <div key={g.id} className="w-[150px] flex-shrink-0">
+                    {renderGroupCard(g, 'active')}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1392,27 +1664,44 @@ export const SimpleMediaView: React.FC = () => {
           {/* Shelf 2: Library (owner: no icon, no count). */}
           <div className="space-y-7">
             {/* Header row: title + custom-order toggle + posters-per-row slider */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
-                Downloaded
-              </h3>
-              <div className="ml-auto flex items-center gap-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <h3 className="text-[14px] font-semibold uppercase tracking-[0.15em] text-[#a3a3a3]">
+                  Downloaded
+                </h3>
+                {customOrderMode && (
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-[#e50914]/20 border border-[#e50914]/40 text-[#ffb3b3] font-medium animate-pulse">
+                    Reorder mode active
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
                   disabled={readyToWatch.length === 0}
-                  title={customOrderMode ? 'Exit custom order mode' : 'Enable drag-to-reorder'}
+                  title={customOrderMode ? 'Finish poster rearrangement' : 'Rearrange poster positions'}
                   onClick={() => setCustomOrderMode(!customOrderMode)}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed ${
                     customOrderMode
-                      ? 'bg-[#1a2a1a] border-[#22c55e] text-[#22c55e]'
-                      : 'bg-[#1a1a1a] border-[#333333] text-[#a3a3a3] hover:border-[#555]'
+                      ? 'bg-[#e50914] hover:bg-[#b80710] text-white shadow'
+                      : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#a3a3a3] hover:text-white'
                   }`}
                 >
-                  <GripVertical className="w-3 h-3" />
-                  {customOrderMode ? 'Done' : 'Reorder'}
+                  {customOrderMode ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Done</span>
+                    </>
+                  ) : (
+                    <>
+                      <GripVertical className="w-3.5 h-3.5" />
+                      <span>Reorder</span>
+                    </>
+                  )}
                 </button>
-                <div className="flex items-center gap-2">
-                  <Sliders className="w-3 h-3 text-[#737373]" />
+                <div className="flex items-center gap-2 text-xs text-[#a3a3a3] bg-[#1a1a1a] px-2.5 py-1 rounded border border-[#2a2a2a]">
+                  <Sliders className="w-3.5 h-3.5 text-[#737373]" />
+                  <span className="text-[11px] text-[#737373]">Posters:</span>
                   <input
                     type="range"
                     min={2}
@@ -1420,49 +1709,67 @@ export const SimpleMediaView: React.FC = () => {
                     step={1}
                     value={postersPerRow}
                     onChange={(e) => void setPostersPerRow(Number(e.target.value))}
-                    className="w-20 accent-white"
+                    className="w-20 accent-[#e50914] cursor-pointer"
                     title={`Posters per row: ${postersPerRow}`}
                   />
-                  <span className="text-[11px] font-mono text-[#737373]">{postersPerRow}</span>
+                  <span className="text-[11px] font-mono text-white font-semibold w-4 text-center">
+                    {postersPerRow}
+                  </span>
                 </div>
               </div>
             </div>
+
+            {customOrderMode && (
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#1c1c1c] border border-[#333333] text-xs text-[#cccccc]">
+                <div className="flex items-center gap-2">
+                  <GripVertical className="w-4 h-4 text-[#e50914]" />
+                  <span>Drag any poster to reorder your downloaded media library. Changes are saved automatically.</span>
+                </div>
+                <button
+                  onClick={() => setCustomOrderMode(false)}
+                  className="px-2.5 py-1 rounded bg-[#e50914] hover:bg-[#b80710] text-white text-xs font-semibold transition"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
             {readyToWatch.length === 0 ? (
               <p className="text-xs text-[#737373] italic">
                 No optical disc images or media downloaded yet. Completed releases will appear here.
               </p>
-            ) : (() => {
-              // Apply custom sort order: groups with a stored position come first,
-              // then new/unordered groups appended at the end.
-              const allGroups = visibleGroups(groupItems(readyToWatch));
-              const ordered = customOrder.length > 0
-                ? [
-                    ...customOrder
-                      .map((id) => allGroups.find((g) => g.id === id))
-                      .filter((g): g is MediaGroup => g !== undefined),
-                    ...allGroups.filter((g) => !customOrder.includes(g.id)),
-                  ]
-                : allGroups;
-              return (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleDragEnd}
-                >
-                  <SortableContext items={ordered.map((g) => g.id)} strategy={rectSortingStrategy}>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDownloadedDragStart}
+                onDragEnd={handleDownloadedDragEnd}
+                onDragCancel={handleDownloadedDragCancel}
+              >
+                <SortableContext items={ordered.map((g) => g.id)} strategy={rectSortingStrategy}>
+                  <div className="w-full pb-4 pt-1 px-1 -mx-1">
                     <div
                       ref={gridRef}
-                      className="grid gap-4 pb-4"
-                      style={{ gridTemplateColumns: `repeat(${postersPerRow}, minmax(0, 1fr))` }}
+                      className="grid gap-4"
+                      style={{
+                        gridTemplateColumns: `repeat(auto-fill, minmax(max(135px, calc((100% - (${postersPerRow} - 1) * 1rem) / ${postersPerRow})), 1fr))`,
+                      }}
                     >
                       {ordered.map((g) => (
                         <SortableCard key={g.id} group={g} variant="watch" />
                       ))}
                     </div>
-                  </SortableContext>
-                </DndContext>
-              );
-            })()}
+                  </div>
+                </SortableContext>
+                <DragOverlay dropAnimation={defaultDropAnimation}>
+                  {activeDownloadedGroup ? (
+                    <div className="w-[160px] pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95">
+                      {renderGroupCard(activeDownloadedGroup, 'watch', true)}
+                    </div>
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
+            )}
           </div>
         </div>
       )}

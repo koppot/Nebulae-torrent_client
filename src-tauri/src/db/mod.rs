@@ -579,6 +579,44 @@ impl Database {
         Ok(())
     }
 
+    /// Retrieve the custom ordered list of downloaded torrent info_hashes.
+    pub fn get_downloaded_media_order(&self) -> Result<Vec<String>> {
+        if let Ok(Some(json)) = self.get_setting("media_downloaded_order") {
+            if let Ok(hashes) = serde_json::from_str::<Vec<String>>(&json) {
+                if !hashes.is_empty() {
+                    return Ok(hashes);
+                }
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT info_hash FROM torrent_metadata WHERE sort_order IS NOT NULL ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut list = Vec::new();
+        for r in rows.flatten() {
+            list.push(r);
+        }
+        Ok(list)
+    }
+
+    /// Retrieve the custom ordered list of external media paths.
+    pub fn get_external_media_order(&self) -> Result<Vec<String>> {
+        if let Ok(Some(json)) = self.get_setting("media_external_order") {
+            if let Ok(paths) = serde_json::from_str::<Vec<String>>(&json) {
+                return Ok(paths);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// Persist the custom ordered list of external media paths.
+    pub fn set_external_media_order(&self, paths: &[String]) -> Result<()> {
+        let json = serde_json::to_string(paths)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.set_setting("media_external_order", &json)
+    }
+
     /// Persist a chosen poster path or URL for a torrent.
     pub fn set_torrent_poster(&self, info_hash: &str, poster_path: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -1419,5 +1457,89 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[test]
+    fn test_posters_per_row_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_posters_per_row").unwrap(), None);
+
+        // Persist 7
+        db.set_setting("media_posters_per_row", "7").unwrap();
+        assert_eq!(
+            db.get_setting("media_posters_per_row").unwrap().as_deref(),
+            Some("7")
+        );
+
+        // Clamped preference write
+        let count: u32 = 15;
+        let clamped = count.clamp(2, 12);
+        db.set_setting("media_posters_per_row", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_posters_per_row").unwrap().as_deref(),
+            Some("12")
+        );
+    }
+
+    #[test]
+    fn test_downloaded_media_order_roundtrip_and_fallback() {
+        let db = memory_db();
+
+        // 1. Initially empty
+        let initial = db.get_downloaded_media_order().unwrap();
+        assert!(initial.is_empty());
+
+        // 2. Fallback to torrent_metadata sort_order when setting not set
+        db.set_torrent_sort_order("hash_b", Some(1)).unwrap();
+        db.set_torrent_sort_order("hash_a", Some(0)).unwrap();
+        db.set_torrent_sort_order("hash_c", Some(2)).unwrap();
+
+        let fallback_order = db.get_downloaded_media_order().unwrap();
+        assert_eq!(fallback_order, vec!["hash_a", "hash_b", "hash_c"]);
+
+        // 3. Explicit media_downloaded_order setting takes priority
+        let custom = vec![
+            "hash_c".to_string(),
+            "hash_a".to_string(),
+            "hash_b".to_string(),
+        ];
+        let json = serde_json::to_string(&custom).unwrap();
+        db.set_setting("media_downloaded_order", &json).unwrap();
+
+        let loaded = db.get_downloaded_media_order().unwrap();
+        assert_eq!(loaded, custom);
+    }
+
+    #[test]
+    fn test_external_media_order_roundtrip() {
+        let db = memory_db();
+
+        // Initially empty
+        let initial = db.get_external_media_order().unwrap();
+        assert!(initial.is_empty());
+
+        // Save order
+        let order1 = vec![
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+            "/media/Suzume (2022)".to_string(),
+        ];
+        db.set_external_media_order(&order1).unwrap();
+
+        let loaded1 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded1, order1);
+
+        // Reorder (drag Suzume to front)
+        let order2 = vec![
+            "/media/Suzume (2022)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+        ];
+        db.set_external_media_order(&order2).unwrap();
+
+        let loaded2 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded2, order2);
     }
 }

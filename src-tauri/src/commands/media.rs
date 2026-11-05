@@ -4314,6 +4314,23 @@ pub fn list_external_media(
         }
     }
 
+    // Apply saved external media ordering if present
+    if let Ok(order_paths) = db.get_external_media_order() {
+        if !order_paths.is_empty() {
+            let order_map: std::collections::HashMap<&str, usize> = order_paths
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.as_str(), i))
+                .collect();
+            live.sort_by_key(|m| {
+                order_map
+                    .get(m.path.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
+    }
+
     Ok(live)
 }
 /// Remove an entry explicitly (owner-initiated delete in the collection).

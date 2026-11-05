@@ -54,7 +54,37 @@ pub fn set_media_order(
         db.set_torrent_sort_order(&entry.info_hash, entry.sort_order)
             .map_err(|e| format!("set_torrent_sort_order({}): {e}", entry.info_hash))?;
     }
+    let mut sorted_entries = orders;
+    sorted_entries.sort_by_key(|e| e.sort_order.unwrap_or(i64::MAX));
+    let hashes: Vec<String> = sorted_entries.into_iter().map(|e| e.info_hash).collect();
+    if let Ok(json) = serde_json::to_string(&hashes) {
+        let _ = db.set_setting("media_downloaded_order", &json);
+    }
     Ok(())
+}
+
+/// Retrieve the custom ordered list of downloaded torrent info_hashes.
+#[tauri::command]
+pub fn get_downloaded_media_order(db: State<'_, Arc<Database>>) -> Result<Vec<String>, String> {
+    db.get_downloaded_media_order()
+        .map_err(|e| format!("get_downloaded_media_order: {e}"))
+}
+
+/// Retrieve the custom ordered list of external media paths.
+#[tauri::command]
+pub fn get_external_media_order(db: State<'_, Arc<Database>>) -> Result<Vec<String>, String> {
+    db.get_external_media_order()
+        .map_err(|e| format!("get_external_media_order: {e}"))
+}
+
+/// Persist the custom ordered list of external media paths.
+#[tauri::command]
+pub fn set_external_media_order(
+    paths: Vec<String>,
+    db: State<'_, Arc<Database>>,
+) -> Result<(), String> {
+    db.set_external_media_order(&paths)
+        .map_err(|e| format!("set_external_media_order: {e}"))
 }
 
 // ── Feature 4: Posters-per-row preference ────────────────────────────────────

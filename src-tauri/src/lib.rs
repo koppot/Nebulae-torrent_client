@@ -833,6 +833,9 @@ pub fn run() {
             commands::library::reset_user_display_title,
             // Feature 3: poster ordering
             commands::library::set_media_order,
+            commands::library::get_downloaded_media_order,
+            commands::library::get_external_media_order,
+            commands::library::set_external_media_order,
             // Feature 4: posters-per-row
             commands::library::get_posters_per_row,
             commands::library::set_posters_per_row,
