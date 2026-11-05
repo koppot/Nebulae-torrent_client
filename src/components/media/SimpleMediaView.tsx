@@ -111,6 +111,7 @@ export const SimpleMediaView: React.FC = () => {
   const {
     postersPerRow,
     posterSize,
+    posterSpacing,
     customOrderMode,
     externalReorderMode,
     downloadedOrder,
@@ -1656,10 +1657,11 @@ export const SimpleMediaView: React.FC = () => {
                     <div
                       ref={gridRef}
                       data-testid="downloaded-grid"
-                      className="grid gap-4"
+                      className="grid"
                       style={{
+                        gap: `${posterSpacing}px`,
                         gridTemplateColumns: `repeat(auto-fill, ${posterSize}px)`,
-                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * 1rem)`,
+                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * ${posterSpacing}px)`,
                         justifyContent: 'start',
                       }}
                     >
@@ -1708,10 +1710,11 @@ export const SimpleMediaView: React.FC = () => {
                   <div className="w-full pb-4 pt-1 px-1 -mx-1">
                     <div
                       data-testid="external-grid"
-                      className="grid gap-4"
+                      className="grid"
                       style={{
+                        gap: `${posterSpacing}px`,
                         gridTemplateColumns: `repeat(auto-fill, ${posterSize}px)`,
-                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * 1rem)`,
+                        maxWidth: `calc(${postersPerRow} * ${posterSize}px + (${postersPerRow} - 1) * ${posterSpacing}px)`,
                         justifyContent: 'start',
                       }}
                     >

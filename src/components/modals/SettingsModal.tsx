@@ -53,7 +53,13 @@ type SettingsTab =
   | 'advanced';
 
 export const SettingsModal: React.FC = () => {
-  const { showSettings, setShowSettings, setShowQbitImport } = useUiStore();
+  const {
+    showSettings,
+    setShowSettings,
+    setShowQbitImport,
+    settingsTab: activeTab,
+    setSettingsTab: setActiveTab,
+  } = useUiStore();
   const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
   const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
@@ -66,11 +72,16 @@ export const SettingsModal: React.FC = () => {
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
-  const { postersPerRow, setPostersPerRow, posterSize, setPosterSize, loadPreferences } = useLibraryStore();
+  const {
+    postersPerRow,
+    setPostersPerRow,
+    posterSize,
+    setPosterSize,
+    posterSpacing,
+    setPosterSpacing,
+    loadPreferences,
+  } = useLibraryStore();
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>(
-    () => (new URLSearchParams(window.location.search).get('tab') as SettingsTab) || 'behavior',
-  );
   const [skipSplash, setSkipSplash] = useState(
     () => localStorage.getItem('nebulae_pref_skip_splash') === '1',
   );
@@ -1921,9 +1932,133 @@ export const SettingsModal: React.FC = () => {
               </div>
             )}
 
-            {/* 9. MEDIA (Optical Disc Cinema & Player Detection) */}
+            {/* 9. MEDIA (Media Grid & Posters Layout + Disc Cinema) */}
             {activeTab === 'media' && (
               <div className="space-y-5">
+                {/* Media Grid & Posters Layout */}
+                <div className="p-4 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#2a2a2a]">
+                    <div>
+                      <span className="text-xs font-semibold text-white">Media Grid & Posters Layout</span>
+                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                        Configure poster dimensions, spacing gaps, and row wrapping limits for Downloaded and External media shelves.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Setting 1: Poster size */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#a3a3a3]">Poster size:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={100}
+                          max={300}
+                          step={10}
+                          value={posterSize}
+                          onChange={(e) => void setPosterSize(Number(e.target.value))}
+                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                          title="Poster width in pixels (100–300 px)"
+                        />
+                        <span className="text-xs text-[#737373] font-mono">px</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#737373]">Small</span>
+                      <input
+                        type="range"
+                        min={100}
+                        max={300}
+                        step={10}
+                        value={posterSize}
+                        onChange={(e) => void setPosterSize(Number(e.target.value))}
+                        className="flex-1 accent-[#e50914] cursor-pointer"
+                        title={`Poster size: ${posterSize} px`}
+                      />
+                      <span className="text-[10px] font-mono text-[#737373]">Large</span>
+                    </div>
+                    <p className="text-[10px] text-[#737373]">
+                      Changes poster card dimensions while preserving the configured spacing and maximum posters per row.
+                    </p>
+                  </div>
+
+                  {/* Setting 2: Poster spacing */}
+                  <div className="space-y-2 pt-2 border-t border-[#2a2a2a]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#a3a3a3]">Poster spacing:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={4}
+                          max={48}
+                          step={2}
+                          value={posterSpacing}
+                          onChange={(e) => void setPosterSpacing(Number(e.target.value))}
+                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                          title="Poster gap in pixels (4–48 px)"
+                        />
+                        <span className="text-xs text-[#737373] font-mono">px</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#737373]">4 px</span>
+                      <input
+                        type="range"
+                        min={4}
+                        max={48}
+                        step={2}
+                        value={posterSpacing}
+                        onChange={(e) => void setPosterSpacing(Number(e.target.value))}
+                        className="flex-1 accent-[#e50914] cursor-pointer"
+                        title={`Poster spacing: ${posterSpacing} px`}
+                      />
+                      <span className="text-[10px] font-mono text-[#737373]">48 px</span>
+                    </div>
+                    <p className="text-[10px] text-[#737373]">
+                      Adjusts the gap between poster cards horizontally and vertically without altering card dimensions.
+                    </p>
+                  </div>
+
+                  {/* Setting 3: Maximum posters per row */}
+                  <div className="space-y-2 pt-2 border-t border-[#2a2a2a]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-[#a3a3a3]">Maximum posters per row:</span>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={2}
+                          max={12}
+                          step={1}
+                          value={postersPerRow}
+                          onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                          title="Maximum posters per row (2–12)"
+                        />
+                        <span className="text-xs text-[#737373] font-mono">posters</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-[#737373]">2</span>
+                      <input
+                        type="range"
+                        min={2}
+                        max={12}
+                        step={1}
+                        value={postersPerRow}
+                        onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                        className="flex-1 accent-[#e50914] cursor-pointer"
+                        title={`Maximum posters per row: ${postersPerRow}`}
+                      />
+                      <span className="text-[10px] font-mono text-[#737373]">12</span>
+                    </div>
+                    <p className="text-[10px] text-[#737373]">
+                      Limits how many posters appear in each row without changing poster size. When this limit is reached or when the window narrows, posters wrap into additional rows.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Optical Disc Cinema & Media Player */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
@@ -2031,92 +2166,6 @@ export const SettingsModal: React.FC = () => {
                       ? `System Java Virtual Machine detected at ${discPlayerStatus.java_home}. Full interactive BD-J menus and extras enabled.`
                       : 'No Java Runtime Environment (JAVA_HOME) detected. Standard playlist and title navigation will operate cleanly; advanced BD-J animated menus are limited.'}
                   </p>
-                </div>
-
-                {/* Media Grid & Posters Layout */}
-                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-4">
-                  <div className="flex items-center justify-between pb-2 border-b border-[#2a2a2a]">
-                    <div>
-                      <span className="text-xs font-semibold text-white">Media Grid & Posters Layout</span>
-                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
-                        Configure poster dimensions and row wrapping limits for Downloaded and External media shelves.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Setting 1: Poster size */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#a3a3a3]">Poster size:</span>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          min={100}
-                          max={300}
-                          step={10}
-                          value={posterSize}
-                          onChange={(e) => void setPosterSize(Number(e.target.value))}
-                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
-                          title="Poster width in pixels (100–300 px)"
-                        />
-                        <span className="text-xs text-[#737373] font-mono">px</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-mono text-[#737373]">Small</span>
-                      <input
-                        type="range"
-                        min={100}
-                        max={300}
-                        step={10}
-                        value={posterSize}
-                        onChange={(e) => void setPosterSize(Number(e.target.value))}
-                        className="flex-1 accent-[#e50914] cursor-pointer"
-                        title={`Poster size: ${posterSize} px`}
-                      />
-                      <span className="text-[10px] font-mono text-[#737373]">Large</span>
-                    </div>
-                    <p className="text-[10px] text-[#737373]">
-                      Changes poster dimensions while preserving the configured maximum posters per row.
-                    </p>
-                  </div>
-
-                  {/* Setting 2: Maximum posters per row */}
-                  <div className="space-y-2 pt-2 border-t border-[#2a2a2a]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#a3a3a3]">Maximum posters per row:</span>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          min={2}
-                          max={12}
-                          step={1}
-                          value={postersPerRow}
-                          onChange={(e) => void setPostersPerRow(Number(e.target.value))}
-                          className="w-16 bg-[#141414] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
-                          title="Maximum posters per row (2–12)"
-                        />
-                        <span className="text-xs text-[#737373] font-mono">posters</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-mono text-[#737373]">2</span>
-                      <input
-                        type="range"
-                        min={2}
-                        max={12}
-                        step={1}
-                        value={postersPerRow}
-                        onChange={(e) => void setPostersPerRow(Number(e.target.value))}
-                        className="flex-1 accent-[#e50914] cursor-pointer"
-                        title={`Maximum posters per row: ${postersPerRow}`}
-                      />
-                      <span className="text-[10px] font-mono text-[#737373]">12</span>
-                    </div>
-                    <p className="text-[10px] text-[#737373]">
-                      Limits how many posters appear in each row without changing poster size. When this limit is reached or when the window narrows, posters wrap into additional rows.
-                    </p>
-                  </div>
                 </div>
 
                 {/* Fullscreen & Display Settings */}

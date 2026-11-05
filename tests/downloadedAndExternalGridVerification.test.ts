@@ -48,6 +48,16 @@ class MockSqliteBackend {
     return val ? parseInt(val, 10) : 150;
   }
 
+  set_poster_spacing(spacing: number): void {
+    const clamped = Math.max(4, Math.min(48, spacing));
+    this.settings.set('media_poster_spacing', String(clamped));
+  }
+
+  get_poster_spacing(): number {
+    const val = this.settings.get('media_poster_spacing');
+    return val ? parseInt(val, 10) : 16;
+  }
+
   set_media_order(orders: { info_hash: string; sort_order: number | null }[]): void {
     for (const entry of orders) {
       const existing = this.torrentMetadata.get(entry.info_hash) || { sort_order: null, added_at: Date.now() };
@@ -172,8 +182,14 @@ function orderExternal<T extends { path: string }>(items: T[], orderList: string
 }
 
 // Grid layout geometry calculator matching SimpleMediaView.tsx CSS grid
-function computeGridGeometry(maxPostersPerRow: number, posterSizePx: number, totalItems: number, availableWidthPx: number) {
-  const GAP_PX = 16;
+function computeGridGeometry(
+  maxPostersPerRow: number,
+  posterSizePx: number,
+  totalItems: number,
+  availableWidthPx: number,
+  posterSpacingPx: number = 16,
+) {
+  const GAP_PX = posterSpacingPx;
   const maxAllowedWidth = maxPostersPerRow * posterSizePx + (maxPostersPerRow - 1) * GAP_PX;
   const effectiveWidth = Math.min(availableWidthPx, maxAllowedWidth);
   const columns = Math.max(1, Math.min(maxPostersPerRow, Math.floor((effectiveWidth + GAP_PX) / (posterSizePx + GAP_PX))));
@@ -191,6 +207,8 @@ function computeGridGeometry(maxPostersPerRow: number, posterSizePx: number, tot
     rows,
     cardWidthPx: posterSizePx,
     cardHeightPx: Math.round(posterSizePx * (800 / 660)),
+    gapPx: posterSpacingPx,
+    maxAllowedWidth,
     unusedColumnsInLastRow: columns - rows[rows.length - 1],
   };
 }
@@ -647,6 +665,10 @@ test('Test Scenario 10: Settings Exclusivity, Store Hydration on Startup, and Ac
     'SettingsModal contains "Poster size:" control'
   );
   assert.ok(
+    settingsSource.includes('Poster spacing:'),
+    'SettingsModal contains "Poster spacing:" control'
+  );
+  assert.ok(
     settingsSource.includes('Maximum posters per row:'),
     'SettingsModal contains "Maximum posters per row:" control'
   );
@@ -654,4 +676,83 @@ test('Test Scenario 10: Settings Exclusivity, Store Hydration on Startup, and Ac
     settingsSource.includes('loadPreferences'),
     'SettingsModal calls loadPreferences to synchronize persisted SQLite state'
   );
+});
+
+test('Test Scenario 11: Three-way Independence - Poster Size, Spacing, and Per-Row Wrapping with Restart Persistence', () => {
+  const backend = new MockSqliteBackend();
+
+  // 1. Initial defaults
+  assert.equal(backend.get_poster_size(), 150, 'Default poster size is 150 px');
+  assert.equal(backend.get_poster_spacing(), 16, 'Default poster spacing is 16 px');
+  assert.equal(backend.get_posters_per_row(), 5, 'Default posters per row is 5');
+
+  // Baseline layout with 12 items: 5, 5, 2
+  const baseGeom = computeGridGeometry(
+    backend.get_posters_per_row(),
+    backend.get_poster_size(),
+    12,
+    1600,
+    backend.get_poster_spacing()
+  );
+  assert.deepEqual(baseGeom.rows, [5, 5, 2]);
+  assert.equal(baseGeom.cardWidthPx, 150);
+  assert.equal(baseGeom.gapPx, 16);
+  // Max width = 5 * 150 + 4 * 16 = 750 + 64 = 814 px
+  assert.equal(baseGeom.maxAllowedWidth, 814);
+
+  // 2. Adjust spacing only: card size and per-row wrapping remain identical
+  backend.set_poster_spacing(32);
+  assert.equal(backend.get_poster_spacing(), 32, 'Poster spacing updated to 32 px');
+  assert.equal(backend.get_poster_size(), 150, 'Poster size unchanged at 150 px');
+  assert.equal(backend.get_posters_per_row(), 5, 'Posters per row unchanged at 5');
+
+  const spacedGeom = computeGridGeometry(
+    backend.get_posters_per_row(),
+    backend.get_poster_size(),
+    12,
+    1600,
+    backend.get_poster_spacing()
+  );
+  assert.deepEqual(spacedGeom.rows, [5, 5, 2], 'Rows still wrap at 5, 5, 2');
+  assert.equal(spacedGeom.cardWidthPx, 150, 'Cards remain 150 px wide');
+  assert.equal(spacedGeom.gapPx, 32, 'Gaps expanded to 32 px');
+  // Max width = 5 * 150 + 4 * 32 = 750 + 128 = 878 px
+  assert.equal(spacedGeom.maxAllowedWidth, 878);
+
+  // 3. Adjust poster size: spacing and per-row wrapping remain identical
+  backend.set_poster_size(200);
+  assert.equal(backend.get_poster_size(), 200, 'Poster size updated to 200 px');
+  assert.equal(backend.get_poster_spacing(), 32, 'Poster spacing preserved at 32 px');
+  assert.equal(backend.get_posters_per_row(), 5, 'Posters per row preserved at 5');
+
+  const resizedGeom = computeGridGeometry(
+    backend.get_posters_per_row(),
+    backend.get_poster_size(),
+    12,
+    1600,
+    backend.get_poster_spacing()
+  );
+  assert.deepEqual(resizedGeom.rows, [5, 5, 2]);
+  assert.equal(resizedGeom.cardWidthPx, 200);
+  assert.equal(resizedGeom.gapPx, 32);
+  // Max width = 5 * 200 + 4 * 32 = 1000 + 128 = 1128 px
+  assert.equal(resizedGeom.maxAllowedWidth, 1128);
+
+  // 4. Clamping boundaries verified
+  backend.set_poster_spacing(2); // below 4
+  assert.equal(backend.get_poster_spacing(), 4, 'Clamped to min 4 px');
+  backend.set_poster_spacing(80); // above 48
+  assert.equal(backend.get_poster_spacing(), 48, 'Clamped to max 48 px');
+
+  backend.set_poster_spacing(24);
+
+  // 5. Restart persistence
+  const restart = new MockSqliteBackend();
+  restart.settings.set('media_poster_size', backend.settings.get('media_poster_size')!);
+  restart.settings.set('media_poster_spacing', backend.settings.get('media_poster_spacing')!);
+  restart.settings.set('media_posters_per_row', backend.settings.get('media_posters_per_row')!);
+
+  assert.equal(restart.get_poster_size(), 200, 'Restored poster size: 200 px');
+  assert.equal(restart.get_poster_spacing(), 24, 'Restored poster spacing: 24 px');
+  assert.equal(restart.get_posters_per_row(), 5, 'Restored max posters per row: 5');
 });

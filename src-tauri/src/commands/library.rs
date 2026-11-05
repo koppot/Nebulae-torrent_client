@@ -130,6 +130,27 @@ pub fn set_poster_size(size: u32, db: State<'_, Arc<Database>>) -> Result<(), St
         .map_err(|e| format!("set_poster_size: {e}"))
 }
 
+/// Read the stored poster spacing preference in pixels (default 16).
+#[tauri::command]
+pub fn get_poster_spacing(db: State<'_, Arc<Database>>) -> Result<u32, String> {
+    let val = db
+        .get_setting("media_poster_spacing")
+        .map_err(|e| format!("get_poster_spacing: {e}"))?
+        .and_then(|v| v.parse::<u32>().ok())
+        .map(|s| s.clamp(4, 48))
+        .unwrap_or(16);
+    Ok(val)
+}
+
+/// Persist the poster spacing preference in pixels.
+/// Clamped to 4–48; values outside this range are clamped silently.
+#[tauri::command]
+pub fn set_poster_spacing(spacing: u32, db: State<'_, Arc<Database>>) -> Result<(), String> {
+    let clamped = spacing.clamp(4, 48);
+    db.set_setting("media_poster_spacing", &clamped.to_string())
+        .map_err(|e| format!("set_poster_spacing: {e}"))
+}
+
 // ── Feature 8/9: Metadata provider attribution ────────────────────────────────
 
 /// Store provider attribution (tmdb/imdb/mal) on an existing torrent entry.

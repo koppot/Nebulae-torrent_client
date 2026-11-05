@@ -19,6 +19,8 @@ interface LibraryState {
   postersPerRow: number;
   /** Poster card width in pixels (default 150, range 100–300). */
   posterSize: number;
+  /** Gap between poster cards in pixels (default 16, range 4–48). */
+  posterSpacing: number;
   /** Whether the Downloaded shelf grid is in custom-ordering mode. */
   customOrderMode: boolean;
   /** Whether the External shelf grid is in custom-ordering mode. */
@@ -33,6 +35,7 @@ interface LibraryState {
   loadPreferences: () => Promise<void>;
   setPostersPerRow: (count: number) => Promise<void>;
   setPosterSize: (size: number) => Promise<void>;
+  setPosterSpacing: (spacing: number) => Promise<void>;
   setCustomOrderMode: (enabled: boolean) => void;
   setExternalReorderMode: (enabled: boolean) => void;
   saveDownloadedOrder: (hashes: string[]) => Promise<void>;
@@ -45,6 +48,7 @@ interface LibraryState {
 export const useLibraryStore = create<LibraryState>((set) => ({
   postersPerRow: 5,
   posterSize: 150,
+  posterSpacing: 16,
   customOrderMode: false,
   externalReorderMode: false,
   downloadedOrder: [],
@@ -54,15 +58,17 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   loadPreferences: async () => {
     set({ isLoading: true });
     try {
-      const [count, size, downloadedOrder, externalOrder] = await Promise.all([
+      const [count, size, spacing, downloadedOrder, externalOrder] = await Promise.all([
         invoke<number>('get_posters_per_row').catch(() => 5),
         invoke<number>('get_poster_size').catch(() => 150),
+        invoke<number>('get_poster_spacing').catch(() => 16),
         invoke<string[]>('get_downloaded_media_order').catch(() => []),
         invoke<string[]>('get_external_media_order').catch(() => []),
       ]);
       set({
         postersPerRow: count || 5,
         posterSize: size || 150,
+        posterSpacing: spacing || 16,
         downloadedOrder: downloadedOrder || [],
         externalOrder: externalOrder || [],
       });
@@ -88,6 +94,16 @@ export const useLibraryStore = create<LibraryState>((set) => ({
     set({ posterSize: clamped });
     try {
       await invoke('set_poster_size', { size: clamped });
+    } catch {
+      // Silently keep the in-memory value; will retry on next load.
+    }
+  },
+
+  setPosterSpacing: async (spacing: number) => {
+    const clamped = Math.max(4, Math.min(48, spacing));
+    set({ posterSpacing: clamped });
+    try {
+      await invoke('set_poster_spacing', { spacing: clamped });
     } catch {
       // Silently keep the in-memory value; will retry on next load.
     }

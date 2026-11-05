@@ -36,7 +36,7 @@ export const TitleBar: React.FC = () => {
   const {
     viewMode,
     setViewMode,
-    setShowSettings,
+    openSettings,
     setShowHelp,
     setShowAddTorrent,
     setShowCreateTorrent,
@@ -303,21 +303,20 @@ export const TitleBar: React.FC = () => {
             </button>
           )}
 
-          {/* Settings on the top bar (owner): no need to bury it in row 2. */}
+          {/* Settings on the top bar: opens SettingsModal.
+              When in Media view, opens directly to the Media tab. */}
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              // Media view: the gear opens MEDIA preferences (player
-              // languages), not the manager's engine settings.
               if (viewMode === 'media') {
-                window.dispatchEvent(new CustomEvent('nebulae:player-prefs'));
+                openSettings('media');
               } else {
-                setShowSettings(true);
+                openSettings();
               }
             }}
             className="p-1.5 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white transition"
-            title={viewMode === 'media' ? 'Media preferences — audio & subtitle languages' : 'Preferences & Torrent Engine Settings'}
+            title={viewMode === 'media' ? 'Media & Poster Layout Settings' : 'Preferences & Torrent Engine Settings'}
           >
             <Settings className="w-3.5 h-3.5" />
           </button>

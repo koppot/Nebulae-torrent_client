@@ -1574,6 +1574,30 @@ mod tests {
     }
 
     #[test]
+    fn test_poster_spacing_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_poster_spacing").unwrap(), None);
+
+        // Persist 24
+        db.set_setting("media_poster_spacing", "24").unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_spacing").unwrap().as_deref(),
+            Some("24")
+        );
+
+        // Clamped preference write (bounds 4 to 48)
+        let spacing: u32 = 64;
+        let clamped = spacing.clamp(4, 48);
+        db.set_setting("media_poster_spacing", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_spacing").unwrap().as_deref(),
+            Some("48")
+        );
+    }
+
+    #[test]
     fn test_downloaded_media_order_roundtrip_and_fallback() {
         let db = memory_db();
 
