@@ -283,6 +283,8 @@ export const SimpleMediaView: React.FC = () => {
   const isReordering = customOrderMode || externalReorderMode;
   const handleToggleReorder = useCallback(() => {
     const next = !isReordering;
+    setActiveDownloadedId(null);
+    setActiveExternalId(null);
     setCustomOrderMode(next);
     setExternalReorderMode(next);
   }, [isReordering, setCustomOrderMode, setExternalReorderMode]);
@@ -295,7 +297,14 @@ export const SimpleMediaView: React.FC = () => {
   // Keep customOrder synced with saved downloadedOrder from SQLite
   useEffect(() => {
     if (downloadedOrder.length > 0) {
-      setCustomOrder(downloadedOrder);
+      const seen = new Set<string>();
+      const deduped = downloadedOrder.filter((h) => {
+        const lower = h.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
+      setCustomOrder(deduped);
     }
   }, [downloadedOrder]);
 
@@ -304,7 +313,14 @@ export const SimpleMediaView: React.FC = () => {
   // Keep extCustomOrder synced with saved externalOrder from SQLite
   useEffect(() => {
     if (externalOrder.length > 0) {
-      setExtCustomOrder(externalOrder);
+      const seen = new Set<string>();
+      const deduped = externalOrder.filter((p) => {
+        const norm = p.trim().toLowerCase().replace(/\\/g, '/');
+        if (seen.has(norm)) return false;
+        seen.add(norm);
+        return true;
+      });
+      setExtCustomOrder(deduped);
     }
   }, [externalOrder]);
 
@@ -314,11 +330,26 @@ export const SimpleMediaView: React.FC = () => {
   useEffect(() => {
     if (externalMedia.length === 0) return;
     setExtCustomOrder((prev) => {
+      const normalize = (p: string) => p.trim().toLowerCase().replace(/\\/g, '/');
       if (prev.length === 0) {
-        return externalOrder.length > 0 ? externalOrder : externalMedia.map((m) => m.path);
+        const initial = externalOrder.length > 0 ? externalOrder : externalMedia.map((m) => m.path);
+        const seen = new Set<string>();
+        return initial.filter((p) => {
+          const norm = normalize(p);
+          if (seen.has(norm)) return false;
+          seen.add(norm);
+          return true;
+        });
       }
-      const known = new Set(prev);
-      const newPaths = externalMedia.filter((m) => !known.has(m.path)).map((m) => m.path);
+      const known = new Set(prev.map(normalize));
+      const newPaths: string[] = [];
+      for (const m of externalMedia) {
+        const norm = normalize(m.path);
+        if (!known.has(norm)) {
+          known.add(norm);
+          newPaths.push(m.path);
+        }
+      }
       return newPaths.length > 0 ? [...prev, ...newPaths] : prev;
     });
   }, [externalMedia, externalOrder]);
@@ -1225,9 +1256,9 @@ export const SimpleMediaView: React.FC = () => {
     } = useSortable({ id: group.id, disabled: !isReordering });
 
     const style: React.CSSProperties = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-      opacity: isDragging ? 0.3 : 1,
+      transform: isReordering ? CSS.Transform.toString(transform) : undefined,
+      transition: isReordering ? transition : undefined,
+      opacity: isReordering && isDragging ? 0.3 : 1,
       position: 'relative',
       width: `${posterSize}px`,
     };
@@ -1260,9 +1291,9 @@ export const SimpleMediaView: React.FC = () => {
     } = useSortable({ id: item.path, disabled: !isReordering });
 
     const style: React.CSSProperties = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-      opacity: isDragging ? 0.3 : 1,
+      transform: isReordering ? CSS.Transform.toString(transform) : undefined,
+      transition: isReordering ? transition : undefined,
+      opacity: isReordering && isDragging ? 0.3 : 1,
       position: 'relative',
       width: `${posterSize}px`,
     };
@@ -1285,6 +1316,28 @@ export const SimpleMediaView: React.FC = () => {
   const [activeDownloadedId, setActiveDownloadedId] = useState<string | null>(null);
   const [activeExternalId, setActiveExternalId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isReordering) {
+      setActiveDownloadedId(null);
+      setActiveExternalId(null);
+    }
+  }, [isReordering]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveDownloadedId(null);
+        setActiveExternalId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      setActiveDownloadedId(null);
+      setActiveExternalId(null);
+    };
+  }, []);
+
   const handleDownloadedDragStart = useCallback((event: DragStartEvent) => {
     setActiveDownloadedId(String(event.active.id));
   }, []);
@@ -1305,17 +1358,33 @@ export const SimpleMediaView: React.FC = () => {
     return visibleGroups(groupItems(readyToWatch));
   }, [readyToWatch, searchQuery, groupBoxsets]);
 
+  const normalizeExtPath = (p: string) => p.trim().toLowerCase().replace(/\\/g, '/');
+
   // Order resolution helpers: items in orderList take precedence in exact saved order;
   // any newly added items append deterministically at the end.
   const orderGroups = (groups: MediaGroup[], orderList: string[]): MediaGroup[] => {
-    if (!orderList || orderList.length === 0) return groups;
-    const remaining = [...groups];
+    if (!groups || groups.length === 0) return [];
+    // Deduplicate incoming groups by ID
+    const uniqueGroups: MediaGroup[] = [];
+    const seenGroupIds = new Set<string>();
+    for (const g of groups) {
+      const idLower = g.id.toLowerCase();
+      if (!seenGroupIds.has(idLower)) {
+        seenGroupIds.add(idLower);
+        uniqueGroups.push(g);
+      }
+    }
+    if (!orderList || orderList.length === 0) return uniqueGroups;
+    const remaining = [...uniqueGroups];
     const result: MediaGroup[] = [];
-    for (const id of orderList) {
-      const idLower = id.toLowerCase();
+    const seenOrderIds = new Set<string>();
+    for (const rawId of orderList) {
+      const idLower = rawId.toLowerCase();
+      if (seenOrderIds.has(idLower)) continue;
+      seenOrderIds.add(idLower);
       const idx = remaining.findIndex((g) =>
         g.id.toLowerCase() === idLower ||
-        g.items.some((item) => (item.info_hash && item.info_hash.toLowerCase() === idLower) || item.id === id)
+        g.items.some((item) => (item.info_hash && item.info_hash.toLowerCase() === idLower) || item.id === rawId)
       );
       if (idx !== -1) {
         result.push(remaining[idx]);
@@ -1327,11 +1396,26 @@ export const SimpleMediaView: React.FC = () => {
   };
 
   const orderExternal = (items: typeof externalMedia, orderList: string[]): typeof externalMedia => {
-    if (!orderList || orderList.length === 0) return items;
-    const remaining = [...items];
+    if (!items || items.length === 0) return [];
+    // Deduplicate incoming items by path: distinct paths (e.g. separate editions or releases sharing title/artwork) are strictly preserved
+    const uniqueItems: typeof externalMedia = [];
+    const seenItemPaths = new Set<string>();
+    for (const item of items) {
+      const norm = normalizeExtPath(item.path);
+      if (!seenItemPaths.has(norm)) {
+        seenItemPaths.add(norm);
+        uniqueItems.push(item);
+      }
+    }
+    if (!orderList || orderList.length === 0) return uniqueItems;
+    const remaining = [...uniqueItems];
     const result: typeof externalMedia = [];
-    for (const path of orderList) {
-      const idx = remaining.findIndex((m) => m.path === path);
+    const seenOrderPaths = new Set<string>();
+    for (const rawPath of orderList) {
+      const norm = normalizeExtPath(rawPath);
+      if (seenOrderPaths.has(norm)) continue;
+      seenOrderPaths.add(norm);
+      const idx = remaining.findIndex((m) => normalizeExtPath(m.path) === norm);
       if (idx !== -1) {
         result.push(remaining[idx]);
         remaining.splice(idx, 1);
@@ -1356,13 +1440,14 @@ export const SimpleMediaView: React.FC = () => {
       setActiveDownloadedId(null);
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const currentList = ordered.map((g) => g.id);
+      const currentList = Array.from(new Set(ordered.map((g) => g.id)));
       const oldIdx = currentList.indexOf(String(active.id));
       const newIdx = currentList.indexOf(String(over.id));
       if (oldIdx === -1 || newIdx === -1) return;
       const next = arrayMove(currentList, oldIdx, newIdx);
-      setCustomOrder(next);
-      void saveDownloadedOrder(next);
+      const deduped = Array.from(new Set(next));
+      setCustomOrder(deduped);
+      void saveDownloadedOrder(deduped);
     },
     [ordered, saveDownloadedOrder],
   );
@@ -1372,13 +1457,14 @@ export const SimpleMediaView: React.FC = () => {
       setActiveExternalId(null);
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const currentList = orderedExternal.map((m) => m.path);
+      const currentList = Array.from(new Set(orderedExternal.map((m) => m.path)));
       const oldIdx = currentList.indexOf(String(active.id));
       const newIdx = currentList.indexOf(String(over.id));
       if (oldIdx === -1 || newIdx === -1) return;
       const next = arrayMove(currentList, oldIdx, newIdx);
-      setExtCustomOrder(next);
-      void saveExternalOrder(next);
+      const deduped = Array.from(new Set(next));
+      setExtCustomOrder(deduped);
+      void saveExternalOrder(deduped);
     },
     [orderedExternal, saveExternalOrder],
   );
@@ -1566,7 +1652,7 @@ export const SimpleMediaView: React.FC = () => {
                 onDragEnd={handleDownloadedDragEnd}
                 onDragCancel={handleDownloadedDragCancel}
               >
-                <SortableContext items={ordered.map((g) => g.id)} strategy={rectSortingStrategy}>
+                <SortableContext items={Array.from(new Set(ordered.map((g) => g.id)))} strategy={rectSortingStrategy}>
                   <div className="w-full pb-4 pt-1 px-1 -mx-1">
                     <div
                       ref={gridRef}
@@ -1585,7 +1671,7 @@ export const SimpleMediaView: React.FC = () => {
                   </div>
                 </SortableContext>
                 <DragOverlay dropAnimation={defaultDropAnimation}>
-                  {activeDownloadedGroup ? (
+                  {isReordering && activeDownloadedGroup ? (
                     <div
                       style={{ width: `${posterSize}px` }}
                       className="pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95"
@@ -1619,7 +1705,7 @@ export const SimpleMediaView: React.FC = () => {
                 onDragEnd={handleExternalDragEnd}
                 onDragCancel={handleExternalDragCancel}
               >
-                <SortableContext items={orderedExternal.map((m) => m.path)} strategy={rectSortingStrategy}>
+                <SortableContext items={Array.from(new Set(orderedExternal.map((m) => m.path)))} strategy={rectSortingStrategy}>
                   <div className="w-full pb-4 pt-1 px-1 -mx-1">
                     <div
                       data-testid="external-grid"
@@ -1637,7 +1723,7 @@ export const SimpleMediaView: React.FC = () => {
                   </div>
                 </SortableContext>
                 <DragOverlay dropAnimation={defaultDropAnimation}>
-                  {activeExternalItem ? (
+                  {isReordering && activeExternalItem ? (
                     <div
                       style={{ width: `${posterSize}px` }}
                       className="pointer-events-none shadow-2xl rounded-lg ring-2 ring-[#e50914] transform rotate-1 scale-105 opacity-95"

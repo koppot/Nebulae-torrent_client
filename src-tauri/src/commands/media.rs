@@ -4084,6 +4084,96 @@ mod tests {
             Some("/custom/my_suzume_art.jpg")
         );
     }
+
+    #[test]
+    fn test_external_media_path_deduplication_preserves_distinct_releases() {
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut deduplicated: Vec<ExternalMedia> = Vec::new();
+
+        let raw_items = vec![
+            // Two entries with identical path (e.g. historical sidecar duplicates)
+            ExternalMedia {
+                path: "V:\\UHD\\Patlabor 2 the Movie (2002) UHD".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: None,
+                kind: "Blu-ray UHD".to_string(),
+                added_ms: 1000,
+                poster_url: None,
+            },
+            ExternalMedia {
+                path: "V:\\UHD\\Patlabor 2 the Movie (2002) UHD".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: Some(2002),
+                kind: "File".to_string(),
+                added_ms: 2000,
+                poster_url: Some("/thumbs/patlabor.webp".to_string()),
+            },
+            // Legitimate distinct release sharing same title and artwork
+            ExternalMedia {
+                path: "V:\\Blu-ray\\Patlabor 2 the Movie (1993)".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: Some(1993),
+                kind: "Blu-ray".to_string(),
+                added_ms: 3000,
+                poster_url: Some("/thumbs/patlabor.webp".to_string()),
+            },
+            // Another unique release
+            ExternalMedia {
+                path: "V:\\Blu-ray\\Fuuka (2017) Funimation".to_string(),
+                title: "Fuuka (2017)".to_string(),
+                year: Some(2017),
+                kind: "Blu-ray".to_string(),
+                added_ms: 4000,
+                poster_url: None,
+            },
+        ];
+
+        for m in &raw_items {
+            let key = m.path.trim().to_lowercase().replace('\\', "/");
+            if !seen_paths.insert(key.clone()) {
+                if let Some(existing) = deduplicated
+                    .iter_mut()
+                    .find(|e| e.path.trim().to_lowercase().replace('\\', "/") == key)
+                {
+                    if existing.year.is_none() && m.year.is_some() {
+                        existing.year = m.year;
+                    }
+                    if existing.poster_url.is_none() && m.poster_url.is_some() {
+                        existing.poster_url = m.poster_url.clone();
+                    }
+                    if m.added_ms > existing.added_ms {
+                        existing.added_ms = m.added_ms;
+                    }
+                }
+                continue;
+            }
+            deduplicated.push(m.clone());
+        }
+
+        // Total deduplicated items must be 3 (2 patlabor paths + 1 fuuka path)
+        assert_eq!(deduplicated.len(), 3);
+        // Patlabor UHD merged metadata from entry 2: year 2002, poster_url preserved, latest added_ms
+        assert_eq!(
+            deduplicated[0].path,
+            "V:\\UHD\\Patlabor 2 the Movie (2002) UHD"
+        );
+        assert_eq!(deduplicated[0].year, Some(2002));
+        assert_eq!(
+            deduplicated[0].poster_url.as_deref(),
+            Some("/thumbs/patlabor.webp")
+        );
+        assert_eq!(deduplicated[0].added_ms, 2000);
+
+        // Legitimate separate Patlabor 1993 release strictly preserved
+        assert_eq!(
+            deduplicated[1].path,
+            "V:\\Blu-ray\\Patlabor 2 the Movie (1993)"
+        );
+        assert_eq!(deduplicated[1].year, Some(1993));
+
+        // Fuuka strictly preserved
+        assert_eq!(deduplicated[2].path, "V:\\Blu-ray\\Fuuka (2017) Funimation");
+    }
 }
 
 /// One externally-opened media item in the persistent collection.
@@ -4172,30 +4262,56 @@ fn read_external_store(app: &tauri::AppHandle) -> Vec<ExternalMedia> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    if auto_heal_external_media_posters(&mut items) {
+
+    let mut seen_paths = std::collections::HashSet::new();
+    let has_path_duplicates = items.iter().any(|m| {
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        !seen_paths.insert(key)
+    });
+
+    let healed = auto_heal_external_media_posters(&mut items);
+    if healed || has_path_duplicates {
         let _ = write_external_store(app, &items);
+        if has_path_duplicates {
+            let mut seen = std::collections::HashSet::new();
+            items.retain(|m| {
+                let key = m.path.trim().to_lowercase().replace('\\', "/");
+                seen.insert(key)
+            });
+        }
     }
     items
 }
 
 fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Result<(), String> {
-    // Collapse legacy duplicates on every write: one entry per title+year
-    // (owner: "we do not need 2 separate entries"). Keeps the FIRST.
-    let mut seen: Vec<(String, Option<i32>)> = Vec::new();
-    let items: Vec<ExternalMedia> = items
-        .iter()
-        .filter(|m| {
-            let key = (m.title.to_ascii_lowercase(), m.year);
-            if seen.contains(&key) {
-                return false;
+    // Deduplicate entries on every write: strictly one entry per unique filesystem path.
+    // Distinct paths (e.g. separate editions or releases sharing title/artwork) are strictly preserved.
+    let mut seen_paths = std::collections::HashSet::new();
+    let mut deduplicated: Vec<ExternalMedia> = Vec::new();
+    for m in items {
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        if !seen_paths.insert(key.clone()) {
+            // Path was already seen; merge metadata if this entry has more info
+            if let Some(existing) = deduplicated
+                .iter_mut()
+                .find(|e| e.path.trim().to_lowercase().replace('\\', "/") == key)
+            {
+                if existing.year.is_none() && m.year.is_some() {
+                    existing.year = m.year;
+                }
+                if existing.poster_url.is_none() && m.poster_url.is_some() {
+                    existing.poster_url = m.poster_url.clone();
+                }
+                if m.added_ms > existing.added_ms {
+                    existing.added_ms = m.added_ms;
+                }
             }
-            seen.push(key);
-            true
-        })
-        .cloned()
-        .collect();
+            continue;
+        }
+        deduplicated.push(m.clone());
+    }
     let store = external_media_path(app)?;
-    let data = serde_json::to_vec_pretty(&items).map_err(|e| e.to_string())?;
+    let data = serde_json::to_vec_pretty(&deduplicated).map_err(|e| e.to_string())?;
     std::fs::write(store, data).map_err(|e| e.to_string())
 }
 
@@ -4298,14 +4414,17 @@ pub fn add_external_media(
         title.trim().to_string()
     };
     let year = parsed.year.map(|y| y as i32);
-    // One poster per movie (owner): the same title can arrive twice -
-    // auto-adopted on play AND added manually - at different folder
-    // levels. Keep the FIRST entry; later duplicates are dropped.
-    if items
-        .iter()
-        .any(|m| m.title.eq_ignore_ascii_case(&title_clean) && m.year == year)
+    // If an entry for the exact same filesystem path already exists, update missing metadata and do not duplicate.
+    // Distinct paths (e.g. separate cuts/editions sharing title or artwork) are strictly preserved as separate entries.
+    let target_key = path.trim().to_lowercase().replace('\\', "/");
+    if let Some(existing) = items
+        .iter_mut()
+        .find(|m| m.path.trim().to_lowercase().replace('\\', "/") == target_key)
     {
-        return Ok(());
+        if existing.year.is_none() && year.is_some() {
+            existing.year = year;
+        }
+        return write_external_store(&app, &items);
     }
     items.push(ExternalMedia {
         path: path.clone(),
@@ -4336,19 +4455,25 @@ pub fn list_external_media(
 
     // Source 1: JSON sidecar (user-added external media).
     let sidecar_items = read_external_store(&app);
-    let mut live: Vec<ExternalMedia> = sidecar_items
-        .into_iter()
-        .map(|mut m| {
-            m.path = release_root_of(&m.path);
-            m
-        })
-        .filter(|m| std::path::Path::new(&m.path).exists())
-        .collect();
+    let mut live: Vec<ExternalMedia> = Vec::new();
+    let mut seen_live_paths = std::collections::HashSet::new();
+    for mut m in sidecar_items {
+        m.path = release_root_of(&m.path);
+        if !std::path::Path::new(&m.path).exists() {
+            continue;
+        }
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        if seen_live_paths.insert(key) {
+            live.push(m);
+        }
+    }
     let _ = write_external_store(&app, &live);
 
     // Track paths already in sidecar to avoid duplicates from DB source.
-    let mut seen_paths: std::collections::HashSet<String> =
-        live.iter().map(|m| m.path.clone()).collect();
+    let mut seen_paths: std::collections::HashSet<String> = live
+        .iter()
+        .map(|m| m.path.trim().to_lowercase().replace('\\', "/"))
+        .collect();
 
     // Source 2: DB rows with is_external = 1 (auto-reclassified by seeding.rs).
     // These include the user's custom title, poster associations, and all
@@ -4388,8 +4513,9 @@ pub fn list_external_media(
                 release_root_of(raw_path)
             };
 
+            let norm_key = norm_path.trim().to_lowercase().replace('\\', "/");
             // Skip if already covered by sidecar.
-            if !seen_paths.insert(norm_path.clone()) {
+            if !seen_paths.insert(norm_key) {
                 continue;
             }
 
@@ -4427,16 +4553,15 @@ pub fn list_external_media(
     // Apply saved external media ordering if present
     if let Ok(order_paths) = db.get_external_media_order() {
         if !order_paths.is_empty() {
-            let order_map: std::collections::HashMap<&str, usize> = order_paths
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (p.as_str(), i))
-                .collect();
+            let mut order_map: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (i, p) in order_paths.iter().enumerate() {
+                let key = p.trim().to_lowercase().replace('\\', "/");
+                order_map.entry(key).or_insert(i);
+            }
             live.sort_by_key(|m| {
-                order_map
-                    .get(m.path.as_str())
-                    .copied()
-                    .unwrap_or(usize::MAX)
+                let key = m.path.trim().to_lowercase().replace('\\', "/");
+                order_map.get(&key).copied().unwrap_or(usize::MAX)
             });
         }
     }

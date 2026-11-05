@@ -589,8 +589,13 @@ impl Database {
     pub fn get_downloaded_media_order(&self) -> Result<Vec<String>> {
         if let Ok(Some(json)) = self.get_setting("media_downloaded_order") {
             if let Ok(hashes) = serde_json::from_str::<Vec<String>>(&json) {
-                if !hashes.is_empty() {
-                    return Ok(hashes);
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<String> = hashes
+                    .into_iter()
+                    .filter(|h| seen.insert(h.to_lowercase()))
+                    .collect();
+                if !unique.is_empty() {
+                    return Ok(unique);
                 }
             }
         }
@@ -600,8 +605,11 @@ impl Database {
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut list = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for r in rows.flatten() {
-            list.push(r);
+            if seen.insert(r.to_lowercase()) {
+                list.push(r);
+            }
         }
         Ok(list)
     }
@@ -610,7 +618,15 @@ impl Database {
     pub fn get_external_media_order(&self) -> Result<Vec<String>> {
         if let Ok(Some(json)) = self.get_setting("media_external_order") {
             if let Ok(paths) = serde_json::from_str::<Vec<String>>(&json) {
-                return Ok(paths);
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<String> = paths
+                    .into_iter()
+                    .filter(|p| {
+                        let key = p.trim().to_lowercase().replace('\\', "/");
+                        seen.insert(key)
+                    })
+                    .collect();
+                return Ok(unique);
             }
         }
         Ok(Vec::new())
@@ -618,7 +634,16 @@ impl Database {
 
     /// Persist the custom ordered list of external media paths.
     pub fn set_external_media_order(&self, paths: &[String]) -> Result<()> {
-        let json = serde_json::to_string(paths)
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<String> = paths
+            .iter()
+            .filter(|p| {
+                let key = p.trim().to_lowercase().replace('\\', "/");
+                seen.insert(key)
+            })
+            .cloned()
+            .collect();
+        let json = serde_json::to_string(&unique)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         self.set_setting("media_external_order", &json)
     }
@@ -1606,5 +1631,17 @@ mod tests {
 
         let loaded2 = db.get_external_media_order().unwrap();
         assert_eq!(loaded2, order2);
+
+        // Deduplication on set and get: duplicates must be stripped
+        let with_dupes = vec![
+            "/media/Suzume (2022)".to_string(),
+            "/media/Suzume (2022)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+        ];
+        db.set_external_media_order(&with_dupes).unwrap();
+        let loaded3 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded3, order2);
     }
 }

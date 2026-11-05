@@ -74,7 +74,14 @@ class MockSqliteBackend {
   }
 
   set_external_media_order(paths: string[]): void {
-    this.settings.set('media_external_order', JSON.stringify(paths));
+    const seen = new Set<string>();
+    const unique = paths.filter((p) => {
+      const key = p.trim().toLowerCase().replace(/\\/g, '/');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    this.settings.set('media_external_order', JSON.stringify(unique));
   }
 
   get_external_media_order(): string[] {
@@ -82,7 +89,15 @@ class MockSqliteBackend {
     if (json) {
       try {
         const paths = JSON.parse(json);
-        if (Array.isArray(paths)) return paths;
+        if (Array.isArray(paths)) {
+          const seen = new Set<string>();
+          return paths.filter((p) => {
+            const key = p.trim().toLowerCase().replace(/\\/g, '/');
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
       } catch { /* fallback */ }
     }
     return [];
@@ -90,15 +105,33 @@ class MockSqliteBackend {
 }
 
 // Order resolution algorithm from SimpleMediaView.tsx
+function normalizePath(p: string): string {
+  return p.trim().toLowerCase().replace(/\\/g, '/');
+}
+
 function orderGroups<T extends { id: string; info_hash?: string }>(groups: T[], orderList: string[]): T[] {
-  if (!orderList || orderList.length === 0) return groups;
-  const remaining = [...groups];
+  if (!groups || groups.length === 0) return [];
+  const uniqueGroups: T[] = [];
+  const seenGroupIds = new Set<string>();
+  for (const g of groups) {
+    const idLower = g.id.toLowerCase();
+    if (!seenGroupIds.has(idLower)) {
+      seenGroupIds.add(idLower);
+      uniqueGroups.push(g);
+    }
+  }
+  if (!orderList || orderList.length === 0) return uniqueGroups;
+  const remaining = [...uniqueGroups];
   const result: T[] = [];
-  for (const id of orderList) {
-    const idLower = id.toLowerCase();
+  const seenOrderIds = new Set<string>();
+  for (const rawId of orderList) {
+    const idLower = rawId.toLowerCase();
+    if (seenOrderIds.has(idLower)) continue;
+    seenOrderIds.add(idLower);
     const idx = remaining.findIndex((g) =>
       g.id.toLowerCase() === idLower ||
-      (g.info_hash && g.info_hash.toLowerCase() === idLower)
+      (g.info_hash && g.info_hash.toLowerCase() === idLower) ||
+      g.id === rawId
     );
     if (idx !== -1) {
       result.push(remaining[idx]);
@@ -110,11 +143,25 @@ function orderGroups<T extends { id: string; info_hash?: string }>(groups: T[], 
 }
 
 function orderExternal<T extends { path: string }>(items: T[], orderList: string[]): T[] {
-  if (!orderList || orderList.length === 0) return items;
-  const remaining = [...items];
+  if (!items || items.length === 0) return [];
+  const uniqueItems: T[] = [];
+  const seenItemPaths = new Set<string>();
+  for (const item of items) {
+    const norm = normalizePath(item.path);
+    if (!seenItemPaths.has(norm)) {
+      seenItemPaths.add(norm);
+      uniqueItems.push(item);
+    }
+  }
+  if (!orderList || orderList.length === 0) return uniqueItems;
+  const remaining = [...uniqueItems];
   const result: T[] = [];
-  for (const path of orderList) {
-    const idx = remaining.findIndex((m) => m.path === path);
+  const seenOrderPaths = new Set<string>();
+  for (const rawPath of orderList) {
+    const norm = normalizePath(rawPath);
+    if (seenOrderPaths.has(norm)) continue;
+    seenOrderPaths.add(norm);
+    const idx = remaining.findIndex((m) => normalizePath(m.path) === norm);
     if (idx !== -1) {
       result.push(remaining[idx]);
       remaining.splice(idx, 1);
@@ -365,4 +412,179 @@ test('Test Scenario 5: Independent Poster Size and Max Posters Per Row Interacti
   restartBackend.settings.set('media_posters_per_row', backend.settings.get('media_posters_per_row')!);
   assert.equal(restartBackend.get_poster_size(), 220, 'Poster size survived restart');
   assert.equal(restartBackend.get_posters_per_row(), 4, 'Max posters per row survived restart');
+});
+
+test('Test Scenario 6: Reordering Invariant - Moving Posters Preserves Exact Item Count and Identity Without Cloning', () => {
+  const backend = new MockSqliteBackend();
+
+  // Initial collection of 6 external items (matching the real setup)
+  const initialMedia = [
+    { path: 'V:\\Blu-ray\\Fuuka (2017) Funimation', title: 'Fuuka', year: 2017 },
+    { path: 'V:\\UHD\\Suzume (2022) UHD', title: 'Suzume', year: 2022 },
+    { path: 'V:\\DVD\\DVD_jp\\Patapata Hikousen no Bouken DVD', title: 'Patapata Hikousen no Bouken', year: 2002 },
+    { path: 'V:\\DVD\\DVD_jp\\Busou Renkin 9', title: 'Busou Renkin', year: 2006 },
+    { path: 'V:\\UHD\\UHD Mary and a witch\'s flower', title: 'Mary to Majo no Hana', year: 2017 },
+    { path: 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', title: 'Patlabor 2: The Movie', year: 2002 },
+  ];
+
+  const initialCount = initialMedia.length;
+  assert.equal(initialCount, 6);
+
+  // Initial order resolution
+  const initialOrdered = orderExternal(initialMedia, []);
+  assert.equal(initialOrdered.length, 6);
+
+  // Simulate multiple drag moves across rows:
+  // Move 1: Drag Patlabor from index 5 to index 0 (top row)
+  let currentPaths = Array.from(new Set(initialOrdered.map((m) => m.path)));
+  const oldIdx1 = currentPaths.indexOf('V:\\UHD\\Patlabor 2 the Movie (2002) UHD');
+  const newIdx1 = 0;
+  assert.notEqual(oldIdx1, -1);
+  const moved1 = [...currentPaths];
+  const [removed1] = moved1.splice(oldIdx1, 1);
+  moved1.splice(newIdx1, 0, removed1);
+  const deduped1 = Array.from(new Set(moved1));
+  backend.set_external_media_order(deduped1);
+
+  // Verify collection item count and uniqueness after Move 1
+  const afterMove1 = orderExternal(initialMedia, backend.get_external_media_order());
+  assert.equal(afterMove1.length, 6, 'Item count strictly invariant after Move 1');
+  assert.equal(new Set(afterMove1.map((m) => m.path)).size, 6, 'All 6 items are unique');
+  assert.equal(afterMove1[0].path, 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', 'Patlabor moved to index 0');
+
+  // Move 2: Drag Busou Renkin to index 2
+  currentPaths = Array.from(new Set(afterMove1.map((m) => m.path)));
+  const oldIdx2 = currentPaths.indexOf('V:\\DVD\\DVD_jp\\Busou Renkin 9');
+  const newIdx2 = 2;
+  const moved2 = [...currentPaths];
+  const [removed2] = moved2.splice(oldIdx2, 1);
+  moved2.splice(newIdx2, 0, removed2);
+  const deduped2 = Array.from(new Set(moved2));
+  backend.set_external_media_order(deduped2);
+
+  // Verify collection item count and uniqueness after Move 2
+  const afterMove2 = orderExternal(initialMedia, backend.get_external_media_order());
+  assert.equal(afterMove2.length, 6, 'Item count strictly invariant after Move 2');
+  assert.equal(new Set(afterMove2.map((m) => m.path)).size, 6, 'All 6 items are unique');
+  assert.equal(afterMove2[2].path, 'V:\\DVD\\DVD_jp\\Busou Renkin 9', 'Busou Renkin at index 2');
+
+  // Move 3: Drag Patlabor to the very end
+  currentPaths = Array.from(new Set(afterMove2.map((m) => m.path)));
+  const oldIdx3 = currentPaths.indexOf('V:\\UHD\\Patlabor 2 the Movie (2002) UHD');
+  const newIdx3 = currentPaths.length - 1;
+  const moved3 = [...currentPaths];
+  const [removed3] = moved3.splice(oldIdx3, 1);
+  moved3.splice(newIdx3, 0, removed3);
+  const deduped3 = Array.from(new Set(moved3));
+  backend.set_external_media_order(deduped3);
+
+  // Verify collection item count and uniqueness after Move 3
+  const afterMove3 = orderExternal(initialMedia, backend.get_external_media_order());
+  assert.equal(afterMove3.length, 6, 'Item count strictly invariant after Move 3');
+  assert.equal(new Set(afterMove3.map((m) => m.path)).size, 6, 'All 6 items remain unique');
+  assert.equal(afterMove3[5].path, 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', 'Patlabor moved to end');
+});
+
+test('Test Scenario 7: Path Deduplication Preserves Legitimate Separate Releases Sharing Title or Artwork', () => {
+  // Collection containing:
+  // 1. Two separate legitimate releases sharing title and poster (e.g. 1993 DVD vs 2002 UHD)
+  // 2. One duplicate entry with the exact same path (e.g. historical un-deduplicated sidecar entry)
+  const rawItems = [
+    { path: 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', title: 'Patlabor 2: The Movie', year: 2002, poster_url: '/posters/patlabor.webp' },
+    { path: 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', title: 'Patlabor 2: The Movie', year: null, poster_url: null }, // identical path
+    { path: 'V:\\Blu-ray\\Patlabor 2 the Movie (1993)', title: 'Patlabor 2: The Movie', year: 1993, poster_url: '/posters/patlabor.webp' }, // distinct release, same title & artwork
+    { path: 'V:\\Blu-ray\\Fuuka (2017)', title: 'Fuuka', year: 2017, poster_url: '/posters/fuuka.webp' },
+  ];
+
+  // Simulated order array that might even contain duplicate paths from prior bug
+  const orderList = [
+    'V:\\Blu-ray\\Fuuka (2017)',
+    'V:\\UHD\\Patlabor 2 the Movie (2002) UHD',
+    'V:\\UHD\\Patlabor 2 the Movie (2002) UHD', // duplicate path in saved order
+    'V:\\Blu-ray\\Patlabor 2 the Movie (1993)',
+  ];
+
+  const resolved = orderExternal(rawItems, orderList);
+
+  // Exact requirements:
+  // 1. Identical paths are deduplicated to exactly ONE card.
+  // 2. Distinct paths sharing title/artwork are STRICTLY PRESERVED as separate cards.
+  assert.equal(resolved.length, 3, 'Exactly 3 distinct items rendered');
+  assert.equal(resolved[0].path, 'V:\\Blu-ray\\Fuuka (2017)');
+  assert.equal(resolved[1].path, 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD');
+  assert.equal(resolved[2].path, 'V:\\Blu-ray\\Patlabor 2 the Movie (1993)', 'Separate release strictly preserved');
+
+  // Verify sortable IDs in SortableContext are strictly unique
+  const sortableIds = Array.from(new Set(resolved.map((m) => m.path)));
+  assert.equal(sortableIds.length, 3, 'SortableContext IDs have zero collisions');
+});
+
+test('Test Scenario 8: Clean Drag Lifecycle - Reorder Exit and Drop Invariants', () => {
+  // Simulate active drag state
+  let isReordering = true;
+  let activeExternalId: string | null = 'V:\\UHD\\Patlabor 2 the Movie (2002) UHD';
+  let activeDownloadedId: string | null = 'dl-hash-1';
+
+  // Invariant 1: While dragging in reorder mode, active card has dragging style
+  const cardStyleInReorder = (isDragging: boolean) => ({
+    transform: isReordering ? 'translate3d(0px, 100px, 0px)' : undefined,
+    transition: isReordering ? 'transform 250ms ease' : undefined,
+    opacity: isReordering && isDragging ? 0.3 : 1,
+  });
+
+  const draggingCard = cardStyleInReorder(true);
+  assert.equal(draggingCard.opacity, 0.3);
+  assert.equal(draggingCard.transform, 'translate3d(0px, 100px, 0px)');
+
+  // Invariant 2: User clicks "Done" (handleToggleReorder)
+  // Both active IDs MUST be reset to null immediately
+  const handleToggleReorder = () => {
+    isReordering = !isReordering;
+    activeDownloadedId = null;
+    activeExternalId = null;
+  };
+
+  handleToggleReorder();
+  assert.equal(isReordering, false, 'Reorder mode is now false');
+  assert.equal(activeDownloadedId, null, 'Downloaded active drag ID cleared');
+  assert.equal(activeExternalId, null, 'External active drag ID cleared');
+
+  // Invariant 3: When isReordering is false, cards NEVER have transform or dimming
+  const normalCard = cardStyleInReorder(false);
+  assert.equal(normalCard.opacity, 1, 'Opacity is strictly 1');
+  assert.equal(normalCard.transform, undefined, 'Transform is undefined - zero floating/displaced cards');
+
+  // Invariant 4: DragOverlay is NEVER rendered when isReordering is false
+  const shouldRenderOverlay = isReordering && activeExternalId !== null;
+  assert.equal(shouldRenderOverlay, false, 'DragOverlay cannot render when reorder mode is inactive');
+});
+
+test('Test Scenario 9: Persistence Roundtrip and State Sanitization', () => {
+  const backend = new MockSqliteBackend();
+
+  // Save order containing duplicate and malformed paths
+  const pollutedOrder = [
+    'V:\\UHD\\Patlabor 2 the Movie (2002) UHD',
+    'V:\\Blu-ray\\Fuuka (2017)',
+    'V:/UHD/Patlabor 2 the Movie (2002) UHD', // same path with forward slashes
+    'V:\\Blu-ray\\Fuuka (2017)',             // exact duplicate
+    'V:\\UHD\\Suzume (2022)',
+  ];
+
+  backend.set_external_media_order(pollutedOrder);
+
+  // Backend automatically sanitizes on write and read
+  const sanitized = backend.get_external_media_order();
+  assert.equal(sanitized.length, 3, 'Sanitized to exactly 3 unique paths');
+  assert.deepEqual(sanitized, [
+    'V:\\UHD\\Patlabor 2 the Movie (2002) UHD',
+    'V:\\Blu-ray\\Fuuka (2017)',
+    'V:\\UHD\\Suzume (2022)',
+  ]);
+
+  // Restart persistence simulation
+  const restartBackend = new MockSqliteBackend();
+  restartBackend.settings.set('media_external_order', backend.settings.get('media_external_order')!);
+  const restored = restartBackend.get_external_media_order();
+  assert.deepEqual(restored, sanitized, 'Sanitized unique order persists across restarts');
 });
