@@ -63,11 +63,11 @@ impl Database {
             let _ = conn.execute(&sql, []);
         }
 
-        // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash)
+        // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash or fuuka artwork)
         let _ = conn.execute(
             "DELETE FROM settings
              WHERE (key LIKE 'tmdb_poster:%' OR key LIKE 'mal_poster:%')
-               AND value LIKE '%93758aeca10f8450%'
+               AND (value LIKE '%93758aeca10f8450%' OR LOWER(value) LIKE '%fuuka%')
                AND LOWER(key) NOT LIKE '%fuuka%'",
             [],
         );
@@ -76,7 +76,7 @@ impl Database {
         let _ = conn.execute(
             "UPDATE torrent_metadata
              SET poster_path = NULL
-             WHERE poster_path LIKE '%93758aeca10f8450%'
+             WHERE (poster_path LIKE '%93758aeca10f8450%' OR LOWER(poster_path) LIKE '%fuuka%')
                AND COALESCE(user_title_locked, 0) = 0
                AND LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) NOT LIKE '%fuuka%'",
             [],
@@ -90,7 +90,10 @@ impl Database {
                  SELECT s.value FROM settings s
                  WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
                     OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
-                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
+                   AND (
+                       (s.value NOT LIKE '%93758aeca10f8450%' AND LOWER(s.value) NOT LIKE '%fuuka%')
+                       OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%'
+                   )
                  LIMIT 1
              )
              WHERE (poster_path IS NULL OR poster_path = '')
@@ -99,7 +102,10 @@ impl Database {
                  SELECT 1 FROM settings s
                  WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
                     OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
-                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
+                   AND (
+                       (s.value NOT LIKE '%93758aeca10f8450%' AND LOWER(s.value) NOT LIKE '%fuuka%')
+                       OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%'
+                   )
                )",
             [],
         );
@@ -1376,6 +1382,10 @@ mod tests {
                  -- Provider setting containing contaminated hash
                  INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
                  INSERT INTO settings (key, value) VALUES ('mal_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
+                 -- Provider setting containing fuuka keyword for non-fuuka title
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:patlabor 2 the movie', '/cache/fuuka.webp');
+                 -- Genuine Fuuka settings
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:fuuka (2017)', '/cache/fuuka.webp');
 
                  -- Item 1: Locked custom poster (even if file path contains hash)
                  INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
@@ -1387,7 +1397,15 @@ mod tests {
 
                  -- Item 3: Unlocked item with contaminated hash
                  INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
-                     VALUES ('h_unlocked_contam', 'Regular Item', 0, '/thumbs/93758aeca10f8450.webp', 30);",
+                     VALUES ('h_unlocked_contam', 'Regular Item', 0, '/thumbs/93758aeca10f8450.webp', 30);
+
+                 -- Item 4: Unlocked item with fuuka in path
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_unlocked_fuuka_path', 'Mary and the Witch''s Flower', 0, '/cache/fuuka_scan.webp', 40);
+
+                 -- Item 5: Genuine Fuuka torrent
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_genuine_fuuka', 'Fuuka (2017)', 0, '/cache/fuuka.webp', 50);",
             )
             .unwrap();
         }
@@ -1408,6 +1426,19 @@ mod tests {
                 None
             );
             assert_eq!(db.get_setting("mal_poster:v3:another title").unwrap(), None);
+            assert_eq!(
+                db.get_setting("tmdb_poster:v3:patlabor 2 the movie")
+                    .unwrap(),
+                None
+            );
+
+            // Genuine Fuuka setting must be preserved
+            assert_eq!(
+                db.get_setting("tmdb_poster:v3:fuuka (2017)")
+                    .unwrap()
+                    .as_deref(),
+                Some("/cache/fuuka.webp")
+            );
 
             // Locked items must be completely preserved
             let m1 = db.get_torrent_metadata("h_locked_hash").unwrap().unwrap();
@@ -1424,12 +1455,22 @@ mod tests {
             );
             assert!(m2.user_title_locked);
 
-            // Unlocked contaminated item must be reset to NULL
+            // Unlocked contaminated items must be reset to NULL
             let m3 = db
                 .get_torrent_metadata("h_unlocked_contam")
                 .unwrap()
                 .unwrap();
             assert_eq!(m3.poster_path, None);
+
+            let m4 = db
+                .get_torrent_metadata("h_unlocked_fuuka_path")
+                .unwrap()
+                .unwrap();
+            assert_eq!(m4.poster_path, None);
+
+            // Genuine Fuuka item must retain its poster
+            let m5 = db.get_torrent_metadata("h_genuine_fuuka").unwrap().unwrap();
+            assert_eq!(m5.poster_path.as_deref(), Some("/cache/fuuka.webp"));
         }
 
         // Pass 2: Second startup init (assert idempotence)

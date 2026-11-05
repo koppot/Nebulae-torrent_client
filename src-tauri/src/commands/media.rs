@@ -4007,6 +4007,83 @@ mod tests {
         // 11. Again, no repeated seek while active
         assert!(!lifecycle.tick(false, 100, warn_mpls));
     }
+
+    #[test]
+    fn test_auto_heal_external_media_posters() {
+        let mut items = vec![
+            ExternalMedia {
+                path: "/media/external/Fuuka (2017)".to_string(),
+                title: "Fuuka (2017)".to_string(),
+                year: Some(2017),
+                kind: "Folder".to_string(),
+                added_ms: 100,
+                poster_url: Some("/thumbs/93758aeca10f8450.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Patlabor 2 the Movie (1993)".to_string(),
+                title: "Patlabor 2 the Movie (1993)".to_string(),
+                year: Some(1993),
+                kind: "Folder".to_string(),
+                added_ms: 200,
+                poster_url: Some("/thumbs/93758aeca10f8450.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Mary and a witchs flower (2017)".to_string(),
+                title: "Mary and a witchs flower (2017)".to_string(),
+                year: Some(2017),
+                kind: "Folder".to_string(),
+                added_ms: 300,
+                poster_url: Some("/cache/fuuka_scan.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Suzume (2022)".to_string(),
+                title: "Suzume (2022)".to_string(),
+                year: Some(2022),
+                kind: "Folder".to_string(),
+                added_ms: 400,
+                poster_url: Some("/custom/my_suzume_art.jpg".to_string()),
+            },
+        ];
+
+        // First pass: heals contaminated entries, preserves genuine Fuuka and custom art
+        let mutated = auto_heal_external_media_posters(&mut items);
+        assert!(mutated, "Expected mutation on contaminated collection");
+
+        // Genuine Fuuka poster preserved
+        assert_eq!(
+            items[0].poster_url.as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+
+        // Patlabor 2 contaminated hash cleared to None
+        assert_eq!(items[1].poster_url, None);
+
+        // Mary and the Witch's Flower contaminated path cleared to None
+        assert_eq!(items[2].poster_url, None);
+
+        // Suzume intentional custom poster preserved
+        assert_eq!(
+            items[3].poster_url.as_deref(),
+            Some("/custom/my_suzume_art.jpg")
+        );
+
+        // Second pass: idempotent, zero mutations
+        let second_pass = auto_heal_external_media_posters(&mut items);
+        assert!(
+            !second_pass,
+            "Second pass must be idempotent and return false"
+        );
+        assert_eq!(
+            items[0].poster_url.as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+        assert_eq!(items[1].poster_url, None);
+        assert_eq!(items[2].poster_url, None);
+        assert_eq!(
+            items[3].poster_url.as_deref(),
+            Some("/custom/my_suzume_art.jpg")
+        );
+    }
 }
 
 /// One externally-opened media item in the persistent collection.
@@ -4061,14 +4138,44 @@ fn classify_external(path: &str) -> String {
     "File".into()
 }
 
+/// Auto-heal historical poster contamination in external media items.
+/// Non-Fuuka items pointing to contaminated Fuuka hashes or Fuuka scan paths
+/// have their `poster_url` safely reset to `None` so genuine artwork re-resolves cleanly.
+/// Preserves genuine Fuuka titles and intentional custom/user-assigned posters.
+pub fn auto_heal_external_media_posters(items: &mut [ExternalMedia]) -> bool {
+    let mut mutated = false;
+    for m in items.iter_mut() {
+        let title_lc = m.title.to_lowercase();
+        if !title_lc.contains("fuuka") {
+            if let Some(ref p) = m.poster_url {
+                let p_lc = p.to_lowercase();
+                if p_lc.contains("93758aeca10f8450") || p_lc.contains("fuuka") {
+                    tracing::info!(
+                        "[media] Auto-healing historical poster contamination for {:?}: resetting poster_url (was {})",
+                        m.title,
+                        p
+                    );
+                    m.poster_url = None;
+                    mutated = true;
+                }
+            }
+        }
+    }
+    mutated
+}
+
 fn read_external_store(app: &tauri::AppHandle) -> Vec<ExternalMedia> {
     let Ok(store) = external_media_path(app) else {
         return Vec::new();
     };
-    std::fs::read(&store)
+    let mut items: Vec<ExternalMedia> = std::fs::read(&store)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if auto_heal_external_media_posters(&mut items) {
+        let _ = write_external_store(app, &items);
+    }
+    items
 }
 
 fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Result<(), String> {
@@ -4313,6 +4420,9 @@ pub fn list_external_media(
             });
         }
     }
+
+    // Ensure all live external items (both sidecar and DB-sourced) are free from cross-title contamination
+    auto_heal_external_media_posters(&mut live);
 
     // Apply saved external media ordering if present
     if let Ok(order_paths) = db.get_external_media_order() {
