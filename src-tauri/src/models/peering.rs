@@ -133,7 +133,7 @@ impl Default for PeeringSettings {
             locality_enabled: true,
             max_peers_per_torrent: 80,
             max_global_peers: 500,
-            prefer_utp: true,
+            prefer_utp: false,
             require_encryption: true,
             probe_rtt_enabled: false,
         }
@@ -143,6 +143,13 @@ impl Default for PeeringSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_peering_settings_default_prefers_tcp() {
+        let settings = PeeringSettings::default();
+        assert!(!settings.prefer_utp);
+        assert!(settings.require_encryption);
+    }
 
     #[test]
     fn test_peer_quality_scoring() {

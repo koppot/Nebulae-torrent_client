@@ -807,11 +807,49 @@ pub struct TransmissionTorrentEngine {
     is_shutting_down: Arc<AtomicBool>,
 }
 
+/// Derives (preferred_transports, utp_enabled) from peer connection protocol and prefer_utp flag.
+pub fn derive_transport_settings(
+    peer_connection_protocol: &str,
+    prefer_utp: bool,
+) -> (Vec<&'static str>, bool) {
+    match peer_connection_protocol {
+        "TCP" => (vec!["tcp"], false),
+        "uTP" => (vec!["utp"], true),
+        _ => {
+            if prefer_utp {
+                (vec!["utp", "tcp"], true)
+            } else {
+                (vec!["tcp", "utp"], true)
+            }
+        }
+    }
+}
+
 /// Builds the transmission-daemon `settings.json` configuration structure with
 /// strict private tracker constraints (DHT, PEX, LPD hard-disabled at the session level)
-/// and settings mapped from Nebulae UserSettings.
+/// and settings mapped from Nebulae UserSettings and PeeringSettings.
 pub fn build_transmission_settings(
     settings: &UserSettings,
+    default_download_dir: &str,
+    bind_ipv4: &str,
+    rpc_port: u16,
+    rpc_user: &str,
+    rpc_password: &str,
+) -> Value {
+    build_transmission_settings_with_peering(
+        settings,
+        None,
+        default_download_dir,
+        bind_ipv4,
+        rpc_port,
+        rpc_user,
+        rpc_password,
+    )
+}
+
+pub fn build_transmission_settings_with_peering(
+    settings: &UserSettings,
+    peering: Option<&crate::models::peering::PeeringSettings>,
     default_download_dir: &str,
     bind_ipv4: &str,
     rpc_port: u16,
@@ -850,6 +888,12 @@ pub fn build_transmission_settings(
     let script_enabled = settings.run_external_program_on_finished
         && !settings.external_program_command.trim().is_empty();
 
+    let default_peering = crate::models::peering::PeeringSettings::default();
+    let peering_ref = peering.unwrap_or(&default_peering);
+    let (transports, utp_enabled) =
+        derive_transport_settings(&settings.peer_connection_protocol, peering_ref.prefer_utp);
+    let encryption_level = if peering_ref.require_encryption { 2 } else { 1 };
+
     json!({
         // RPC access (loopback-only)
         "rpc-enabled": true,
@@ -867,8 +911,9 @@ pub fn build_transmission_settings(
         "peer-limit-per-torrent": peer_per_torrent,
         "peer-limit-global": peer_global,
         "upload-slots-per-torrent": unchoke_slots,
-        "encryption": 1, // Preferred
-        "utp-enabled": true,
+        "encryption": encryption_level,
+        "utp-enabled": utp_enabled,
+        "preferred_transports": transports,
 
         // Mandatory private tracker constraints: hard-off at session level
         "dht-enabled": false,
@@ -1327,8 +1372,18 @@ impl TransmissionTorrentEngine {
         }
 
         // 5. Build settings.json for Transmission with private-tracker constraints hard-off
-        let trans_settings = build_transmission_settings(
+        let peering = db
+            .get_setting("peering_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::models::peering::PeeringSettings>(&raw).ok()
+            })
+            .unwrap_or_default();
+
+        let trans_settings = build_transmission_settings_with_peering(
             settings,
+            Some(&peering),
             &default_download_dir.to_string_lossy(),
             &bind_ipv4,
             rpc_port,
@@ -1607,8 +1662,21 @@ impl TransmissionTorrentEngine {
                             })
                             .unwrap_or_default();
 
-                        let new_settings = build_transmission_settings(
+                        let peering = db_watch
+                            .get_setting("peering_settings_json")
+                            .ok()
+                            .flatten()
+                            .and_then(|raw| {
+                                serde_json::from_str::<crate::models::peering::PeeringSettings>(
+                                    &raw,
+                                )
+                                .ok()
+                            })
+                            .unwrap_or_default();
+
+                        let new_settings = build_transmission_settings_with_peering(
                             &user_settings,
+                            Some(&peering),
                             &default_download_dir_watch.to_string_lossy(),
                             &bind_ipv4_watch,
                             new_port,
@@ -3331,26 +3399,61 @@ impl TorrentEngine for TransmissionTorrentEngine {
         &self,
         settings: &crate::models::peering::PeeringSettings,
     ) -> Result<(), String> {
-        // Push peer connection limits to the running Transmission session.
-        // These are session-level settings — they persist until the daemon
-        // restarts and are re-applied on engine startup via saved PeeringSettings.
+        // Read user_settings to respect peer_connection_protocol if configured
+        let user_proto = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
+            .map(|u| u.peer_connection_protocol)
+            .unwrap_or_else(|| "Both".to_string());
+
+        let (transports, utp_on) = derive_transport_settings(&user_proto, settings.prefer_utp);
+        let encryption = if settings.require_encryption { 2 } else { 1 };
+
+        // 1. Update settings.json on disk so disk-only keys and restart values are preserved.
+        let sp = self.config_dir.join("settings.json");
+        if let Ok(raw) = std::fs::read_to_string(&sp) {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                v["peer-limit-per-torrent"] = json!(settings.max_peers_per_torrent);
+                v["peer-limit-global"] = json!(settings.max_global_peers);
+                v["utp-enabled"] = json!(utp_on);
+                v["preferred_transports"] = json!(transports);
+                v["encryption"] = json!(encryption);
+                let tmp = sp.with_extension("json.tmp");
+                if let Ok(content) = serde_json::to_string_pretty(&v) {
+                    let _ =
+                        std::fs::write(&tmp, &content).and_then(|()| std::fs::rename(&tmp, &sp));
+                }
+            }
+        }
+
+        // 2. Push session-set keys to the live running engine via RPC.
         let result = self.rpc_client.session_set(json!({
             "peer-limit-per-torrent": settings.max_peers_per_torrent,
             "peer-limit-global":      settings.max_global_peers,
+            "utp-enabled":            utp_on,
+            "preferred_transports":   transports,
+            "encryption":             encryption,
         }));
         match result {
             Ok(()) => {
                 info!(
-                    "[peering] applied peer limits to Transmission session: \
-                     per-torrent={}, global={}",
-                    settings.max_peers_per_torrent, settings.max_global_peers
+                    "[peering] applied peer limits and transport preference to Transmission: \
+                     per-torrent={}, global={}, transports={:?}, utp-enabled={}, encryption={}",
+                    settings.max_peers_per_torrent,
+                    settings.max_global_peers,
+                    transports,
+                    utp_on,
+                    encryption
                 );
                 Ok(())
             }
             Err(e) => {
-                // Non-fatal: DB is already updated. Log and return error so
-                // the frontend can show a partial-success notification.
-                warn!("[peering] session-set peer limits failed: {e}");
+                warn!("[peering] session-set peer limits/transports failed: {e}");
                 Err(format!(
                     "Peer limits saved but could not be applied to engine: {e}"
                 ))
@@ -3393,6 +3496,19 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let script_enabled = settings.run_external_program_on_finished
             && !settings.external_program_command.trim().is_empty();
 
+        let peering = self
+            .db
+            .get_setting("peering_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::models::peering::PeeringSettings>(&raw).ok()
+            })
+            .unwrap_or_default();
+        let (transports, utp_on) =
+            derive_transport_settings(&settings.peer_connection_protocol, peering.prefer_utp);
+        let encryption = if peering.require_encryption { 2 } else { 1 };
+
         // 1. Update settings.json on disk so disk-only keys (upload-slots-per-torrent,
         // preallocation, watch-dir) and restart values are preserved.
         let sp = self.config_dir.join("settings.json");
@@ -3402,6 +3518,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 v["peer-limit-global"] = json!(peer_global);
                 v["upload-slots-per-torrent"] = json!(unchoke_slots);
                 v["cache-size-mb"] = json!(cache_mb_eff);
+                v["utp-enabled"] = json!(utp_on);
+                v["preferred_transports"] = json!(transports);
+                v["encryption"] = json!(encryption);
                 v["preallocation"] = json!(if settings.preallocate_disk_space {
                     1u8
                 } else {
@@ -3440,6 +3559,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
             // Peer connectivity
             "peer-limit-per-torrent":   peer_per_torrent,
             "peer-limit-global":        peer_global,
+            "utp-enabled":              utp_on,
+            "preferred_transports":     transports,
+            "encryption":               encryption,
 
             // Disk cache (throughput-critical)
             "cache-size-mb":            cache_mb_eff,
@@ -3784,8 +3906,12 @@ mod tests {
         assert_eq!(config["peer-limit-per-torrent"], 150); // clamped to 150 max
         assert_eq!(config["peer-limit-global"], 600); // within clamp(250,1000)
         assert_eq!(config["upload-slots-per-torrent"], 10); // max(4) → 10
-        assert_eq!(config["encryption"], 1);
+        assert_eq!(config["encryption"], 2); // default peering require_encryption is true -> 2
         assert_eq!(config["utp-enabled"], true);
+        assert_eq!(
+            config["preferred_transports"],
+            serde_json::json!(["tcp", "utp"])
+        );
 
         // Private tracker constraints hard-disabled
         assert_eq!(config["dht-enabled"], false);
@@ -3795,6 +3921,74 @@ mod tests {
         // Interface and path
         assert_eq!(config["bind-address-ipv4"], "10.2.0.5");
         assert_eq!(config["download-dir"], "/home/user/Downloads");
+    }
+
+    #[test]
+    fn test_derive_transport_settings_scenarios() {
+        // Both protocols, default TCP-first
+        let (both_tcp_first, utp_on1) = derive_transport_settings("Both", false);
+        assert_eq!(both_tcp_first, vec!["tcp", "utp"]);
+        assert!(utp_on1);
+
+        // Both protocols, user prefers uTP
+        let (both_utp_first, utp_on2) = derive_transport_settings("Both", true);
+        assert_eq!(both_utp_first, vec!["utp", "tcp"]);
+        assert!(utp_on2);
+
+        // TCP Only
+        let (tcp_only, utp_on3) = derive_transport_settings("TCP", false);
+        assert_eq!(tcp_only, vec!["tcp"]);
+        assert!(!utp_on3);
+
+        // uTP Only
+        let (utp_only, utp_on4) = derive_transport_settings("uTP", false);
+        assert_eq!(utp_only, vec!["utp"]);
+        assert!(utp_on4);
+    }
+
+    #[test]
+    fn test_build_transmission_settings_with_peering_transport_preference() {
+        let user_settings = UserSettings {
+            peer_connection_protocol: "Both".to_string(),
+            ..Default::default()
+        };
+
+        // User preference: prefer_utp = true, require_encryption = false
+        let peering_prefer_utp = crate::models::peering::PeeringSettings {
+            prefer_utp: true,
+            require_encryption: false,
+            ..Default::default()
+        };
+        let cfg1 = build_transmission_settings_with_peering(
+            &user_settings,
+            Some(&peering_prefer_utp),
+            "/downloads",
+            "0.0.0.0",
+            9091,
+            "user",
+            "pass",
+        );
+        assert_eq!(
+            cfg1["preferred_transports"],
+            serde_json::json!(["utp", "tcp"])
+        );
+        assert_eq!(cfg1["utp-enabled"], true);
+        assert_eq!(cfg1["encryption"], 1);
+
+        // User preference: TCP-only
+        let mut user_tcp_only = user_settings.clone();
+        user_tcp_only.peer_connection_protocol = "TCP".to_string();
+        let cfg2 = build_transmission_settings_with_peering(
+            &user_tcp_only,
+            None,
+            "/downloads",
+            "0.0.0.0",
+            9091,
+            "user",
+            "pass",
+        );
+        assert_eq!(cfg2["preferred_transports"], serde_json::json!(["tcp"]));
+        assert_eq!(cfg2["utp-enabled"], false);
     }
 
     #[test]

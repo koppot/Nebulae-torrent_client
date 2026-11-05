@@ -27,7 +27,7 @@ export const usePeeringStore = create<PeeringState>((set) => ({
           locality_enabled: true,
           max_peers_per_torrent: 80,
           max_global_peers: 500,
-          prefer_utp: true,
+          prefer_utp: false,
           require_encryption: true,
           probe_rtt_enabled: false,
         },
