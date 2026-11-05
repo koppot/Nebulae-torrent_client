@@ -110,8 +110,11 @@ export const SimpleMediaView: React.FC = () => {
   const { fetchSeedTimeRecords } = useTrackerStore();
   const {
     postersPerRow,
+    setPostersPerRow,
     posterSize,
+    setPosterSize,
     posterSpacing,
+    setPosterSpacing,
     customOrderMode,
     externalReorderMode,
     downloadedOrder,
@@ -2760,78 +2763,218 @@ export const SimpleMediaView: React.FC = () => {
           </div>
         </div>
       )}
-      {/* Media player preferences (owner): preferred audio/subtitle
-          languages as ISO codes (e.g. "en,ja"), applied automatically when
-          playback starts. */}
+      {/* Media preferences dialog: Media Grid & Poster Layout controls
+          plus preferred audio/subtitle languages as ISO codes (e.g. "en,ja"),
+          applied automatically during playback. */}
       {showPlayerPrefs && (
         <div
           className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
           onClick={() => setShowPlayerPrefs(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl bg-[#161616] border border-[#333333] shadow-2xl p-5 space-y-4"
+            className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl bg-[#161616] border border-[#333333] shadow-2xl p-5 space-y-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-3">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-[#262626] pb-3">
               <div>
-                <h3 className="text-[15px] font-semibold text-white">Media player preferences</h3>
+                <h3 className="text-[15px] font-semibold text-white">Media Preferences</h3>
                 <p className="text-[11px] text-[#8c8c8c] mt-0.5">
-                  Preferred languages, tried in order every time playback starts. Use ISO 639
-                  codes, comma-separated.
+                  Configure poster dimensions, spacing, row limits, and preferred playback languages.
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setShowPlayerPrefs(false)}
                 className="p-1 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            {(() => {
-              const examples: [string, string][] = [
-                ['en', 'English'],
-                ['ja', 'Japanese'],
-                ['fr', 'French'],
-                ['de', 'German'],
-                ['es', 'Spanish'],
-                ['ko', 'Korean'],
-              ];
-              return (
-                <p className="text-[10px] font-mono text-[#737373]">
-                  {examples.map(([c, n]) => `${c} = ${n}`).join(' · ')}
+
+            {/* Section 1: Media Grid & Poster Layout */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-white">
+                  Media Grid & Poster Layout
+                </span>
+                <span className="text-[10px] text-[#737373]">Downloaded & External</span>
+              </div>
+
+              {/* Setting 1: Poster size */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#a3a3a3]">Poster size:</span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={100}
+                      max={300}
+                      step={10}
+                      value={posterSize}
+                      onChange={(e) => void setPosterSize(Number(e.target.value))}
+                      className="w-16 bg-[#1f1f1f] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                      title="Poster width in pixels (100–300 px)"
+                    />
+                    <span className="text-xs text-[#737373] font-mono">px</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-mono text-[#737373]">Small</span>
+                  <input
+                    type="range"
+                    min={100}
+                    max={300}
+                    step={10}
+                    value={posterSize}
+                    onChange={(e) => void setPosterSize(Number(e.target.value))}
+                    className="flex-1 accent-[#e50914] cursor-pointer"
+                    title={`Poster size: ${posterSize} px`}
+                  />
+                  <span className="text-[10px] font-mono text-[#737373]">Large</span>
+                </div>
+                <p className="text-[10px] text-[#737373]">
+                  Changes poster card dimensions while preserving the configured spacing and maximum posters per row.
                 </p>
-              );
-            })()}
-            <div className="space-y-3">
-              <label className="block space-y-1">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                  Audio languages
-                </span>
-                <input
-                  value={prefAudioLangs}
-                  onChange={(e) => setPrefAudioLangs(e.target.value)}
-                  placeholder="e.g. en,ja"
-                  className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
-                  Subtitle languages
-                </span>
-                <input
-                  value={prefSubsLangs}
-                  onChange={(e) => setPrefSubsLangs(e.target.value)}
-                  placeholder="e.g. en (leave empty for none)"
-                  className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
-                />
-              </label>
+              </div>
+
+              {/* Setting 2: Poster spacing */}
+              <div className="space-y-2 pt-2 border-t border-[#262626]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#a3a3a3]">Poster spacing:</span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={4}
+                      max={48}
+                      step={2}
+                      value={posterSpacing}
+                      onChange={(e) => void setPosterSpacing(Number(e.target.value))}
+                      className="w-16 bg-[#1f1f1f] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                      title="Poster gap in pixels (4–48 px)"
+                    />
+                    <span className="text-xs text-[#737373] font-mono">px</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-mono text-[#737373]">4 px</span>
+                  <input
+                    type="range"
+                    min={4}
+                    max={48}
+                    step={2}
+                    value={posterSpacing}
+                    onChange={(e) => void setPosterSpacing(Number(e.target.value))}
+                    className="flex-1 accent-[#e50914] cursor-pointer"
+                    title={`Poster spacing: ${posterSpacing} px`}
+                  />
+                  <span className="text-[10px] font-mono text-[#737373]">48 px</span>
+                </div>
+                <p className="text-[10px] text-[#737373]">
+                  Adjusts the gap between poster cards horizontally and vertically without altering card dimensions.
+                </p>
+              </div>
+
+              {/* Setting 3: Maximum posters per row */}
+              <div className="space-y-2 pt-2 border-t border-[#262626]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#a3a3a3]">Maximum posters per row:</span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={2}
+                      max={12}
+                      step={1}
+                      value={postersPerRow}
+                      onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                      className="w-16 bg-[#1f1f1f] border border-[#333333] text-white text-xs font-mono font-bold text-center rounded px-1.5 py-0.5 focus:border-[#e50914] outline-none"
+                      title="Maximum posters per row (2–12)"
+                    />
+                    <span className="text-xs text-[#737373] font-mono">posters</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-mono text-[#737373]">2</span>
+                  <input
+                    type="range"
+                    min={2}
+                    max={12}
+                    step={1}
+                    value={postersPerRow}
+                    onChange={(e) => void setPostersPerRow(Number(e.target.value))}
+                    className="flex-1 accent-[#e50914] cursor-pointer"
+                    title={`Maximum posters per row: ${postersPerRow}`}
+                  />
+                  <span className="text-[10px] font-mono text-[#737373]">12</span>
+                </div>
+                <p className="text-[10px] text-[#737373]">
+                  Limits how many posters appear in each row without changing poster size. When this limit is reached or when the window narrows, posters wrap into additional rows.
+                </p>
+              </div>
             </div>
-            <button
-              onClick={savePlayerPrefs}
-              className="w-full py-2 rounded-lg bg-[#e50914] hover:bg-[#c40812] text-white text-xs font-semibold transition"
-            >
-              Save preferences
-            </button>
+
+            {/* Section 2: Preferred Languages (Playback Defaults) */}
+            <div className="space-y-3 pt-3 border-t border-[#262626]">
+              <div className="flex items-center justify-between pb-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-white">
+                  Preferred Languages
+                </span>
+                <span className="text-[10px] text-[#737373]">Playback Defaults</span>
+              </div>
+              <p className="text-[11px] text-[#8c8c8c]">
+                Tried in order every time playback starts. Use ISO 639 codes, comma-separated.
+              </p>
+              {(() => {
+                const examples: [string, string][] = [
+                  ['en', 'English'],
+                  ['ja', 'Japanese'],
+                  ['fr', 'French'],
+                  ['de', 'German'],
+                  ['es', 'Spanish'],
+                  ['ko', 'Korean'],
+                ];
+                return (
+                  <p className="text-[10px] font-mono text-[#737373]">
+                    {examples.map(([c, n]) => `${c} = ${n}`).join(' · ')}
+                  </p>
+                );
+              })()}
+              <div className="space-y-3">
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                    Audio languages
+                  </span>
+                  <input
+                    value={prefAudioLangs}
+                    onChange={(e) => setPrefAudioLangs(e.target.value)}
+                    placeholder="e.g. en,ja"
+                    className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-[#8c8c8c]">
+                    Subtitle languages
+                  </span>
+                  <input
+                    value={prefSubsLangs}
+                    onChange={(e) => setPrefSubsLangs(e.target.value)}
+                    placeholder="e.g. en (leave empty for none)"
+                    className="w-full px-3 py-2 rounded-lg bg-[#1f1f1f] border border-[#262626] text-xs text-white outline-none focus:border-[#e50914]/50"
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Footer action */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={savePlayerPrefs}
+                className="w-full py-2.5 rounded-lg bg-[#e50914] hover:bg-[#c40812] text-white text-xs font-semibold transition"
+              >
+                Save Preferences
+              </button>
+            </div>
           </div>
         </div>
       )}

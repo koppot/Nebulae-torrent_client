@@ -650,31 +650,63 @@ test('Test Scenario 10: Settings Exclusivity, Store Hydration on Startup, and Ac
   assert.equal(restarted.get_posters_per_row(), 4, 'Restored max posters per row is 4');
   assert.equal(restarted.get_poster_size(), 240, 'Restored poster size is 240px');
 
-  // Verify Media screen has NO duplicate poster count / size controls
+  // Verify Media preferences dialog in SimpleMediaView contains layout controls & language preferences
   const fs = await import('node:fs');
   const mediaViewSource = fs.readFileSync('src/components/media/SimpleMediaView.tsx', 'utf-8');
   assert.ok(
-    !mediaViewSource.includes('Posters per row'),
-    'SimpleMediaView does not contain duplicate "Posters per row" control'
+    mediaViewSource.includes('Poster size:'),
+    'SimpleMediaView preferences modal contains "Poster size:" control'
+  );
+  assert.ok(
+    mediaViewSource.includes('Poster spacing:'),
+    'SimpleMediaView preferences modal contains "Poster spacing:" control'
+  );
+  assert.ok(
+    mediaViewSource.includes('Maximum posters per row:'),
+    'SimpleMediaView preferences modal contains "Maximum posters per row:" control'
+  );
+  assert.ok(
+    mediaViewSource.includes('Audio languages') && mediaViewSource.includes('prefAudioLangs'),
+    'SimpleMediaView preferences modal preserves audio language preferences'
+  );
+  assert.ok(
+    mediaViewSource.includes('Subtitle languages') && mediaViewSource.includes('prefSubsLangs'),
+    'SimpleMediaView preferences modal preserves subtitle language preferences'
   );
 
-  // Verify SettingsModal contains BOTH independent controls
+  // Verify SettingsModal does NOT contain duplicate poster layout controls
   const settingsSource = fs.readFileSync('src/components/modals/SettingsModal.tsx', 'utf-8');
   assert.ok(
-    settingsSource.includes('Poster size:'),
-    'SettingsModal contains "Poster size:" control'
+    !settingsSource.includes('Poster size:'),
+    'SettingsModal does NOT contain duplicate "Poster size:" control'
   );
   assert.ok(
-    settingsSource.includes('Poster spacing:'),
-    'SettingsModal contains "Poster spacing:" control'
+    !settingsSource.includes('Poster spacing:'),
+    'SettingsModal does NOT contain duplicate "Poster spacing:" control'
   );
   assert.ok(
-    settingsSource.includes('Maximum posters per row:'),
-    'SettingsModal contains "Maximum posters per row:" control'
+    !settingsSource.includes('Maximum posters per row:'),
+    'SettingsModal does NOT contain duplicate "Maximum posters per row:" control'
   );
   assert.ok(
-    settingsSource.includes('loadPreferences'),
-    'SettingsModal calls loadPreferences to synchronize persisted SQLite state'
+    !settingsSource.includes('Media Grid & Posters Layout'),
+    'SettingsModal does NOT contain duplicate "Media Grid & Posters Layout"'
+  );
+
+  // Verify TitleBar opens separate Media preferences via nebulae:player-prefs in Media view,
+  // and Manager general preferences via setShowSettings in Manager view
+  const titleBarSource = fs.readFileSync('src/components/layout/TitleBar.tsx', 'utf-8');
+  assert.ok(
+    titleBarSource.includes("window.dispatchEvent(new CustomEvent('nebulae:player-prefs'))"),
+    'TitleBar dispatches nebulae:player-prefs when in Media view'
+  );
+  assert.ok(
+    titleBarSource.includes('setShowSettings(true)'),
+    'TitleBar opens general preferences (setShowSettings) when in Manager view'
+  );
+  assert.ok(
+    !titleBarSource.includes("openSettings('media')"),
+    "TitleBar does not redirect Media view gear to openSettings('media')"
   );
 });
 
