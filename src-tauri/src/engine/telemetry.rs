@@ -14,21 +14,29 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
         loop {
             interval.tick().await;
 
-            if let Ok(torrents) = engine.list_torrents() {
-                let _ = app_handle.emit("nebulae://telemetry", &torrents);
+            match engine.list_torrents() {
+                Ok(torrents) => {
+                    let _ = app_handle.emit("nebulae://telemetry", &torrents);
 
-                // Calculate aggregate transfer rates for macOS status bar
-                let (upload_rate, download_rate) =
-                    torrents.iter().fold((0u64, 0u64), |acc, torrent| {
-                        (acc.0 + torrent.upload_rate, acc.1 + torrent.download_rate)
-                    });
+                    // Calculate aggregate transfer rates for macOS status bar
+                    let (upload_rate, download_rate) =
+                        torrents.iter().fold((0u64, 0u64), |acc, torrent| {
+                            (acc.0 + torrent.upload_rate, acc.1 + torrent.download_rate)
+                        });
 
-                // Update status bar on macOS
-                status_bar::update_status_bar(&app_handle, upload_rate, download_rate);
+                    // Update status bar on macOS
+                    status_bar::update_status_bar(&app_handle, upload_rate, download_rate);
 
-                // Windows-only: tray title speed readout
-                #[cfg(target_os = "windows")]
-                crate::tray_speed::update_tray_title(&app_handle, &torrents, &mut tray_speed);
+                    // Windows-only: tray title speed readout
+                    #[cfg(target_os = "windows")]
+                    crate::tray_speed::update_tray_title(&app_handle, &torrents, &mut tray_speed);
+                }
+                Err(_) => {
+                    // Clear stale rates on engine stop or failure
+                    status_bar::clear_status_bar(&app_handle);
+                    #[cfg(target_os = "windows")]
+                    crate::tray_speed::clear_tray_title(&app_handle, &mut tray_speed);
+                }
             }
         }
     });

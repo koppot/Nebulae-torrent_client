@@ -65,19 +65,18 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
             tray_id, upload_rate, download_rate
         );
 
-        // Convert bytes/s to KB/s
-        let upload_kib = upload_rate as f64 / 1024.0;
-        let download_kib = download_rate as f64 / 1024.0;
-
-        // Throttle updates: no more than once per second
+        // Throttle updates: no more than once per second (>= 950 ms)
         let state = STATUS_BAR_STATE.get();
         let now = Instant::now();
         let should_update = if let Some(s) = state {
             match s.lock() {
                 Ok(mut s) => {
-                    let elapsed = now.duration_since(s.last_update).as_secs();
-                    s.last_update = now;
-                    elapsed >= 1
+                    if now.duration_since(s.last_update) >= std::time::Duration::from_millis(950) {
+                        s.last_update = now;
+                        true
+                    } else {
+                        false
+                    }
                 }
                 Err(_) => false,
             }
@@ -89,13 +88,10 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
             return;
         }
 
-        // Use unicode arrows with line break for two-line display
-        // Format: ▲ upload_rate KB/s\n▼ download_rate KB/s
-        // Using KB/s with one decimal place for compact adaptive display
-        let upload_text = format!("{:.1} KB/s", upload_kib);
-        let download_text = format!("{:.1} KB/s", download_kib);
-        // Line break between upload and download
-        let text = format!("▲ {}\n▼ {}", upload_text, download_text);
+        // Single-line adaptive presentation: "↓ <down>   ↑ <up>"
+        // Eliminates vertical clipping, preserves display width with figure space padding,
+        // and avoids unnecessary trailing decimals.
+        let text = crate::speed_format::format_status_bar_title(download_rate, upload_rate);
 
         // Update tray icon title - this displays text beside the icon on macOS
         if let Some(tray) = app_handle.tray_by_id(&tray_id) {
