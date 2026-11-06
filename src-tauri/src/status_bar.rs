@@ -29,6 +29,8 @@ pub(crate) static STATUS_BAR_STATE: std::sync::OnceLock<
 pub fn init_status_bar(_app_handle: &AppHandle) {
     STATUS_BAR_STATE
         .get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(StatusBarState::new())));
+    #[cfg(target_os = "macos")]
+    apply_status_bar_font();
 }
 
 /// Set the tray ID from the actual tray icon
@@ -37,6 +39,8 @@ pub fn set_tray_id(tray_id: String) {
         let mut s = s.lock().unwrap();
         s.tray_id = Some(tray_id);
     }
+    #[cfg(target_os = "macos")]
+    apply_status_bar_font();
 }
 
 /// Update tray icon title with current rates (bytes per second converted to KB/s)
@@ -88,16 +92,18 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
             return;
         }
 
-        // Single-line adaptive presentation: "↓ <down>   ↑ <up>"
-        // Eliminates vertical clipping, preserves display width with figure space padding,
-        // and avoids unnecessary trailing decimals.
-        let text = crate::speed_format::format_status_bar_title(download_rate, upload_rate);
+        // Two-line stacked presentation:
+        // Line 1: ▲ <upload>
+        // Line 2: ▼ <download>
+        // Uses 12-char column alignment, figure-space padding, and compact adaptive units.
+        let text = crate::speed_format::format_stacked_status_bar(upload_rate, download_rate);
 
         // Update tray icon title - this displays text beside the icon on macOS
         if let Some(tray) = app_handle.tray_by_id(&tray_id) {
             if let Err(e) = tray.set_title(Some(&text)) {
                 info!("[status_bar] set_title failed: {}", e);
             }
+            apply_status_bar_font();
         } else {
             info!("[status_bar] Tray not found");
         }
@@ -134,6 +140,68 @@ pub fn clear_status_bar(app_handle: &AppHandle) {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app_handle;
+    }
+}
+
+/// Configure NSStatusBarButton to use a compact monospaced digit font (8.5pt medium)
+/// ensuring both lines of the stacked rate fit within the menu bar height without clipping.
+#[cfg(target_os = "macos")]
+pub fn apply_status_bar_font() {
+    use objc2::runtime::{AnyClass, AnyObject};
+    unsafe {
+        let app_class = match AnyClass::get(c"NSApplication") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let ns_app: *mut AnyObject = objc2::msg_send![app_class, sharedApplication];
+        if ns_app.is_null() {
+            return;
+        }
+        let windows: *mut AnyObject = objc2::msg_send![ns_app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = objc2::msg_send![windows, count];
+        let font_class = match AnyClass::get(c"NSFont") {
+            Some(cls) => cls,
+            None => return,
+        };
+        // monospacedDigitSystemFontOfSize: 8.5, weight: 0.23 (NSFontWeightMedium)
+        let font: *mut AnyObject = objc2::msg_send![
+            font_class,
+            monospacedDigitSystemFontOfSize: 8.5f64,
+            weight: 0.23f64
+        ];
+        if font.is_null() {
+            return;
+        }
+
+        let status_win_class = match AnyClass::get(c"NSStatusBarWindow") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let status_btn_class = match AnyClass::get(c"NSStatusBarButton") {
+            Some(cls) => cls,
+            None => return,
+        };
+
+        for i in 0..count {
+            let win: *mut AnyObject = objc2::msg_send![windows, objectAtIndex: i];
+            if win.is_null() {
+                continue;
+            }
+            let is_status_window: bool = objc2::msg_send![win, isKindOfClass: status_win_class];
+            if is_status_window {
+                let view: *mut AnyObject = objc2::msg_send![win, contentView];
+                if !view.is_null() {
+                    let is_status_btn: bool =
+                        objc2::msg_send![view, isKindOfClass: status_btn_class];
+                    if is_status_btn {
+                        let _: () = objc2::msg_send![view, setFont: font];
+                    }
+                }
+            }
+        }
     }
 }
 

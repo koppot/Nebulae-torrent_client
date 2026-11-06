@@ -94,11 +94,11 @@ pub fn update_tray_title(app: &AppHandle, torrents: &[TorrentItem], state: &mut 
                 let _ = tray.set_icon(Some(img));
                 state.is_custom_icon = true;
 
-                // Also update tooltip with adaptive rates
+                // Also update tooltip with adaptive rates (preserving upload-first order)
                 let tooltip = format!(
-                    "Nebulae — ↓ {}   ↑ {}",
-                    crate::speed_format::format_adaptive_rate(down),
-                    crate::speed_format::format_adaptive_rate(up)
+                    "Nebulae — ▲ {}   ▼ {}",
+                    crate::speed_format::format_adaptive_rate(up),
+                    crate::speed_format::format_adaptive_rate(down)
                 );
                 let _ = tray.set_tooltip(Some(&tooltip));
             }

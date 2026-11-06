@@ -80,6 +80,89 @@ pub fn format_status_bar_title(down: u64, up: u64) -> String {
     format!("↓ {}   ↑ {}", down_str, up_str)
 }
 
+/// Format an instantaneous transfer rate into a compact right-aligned value (5 chars) and fixed unit (4 chars).
+/// Returns `(value, unit)` where `value` is padded on the left with figure spaces (`\u{2007}`) to 5 characters,
+/// and `unit` is exactly 4 characters (`KB/s`, `MB/s`, `GB/s`, or `\u{2007}B/s`).
+pub fn format_rate_components(bytes_per_sec: u64) -> (String, &'static str) {
+    if bytes_per_sec == 0 {
+        return (
+            format!("{}{}", FIGURE_SPACE.to_string().repeat(4), "0"),
+            "\u{2007}B/s",
+        );
+    }
+    if bytes_per_sec < 1024 {
+        let s = format!("{}", bytes_per_sec);
+        let pad = FIGURE_SPACE
+            .to_string()
+            .repeat(5usize.saturating_sub(s.chars().count()));
+        return (format!("{}{}", pad, s), "\u{2007}B/s");
+    }
+    let kib = bytes_per_sec as f64 / 1024.0;
+    if kib < 1024.0 {
+        let s = if kib < 10.0 {
+            let val = (kib * 10.0).round() / 10.0;
+            if val.fract() == 0.0 {
+                format!("{:.0}", val)
+            } else {
+                format!("{:.1}", val)
+            }
+        } else {
+            format!("{:.0}", kib.round())
+        };
+        let pad = FIGURE_SPACE
+            .to_string()
+            .repeat(5usize.saturating_sub(s.chars().count()));
+        return (format!("{}{}", pad, s), "KB/s");
+    }
+    let mib = kib / 1024.0;
+    if mib < 1024.0 {
+        let s = if mib < 100.0 {
+            let val = (mib * 10.0).round() / 10.0;
+            if val.fract() == 0.0 {
+                format!("{:.0}", val)
+            } else {
+                format!("{:.1}", val)
+            }
+        } else {
+            format!("{:.0}", mib.round())
+        };
+        let pad = FIGURE_SPACE
+            .to_string()
+            .repeat(5usize.saturating_sub(s.chars().count()));
+        return (format!("{}{}", pad, s), "MB/s");
+    }
+    let gib = mib / 1024.0;
+    let val = (gib * 10.0).round() / 10.0;
+    let s = if val.fract() == 0.0 {
+        format!("{:.0}", val)
+    } else {
+        format!("{:.1}", val)
+    };
+    let pad = FIGURE_SPACE
+        .to_string()
+        .repeat(5usize.saturating_sub(s.chars().count()));
+    (format!("{}{}", pad, s), "GB/s")
+}
+
+/// Format a single line of the stacked status bar rate:
+/// `▲ <val> <unit>` or `▼ <val> <unit>`
+/// Result is always exactly 12 characters: 1 indicator + 1 space + 5-char value + 1 space + 4-char unit.
+pub fn format_stacked_line(indicator: char, bytes_per_sec: u64) -> String {
+    let (val, unit) = format_rate_components(bytes_per_sec);
+    format!("{} {} {}", indicator, val, unit)
+}
+
+/// Format the two-line stacked status bar text with upload on top and download on bottom:
+/// Line 1: `▲ <up_val> <up_unit>`
+/// Line 2: `▼ <down_val> <down_unit>`
+pub fn format_stacked_status_bar(up: u64, down: u64) -> String {
+    format!(
+        "{}\n{}",
+        format_stacked_line('▲', up),
+        format_stacked_line('▼', down)
+    )
+}
+
 /// Format a single direction's bytes-per-second as `0B`, `999B`, `1.0K`,
 /// `1.2M`, `10.5M`, … using the largest unit that keeps the value ≥ 1.
 pub fn format_rate(bytes_per_sec: u64) -> String {
@@ -496,6 +579,38 @@ mod tests {
         // High rate
         let high = format_status_bar_title(78 * 1024 * 1024, 1536);
         assert!(high.contains("78 MB/s") && high.contains("1.5 KB/s"));
+    }
+
+    #[test]
+    fn stacked_status_bar_formatting() {
+        // Idle
+        let idle = format_stacked_status_bar(0, 0);
+        let lines: Vec<&str> = idle.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("▲"));
+        assert!(lines[1].starts_with("▼"));
+        assert_eq!(lines[0].chars().count(), 12);
+        assert_eq!(lines[1].chars().count(), 12);
+
+        // Low rates
+        let low = format_stacked_status_bar(45 * 1024, 1536);
+        let low_lines: Vec<&str> = low.lines().collect();
+        assert_eq!(low_lines[0].chars().count(), 12);
+        assert_eq!(low_lines[1].chars().count(), 12);
+        assert!(low_lines[0].contains("45"));
+        assert!(low_lines[0].contains("KB/s"));
+        assert!(low_lines[1].contains("1.5"));
+        assert!(low_lines[1].contains("KB/s"));
+
+        // High rates
+        let high = format_stacked_status_bar(1584 * 1024, 52 * 1024 * 1024);
+        let high_lines: Vec<&str> = high.lines().collect();
+        assert_eq!(high_lines[0].chars().count(), 12);
+        assert_eq!(high_lines[1].chars().count(), 12);
+        assert!(high_lines[0].contains("1.5"));
+        assert!(high_lines[0].contains("MB/s"));
+        assert!(high_lines[1].contains("52"));
+        assert!(high_lines[1].contains("MB/s"));
     }
 
     #[test]
