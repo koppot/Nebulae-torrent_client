@@ -2246,8 +2246,20 @@ impl TransmissionTorrentEngine {
             .get("secondsSeeding")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let rate_dl = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
-        let rate_ul = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
+        // Instantaneous transfer rates: only active transferring directions can be non-zero.
+        // Completed/seeding, paused, checking, or errored states strictly report 0 for non-active directions.
+        let is_dl_active = status_num == 3 || status_num == 4;
+        let is_ul_active = status_num == 3 || status_num == 4 || status_num == 5 || status_num == 6;
+        let rate_dl = if is_dl_active {
+            t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0)
+        } else {
+            0
+        };
+        let rate_ul = if is_ul_active {
+            t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0)
+        } else {
+            0
+        };
         let total_bytes = t
             .get("totalSize")
             .or_else(|| t.get("sizeWhenDone"))
@@ -2620,7 +2632,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn get_torrent_details(&self, id: &str) -> Result<TorrentItem, String> {
-        let raw_torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut raw_torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if raw_torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        raw_torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let t = raw_torrents
             .first()
             .ok_or_else(|| format!("Torrent {id} not found in Transmission"))?;
@@ -3050,7 +3080,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
         file_index: u32,
         new_file_name: &str,
     ) -> Result<(), String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3078,7 +3126,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3118,7 +3184,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
         const EMA_ALPHA: f64 = 0.3; // smoothing factor — 30% new sample, 70% history
         const MIN_OBSERVATIONS_FOR_STABILITY: u32 = 3;
 
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3700,6 +3784,33 @@ mod tests {
         assert_eq!(map_full_status(false, 1, 6), "Seeding");
         // Kill switch active -> Paused
         assert_eq!(map_full_status(true, 0, 4), "Paused");
+    }
+
+    #[test]
+    fn test_transmission_rate_sanitization_strictly_zeroes_nonactive_directions() {
+        let is_dl_active = |s: i64| s == 3 || s == 4;
+        let is_ul_active = |s: i64| s == 3 || s == 4 || s == 5 || s == 6;
+
+        let sanitize = |status_num: i64, raw_dl: u64, raw_ul: u64| {
+            let dl = if is_dl_active(status_num) { raw_dl } else { 0 };
+            let ul = if is_ul_active(status_num) { raw_ul } else { 0 };
+            (dl, ul)
+        };
+
+        // Seeding torrents never report download speed even if engine leaked protocol bytes
+        assert_eq!(sanitize(5, 15_000_000, 250_000), (0, 250_000));
+        assert_eq!(sanitize(6, 36_000_000, 500_000), (0, 500_000));
+
+        // Paused torrents report 0 in both directions
+        assert_eq!(sanitize(0, 10_000_000, 100_000), (0, 0));
+
+        // Checking torrents report 0 in both directions
+        assert_eq!(sanitize(1, 10_000_000, 100_000), (0, 0));
+        assert_eq!(sanitize(2, 10_000_000, 100_000), (0, 0));
+
+        // Downloading torrents preserve active rates
+        assert_eq!(sanitize(3, 50_000_000, 200_000), (50_000_000, 200_000));
+        assert_eq!(sanitize(4, 50_000_000, 200_000), (50_000_000, 200_000));
     }
 
     #[test]

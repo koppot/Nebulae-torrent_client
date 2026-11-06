@@ -5,16 +5,21 @@ import { PeerTelemetry, PeeringSettings } from '../types';
 interface PeeringState {
   settings: PeeringSettings | null;
   peers: PeerTelemetry[];
+  activeTorrentId: string | null;
   isLoading: boolean;
+  error: string | null;
   fetchSettings: () => Promise<void>;
   saveSettings: (settings: PeeringSettings) => Promise<void>;
   fetchPeers: (torrentId: string) => Promise<void>;
+  clearPeers: () => void;
 }
 
-export const usePeeringStore = create<PeeringState>((set) => ({
+export const usePeeringStore = create<PeeringState>((set, get) => ({
   settings: null,
   peers: [],
+  activeTorrentId: null,
   isLoading: false,
+  error: null,
 
   fetchSettings: async () => {
     try {
@@ -44,13 +49,28 @@ export const usePeeringStore = create<PeeringState>((set) => ({
     }
   },
 
+  clearPeers: () => {
+    set({ activeTorrentId: null, peers: [], isLoading: false, error: null });
+  },
+
   fetchPeers: async (torrentId: string) => {
-    set({ isLoading: true });
+    const isNew = get().activeTorrentId !== torrentId;
+    if (isNew) {
+      set({ activeTorrentId: torrentId, peers: [], isLoading: true, error: null });
+    } else {
+      set({ activeTorrentId: torrentId, error: null });
+    }
+
     try {
       const res = await invoke<PeerTelemetry[]>('get_peer_telemetry', { torrentId });
-      set({ peers: res, isLoading: false });
-    } catch {
-      set({ peers: [], isLoading: false });
+      // Guard against race condition: only update if activeTorrentId matches
+      if (get().activeTorrentId === torrentId) {
+        set({ peers: res, isLoading: false, error: null });
+      }
+    } catch (err: unknown) {
+      if (get().activeTorrentId === torrentId) {
+        set({ peers: [], isLoading: false, error: String(err) });
+      }
     }
   },
 }));
