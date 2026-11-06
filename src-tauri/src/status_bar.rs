@@ -103,7 +103,7 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
             if let Err(e) = tray.set_title(Some(&text)) {
                 info!("[status_bar] set_title failed: {}", e);
             }
-            apply_status_bar_font();
+            apply_status_bar_attributed_title(&text);
         } else {
             info!("[status_bar] Tray not found");
         }
@@ -144,7 +144,142 @@ pub fn clear_status_bar(app_handle: &AppHandle) {
 }
 
 /// Configure NSStatusBarButton to use a compact monospaced digit font (8.5pt medium)
+/// with precise paragraph style line height (10.0pt) and baseline offset (+3.5pt)
 /// ensuring both lines of the stacked rate fit within the menu bar height without clipping.
+#[cfg(target_os = "macos")]
+pub fn apply_status_bar_attributed_title(title: &str) {
+    use objc2::runtime::{AnyClass, AnyObject};
+    use std::ffi::CString;
+
+    let c_text = match CString::new(title) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    unsafe {
+        let app_class = match AnyClass::get(c"NSApplication") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let ns_app: *mut AnyObject = objc2::msg_send![app_class, sharedApplication];
+        if ns_app.is_null() {
+            return;
+        }
+        let windows: *mut AnyObject = objc2::msg_send![ns_app, windows];
+        if windows.is_null() {
+            return;
+        }
+        let count: usize = objc2::msg_send![windows, count];
+
+        let font_class = match AnyClass::get(c"NSFont") {
+            Some(cls) => cls,
+            None => return,
+        };
+        // monospacedDigitSystemFontOfSize: 8.5, weight: 0.23 (NSFontWeightMedium)
+        let font: *mut AnyObject = objc2::msg_send![
+            font_class,
+            monospacedDigitSystemFontOfSize: 8.5f64,
+            weight: 0.23f64
+        ];
+        if font.is_null() {
+            return;
+        }
+
+        let str_class = match AnyClass::get(c"NSString") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let ns_str: *mut AnyObject =
+            objc2::msg_send![str_class, stringWithUTF8String: c_text.as_ptr()];
+        if ns_str.is_null() {
+            return;
+        }
+
+        let style_class = match AnyClass::get(c"NSMutableParagraphStyle") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let style: *mut AnyObject = objc2::msg_send![style_class, new];
+        if style.is_null() {
+            return;
+        }
+        let _: () = objc2::msg_send![style, setMaximumLineHeight: 10.0f64];
+        let _: () = objc2::msg_send![style, setMinimumLineHeight: 10.0f64];
+        let _: () = objc2::msg_send![style, setLineSpacing: 0.0f64];
+        let _: () = objc2::msg_send![style, setAlignment: 0usize]; // left
+
+        let num_class = match AnyClass::get(c"NSNumber") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let baseline_offset: *mut AnyObject = objc2::msg_send![num_class, numberWithDouble: 3.5f64];
+
+        let color_class = match AnyClass::get(c"NSColor") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let color: *mut AnyObject = objc2::msg_send![color_class, labelColor];
+
+        let key_font: *mut AnyObject =
+            objc2::msg_send![str_class, stringWithUTF8String: c"NSFont".as_ptr()];
+        let key_style: *mut AnyObject =
+            objc2::msg_send![str_class, stringWithUTF8String: c"NSParagraphStyle".as_ptr()];
+        let key_offset: *mut AnyObject =
+            objc2::msg_send![str_class, stringWithUTF8String: c"NSBaselineOffset".as_ptr()];
+        let key_color: *mut AnyObject =
+            objc2::msg_send![str_class, stringWithUTF8String: c"NSColor".as_ptr()];
+
+        let attr_class = match AnyClass::get(c"NSMutableAttributedString") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let attr_str: *mut AnyObject = objc2::msg_send![attr_class, alloc];
+        let attr_str: *mut AnyObject = objc2::msg_send![attr_str, initWithString: ns_str];
+        if attr_str.is_null() {
+            return;
+        }
+
+        let len: usize = objc2::msg_send![ns_str, length];
+        let full_range = objc2_foundation::NSRange::new(0, len);
+
+        let _: () =
+            objc2::msg_send![attr_str, addAttribute: key_font, value: font, range: full_range];
+        let _: () =
+            objc2::msg_send![attr_str, addAttribute: key_style, value: style, range: full_range];
+        let _: () = objc2::msg_send![attr_str, addAttribute: key_offset, value: baseline_offset, range: full_range];
+        let _: () =
+            objc2::msg_send![attr_str, addAttribute: key_color, value: color, range: full_range];
+
+        let status_win_class = match AnyClass::get(c"NSStatusBarWindow") {
+            Some(cls) => cls,
+            None => return,
+        };
+        let status_btn_class = match AnyClass::get(c"NSStatusBarButton") {
+            Some(cls) => cls,
+            None => return,
+        };
+
+        for i in 0..count {
+            let win: *mut AnyObject = objc2::msg_send![windows, objectAtIndex: i];
+            if win.is_null() {
+                continue;
+            }
+            let is_status_window: bool = objc2::msg_send![win, isKindOfClass: status_win_class];
+            if is_status_window {
+                let view: *mut AnyObject = objc2::msg_send![win, contentView];
+                if !view.is_null() {
+                    let is_status_btn: bool =
+                        objc2::msg_send![view, isKindOfClass: status_btn_class];
+                    if is_status_btn {
+                        let _: () = objc2::msg_send![view, setAttributedTitle: attr_str];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Fallback font config when title is not yet populated
 #[cfg(target_os = "macos")]
 pub fn apply_status_bar_font() {
     use objc2::runtime::{AnyClass, AnyObject};
@@ -166,7 +301,6 @@ pub fn apply_status_bar_font() {
             Some(cls) => cls,
             None => return,
         };
-        // monospacedDigitSystemFontOfSize: 8.5, weight: 0.23 (NSFontWeightMedium)
         let font: *mut AnyObject = objc2::msg_send![
             font_class,
             monospacedDigitSystemFontOfSize: 8.5f64,
