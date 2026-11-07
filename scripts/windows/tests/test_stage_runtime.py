@@ -5,6 +5,7 @@ downloader, so the suite needs no network and no real binaries:
 
     python3 -m unittest discover -s scripts/windows/tests
 """
+import hashlib
 import io
 import json
 import struct
@@ -318,12 +319,23 @@ class StageVlcContractTests(Fixture):
         self.vlc_dir = self.scratch / "vlc-modified"
         self.vlc_dir.mkdir(parents=True, exist_ok=True)
         self.rec = stage_runtime.Recorder(self.root)
+        # Pinned-plugin lock for the synthetic trees: the "patched" plugin is a PE carrying the marker.
+        self.patched_d3d11 = make_pe() + b"\0" + stage_runtime.D3D11_PLUGIN_MARKER + b"\0"
+        self.stock_d3d11 = make_pe() + b"stock"
+        lock = self.scratch / "d3d11-plugin.lock.json"
+        lock.write_text(json.dumps({
+            "sha256": hashlib.sha256(self.patched_d3d11).hexdigest(),
+            "stock_sha256": hashlib.sha256(self.stock_d3d11).hexdigest(),
+        }))
+        old = stage_runtime.D3D11_PLUGIN_LOCK
+        stage_runtime.D3D11_PLUGIN_LOCK = lock
+        self.addCleanup(setattr, stage_runtime, "D3D11_PLUGIN_LOCK", old)
 
     def _create_complete_modified_tree(self, custom_exports=stage_runtime.CUSTOM_EXPORTS,
                                        with_core=True, with_plugin=True, with_jars=True,
                                        with_manifest=True, machine=0x8664, stock_jars=False,
                                        corrupt_jar=False, with_plugins_dir=True,
-                                       plugin_count=12, with_video_output=True):
+                                       plugin_count=12, with_video_output=True, d3d11="patched"):
         (self.vlc_dir / "libvlc.dll").write_bytes(make_pe(exports=list(custom_exports), machine=machine))
         if with_core:
             (self.vlc_dir / "libvlccore.dll").write_bytes(make_pe(machine=machine))
@@ -341,7 +353,9 @@ class StageVlcContractTests(Fixture):
             if with_video_output:
                 vout = self.vlc_dir / "plugins" / "video_output"
                 vout.mkdir(parents=True, exist_ok=True)
-                (vout / "libdirect3d11_plugin.dll").write_bytes(make_pe(machine=machine))
+                d3d11_bytes = {"patched": self.patched_d3d11, "stock": self.stock_d3d11,
+                               "nomarker": make_pe(), "other": self.patched_d3d11 + b"x"}[d3d11]
+                (vout / "libdirect3d11_plugin.dll").write_bytes(d3d11_bytes)
                 (vout / "libgl_plugin.dll").write_bytes(make_pe(machine=machine))
                 for i in range(plugin_count):
                     (vout / f"libmock{i}_plugin.dll").write_bytes(make_pe(machine=machine))
@@ -450,6 +464,24 @@ class StageVlcContractTests(Fixture):
             stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks required plugin category", str(ctx.exception))
 
+    def test_rejects_stock_d3d11_plugin(self):
+        self._create_complete_modified_tree(d3d11="stock")
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("stock VLC 3.0.23 Direct3D 11 plugin", str(ctx.exception))
+
+    def test_rejects_d3d11_plugin_without_tone_mapping(self):
+        self._create_complete_modified_tree(d3d11="nomarker")
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("lacks the HDR-to-SDR tone mapping code", str(ctx.exception))
+
+    def test_rejects_unpinned_d3d11_plugin(self):
+        self._create_complete_modified_tree(d3d11="other")
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        self.assertIn("differs from the pinned build", str(ctx.exception))
+
     def test_stage_geo_validates_mmdb_format(self):
         geo_dir = self.scratch / "geo"
         geo_dir.mkdir(parents=True, exist_ok=True)
@@ -489,6 +521,23 @@ class StageVlcContractTests(Fixture):
         with self.assertRaises(stage_runtime.StageError) as ctx:
             stage_runtime.validate_mmdb_format(bad_file, "GeoLite2-Country")
         self.assertIn("too small to be a valid MMDB file", str(ctx.exception))
+
+
+class D3D11LockIdentityTests(unittest.TestCase):
+    """CI enforcement: the staged D3D11 plugin must remain the user-accepted build."""
+
+    def test_lock_matches_accepted_baseline(self):
+        lock = json.loads(stage_runtime.D3D11_PLUGIN_LOCK.read_text(encoding="utf-8"))
+        self.assertEqual(
+            lock["sha256"].lower(),
+            "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993",
+        )
+        self.assertEqual(lock["bytes"], 401920)
+        self.assertEqual(
+            lock["stock_sha256"].lower(),
+            "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8",
+        )
+        self.assertNotEqual(lock["sha256"].lower(), lock["stock_sha256"].lower())
 
 
 if __name__ == "__main__":

@@ -3,10 +3,23 @@ import { ViewMode } from '../types';
 
 export type ManagerTab = 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
 
+export type SettingsTab =
+  | 'behavior'
+  | 'downloads'
+  | 'connection'
+  | 'speed'
+  | 'bittorrent'
+  | 'rss'
+  | 'webui'
+  | 'rtorrent'
+  | 'media'
+  | 'advanced';
+
 interface UiState {
   viewMode: ViewMode;
   theme: 'dark' | 'light';
   showSettings: boolean;
+  settingsTab: SettingsTab;
   showHelp: boolean;
   showAddTorrent: boolean;
   showCreateTorrent: boolean;
@@ -25,6 +38,8 @@ interface UiState {
   setTheme: (theme: 'dark' | 'light') => void;
   toggleTheme: () => void;
   setShowSettings: (show: boolean) => void;
+  setSettingsTab: (tab: SettingsTab) => void;
+  openSettings: (tab?: SettingsTab) => void;
   setShowHelp: (show: boolean) => void;
   setShowAddTorrent: (show: boolean) => void;
   setShowCreateTorrent: (show: boolean) => void;
@@ -59,6 +74,7 @@ export const useUiStore = create<UiState>((set) => ({
   viewMode: getSavedViewMode(),
   theme: 'dark',
   showSettings: false,
+  settingsTab: 'behavior',
   showHelp: false,
   showAddTorrent: false,
   showCreateTorrent: false,
@@ -92,6 +108,8 @@ export const useUiStore = create<UiState>((set) => ({
       return { theme: nextTheme };
     }),
   setShowSettings: (showSettings) => set({ showSettings }),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
+  openSettings: (tab) => set({ showSettings: true, ...(tab ? { settingsTab: tab } : {}) }),
   setShowHelp: (showHelp) => set({ showHelp }),
   setShowAddTorrent: (showAddTorrent) => set({ showAddTorrent }),
   setShowCreateTorrent: (showCreateTorrent) => set({ showCreateTorrent }),

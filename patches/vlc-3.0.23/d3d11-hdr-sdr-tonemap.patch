@@ -1,0 +1,236 @@
+--- a/modules/video_output/win32/d3d11_quad.c
++++ b/modules/video_output/win32/d3d11_quad.c
+@@ -617,6 +617,18 @@
+         quad->shaderConstants.LuminanceScale = old;
+ }
+ 
++#undef D3D11_UpdateQuadSourcePeak
++void D3D11_UpdateQuadSourcePeak(vlc_object_t *o, d3d11_device_t *d3d_dev, d3d_quad_t *quad, float sourcePeak)
++{
++    if (quad->shaderConstants.SourcePeak == sourcePeak)
++        return;
++
++    float old = quad->shaderConstants.SourcePeak;
++    quad->shaderConstants.SourcePeak = sourcePeak;
++    if (!D3D11_ShaderUpdateConstants(o, d3d_dev, quad))
++        quad->shaderConstants.SourcePeak = old;
++}
++
+ struct xy_primary {
+     double x, y;
+ };
+@@ -832,6 +844,7 @@
+     const bool RGB_shader = IsRGBShader(quad->formatInfo);
+ 
+     quad->shaderConstants.LuminanceScale = (float)displayFormat->luminance_peak / GetFormatLuminance(o, fmt);
++    quad->shaderConstants.SourcePeak = GetFormatSourcePeak(fmt);
+ 
+     /* pixel shader constant buffer */
+     quad->shaderConstants.Opacity = 1.0;
+@@ -909,10 +922,12 @@
+         1.164383561643836f,  2.112401785714286f,                 0.f, 0.f,
+                        0.f,                 0.f,                 0.f, 1.f,
+     };
+-    /* see https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.2020_conversion, in studio range */
++    /* see https://en.wikipedia.org/wiki/YCbCr#ITU-R_BT.2020_conversion, in studio range.
++       Green row: -2*Kb*(1-Kb)/Kg and -2*Kr*(1-Kr)/Kg (Kr=0.2627, Kb=0.0593, Kg=0.6780) scaled by 255/224;
++       upstream VLC 3.0.23 carried these two terms already multiplied by Kg a second time. */
+     static const FLOAT COLORSPACE_BT2020_YUV_TO_FULL_RGBA[4*4] = {
+         1.164383561643836f,  0.000000000000f,  1.678674107143f, 0.f,
+-        1.164383561643836f, -0.127007098661f, -0.440987687946f, 0.f,
++        1.164383561643836f, -0.187326104219f, -0.650424318505f, 0.f,
+         1.164383561643836f,  2.141772321429f,  0.000000000000f, 0.f,
+                        0.f,              0.f,              0.f, 1.f,
+     };
+--- a/modules/video_output/win32/d3d11_quad.h
++++ b/modules/video_output/win32/d3d11_quad.h
+@@ -87,5 +87,7 @@
+ 
+ void D3D11_UpdateQuadLuminanceScale(vlc_object_t *, d3d11_device_t *, d3d_quad_t *, float luminanceScale);
+ #define D3D11_UpdateQuadLuminanceScale(a,b,c,d)  D3D11_UpdateQuadLuminanceScale(VLC_OBJECT(a),b,c,d)
++void D3D11_UpdateQuadSourcePeak(vlc_object_t *, d3d11_device_t *, d3d_quad_t *, float sourcePeak);
++#define D3D11_UpdateQuadSourcePeak(a,b,c,d)  D3D11_UpdateQuadSourcePeak(VLC_OBJECT(a),b,c,d)
+ 
+ #endif /* VLC_D3D11_QUAD_H */
+--- a/modules/video_output/win32/d3d11_shaders.c
++++ b/modules/video_output/win32/d3d11_shaders.c
+@@ -58,6 +58,7 @@
+     float BoundaryX;\n\
+     float BoundaryY;\n\
+     float LuminanceScale;\n\
++    float SourcePeak;\n\
+   };\n\
+   cbuffer PS_COLOR_TRANSFORM : register(b1)\n\
+   {\n\
+@@ -93,6 +94,53 @@
+       return x;\n\
+   }\n\
+   \n\
++  /* HDR (PQ/HLG) to SDR, see hdrToSdr() and D3D11_CompilePixelShader() */\n\
++  inline float nitsToPQ(float L) {\n\
++      " ST2084_PQ_CONSTANTS "\
++      float y = pow(max(L, 0) / 10000, ST2084_m1);\n\
++      return pow((ST2084_c1 + ST2084_c2 * y) / (1 + ST2084_c3 * y), ST2084_m2);\n\
++  }\n\
++  \n\
++  inline float pqToNits(float e) {\n\
++      " ST2084_PQ_CONSTANTS "\
++      float p = pow(max(e, 0), 1.0 / ST2084_m2);\n\
++      return 10000 * pow(max(p - ST2084_c1, 0) / (ST2084_c2 - ST2084_c3 * p), 1.0 / ST2084_m1);\n\
++  }\n\
++  \n\
++  /* Rec. ITU-R BT.2390-10 §5.4.1 EETF: identity below the knee, Hermite\n\
++     roll-off in the PQ domain from the knee up to the source peak Lw,\n\
++     reaching exactly the target peak Lt (no clipping, no gain). */\n\
++  inline float bt2390(float L, float Lw, float Lt) {\n\
++      if (Lw <= Lt)\n\
++          return min(L, Lt);\n\
++      float ew = nitsToPQ(Lw);\n\
++      float mx = nitsToPQ(Lt) / ew;\n\
++      float e  = nitsToPQ(L) / ew;\n\
++      float KS = 1.5 * mx - 0.5;\n\
++      if (e <= KS)\n\
++          return L;\n\
++      float T  = min((e - KS) / (1 - KS), 1);\n\
++      float T2 = T * T;\n\
++      float T3 = T2 * T;\n\
++      float p  = (2 * T3 - 3 * T2 + 1) * KS + (T3 - 2 * T2 + T) * (1 - KS) + (-2 * T3 + 3 * T2) * mx;\n\
++      return pqToNits(p * ew);\n\
++  }\n\
++  \n\
++  /* rgb: linear BT.709 light in cd/m2, components below 0 are outside the BT.709 gamut.\n\
++     The tone mapping gain is computed from max(R,G,B) and applied to all channels,\n\
++     so hue is kept and no channel clips. 'white' (cd/m2) maps to SDR white. */\n\
++  inline float4 hdrToSdr(float4 rgb, float srcPeak, float white) {\n\
++      float Y = dot(rgb.rgb, float3(0.2126, 0.7152, 0.0722));\n\
++      float m = min(rgb.r, min(rgb.g, rgb.b));\n\
++      if (m < 0 && Y > 0)\n\
++          rgb.rgb = Y + (rgb.rgb - Y) * (Y / (Y - m)); /* desaturate to the gamut edge, keep luminance */\n\
++      rgb.rgb = max(rgb.rgb, 0);\n\
++      float pk = max(rgb.r, max(rgb.g, rgb.b));\n\
++      float gain = pk > 0 ? bt2390(pk, srcPeak, white) / pk : 1;\n\
++      rgb.rgb *= gain / white;\n\
++      return rgb;\n\
++  }\n\
++  \n\
+   inline float4 sourceToLinear(float4 rgb) {\n\
+       %s;\n\
+   }\n\
+@@ -217,6 +265,9 @@
+     const char *psz_tone_mapping      = "return rgb * LuminanceScale";
+     const char *psz_adjust_range      = DEFAULT_NOOP;
+     char *psz_range = NULL;
++    char psz_hdr_tone_mapping[96];
++    const bool hdr_to_sdr = (transfer == TRANSFER_FUNC_SMPTE_ST2084 || transfer == TRANSFER_FUNC_HLG) &&
++                            display->colorspace->transfer == TRANSFER_FUNC_SRGB;
+ 
+     switch (format->formatTexture)
+     {
+@@ -286,6 +337,15 @@
+                 src_transfer = TRANSFER_FUNC_LINEAR;
+                 break;
+             case TRANSFER_FUNC_HLG:
++                if (hdr_to_sdr)
++                    /* Rec. ITU-R BT.2100-2 Table 5: inverse OETF to scene light in [0,1], then the
++                       reference OOTF (system gamma 1.2) for a 1000 cd/m2 display, in cd/m2 */
++                    psz_src_transform = "rgb.r = inverse_HLG(rgb.r) / 12;\n"
++                                        "rgb.g = inverse_HLG(rgb.g) / 12;\n"
++                                        "rgb.b = inverse_HLG(rgb.b) / 12;\n"
++                                        "float ys = dot(float3(0.2627, 0.6780, 0.0593), rgb.rgb);\n"
++                                        "return rgb * (1000 * pow(ys, 0.2))";
++                else
+                 psz_src_transform = "const float alpha_gain = 2000; /* depends on the display output */\n"
+                                     "rgb.r = inverse_HLG(rgb.r);\n"
+                                     "rgb.g = inverse_HLG(rgb.g);\n"
+@@ -324,11 +384,12 @@
+ 
+                     if (transfer == TRANSFER_FUNC_SMPTE_ST2084 || transfer == TRANSFER_FUNC_HLG)
+                     {
+-                        /* HDR tone mapping */
+-                        psz_tone_mapping =
+-                            "static const float4 HABLE_DIV = hable(11.2);\n"
+-                            "rgb = hable(rgb * LuminanceScale) / HABLE_DIV;\n"
+-                            "return rgb";
++                        /* HDR to SDR: BT.2390 EETF, absolute light, 'luminance_peak' cd/m2 is SDR white */
++                        snprintf(psz_hdr_tone_mapping, sizeof(psz_hdr_tone_mapping),
++                                 "return hdrToSdr(rgb, SourcePeak, %u)", display->luminance_peak);
++                        psz_tone_mapping = psz_hdr_tone_mapping;
++                        msg_Info(o, "HDR to SDR tone mapping: %s source, BT.2390 EETF on max(R,G,B), SDR white %u cd/m2",
++                                 transfer == TRANSFER_FUNC_HLG ? "HLG" : "PQ", display->luminance_peak);
+                     }
+                 }
+                 else
+@@ -365,7 +426,9 @@
+         case COLOR_PRIMARIES_BT2020:
+         case COLOR_PRIMARIES_DCI_P3:
+         case COLOR_PRIMARIES_FCC1953:
+-            psz_primaries_transform = "return max(mul(rgb, Primaries), 0)";
++            /* out of gamut colors are brought back by hdrToSdr(), keep the sign until then */
++            psz_primaries_transform = hdr_to_sdr ? "return mul(rgb, Primaries)"
++                                                 : "return max(mul(rgb, Primaries), 0)";
+             break;
+         default:
+             /* see STANDARD_PRIMARIES */
+@@ -542,6 +605,24 @@
+             return DEFAULT_BRIGHTNESS;
+         default:
+             msg_Dbg(o, "unhandled source transfer %d", fmt->transfer);
++            return DEFAULT_BRIGHTNESS;
++    }
++}
++
++float GetFormatSourcePeak(const video_format_t *fmt)
++{
++    switch (fmt->transfer)
++    {
++        case TRANSFER_FUNC_SMPTE_ST2084:
++            /* static metadata: brightest pixel of the content, else the mastering display peak */
++            if (fmt->lighting.MaxCLL)
++                return (float)fmt->lighting.MaxCLL;
++            if (fmt->mastering.max_luminance)
++                return fmt->mastering.max_luminance / 10000.f; /* 0.0001 cd/m2 units */
++            return MAX_HLG_BRIGHTNESS; /* common mastering peak when nothing is signalled */
++        case TRANSFER_FUNC_HLG:
++            return MAX_HLG_BRIGHTNESS;
++        default:
+             return DEFAULT_BRIGHTNESS;
+     }
+ }
+--- a/modules/video_output/win32/d3d11_shaders.h
++++ b/modules/video_output/win32/d3d11_shaders.h
+@@ -57,6 +57,8 @@
+     FLOAT BoundaryX;
+     FLOAT BoundaryY;
+     FLOAT LuminanceScale;
++    FLOAT SourcePeak; /* cd/m2 of the brightest source highlight, HDR to SDR tone mapping only */
++    FLOAT Reserved[3];
+ } PS_CONSTANT_BUFFER;
+ 
+ typedef struct {
+@@ -93,6 +95,8 @@
+ float GetFormatLuminance(vlc_object_t *, const video_format_t *);
+ #define GetFormatLuminance(a,b)  GetFormatLuminance(VLC_OBJECT(a),b)
+ 
++float GetFormatSourcePeak(const video_format_t *);
++
+ HRESULT D3D11_CreateRenderTargets(d3d11_device_t *, ID3D11Resource *, const d3d_format_t *,
+                                   ID3D11RenderTargetView *output[D3D11_MAX_SHADER_VIEW]);
+ 
+--- a/modules/video_output/win32/direct3d11.c
++++ b/modules/video_output/win32/direct3d11.c
+@@ -1216,6 +1216,15 @@
+         sys->d3dregions      = subpicture_regions;
+     }
+ 
++    if (picture->format.lighting.MaxCLL || picture->format.mastering.max_luminance)
++    {
++        /* the per-picture format does not always repeat the transfer function */
++        video_format_t peak_fmt = { .transfer = vd->source.transfer,
++                                    .mastering.max_luminance = picture->format.mastering.max_luminance,
++                                    .lighting.MaxCLL = picture->format.lighting.MaxCLL };
++        D3D11_UpdateQuadSourcePeak(vd, &sys->d3d_dev, &sys->picQuad, GetFormatSourcePeak(&peak_fmt));
++    }
++
+     if (picture->format.mastering.max_luminance)
+     {
+         D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad, (float)sys->display.luminance_peak / GetFormatLuminance(VLC_OBJECT(vd), &picture->format));

@@ -179,6 +179,17 @@ Status: **compiled** into `lib/libvlc.5.dylib` (new export) and
 `plugins/liblibbluray_plugin.dylib` (the `bluray.c` changes). Applies after
 `bluray-playlist-id.patch` (same header, symbol list and `lib/media_player.c`).
 
+## d3d11-hdr-sdr-tonemap.patch — Windows `modules/video_output/win32/` (D3D11)
+
+Windows only; not applied by `scripts/apply-vlc-patches.sh` (macOS series) and
+not part of the five-patch order. Applies to the pristine 3.0.23 tarball with
+`patch -p1 -F0`; the five patched files are listed in
+`d3d11-patched-sources.sha256`. `scripts/windows/build-d3d11-plugin.sh` applies
+it, builds only `libdirect3d11_plugin.dll` with MinGW-w64 against the stock
+`libvlccore.dll`, and the result is pinned in `scripts/windows/d3d11-plugin.lock.json`.
+See `docs/windows/MODIFIED-VLC-RUNTIME-SPEC-0.2.4.md` §5.3 and
+`docs/windows/UHD-HDR-SDR-VALIDATION.md`.
+
 ## Applying the patches
 
 Use `scripts/apply-vlc-patches.sh SOURCE_DIR` on a freshly unpacked VLC 3.0.23

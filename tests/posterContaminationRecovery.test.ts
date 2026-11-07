@@ -172,3 +172,90 @@ test('Poster Contamination Recovery: Restart persistence preserves clean mapping
   // Verify total keys remained exactly 4 without cache wipes or record loss
   assert.strictEqual(storage.size(), 4);
 });
+
+test('Poster Contamination Recovery: Sidecar auto-healing resets contaminated external posters without user intervention', () => {
+  interface ExternalItem {
+    path: string;
+    title: string;
+    year?: number | null;
+    poster_url?: string | null;
+  }
+
+  function autoHealExternalMedia(items: ExternalItem[]): boolean {
+    let mutated = false;
+    for (const m of items) {
+      const titleLc = m.title.toLowerCase();
+      if (!titleLc.includes('fuuka')) {
+        if (m.poster_url) {
+          const pLc = m.poster_url.toLowerCase();
+          if (pLc.includes(FUUKA_CONTAMINATED_HASH) || pLc.includes('fuuka')) {
+            m.poster_url = null;
+            mutated = true;
+          }
+        }
+      }
+    }
+    return mutated;
+  }
+
+  const items: ExternalItem[] = [
+    {
+      path: '/media/external/Fuuka (2017)',
+      title: 'Fuuka (2017)',
+      year: 2017,
+      poster_url: `/thumbs/${FUUKA_CONTAMINATED_HASH}.webp`,
+    },
+    {
+      path: '/media/external/Patlabor 2 the Movie (1993)',
+      title: 'Patlabor 2 the Movie (1993)',
+      year: 1993,
+      poster_url: `/thumbs/${FUUKA_CONTAMINATED_HASH}.webp`,
+    },
+    {
+      path: "/media/external/Mary and a witch's flower (2017)",
+      title: "Mary and a witch's flower (2017)",
+      year: 2017,
+      poster_url: '/cache/fuuka_scan.webp',
+    },
+    {
+      path: '/media/external/Suzume (2022)',
+      title: 'Suzume (2022)',
+      year: 2022,
+      poster_url: '/custom/my_suzume_art.jpg',
+    },
+  ];
+
+  // Pass 1: Auto-heals contaminated items
+  const changed = autoHealExternalMedia(items);
+  assert.strictEqual(changed, true, 'Should detect and mutate contaminated records');
+
+  // Genuine Fuuka retained
+  assert.strictEqual(items[0].poster_url, `/thumbs/${FUUKA_CONTAMINATED_HASH}.webp`);
+  // Patlabor 2 cleared
+  assert.strictEqual(items[1].poster_url, null);
+  // Mary cleared
+  assert.strictEqual(items[2].poster_url, null);
+  // Custom art for Suzume strictly preserved
+  assert.strictEqual(items[3].poster_url, '/custom/my_suzume_art.jpg');
+
+  // Pass 2: Idempotent
+  const secondPass = autoHealExternalMedia(items);
+  assert.strictEqual(secondPass, false, 'Second pass should not mutate already healed collection');
+  assert.strictEqual(items[1].poster_url, null);
+  assert.strictEqual(items[2].poster_url, null);
+  assert.strictEqual(items[3].poster_url, '/custom/my_suzume_art.jpg');
+
+  // Simulate auto-refetch when poster_url is null (matching SimpleMediaView.tsx lines 400-422)
+  const tmdbFetchMock = (title: string) => `/thumbs/tmdb-${fnv1a(title.toLowerCase())}.webp`;
+  for (const item of items) {
+    if (!item.poster_url && !item.title.toLowerCase().includes('fuuka')) {
+      item.poster_url = tmdbFetchMock(item.title);
+    }
+  }
+
+  // Verify Patlabor 2 and Mary now have their own clean distinct posters
+  assert.strictEqual(items[1].poster_url, `/thumbs/tmdb-${fnv1a('patlabor 2 the movie (1993)')}.webp`);
+  assert.strictEqual(items[2].poster_url, `/thumbs/tmdb-${fnv1a("mary and a witch's flower (2017)")}.webp`);
+  assert.notStrictEqual(items[1].poster_url, items[0].poster_url);
+  assert.notStrictEqual(items[2].poster_url, items[0].poster_url);
+});

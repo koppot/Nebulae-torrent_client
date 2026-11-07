@@ -64,9 +64,10 @@ The following matrix documents every patch in the series, its technical purpose,
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`vt-305.patch`** | `modules/codec/videotoolbox.m` | Prevents VideoToolbox error 305 on format transitions by reusing valid sessions. | **macOS Only** | None (Windows uses D3D11/DXVA2) | **Platform Specific** |
 | **`navigate-menu.patch`** | `include/vlc/libvlc_media_player.h`<br>`lib/libvlc.sym`<br>`lib/media_player.c` | Exposes `libvlc_media_player_navigate_menu()` to directly send `INPUT_NAV_MENU` to input thread. | **Cross-platform** | `libvlc.dll` | **Static implementation evidence** |
-| **`hdr-tonemap.patch`** | `modules/video_output/caopengllayer.m`<br>`modules/video_output/opengl/converter.h`<br>`modules/video_output/opengl/fragment_shaders.c`<br>`modules/video_output/opengl/vout_helper.c` | Adds GLSL ITU-R BT.2390 tone-mapping and BT.709 gamut mapping shaders (`vlc_pq_to_nits`, `vlc_hdr_tonemap`). | **Output Dependent** (OpenGL pipeline) | `plugins/video_output/libgl_plugin.dll` (if OpenGL is used) | **Known missing** (Stock D3D11 & GL reused) |
+| **`hdr-tonemap.patch`** | `modules/video_output/caopengllayer.m`<br>`modules/video_output/opengl/converter.h`<br>`modules/video_output/opengl/fragment_shaders.c`<br>`modules/video_output/opengl/vout_helper.c` | Adds GLSL ITU-R BT.2390 tone-mapping and BT.709 gamut mapping shaders (`vlc_pq_to_nits`, `vlc_hdr_tonemap`). | **Output Dependent** (OpenGL pipeline) | `plugins/video_output/libgl_plugin.dll` (if OpenGL is used) | **Not used on Windows** (OpenGL only; Windows uses `d3d11-hdr-sdr-tonemap.patch`) |
 | **`bluray-playlist-id.patch`** | `include/vlc/libvlc_media_player.h`<br>`lib/libvlc.sym`<br>`lib/media_player.c`<br>`modules/access/bluray.c` | Publishes active MPLS ID on `BD_EVENT_PLAYLIST` to input thread; adds `libvlc_media_player_get_bluray_playlist_id()`. | **Cross-platform** | `libvlc.dll`<br>`plugins/access/liblibbluray_plugin.dll` | **Static implementation evidence** |
 | **`bluray-menu-first.patch`** | `include/vlc/libvlc_media_player.h`<br>`lib/libvlc.sym`<br>`lib/media_player.c`<br>`modules/access/bluray.c` | Opens disc directly on Top Menu via `blurayTopMenuCall()` with UO restriction lowering; publishes menu visibility on `BD_EVENT_MENU`; adds `libvlc_media_player_get_bluray_menu_open()`. | **Cross-platform** | `libvlc.dll`<br>`plugins/access/liblibbluray_plugin.dll` | **Static implementation evidence** |
+| **`d3d11-hdr-sdr-tonemap.patch`** | `modules/video_output/win32/d3d11_quad.c`<br>`d3d11_quad.h`<br>`d3d11_shaders.c`<br>`d3d11_shaders.h`<br>`direct3d11.c` | Replaces the stock Hable/gamma-2.2 PQ/HLG-to-SDR shader with a BT.2390 EETF on max(R,G,B) in absolute light (SDR white = 100 cd/m2, no gain, no clip), source-peak aware (MaxCLL, mastering max, 1000 nit fallback), HLG inverse OETF + OOTF, luma-preserving BT.2020 to BT.709 gamut desaturation. Also fixes the upstream `COLORSPACE_BT2020_YUV_TO_FULL_RGBA` green row (Kg applied twice). SDR and native-HDR swapchain paths unchanged. | **Windows only** (D3D11) | `plugins/video_output/libdirect3d11_plugin.dll` (built by `scripts/windows/build-d3d11-plugin.sh`, pinned in `scripts/windows/d3d11-plugin.lock.json`) | **Implemented and validated** (see `UHD-HDR-SDR-VALIDATION.md`) |
 
 ---
 
@@ -82,20 +83,18 @@ Inspection of `src-tauri/src/player/engine.rs` and `src-tauri/src/player/embed_w
    - `glwin32.c` (OpenGL): Priority **275**
 4. Consequently, **Windows automatically selects Direct3D 11 (`libdirect3d11_plugin.dll`)**.
 
-### 5.2 The HDR Disconnect Identified
-- The `--tone-mapping` variables configured in `engine.rs` and the `apply_edr_to_video_layer` stub in `embed_windows.rs` (`var_set_checked("tone-mapping", ...)`) are **exclusively consumed by `modules/video_output/opengl/`**. Direct3D 11 does not read or inherit them.
-- `direct3d11.c` handles HDR via its own options:
-  - `d3d11-hdr-mode=auto`: Checks monitor capabilities; outputs native PQ/BT.2020 to the DXGI swapchain if the monitor supports HDR, or invokes DirectX 11 VideoProcessor tone-mapping (`d3d11_tonemap.cpp`) if the display is SDR.
-  - `d3d11-hdr-mode=never`: Always converts HDR to SDR.
+### 5.2 The HDR Disconnect Identified (original finding, corrected)
+- The `--tone-mapping*` variables formerly configured in `engine.rs` and the `apply_edr_to_video_layer` stub in `embed_windows.rs` are consumed **only** by `modules/video_output/opengl/`. Direct3D 11 never read them, so they were inert on Windows. They are now macOS-only in `engine.rs`, and `apply_edr_to_video_layer` is a documented no-op on Windows.
+- Earlier text in this spec claimed `d3d11-hdr-mode=auto` would invoke the DirectX 11 VideoProcessor tone-mapper on SDR displays. That is wrong for VLC 3.0.23: `d3d11-hdr-mode` (default `auto`) only chooses between native HDR output and the SDR shader path by display capability, and the VideoProcessor tonemapper is only reachable in the `generate` mode. Setting the option would not fix the SDR appearance. Stock D3D11 on an SDR swapchain applies a Hable operator with `LuminanceScale = 100/10000` followed by gamma 1/2.2, which renders mid-tones roughly 40% darker than a colorimetric conversion (the "washed out / dim" look).
 
-### 5.3 Concrete Resolution Options for Windows HDR
-- **Option 1: Direct3D 11 Native HDR (Recommended for Windows):**
-  - Retain `libdirect3d11_plugin.dll` as the primary Windows video output (highest performance, hardware DWM compositing, native Windows 10/11 HDR display pass-through).
-  - Update `src-tauri/src/player/engine.rs` to configure Direct3D 11 HDR controls (`--d3d11-hdr-mode=auto`) on Windows, replacing the inert OpenGL tone-mapping variables.
-- **Option 2: OpenGL Shader Parity (`glwin32`):**
-  - Rebuild `plugins/video_output/libgl_plugin.dll` from the patched `fragment_shaders.c` and `converter.h`.
-  - Force `--vout=glwin32` in `engine.rs` on Windows.
-  - *Risk:* Severe performance impact on Windows, software surface fallback on non-NVIDIA GPUs, and potential Z-order flicker beneath WebView2.
+### 5.3 Implemented Resolution (`d3d11-hdr-sdr-tonemap.patch`)
+Windows keeps Direct3D 11 as the video output and the patched plugin replaces the HDR-to-SDR shader:
+- **Decision:** `display->b_hdr_to_sdr` (SDR swapchain) selects tone mapping. If the swapchain is HDR (BT.2020/PQ capable output with luminance reported), the stock native passthrough path is used untouched. SDR sources never enter the tone mapper (bit-identical to stock).
+- **Appearance:** PQ decoded to absolute light; BT.2390-10 EETF applied to max(R,G,B) with the source peak (MaxCLL, else mastering max, else 1000 nit; HLG 1000 nit) mapped to SDR white = 100 cd/m2; no brightness/contrast/saturation/gamma factor and no hard clip. BT.2020 to BT.709 out-of-gamut negatives are desaturated toward luma. Output is encoded with the same Rec.709/gamma-2.2 swapchain path as SDR video. HLG applies inverse OETF / 12 and a gamma 1.2 OOTF at 1000 nit before the same mapper.
+- **Matrix fix:** the upstream BT.2020 YCbCr to RGB matrix used `-0.127007 / -0.440988` in the green row (the Kg factor was applied twice); corrected to `-0.187326 / -0.650424`. This affects saturated colors in both the tone-mapped and native-HDR paths.
+- **Build parity:** the plugin must be configured with `HAVE_ID3D11VIDEODECODER` defined and the AMF headers present, otherwise the software-decode staging texture path is compiled out (crash in `Prepare()` for 10-bit software frames) or the AMF scaler is lost. `build-d3d11-plugin.sh` handles both and is bit-reproducible.
+- **Fallback:** stock `libdirect3d11_plugin.dll` is rejected by `stage_runtime.py --require-patched` (sha, x64, marker string `HDR to SDR tone mapping:`, pinned lock hash). There is no fallback to the stock plugin in a modified runtime.
+- **Limits:** HLG and native-HDR output were validated only for shader math in the SDR path; no HDR display or GPU is available on the test host, so native HDR passthrough is untouched stock behavior and untested on hardware.
 
 ---
 

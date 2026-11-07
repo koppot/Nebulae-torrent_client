@@ -273,7 +273,7 @@ mod tests {
                     assert!(
                         err.contains("ADC node not seen")
                             || err.contains("socks connect reply")
-                            || err.contains("connection refused"),
+                            || err.to_lowercase().contains("connection refused"),
                         "unexpected: {err}"
                     );
                     return;

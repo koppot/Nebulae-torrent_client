@@ -3,10 +3,11 @@ import { useUiStore, ManagerTab } from './stores/uiStore';
 import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
-import { useTorrentStore, averageTransferSpeeds, reconcileRecheckState } from './stores/torrentStore';
+import { useTorrentStore } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
+import { useLibraryStore } from './stores/libraryStore';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
 import { StatusBar } from './components/layout/StatusBar';
@@ -274,19 +275,16 @@ export const App: React.FC = () => {
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
+    void useLibraryStore.getState().loadPreferences();
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
 
-    // Real-time 500ms push telemetry from Rust engine (speeds are
-    // display-averaged since the respective transfer began (owner directive);
-    // raw engine rates burst between full speed and 0)
+    // Real-time 500ms push telemetry from Rust engine (sanitizes instantaneous
+    // rates and preserves existing detail arrays like files and trackers)
     listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
       if (event.payload) {
-        useTorrentStore.setState({
-          torrents: averageTransferSpeeds(reconcileRecheckState(event.payload)),
-          isLoading: false,
-        });
+        useTorrentStore.getState().applyTorrentTelemetry(event.payload);
       }
     })
       .then((unlisten) => unlistenFns.push(unlisten))

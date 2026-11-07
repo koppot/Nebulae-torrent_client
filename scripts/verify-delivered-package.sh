@@ -18,6 +18,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DMG_PATH="${1:-/Users/dev/.download/Nebulae-0.2.5-macOS-arm64.dmg}"
 UPDATER_PATH="${2:-/Users/dev/.download/updater/Nebulae.app.tar.gz}"
+DMG_PATH="$(cd "$(dirname "$DMG_PATH")" && pwd)/$(basename "$DMG_PATH")"
+if [[ -f "$UPDATER_PATH" ]]; then
+    UPDATER_PATH="$(cd "$(dirname "$UPDATER_PATH")" && pwd)/$(basename "$UPDATER_PATH")"
+fi
 UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
 
 fail() {

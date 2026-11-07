@@ -71,10 +71,13 @@ pub fn fetch_anime_poster(
 ) -> Result<Option<PathBuf>, String> {
     let cache_key = format!("mal_poster:{}", lookup_key.to_lowercase());
 
-    // Check cache first
+    // Check cache first with anti-contamination guard
     if let Ok(Some(cached)) = db.get_setting(&cache_key) {
+        let is_contaminated = (cached.contains("93758aeca10f8450")
+            || cached.to_lowercase().contains("fuuka"))
+            && !lookup_key.to_lowercase().contains("fuuka");
         let path = PathBuf::from(&cached);
-        if path.exists() {
+        if path.exists() && !is_contaminated {
             debug!("[mal] Using cached poster for {}", lookup_key);
             return Ok(Some(path));
         }

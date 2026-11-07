@@ -1,0 +1,82 @@
+--- a/modules/video_output/win32/direct3d11.c
++++ b/modules/video_output/win32/direct3d11.c
+@@ -1318,7 +1318,69 @@
+     if (is_d3d11_opaque(picture->format.i_chroma))
+         d3d11_device_unlock( &sys->d3d_dev );
+ }
++
++#ifdef NEBULAE_TEST_DUMP
++/* Test-only (never part of the shipped plugin): write the final back buffer of the first
++   frames to NEBULAE_D3D11_TEST_DUMP as raw 8-bit RGBA/BGRA, after the shader and before Present. */
++#include <stdio.h>
++static void NebulaeTestDump(vout_display_t *vd)
++{
++    vout_display_sys_t *sys = vd->sys;
++    static int skip = -1, limit = -1;
++    static unsigned seen, written;
++    const char *dir = getenv("NEBULAE_D3D11_TEST_DUMP");
++    if (!dir || !sys->d3drenderTargetView)
++        return;
++    if (limit < 0)
++    {
++        const char *l = getenv("NEBULAE_D3D11_TEST_DUMP_FRAMES");
++        const char *k = getenv("NEBULAE_D3D11_TEST_DUMP_SKIP");
++        limit = l ? atoi(l) : 3;
++        skip = k ? atoi(k) : 0;
++    }
++    if ((int)written >= limit || (int)seen++ < skip)
++        return;
+ 
++    ID3D11Resource *res = NULL;
++    ID3D11RenderTargetView_GetResource(sys->d3drenderTargetView, &res);
++    if (!res)
++        return;
++    ID3D11Texture2D *tex = NULL;
++    if (SUCCEEDED(ID3D11Resource_QueryInterface(res, &IID_ID3D11Texture2D, (void **)&tex)))
++    {
++        D3D11_TEXTURE2D_DESC desc;
++        ID3D11Texture2D_GetDesc(tex, &desc);
++        desc.Usage = D3D11_USAGE_STAGING;
++        desc.BindFlags = 0;
++        desc.MiscFlags = 0;
++        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++        ID3D11Texture2D *stg = NULL;
++        if (SUCCEEDED(ID3D11Device_CreateTexture2D(sys->d3d_dev.d3ddevice, &desc, NULL, &stg)))
++        {
++            ID3D11DeviceContext_CopyResource(sys->d3d_dev.d3dcontext, (ID3D11Resource *)stg, res);
++            D3D11_MAPPED_SUBRESOURCE map;
++            if (SUCCEEDED(ID3D11DeviceContext_Map(sys->d3d_dev.d3dcontext, (ID3D11Resource *)stg, 0, D3D11_MAP_READ, 0, &map)))
++            {
++                char name[512];
++                snprintf(name, sizeof(name), "%s\\frame_%04u_%ux%u_fmt%u.raw", dir, written, desc.Width, desc.Height, (unsigned)desc.Format);
++                FILE *f = fopen(name, "wb");
++                if (f)
++                {
++                    for (UINT y = 0; y < desc.Height; y++)
++                        fwrite((const char *)map.pData + (size_t)y * map.RowPitch, 4, desc.Width, f);
++                    fclose(f);
++                    written++;
++                }
++                ID3D11DeviceContext_Unmap(sys->d3d_dev.d3dcontext, (ID3D11Resource *)stg, 0);
++            }
++            ID3D11Texture2D_Release(stg);
++        }
++        ID3D11Texture2D_Release(tex);
++    }
++    ID3D11Resource_Release(res);
++}
++#endif
++
+ static void Display(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
+ {
+     vout_display_sys_t *sys = vd->sys;
+@@ -1326,6 +1388,9 @@
+     DXGI_PRESENT_PARAMETERS presentParams;
+     memset(&presentParams, 0, sizeof(presentParams));
+     d3d11_device_lock( &sys->d3d_dev );
++#ifdef NEBULAE_TEST_DUMP
++    NebulaeTestDump(vd);
++#endif
+     HRESULT hr = IDXGISwapChain1_Present1(sys->dxgiswapChain, 0, 0, &presentParams);
+     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+     {

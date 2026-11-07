@@ -42,6 +42,7 @@ import {
   Zap,
   FolderInput,
   Save,
+  Loader2,
 } from 'lucide-react';
 
 // Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
@@ -244,6 +245,9 @@ export const TorrentManagerView: React.FC = () => {
     torrents,
     selectedId,
     setSelectedId,
+    filesLoadingId,
+    filesError,
+    fetchTorrentDetails,
     pauseTorrent,
     resumeTorrent,
     forceRecheck,
@@ -269,7 +273,16 @@ export const TorrentManagerView: React.FC = () => {
     setDeleteModalTarget,
   } = useUiStore();
 
-  const { peers, fetchPeers, settings: peeringSettings, fetchSettings, saveSettings } = usePeeringStore();
+  const {
+    peers,
+    fetchPeers,
+    clearPeers,
+    isLoading: isPeersLoading,
+    error: peersError,
+    settings: peeringSettings,
+    fetchSettings,
+    saveSettings,
+  } = usePeeringStore();
   const { engineMode, settings } = useSettingsStore();
   // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
   // fulfill instead of offering actions that only produce errors.
@@ -378,17 +391,7 @@ export const TorrentManagerView: React.FC = () => {
     ratioLimit: -1,
   });
 
-  useEffect(() => {
-    if (activeManagerTab === 'peers' && selectedId) {
-      fetchPeers(selectedId);
-      const interval = setInterval(() => {
-        fetchPeers(selectedId);
-      }, 2500);
-      return () => clearInterval(interval);
-    } else if (selectedId) {
-      fetchPeers(selectedId);
-    }
-  }, [selectedId, activeManagerTab, fetchPeers]);
+
 
   // Filtered list — declared BEFORE the keyboard effect below, whose deps
   // reference it during render.
@@ -566,6 +569,27 @@ export const TorrentManagerView: React.FC = () => {
   }, [contextMenu.visible]);
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || displayedTorrents[0];
+
+  // Auto-select initial torrent if none selected
+  useEffect(() => {
+    if (!selectedId && displayedTorrents.length > 0) {
+      setSelectedId(displayedTorrents[0].id);
+    }
+  }, [selectedId, displayedTorrents, setSelectedId]);
+
+  // Periodic peer query targeting active selected torrent
+  useEffect(() => {
+    const targetId = selectedTorrent?.id;
+    if (activeManagerTab === 'peers' && targetId) {
+      fetchPeers(targetId);
+      const interval = setInterval(() => {
+        fetchPeers(targetId);
+      }, 2500);
+      return () => clearInterval(interval);
+    } else if (!targetId) {
+      clearPeers();
+    }
+  }, [selectedTorrent?.id, activeManagerTab, fetchPeers, clearPeers]);
 
   // Announce/scrape status for the General tab: prefer a tracker that is not
   // working (its failure message is what the user needs to see), otherwise
@@ -1223,17 +1247,15 @@ export const TorrentManagerView: React.FC = () => {
                     </td>
                     <td
                       className="py-2 px-2.5 text-white whitespace-nowrap"
-                      title={t.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_download_rate)}` : undefined}
+                      title={t.avg_download_rate ? `Current rate: ${formatSpeed(t.download_rate)} | Since-start average: ${formatSpeed(t.avg_download_rate)}` : undefined}
                     >
                       {formatSpeed(t.download_rate)}
-                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
                     </td>
                     <td
                       className="py-2 px-2.5 whitespace-nowrap"
-                      title={t.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_upload_rate)}` : undefined}
+                      title={t.avg_upload_rate ? `Current rate: ${formatSpeed(t.upload_rate)} | Since-start average: ${formatSpeed(t.avg_upload_rate)}` : undefined}
                     >
                       {formatSpeed(t.upload_rate)}
-                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
                     </td>
                     <td
                       className="py-2 px-2.5"
@@ -1368,10 +1390,9 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_download_rate)}` : undefined}
+                                title={selectedTorrent.avg_download_rate ? `Current rate: ${formatSpeed(selectedTorrent.download_rate)} | Since-start average: ${formatSpeed(selectedTorrent.avg_download_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.download_rate)}
-                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.download_limit_kib > 0 ? ` [${selectedTorrent.download_limit_kib}K]` : ''}
                               </span>
                             </div>
@@ -1381,10 +1402,9 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_upload_rate)}` : undefined}
+                                title={selectedTorrent.avg_upload_rate ? `Current rate: ${formatSpeed(selectedTorrent.upload_rate)} | Since-start average: ${formatSpeed(selectedTorrent.avg_upload_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.upload_rate)}
-                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.upload_limit_kib > 0 ? ` [${selectedTorrent.upload_limit_kib}K]` : ''}
                               </span>
                             </div>
@@ -1705,12 +1725,31 @@ export const TorrentManagerView: React.FC = () => {
 
                   {/* Content List / Tree */}
                   <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs pr-1">
-                    {filesViewMode === 'tree' && fileTree ? (
-                      fileTree.children.length > 0 ? (
+                    {filesLoadingId === selectedTorrent.id && (!selectedTorrent.files || selectedTorrent.files.length === 0) ? (
+                      <div className="py-8 text-center text-[#a3a3a3] font-sans text-xs flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-[#e50914]" />
+                        <span>Loading torrent files...</span>
+                      </div>
+                    ) : filesError && selectedTorrent.id === selectedId ? (
+                      <div className="py-8 text-center text-[#e50914] font-sans text-xs flex flex-col items-center justify-center gap-2">
+                        <div className="flex items-center gap-1.5 text-red-400">
+                          <AlertCircle className="w-4 h-4" />
+                          <span>Failed to load files: {filesError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchTorrentDetails(selectedTorrent.id)}
+                          className="mt-1 px-3 py-1 bg-[#262626] hover:bg-[#333333] text-white rounded text-xs transition"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : filesViewMode === 'tree' ? (
+                      fileTree && fileTree.children.length > 0 ? (
                         fileTree.children.map((child) => renderTreeNode(child, 0))
                       ) : (
                         <div className="p-3 text-center text-[#a3a3a3]">
-                          No files found in torrent.
+                          {fileFilter ? 'No matching files found.' : 'No files found in torrent.'}
                         </div>
                       )
                     ) : (
@@ -1843,6 +1882,10 @@ export const TorrentManagerView: React.FC = () => {
                 /* ── Peers Tab ─────────────────────────────────────────── */
                 <PeersTabPanel
                   peers={peers}
+                  isLoading={isPeersLoading}
+                  error={peersError}
+                  onRetry={() => selectedTorrent && fetchPeers(selectedTorrent.id)}
+                  torrentStatus={selectedTorrent?.status}
                   settings={peeringSettings}
                   fetchSettings={fetchSettings}
                   saveSettings={saveSettings}
@@ -1862,7 +1905,7 @@ export const TorrentManagerView: React.FC = () => {
                         <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
                       </div>
                     </div>
-                    <span className="text-[10px]">Average Since Transfer Began (1s samples)</span>
+                    <span className="text-[10px]">Instantaneous Transfer Rates (1s samples)</span>
                   </div>
 
                   <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">

@@ -1116,23 +1116,31 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=1000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
-            // SDR): handled by the vout's OpenGL tone-mapping shader
-            // pipeline (VLC 3.0.x has no libplacebo; it lives in the
-            // OpenGL vout helper). These variables are inherited by the
-            // vout's GL
-            // helper; they are NOT among the player-object variables that
-            // libvlc_media_player_set_nsobject() resets, so they survive
-            // embedding. A --vout pin is deliberately absent: set_nsobject
-            // resets the player object's "vout" variable anyway (upstream
-            // 3.0.x lib/media_player.c), and the default module probe
-            // already selects caopengllayer for an embedded NSView
-            // (priority 300 > vout_macosx 250, verified in
-            // modules/video_output/caopengllayer.m and macosx.m).
+        ];
+        // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
+        // SDR): handled by the vout's OpenGL tone-mapping shader
+        // pipeline (VLC 3.0.x has no libplacebo; it lives in the
+        // OpenGL vout helper). These variables are inherited by the
+        // vout's GL
+        // helper; they are NOT among the player-object variables that
+        // libvlc_media_player_set_nsobject() resets, so they survive
+        // embedding. A --vout pin is deliberately absent: set_nsobject
+        // resets the player object's "vout" variable anyway (upstream
+        // 3.0.x lib/media_player.c), and the default module probe
+        // already selects caopengllayer for an embedded NSView
+        // (priority 300 > vout_macosx 250, verified in
+        // modules/video_output/caopengllayer.m and macosx.m).
+        //
+        // Not passed on Windows: the Direct3D 11 vout never reads them. It
+        // tone-maps in its own pixel shader (patches/vlc-3.0.23/
+        // d3d11-hdr-sdr-tonemap.patch), so the Hable arguments would only
+        // suggest a behaviour that does not exist.
+        #[cfg(not(target_os = "windows"))]
+        args.extend([
             CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
-        ];
+        ]);
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
