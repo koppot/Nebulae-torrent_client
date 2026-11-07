@@ -206,6 +206,32 @@ mod windows_impl {
                 FindWindowExW(Some(tasksw), None, w!("MSTaskListWClass"), PCWSTR::null()).ok()
             });
 
+            let mut task_rect = RECT::default();
+            let (target_hwnd, base_x, capture_w, capture_h) = if let Some(tasklist) = h_tasklist {
+                if GetWindowRect(tasklist, &mut task_rect).is_ok() {
+                    (
+                        tasklist,
+                        task_rect.left,
+                        (task_rect.right - task_rect.left).max(100),
+                        (task_rect.bottom - task_rect.top).max(30),
+                    )
+                } else {
+                    (
+                        h_tray,
+                        tray_rect.left,
+                        (tray_rect.right - tray_rect.left).max(100),
+                        tray_h,
+                    )
+                }
+            } else {
+                (
+                    h_tray,
+                    tray_rect.left,
+                    (tray_rect.right - tray_rect.left).max(100),
+                    tray_h,
+                )
+            };
+
             // Look for TrayNotifyWnd (notification area / system tray on right)
             let h_notify =
                 FindWindowExW(Some(h_tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok();
@@ -216,18 +242,17 @@ mod windows_impl {
                 false
             };
 
-            let tw = tray_rect.right - tray_rect.left;
-            let th = (tray_rect.bottom - tray_rect.top).max(30);
             let mut target_x = 0;
+            const SLOT_W: i32 = 46;
 
-            // Dynamically scan taskbar/toolbar for the Nebulae application icon
+            // Dynamically scan toolbar for the Nebulae application icon
             let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(None);
             if !hdc_screen.is_invalid() {
                 let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
-                let hbm = CreateCompatibleBitmap(hdc_screen, tw, th);
+                let hbm = CreateCompatibleBitmap(hdc_screen, capture_w, capture_h);
                 let old_bm = SelectObject(hdc_mem, hbm.into());
 
-                // Try PrintWindow to capture DirectComposition / toolbar surfaces
+                // Use PrintWindow on MSTaskListWClass (PW_RENDERFULLCONTENT = 2)
                 type PfnPrintWindow = unsafe extern "system" fn(HWND, HDC, u32) -> BOOL;
                 let mut pw_captured = false;
                 if let Ok(user32) =
@@ -238,20 +263,19 @@ mod windows_impl {
                         windows::core::s!("PrintWindow"),
                     ) {
                         let print_window: PfnPrintWindow = std::mem::transmute(pfn);
-                        pw_captured = print_window(h_tray, hdc_mem, 2).as_bool();
+                        pw_captured = print_window(target_hwnd, hdc_mem, 2).as_bool();
                     }
                 }
 
                 if !pw_captured {
-                    // Fallback to BitBlt with CAPTUREBLT
                     let _ = BitBlt(
                         hdc_mem,
                         0,
                         0,
-                        tw,
-                        th,
+                        capture_w,
+                        capture_h,
                         Some(hdc_screen),
-                        tray_rect.left,
+                        base_x,
                         tray_rect.top,
                         ROP_CODE(SRCCOPY.0 | 0x40000000),
                     );
@@ -262,14 +286,14 @@ mod windows_impl {
                 // 1. Dark background
                 // 2. White "N" characters (r > 200, g > 200, b > 200)
                 // 3. Orange dot in top-right (r > 185, 70 <= g <= 180, b < 65)
-                let max_scan_x = (tw - BAND_WIDTH - 8).max(50);
+                let max_scan_x = (capture_w - 10).max(50);
                 let mut best_icon_x = -1;
                 let mut best_score = 0;
 
-                for x in 40..max_scan_x {
+                for x in 10..max_scan_x {
                     let mut orange_count = 0;
                     let mut white_count = 0;
-                    for y in (th / 5)..(4 * th / 5) {
+                    for y in (capture_h / 5)..(4 * capture_h / 5) {
                         let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
                         let r = (pixel.0 & 0xFF) as i32;
                         let g = ((pixel.0 >> 8) & 0xFF) as i32;
@@ -293,27 +317,10 @@ mod windows_impl {
                 }
 
                 if best_icon_x > 0 {
-                    // Found Nebulae icon! Now locate the right edge of its button slot
-                    let mut right_edge = best_icon_x + 20;
-                    for x in best_icon_x..std::cmp::min(tw - BAND_WIDTH, best_icon_x + 55) {
-                        let mut has_content = false;
-                        for y in (th / 4)..(3 * th / 4) {
-                            let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
-                            let r = (pixel.0 & 0xFF) as i32;
-                            let g = ((pixel.0 >> 8) & 0xFF) as i32;
-                            let b = ((pixel.0 >> 16) & 0xFF) as i32;
-                            if r > 38 || g > 38 || b > 65 {
-                                has_content = true;
-                                break;
-                            }
-                        }
-                        if has_content {
-                            right_edge = x;
-                        } else if x > best_icon_x + 16 {
-                            break;
-                        }
-                    }
-                    target_x = tray_rect.left + right_edge + 2;
+                    // Found Nebulae icon! Determine the button slot right edge
+                    let slot_idx = best_icon_x / SLOT_W;
+                    let slot_right = (slot_idx + 1) * SLOT_W;
+                    target_x = base_x + slot_right + 2;
                 }
 
                 let _ = SelectObject(hdc_mem, old_bm);
@@ -325,14 +332,8 @@ mod windows_impl {
             if target_x == 0 {
                 // Heuristic fallback if visual scan was occluded:
                 // Count taskbar buttons to estimate button slot
-                if let Some(tasklist) = h_tasklist {
-                    let mut task_rect = RECT::default();
-                    if GetWindowRect(tasklist, &mut task_rect).is_ok() {
-                        let btn_count = count_taskbar_buttons();
-                        let slot_w = 46;
-                        target_x = task_rect.left + (btn_count * slot_w) + 2;
-                    }
-                }
+                let btn_count = count_taskbar_buttons();
+                target_x = base_x + (btn_count * SLOT_W) + 2;
             }
 
             if target_x == 0 {
