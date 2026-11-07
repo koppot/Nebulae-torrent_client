@@ -26,27 +26,29 @@ pub use windows_impl::*;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Once;
     use std::time::Instant;
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
     use windows::core::{w, PCWSTR};
-    use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows::Win32::Foundation::{
+        COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    };
     use windows::Win32::Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
-        CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, SelectObject, SetBkMode,
-        SetTextColor, TextOutW, CLEARTYPE_QUALITY, DEFAULT_CHARSET, FW_SEMIBOLD, HDC, HFONT,
-        OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+        CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, SelectObject,
+        SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+        FW_SEMIBOLD, HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
+        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, DrawIconEx, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
-        InvalidateRect, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
-        SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, DI_NORMAL, HICON,
-        HWND_TOPMOST, IMAGE_ICON, LR_LOADFROMFILE, LR_SHARED, MF_STRING, MSG, PM_REMOVE,
-        SWP_NOACTIVATE, SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON,
-        WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS,
-        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+        SetWindowPos, ShowWindow, TrackPopupMenu, DI_NORMAL, HICON, HWND_TOPMOST, IMAGE_ICON,
+        LR_LOADFROMFILE, LR_SHARED, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE,
+        SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
@@ -77,9 +79,9 @@ mod windows_impl {
 
         let hwnd_raw = BAND_HWND.load(Ordering::Relaxed);
         if hwnd_raw != 0 {
-            let hwnd = HWND(hwnd_raw as _);
+            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
             unsafe {
-                let _ = InvalidateRect(hwnd, None, false);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
         }
     }
@@ -88,7 +90,7 @@ mod windows_impl {
         update_taskbar_speed(app, 0, 0);
     }
 
-    fn run_taskbar_speed_window(app: AppHandle) {
+    fn run_taskbar_speed_window(_app: AppHandle) {
         unsafe {
             let hinstance =
                 windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
@@ -117,7 +119,7 @@ mod windows_impl {
                 init_h,
                 None,
                 None,
-                hinstance,
+                Some(HINSTANCE(hinstance.0)),
                 None,
             );
 
@@ -150,47 +152,45 @@ mod windows_impl {
 
     fn calculate_taskbar_position() -> (i32, i32, i32) {
         unsafe {
-            let h_tray = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null());
-            if h_tray.0 == 0 {
-                return (100, 1000, BAND_HEIGHT);
-            }
+            let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
+                Ok(h) => h,
+                Err(_) => return (100, 1000, BAND_HEIGHT),
+            };
 
             let mut tray_rect = RECT::default();
             let _ = GetWindowRect(h_tray, &mut tray_rect);
             let tray_h = (tray_rect.bottom - tray_rect.top).max(30);
 
             // Look for TaskList (MSTaskListWClass) inside ReBarWindow32
-            let h_rebar = FindWindowExW(h_tray, None, w!("ReBarWindow32"), PCWSTR::null());
-            let h_tasksw = if h_rebar.0 != 0 {
-                FindWindowExW(h_rebar, None, w!("MSTaskSwWClass"), PCWSTR::null())
-            } else {
-                HWND::default()
-            };
-            let h_tasklist = if h_tasksw.0 != 0 {
-                FindWindowExW(h_tasksw, None, w!("MSTaskListWClass"), PCWSTR::null())
-            } else {
-                HWND::default()
-            };
+            let h_rebar =
+                FindWindowExW(Some(h_tray), None, w!("ReBarWindow32"), PCWSTR::null()).ok();
+            let h_tasksw = h_rebar.and_then(|rebar| {
+                FindWindowExW(Some(rebar), None, w!("MSTaskSwWClass"), PCWSTR::null()).ok()
+            });
+            let h_tasklist = h_tasksw.and_then(|tasksw| {
+                FindWindowExW(Some(tasksw), None, w!("MSTaskListWClass"), PCWSTR::null()).ok()
+            });
 
             // Look for TrayNotifyWnd (notification area / system tray on right)
-            let h_notify = FindWindowExW(h_tray, None, w!("TrayNotifyWnd"), PCWSTR::null());
+            let h_notify =
+                FindWindowExW(Some(h_tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok();
             let mut notify_rect = RECT::default();
-            let notify_found = if h_notify.0 != 0 {
-                GetWindowRect(h_notify, &mut notify_rect).is_ok()
+            let notify_found = if let Some(notify) = h_notify {
+                GetWindowRect(notify, &mut notify_rect).is_ok()
             } else {
                 false
             };
 
             let mut target_x = 0;
-            if h_tasklist.0 != 0 {
+            if let Some(tasklist) = h_tasklist {
                 let mut task_rect = RECT::default();
-                if GetWindowRect(h_tasklist, &mut task_rect).is_ok() {
+                if GetWindowRect(tasklist, &mut task_rect).is_ok() {
                     // Position immediately to the right of the task buttons
                     target_x = task_rect.right + 6;
                 }
-            } else if h_rebar.0 != 0 {
+            } else if let Some(rebar) = h_rebar {
                 let mut rebar_rect = RECT::default();
-                if GetWindowRect(h_rebar, &mut rebar_rect).is_ok() {
+                if GetWindowRect(rebar, &mut rebar_rect).is_ok() {
                     target_x = rebar_rect.right + 6;
                 }
             }
@@ -218,7 +218,15 @@ mod windows_impl {
     fn reposition_band(hwnd: HWND) {
         let (x, y, h) = calculate_taskbar_position();
         unsafe {
-            let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, BAND_WIDTH, h, SWP_NOACTIVATE);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                BAND_WIDTH,
+                h,
+                SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -273,14 +281,14 @@ mod windows_impl {
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
 
-        let mem_dc = CreateCompatibleDC(hdc);
+        let mem_dc = CreateCompatibleDC(Some(hdc));
         let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
-        let old_bmp = SelectObject(mem_dc, mem_bmp);
+        let old_bmp = SelectObject(mem_dc, mem_bmp.into());
 
         // Fill background with taskbar-matching dark color
         let bg_brush = CreateSolidBrush(COLORREF(0x00101010));
         FillRect(mem_dc, &rect, bg_brush);
-        let _ = DeleteObject(bg_brush);
+        let _ = DeleteObject(bg_brush.into());
 
         // 1. Draw Nebulae "N" icon on left
         let icon_h = load_nebulae_icon();
@@ -308,14 +316,14 @@ mod windows_impl {
             0,
             0,
             0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            0,
-            CLEARTYPE_QUALITY.0 as u32,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
             0,
             w!("Segoe UI"),
         );
-        let old_font = SelectObject(mem_dc, font);
+        let old_font = SelectObject(mem_dc, font.into());
 
         let _ = SetBkMode(mem_dc, TRANSPARENT);
         let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // Crisp white
@@ -332,13 +340,13 @@ mod windows_impl {
         let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
 
         // Blit to screen
-        let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
+        let _ = BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY);
 
         // Cleanup GDI objects
         let _ = SelectObject(mem_dc, old_font);
-        let _ = DeleteObject(font);
+        let _ = DeleteObject(font.into());
         let _ = SelectObject(mem_dc, old_bmp);
-        let _ = DeleteObject(mem_bmp);
+        let _ = DeleteObject(mem_bmp.into());
         let _ = DeleteDC(mem_dc);
     }
 
@@ -362,7 +370,7 @@ mod windows_impl {
                     20,
                     LR_LOADFROMFILE | LR_SHARED,
                 ) {
-                    if handle.0 != 0 {
+                    if !handle.is_invalid() {
                         return Some(HICON(handle.0));
                     }
                 }
@@ -381,7 +389,7 @@ mod windows_impl {
                 20,
                 LR_SHARED,
             ) {
-                if handle.0 != 0 {
+                if !handle.is_invalid() {
                     return Some(HICON(handle.0));
                 }
             }
@@ -398,7 +406,7 @@ mod windows_impl {
             bottom: y + size,
         };
         FillRect(hdc, &r, badge_brush);
-        let _ = DeleteObject(badge_brush);
+        let _ = DeleteObject(badge_brush.into());
 
         let n_font = CreateFontW(
             14,
@@ -409,27 +417,26 @@ mod windows_impl {
             0,
             0,
             0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            0,
-            CLEARTYPE_QUALITY.0 as u32,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
             0,
             w!("Arial Black"),
         );
-        let old_f = SelectObject(hdc, n_font);
+        let old_f = SelectObject(hdc, n_font.into());
         let _ = SetBkMode(hdc, TRANSPARENT);
         let _ = SetTextColor(hdc, COLORREF(0x00FFFFFF));
         let n_char = [b'N' as u16];
         let _ = TextOutW(hdc, x + 4, y + 2, &n_char);
         let _ = SelectObject(hdc, old_f);
-        let _ = DeleteObject(n_font);
+        let _ = DeleteObject(n_font.into());
     }
 
     fn activate_main_window() {
         unsafe {
             // Find main Nebulae window by AppUserModelID or title
-            let h_neb = FindWindowW(None, w!("Nebulae"));
-            if h_neb.0 != 0 {
+            if let Ok(h_neb) = FindWindowW(None, w!("Nebulae")) {
                 let _ = ShowWindow(h_neb, SW_RESTORE);
                 let _ = SetForegroundWindow(h_neb);
             }
@@ -437,10 +444,10 @@ mod windows_impl {
     }
 
     unsafe fn show_context_menu(hwnd: HWND) {
-        let hmenu = CreatePopupMenu().unwrap_or_default();
-        if hmenu.0 == 0 {
-            return;
-        }
+        let hmenu = match CreatePopupMenu() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
 
         let _ = AppendMenuW(hmenu, MF_STRING, 1001, w!("Open Nebulae"));
         let _ = AppendMenuW(hmenu, MF_STRING, 1002, w!("Quit Nebulae"));
@@ -454,7 +461,7 @@ mod windows_impl {
             TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_BOTTOMALIGN,
             pt.x,
             pt.y,
-            0,
+            None,
             hwnd,
             None,
         );
