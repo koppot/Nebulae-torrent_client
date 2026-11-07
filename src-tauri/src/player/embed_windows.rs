@@ -8,7 +8,6 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -81,49 +80,20 @@ pub(crate) fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
 
-/// Windows equivalent of macOS `apply_edr_to_video_layer`.
+/// Windows counterpart of macOS `apply_edr_to_video_layer`.
 ///
-/// On Windows there is no Core Animation layer to tag with a colorspace.
-/// Instead we use libVLC's `var_SetChecked` to enforce the tone-mapping
-/// variables on the media player object, ensuring the Hable filmic curve
-/// is active for HDR/UHD content even if `set_hwnd` reset any
-/// player-object variables.
-pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> bool {
-    let state = match app.try_state::<crate::player::PlayerState>() {
-        Some(s) => s,
-        None => return false,
-    };
-    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
-    if mp == 0 {
-        return false;
-    }
-    let lib = match state.lib.lock() {
-        Ok(l) => l.clone(),
-        Err(_) => return false,
-    };
-    let Some(lib) = lib else {
+/// There is nothing to apply on Windows: HDR (BT.2020 PQ / HLG) is converted to SDR inside the
+/// Direct3D 11 vout's pixel shader (patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch), chosen per
+/// picture from the stream's own transfer function and the swap chain's colour space. The
+/// `tone-mapping*` variables this function used to set belong to the OpenGL vout and are never
+/// read by the Direct3D 11 vout, so setting them only suggested a behaviour that did not exist.
+/// The function stays so the poll-driven retry latch (`edr_applied`) keeps the same shape on both
+/// platforms; it reports whether a media player exists.
+pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, _is_hdr: bool) -> bool {
+    let Some(state) = app.try_state::<crate::player::PlayerState>() else {
         return false;
     };
-    let var_set_checked = lib.var_set_checked;
-
-    let mp_ptr = mp as *mut c_void;
-    let cstr = |s: &str| std::ffi::CString::new(s).ok();
-
-    if is_hdr {
-        // tone-mapping = 3 (Hable filmic), VLC_VAR_INTEGER = 2
-        if let Some(name) = cstr("tone-mapping") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 2, 3i64 as usize);
-        }
-        // tone-mapping-param = 1.0, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-param") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 1.0_f32.to_bits() as usize);
-        }
-        // tone-mapping-desat = 0.5, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-desat") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 0.5_f32.to_bits() as usize);
-        }
-    }
-    true
+    state.media_player.lock().map(|p| *p).unwrap_or(0) != 0
 }
 
 /// Poll-driven HDR retry for Windows. Ensures tone-mapping is applied to
@@ -666,11 +636,11 @@ unsafe extern "system" fn main_wndproc(
         }
     } else if msg == WM_DISPLAYCHANGE {
         // Re-apply EDR/tone-mapping on screen change. If the window moved
-        // to an HDR-capable display, ensure tone-mapping vars are set.
+        // to another display, refresh the per-window state below.
         if let Some(app) = overlay_app_handle() {
             use tauri::Emitter;
             // Reset the latch so the next player_poll / force_apply_edr
-            // re-applies tone-mapping for the new display.
+            // re-checks the player for the new display.
             if let Some(state) = app.try_state::<crate::player::PlayerState>() {
                 state
                     .edr_applied
@@ -917,14 +887,5 @@ mod tests {
     fn overlay_app_handle_returns_none_before_init() {
         // OVERLAY_APP is a OnceLock; before overlay_app_init is called it must be empty.
         assert!(overlay_app_handle().is_none());
-    }
-
-    #[test]
-    fn tone_mapping_bits_match_vlc_expectations() {
-        // VLC_VAR_INTEGER = 2, VLC_VAR_FLOAT = 4; tone-mapping values as shipped
-        // in the instance-level VLC args (--tone-mapping=3, -param=1.0, -desat=0.5).
-        assert_eq!(3i64 as usize, 3);
-        assert_eq!(1.0_f32.to_bits() as usize, 0x3F80_0000);
-        assert_eq!(0.5_f32.to_bits() as usize, 0x3F00_0000);
     }
 }
