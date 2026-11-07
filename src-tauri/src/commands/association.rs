@@ -15,6 +15,7 @@ pub struct AssociationStatus {
     pub message: String,
 }
 
+#[allow(dead_code)]
 fn status(platform: &str, flags: [bool; 4], message: &str) -> AssociationStatus {
     AssociationStatus {
         torrent_files: flags[0],

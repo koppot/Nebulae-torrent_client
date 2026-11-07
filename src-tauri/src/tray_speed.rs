@@ -18,8 +18,7 @@ use tauri::AppHandle;
 
 use crate::commands::torrent::TorrentItem;
 use crate::speed_format::{
-    aggregate_client_rates, create_composite_tray_icon, format_rate, SHOW_THRESHOLD,
-    STALE_AFTER_SECS,
+    aggregate_client_rates, create_composite_tray_icon, SHOW_THRESHOLD, STALE_AFTER_SECS,
 };
 
 /// Tray icon id used by the builder in `lib.rs` (`"nebulae-tray"`).
