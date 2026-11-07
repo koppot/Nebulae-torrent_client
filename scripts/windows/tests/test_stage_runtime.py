@@ -523,5 +523,22 @@ class StageVlcContractTests(Fixture):
         self.assertIn("too small to be a valid MMDB file", str(ctx.exception))
 
 
+class D3D11LockIdentityTests(unittest.TestCase):
+    """CI enforcement: the staged D3D11 plugin must remain the user-accepted build."""
+
+    def test_lock_matches_accepted_baseline(self):
+        lock = json.loads(stage_runtime.D3D11_PLUGIN_LOCK.read_text(encoding="utf-8"))
+        self.assertEqual(
+            lock["sha256"].lower(),
+            "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993",
+        )
+        self.assertEqual(lock["bytes"], 401920)
+        self.assertEqual(
+            lock["stock_sha256"].lower(),
+            "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8",
+        )
+        self.assertNotEqual(lock["sha256"].lower(), lock["stock_sha256"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()
