@@ -56,7 +56,7 @@ mod windows_impl {
     static BAND_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
     static INIT_ONCE: Once = Once::new();
 
-    const BAND_WIDTH: i32 = 126;
+    const BAND_WIDTH: i32 = 80;
     const BAND_HEIGHT: i32 = 40;
     const CLASS_NAME: PCWSTR = w!("NebulaeTaskbarSpeedBand");
 
@@ -150,6 +150,45 @@ mod windows_impl {
         }
     }
 
+    fn count_taskbar_buttons() -> i32 {
+        unsafe {
+            struct EnumState {
+                count: i32,
+            }
+            let mut state = EnumState { count: 0 };
+            unsafe extern "system" fn enum_proc(
+                hwnd: HWND,
+                lparam: LPARAM,
+            ) -> windows::Win32::Foundation::BOOL {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetWindow, GetWindowLongW, GetWindowTextLengthW, IsWindowVisible, GWL_EXSTYLE,
+                    GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+                };
+                if !IsWindowVisible(hwnd).as_bool() {
+                    return windows::Win32::Foundation::BOOL(1);
+                }
+                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                if (ex & WS_EX_TOOLWINDOW.0) != 0 {
+                    return windows::Win32::Foundation::BOOL(1);
+                }
+                let owner = GetWindow(hwnd, GW_OWNER).unwrap_or_default();
+                if owner.0 != 0 && (ex & WS_EX_APPWINDOW.0) == 0 {
+                    return windows::Win32::Foundation::BOOL(1);
+                }
+                if GetWindowTextLengthW(hwnd) > 0 {
+                    let s = &mut *(lparam.0 as *mut EnumState);
+                    s.count += 1;
+                }
+                windows::Win32::Foundation::BOOL(1)
+            }
+            let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
+                Some(enum_proc),
+                LPARAM(&mut state as *mut _ as isize),
+            );
+            state.count.max(1)
+        }
+    }
+
     fn calculate_taskbar_position() -> (i32, i32, i32) {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
@@ -181,26 +220,128 @@ mod windows_impl {
                 false
             };
 
+            let tw = tray_rect.right - tray_rect.left;
+            let th = (tray_rect.bottom - tray_rect.top).max(30);
             let mut target_x = 0;
-            if let Some(tasklist) = h_tasklist {
-                let mut task_rect = RECT::default();
-                if GetWindowRect(tasklist, &mut task_rect).is_ok() {
-                    // Position immediately to the right of the task buttons
-                    target_x = task_rect.right + 6;
+
+            // Dynamically scan taskbar/toolbar for the Nebulae application icon
+            let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(None);
+            if !hdc_screen.is_invalid() {
+                let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+                let hbm = CreateCompatibleBitmap(hdc_screen, tw, th);
+                let old_bm = SelectObject(hdc_mem, hbm.into());
+
+                // Try PrintWindow to capture DirectComposition / toolbar surfaces
+                type PfnPrintWindow =
+                    unsafe extern "system" fn(HWND, HDC, u32) -> windows::Win32::Foundation::BOOL;
+                let mut pw_captured = false;
+                if let Ok(user32) =
+                    windows::Win32::System::LibraryLoader::GetModuleHandleW(w!("user32.dll"))
+                {
+                    if let Some(pfn) = windows::Win32::System::LibraryLoader::GetProcAddress(
+                        user32,
+                        windows::core::s!("PrintWindow"),
+                    ) {
+                        let print_window: PfnPrintWindow = std::mem::transmute(pfn);
+                        pw_captured = print_window(h_tray, hdc_mem, 2).as_bool();
+                    }
                 }
-            } else if let Some(rebar) = h_rebar {
-                let mut rebar_rect = RECT::default();
-                if GetWindowRect(rebar, &mut rebar_rect).is_ok() {
-                    target_x = rebar_rect.right + 6;
+
+                if !pw_captured {
+                    // Fallback to BitBlt with CAPTUREBLT
+                    let _ = BitBlt(
+                        hdc_mem,
+                        0,
+                        0,
+                        tw,
+                        th,
+                        Some(hdc_screen),
+                        tray_rect.left,
+                        tray_rect.top,
+                        SRCCOPY | windows::Win32::Graphics::Gdi::ROPMISSING(0x40000000),
+                    );
+                }
+
+                // Search for the Nebulae application icon across the toolbar
+                // Nebulae icon has:
+                // 1. Dark background
+                // 2. White "N" characters (r > 200, g > 200, b > 200)
+                // 3. Orange dot in top-right (r > 185, 70 <= g <= 180, b < 65)
+                let max_scan_x = (tw - BAND_WIDTH - 8).max(50);
+                let mut best_icon_x = -1;
+                let mut best_score = 0;
+
+                for x in 40..max_scan_x {
+                    let mut orange_count = 0;
+                    let mut white_count = 0;
+                    for y in (th / 5)..(4 * th / 5) {
+                        let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
+                        let r = (pixel.0 & 0xFF) as i32;
+                        let g = ((pixel.0 >> 8) & 0xFF) as i32;
+                        let b = ((pixel.0 >> 16) & 0xFF) as i32;
+
+                        if r > 185 && g >= 70 && g <= 180 && b < 65 {
+                            orange_count += 1;
+                        }
+                        if r > 200 && g > 200 && b > 200 {
+                            white_count += 1;
+                        }
+                    }
+
+                    if orange_count >= 1 && white_count >= 2 {
+                        let score = orange_count * 4 + white_count;
+                        if score > best_score {
+                            best_score = score;
+                            best_icon_x = x;
+                        }
+                    }
+                }
+
+                if best_icon_x > 0 {
+                    // Found Nebulae icon! Now locate the right edge of its button slot
+                    let mut right_edge = best_icon_x + 20;
+                    for x in best_icon_x..std::cmp::min(tw - BAND_WIDTH, best_icon_x + 55) {
+                        let mut has_content = false;
+                        for y in (th / 4)..(3 * th / 4) {
+                            let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
+                            let r = (pixel.0 & 0xFF) as i32;
+                            let g = ((pixel.0 >> 8) & 0xFF) as i32;
+                            let b = ((pixel.0 >> 16) & 0xFF) as i32;
+                            if r > 38 || g > 38 || b > 65 {
+                                has_content = true;
+                                break;
+                            }
+                        }
+                        if has_content {
+                            right_edge = x;
+                        } else if x > best_icon_x + 16 {
+                            break;
+                        }
+                    }
+                    target_x = tray_rect.left + right_edge + 2;
+                }
+
+                let _ = SelectObject(hdc_mem, old_bm);
+                let _ = DeleteObject(hbm.into());
+                let _ = DeleteDC(hdc_mem);
+                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
+            }
+
+            if target_x == 0 {
+                // Heuristic fallback if visual scan was occluded:
+                // Count taskbar buttons to estimate button slot
+                if let Some(tasklist) = h_tasklist {
+                    let mut task_rect = RECT::default();
+                    if GetWindowRect(tasklist, &mut task_rect).is_ok() {
+                        let btn_count = count_taskbar_buttons();
+                        let slot_w = 46;
+                        target_x = task_rect.left + (btn_count * slot_w) + 2;
+                    }
                 }
             }
 
             if target_x == 0 {
-                if notify_found {
-                    target_x = notify_rect.left - BAND_WIDTH - 8;
-                } else {
-                    target_x = tray_rect.right - BAND_WIDTH - 200;
-                }
+                target_x = 520; // Default baseline right next to toolbar icons
             }
 
             // Ensure band stays bounded within the taskbar
@@ -290,17 +431,7 @@ mod windows_impl {
         FillRect(mem_dc, &rect, bg_brush);
         let _ = DeleteObject(bg_brush.into());
 
-        // 1. Draw Nebulae "N" icon on left
-        let icon_h = load_nebulae_icon();
-        let icon_y = (height - 20) / 2;
-        if let Some(hicon) = icon_h {
-            let _ = DrawIconEx(mem_dc, 6, icon_y, hicon, 20, 20, 0, None, DI_NORMAL);
-        } else {
-            // Fallback: draw stylish "N" brand emblem badge
-            draw_fallback_n_icon(mem_dc, 6, icon_y, 20);
-        }
-
-        // 2. Draw Stacked Transfer Rates on right
+        // Draw Stacked Transfer Rates immediately adjacent to existing taskbar icon (no miniature icon)
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
 
@@ -331,8 +462,9 @@ mod windows_impl {
         let up_wide: Vec<u16> = up_str.encode_utf16().collect();
         let down_wide: Vec<u16> = down_str.encode_utf16().collect();
 
-        // Top line: Upload rate
-        let text_x = 32;
+        // Top line: Upload rate (↑)
+        // Bottom line: Download rate (↓)
+        let text_x = 4;
         let up_y = (height / 2) - 15;
         let down_y = (height / 2) + 1;
 
@@ -348,89 +480,6 @@ mod windows_impl {
         let _ = SelectObject(mem_dc, old_bmp);
         let _ = DeleteObject(mem_bmp.into());
         let _ = DeleteDC(mem_dc);
-    }
-
-    unsafe fn load_nebulae_icon() -> Option<HICON> {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(ico_path) = exe
-                .parent()
-                .map(|p| p.join("app.ico"))
-                .filter(|p| p.exists())
-            {
-                let wide: Vec<u16> = ico_path
-                    .to_string_lossy()
-                    .encode_utf16()
-                    .chain(Some(0))
-                    .collect();
-                if let Ok(handle) = LoadImageW(
-                    None,
-                    PCWSTR::from_raw(wide.as_ptr()),
-                    IMAGE_ICON,
-                    20,
-                    20,
-                    LR_LOADFROMFILE | LR_SHARED,
-                ) {
-                    if !handle.is_invalid() {
-                        return Some(HICON(handle.0));
-                    }
-                }
-            }
-            // Fall back to extracting icon 0 from executable
-            let wide_exe: Vec<u16> = exe
-                .to_string_lossy()
-                .encode_utf16()
-                .chain(Some(0))
-                .collect();
-            if let Ok(handle) = LoadImageW(
-                None,
-                PCWSTR::from_raw(wide_exe.as_ptr()),
-                IMAGE_ICON,
-                20,
-                20,
-                LR_SHARED,
-            ) {
-                if !handle.is_invalid() {
-                    return Some(HICON(handle.0));
-                }
-            }
-        }
-        None
-    }
-
-    unsafe fn draw_fallback_n_icon(hdc: HDC, x: i32, y: i32, size: i32) {
-        let badge_brush = CreateSolidBrush(COLORREF(0x001A18E5)); // ADC Crimson Red
-        let r = RECT {
-            left: x,
-            top: y,
-            right: x + size,
-            bottom: y + size,
-        };
-        FillRect(hdc, &r, badge_brush);
-        let _ = DeleteObject(badge_brush.into());
-
-        let n_font = CreateFontW(
-            14,
-            0,
-            0,
-            0,
-            700,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            0,
-            w!("Arial Black"),
-        );
-        let old_f = SelectObject(hdc, n_font.into());
-        let _ = SetBkMode(hdc, TRANSPARENT);
-        let _ = SetTextColor(hdc, COLORREF(0x00FFFFFF));
-        let n_char = [b'N' as u16];
-        let _ = TextOutW(hdc, x + 4, y + 2, &n_char);
-        let _ = SelectObject(hdc, old_f);
-        let _ = DeleteObject(n_font.into());
     }
 
     fn activate_main_window() {

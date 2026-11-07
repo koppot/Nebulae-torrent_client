@@ -32,10 +32,12 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
             let mut active_hashes: HashSet<String> = HashSet::new();
 
             for item in &torrents {
-                active_hashes.insert(item.info_hash.clone());
+                let lower_hash = item.info_hash.to_lowercase();
+                active_hashes.insert(lower_hash.clone());
 
                 // F5: reset miss counter — the torrent is confirmed present.
                 let _ = db.reset_sync_miss_count(&item.info_hash);
+                let _ = db.reset_sync_miss_count(&lower_hash);
 
                 // F10: upsert a durable snatched record for every completed
                 // torrent so it survives removal from the client.
@@ -97,18 +99,20 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
             // never accumulate misses and are never auto-reclassified.
             if let Ok(all_meta) = db.list_all_torrent_metadata() {
                 for (hash, meta) in &all_meta {
+                    let lower_hash = hash.to_lowercase();
                     // Skip entries already reclassified as External.
                     if meta.is_external {
                         // If the torrent is re-added, reconcile: clear External
                         // flag so it reappears in the Downloaded shelf.
-                        if active_hashes.contains(hash) {
+                        if active_hashes.contains(hash) || active_hashes.contains(&lower_hash) {
                             tracing::info!("[seeding] {hash} re-added — clearing external flag");
                             let _ = db.clear_external_flag(hash);
+                            let _ = db.clear_external_flag(&lower_hash);
                         }
                         continue;
                     }
 
-                    if active_hashes.contains(hash) {
+                    if active_hashes.contains(hash) || active_hashes.contains(&lower_hash) {
                         // Present — miss counter already reset above.
                         continue;
                     }

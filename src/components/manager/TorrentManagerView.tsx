@@ -1119,13 +1119,13 @@ export const TorrentManagerView: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-hidden bg-[#141414]">
         {/* Data Table: Classic Grid */}
         <div className="flex-1 overflow-auto bg-[#141414]">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full table-fixed text-left border-collapse text-xs">
             <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#262626] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider z-10">
               <tr>
                 <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none">
                   Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
                   Size {sortField === 'size' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
                 <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-36 cursor-pointer hover:text-white select-none">
@@ -1134,22 +1134,22 @@ export const TorrentManagerView: React.FC = () => {
                 <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
                   Status {sortField === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-28 text-right cursor-pointer hover:text-white select-none">
                   Down Speed {sortField === 'down_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-28 text-right cursor-pointer hover:text-white select-none">
                   Up Speed {sortField === 'up_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none">
                   ETA {sortField === 'eta' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
                   Ratio {sortField === 'ratio' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Seeds {sortField === 'seeds' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Peers {sortField === 'peers' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
                 <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-32 cursor-pointer hover:text-white select-none">
@@ -1211,7 +1211,7 @@ export const TorrentManagerView: React.FC = () => {
                         {t.name}
                       </span>
                     </td>
-                    <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
+                    <td className="py-2 px-2.5 text-right tabular-nums">{formatBytes(t.total_bytes)}</td>
                     <td className="py-2 px-2.5">
                       <div className="flex flex-col gap-0.5 min-w-[150px]">
                         <div className="flex items-center gap-2">
@@ -1247,31 +1247,31 @@ export const TorrentManagerView: React.FC = () => {
                       )}
                     </td>
                     <td
-                      className="py-2 px-2.5 text-white whitespace-nowrap"
+                      className="py-2 px-2.5 text-white whitespace-nowrap text-right tabular-nums"
                       title={t.avg_download_rate ? `Current rate: ${formatSpeed(t.download_rate)} | Since-start average: ${formatSpeed(t.avg_download_rate)}` : undefined}
                     >
                       {formatSpeed(t.download_rate)}
                     </td>
                     <td
-                      className="py-2 px-2.5 whitespace-nowrap"
+                      className="py-2 px-2.5 whitespace-nowrap text-right tabular-nums"
                       title={t.avg_upload_rate ? `Current rate: ${formatSpeed(t.upload_rate)} | Since-start average: ${formatSpeed(t.avg_upload_rate)}` : undefined}
                     >
                       {formatSpeed(t.upload_rate)}
                     </td>
                     <td
-                      className="py-2 px-2.5"
+                      className="py-2 px-2.5 text-right tabular-nums"
                       title={t.eta_seconds !== undefined ? 'Estimated from the average download rate since the transfer began' : undefined}
                     >
                       {formatEta(t.eta_seconds)}
                     </td>
-                    <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
-                    <td className="py-2 px-2.5 text-white">
+                    <td className="py-2 px-2.5 text-white text-right tabular-nums">{formatRatio(t.ratio)}</td>
+                    <td className="py-2 px-2.5 text-white text-right tabular-nums">
                       {/* Swarm seed count from the engine's tracker scrape.
                           A dash means no successful scrape yet - never fake
                           a zero. */}
                       {trackersAllFailing ? '—' : (t.seeds ?? '—')}
                     </td>
-                    <td className="py-2 px-2.5">{trackersAllFailing ? '—' : t.peers}</td>
+                    <td className="py-2 px-2.5 text-right tabular-nums">{trackersAllFailing ? '—' : t.peers}</td>
                     <td
                       className="py-2 px-2.5 text-white whitespace-nowrap text-[11px]"
                       title={t.last_checked && t.last_checked > 0 ? new Date(t.last_checked * 1000).toLocaleString() : undefined}

@@ -29,44 +29,21 @@ const UNITS: &[&str] = &["B", "K", "M", "G", "T"];
 /// - >= 1024 * 1024 * 1024 -> "X GB/s" (e.g. "1.2 GB/s", "2 GB/s", no unnecessary ".0")
 pub fn format_adaptive_rate(bytes_per_sec: u64) -> String {
     if bytes_per_sec == 0 {
-        return "0 KB/s".to_string();
+        return "0.00 KB/s".to_string();
     }
     if bytes_per_sec < 1024 {
-        return format!("{} B/s", bytes_per_sec);
+        return format!("{:.2} B/s", bytes_per_sec as f64);
     }
     let kib = bytes_per_sec as f64 / 1024.0;
     if kib < 1024.0 {
-        if kib < 10.0 {
-            let val = (kib * 10.0).round() / 10.0;
-            if val.fract() == 0.0 {
-                return format!("{:.0} KB/s", val);
-            } else {
-                return format!("{:.1} KB/s", val);
-            }
-        } else {
-            return format!("{:.0} KB/s", kib.round());
-        }
+        return format!("{:.2} KB/s", kib);
     }
     let mib = kib / 1024.0;
     if mib < 1024.0 {
-        if mib < 100.0 {
-            let val = (mib * 10.0).round() / 10.0;
-            if val.fract() == 0.0 {
-                return format!("{:.0} MB/s", val);
-            } else {
-                return format!("{:.1} MB/s", val);
-            }
-        } else {
-            return format!("{:.0} MB/s", mib.round());
-        }
+        return format!("{:.2} MB/s", mib);
     }
     let gib = mib / 1024.0;
-    let val = (gib * 10.0).round() / 10.0;
-    if val.fract() == 0.0 {
-        format!("{:.0} GB/s", val)
-    } else {
-        format!("{:.1} GB/s", val)
-    }
+    format!("{:.2} GB/s", gib)
 }
 
 /// Format the status bar live speed string with download first and upload second:

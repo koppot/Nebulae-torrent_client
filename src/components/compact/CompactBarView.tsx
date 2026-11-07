@@ -53,11 +53,11 @@ export const CompactBarView: React.FC = () => {
           <div className="flex items-center gap-4 font-mono text-xs">
             <div className="flex items-center gap-1.5 text-adc-cyan">
               <ArrowDown className="w-3.5 h-3.5" />
-              <span className="font-semibold">{formatSpeed(totalDownSpeed)}</span>
+              <span className="font-semibold tabular-nums min-w-[70px] inline-block">{formatSpeed(totalDownSpeed)}</span>
             </div>
             <div className="flex items-center gap-1.5 text-adc-emerald">
               <ArrowUp className="w-3.5 h-3.5" />
-              <span className="font-semibold">{formatSpeed(totalUpSpeed)}</span>
+              <span className="font-semibold tabular-nums min-w-[70px] inline-block">{formatSpeed(totalUpSpeed)}</span>
             </div>
             <div className="text-slate-400 text-[11px]">
               <span>{activeCount} active transfers</span>

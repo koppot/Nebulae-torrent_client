@@ -321,7 +321,7 @@ export const StatusBar: React.FC = () => {
               ▼
             </span>
             <span
-              className={`transition-colors ${
+              className={`transition-colors tabular-nums font-mono min-w-[70px] inline-block ${
                 totalDlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
               }`}
             >
@@ -344,7 +344,7 @@ export const StatusBar: React.FC = () => {
               ▲
             </span>
             <span
-              className={`transition-colors ${
+              className={`transition-colors tabular-nums font-mono min-w-[70px] inline-block ${
                 totalUlSpeed > 0 ? 'text-emerald-400 font-semibold' : 'text-white'
               }`}
             >

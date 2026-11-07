@@ -357,8 +357,13 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
     };
     if let Some(disc) = DiscDetector::inspect(path) {
         let title = best_display_title_for_disc(path, &disc.title);
+        let play_path = if Path::new(&disc.play_target).is_file() {
+            disc.play_target.clone()
+        } else {
+            disc.root_path.clone()
+        };
         return Ok(ResolvedPlayback {
-            resolved_path: disc.root_path.clone(),
+            resolved_path: play_path,
             title,
             is_disc: true,
             external: false,
@@ -390,8 +395,13 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         if let Some(target) = resolve_disc_target(path) {
             if let Some(disc) = DiscDetector::inspect(&target) {
                 let title = best_display_title_for_disc(&target, &disc.title);
+                let play_path = if Path::new(&disc.play_target).is_file() {
+                    disc.play_target.clone()
+                } else {
+                    disc.root_path.clone()
+                };
                 return Ok(ResolvedPlayback {
-                    resolved_path: disc.root_path.clone(),
+                    resolved_path: play_path,
                     title,
                     is_disc: true,
                     external: false,
