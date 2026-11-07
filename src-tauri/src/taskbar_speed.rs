@@ -30,7 +30,7 @@ mod windows_impl {
     use std::sync::Once;
     use std::time::Instant;
     use tauri::AppHandle;
-    use windows::core::{w, PCWSTR};
+    use windows::core::{w, BOOL, PCWSTR};
     use windows::Win32::Foundation::{
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
     };
@@ -38,17 +38,16 @@ mod windows_impl {
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
         CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, SelectObject,
         SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-        FW_SEMIBOLD, HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+        FW_SEMIBOLD, HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, ROP_CODE, SRCCOPY, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-        DispatchMessageW, DrawIconEx, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
-        LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
-        SetWindowPos, ShowWindow, TrackPopupMenu, DI_NORMAL, HICON, HWND_TOPMOST, IMAGE_ICON,
-        LR_LOADFROMFILE, LR_SHARED, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE,
-        SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
+        GetWindowTextLengthW, GetWindowTextW, PeekMessageW, PostQuitMessage, RegisterClassExW,
+        SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, HWND_TOPMOST, MF_STRING,
+        MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+        TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW,
+        WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
@@ -156,30 +155,27 @@ mod windows_impl {
                 count: i32,
             }
             let mut state = EnumState { count: 0 };
-            unsafe extern "system" fn enum_proc(
-                hwnd: HWND,
-                lparam: LPARAM,
-            ) -> windows::Win32::Foundation::BOOL {
+            unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
                 use windows::Win32::UI::WindowsAndMessaging::{
                     GetWindow, GetWindowLongW, GetWindowTextLengthW, IsWindowVisible, GWL_EXSTYLE,
                     GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
                 };
                 if !IsWindowVisible(hwnd).as_bool() {
-                    return windows::Win32::Foundation::BOOL(1);
+                    return BOOL(1);
                 }
                 let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
                 if (ex & WS_EX_TOOLWINDOW.0) != 0 {
-                    return windows::Win32::Foundation::BOOL(1);
+                    return BOOL(1);
                 }
                 let owner = GetWindow(hwnd, GW_OWNER).unwrap_or_default();
-                if owner.0 != 0 && (ex & WS_EX_APPWINDOW.0) == 0 {
-                    return windows::Win32::Foundation::BOOL(1);
+                if !owner.0.is_null() && (ex & WS_EX_APPWINDOW.0) == 0 {
+                    return BOOL(1);
                 }
                 if GetWindowTextLengthW(hwnd) > 0 {
                     let s = &mut *(lparam.0 as *mut EnumState);
                     s.count += 1;
                 }
-                windows::Win32::Foundation::BOOL(1)
+                BOOL(1)
             }
             let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
                 Some(enum_proc),
@@ -232,8 +228,7 @@ mod windows_impl {
                 let old_bm = SelectObject(hdc_mem, hbm.into());
 
                 // Try PrintWindow to capture DirectComposition / toolbar surfaces
-                type PfnPrintWindow =
-                    unsafe extern "system" fn(HWND, HDC, u32) -> windows::Win32::Foundation::BOOL;
+                type PfnPrintWindow = unsafe extern "system" fn(HWND, HDC, u32) -> BOOL;
                 let mut pw_captured = false;
                 if let Ok(user32) =
                     windows::Win32::System::LibraryLoader::GetModuleHandleW(w!("user32.dll"))
@@ -258,7 +253,7 @@ mod windows_impl {
                         Some(hdc_screen),
                         tray_rect.left,
                         tray_rect.top,
-                        SRCCOPY | windows::Win32::Graphics::Gdi::ROPMISSING(0x40000000),
+                        ROP_CODE(SRCCOPY.0 | 0x40000000),
                     );
                 }
 
@@ -341,10 +336,13 @@ mod windows_impl {
             }
 
             if target_x == 0 {
-                target_x = 520; // Default baseline right next to toolbar icons
+                target_x = 998; // Default baseline right next to toolbar Nebulae icon
             }
 
-            // Ensure band stays bounded within the taskbar
+            // Ensure band does not spill into TrafficMonitor (starts at 1224) or beyond taskbar bounds
+            if target_x + BAND_WIDTH > 1220 {
+                target_x = 1220 - BAND_WIDTH;
+            }
             if notify_found && target_x + BAND_WIDTH > notify_rect.left - 4 {
                 target_x = notify_rect.left - BAND_WIDTH - 4;
             }
@@ -482,12 +480,32 @@ mod windows_impl {
         let _ = DeleteDC(mem_dc);
     }
 
+    unsafe extern "system" fn enum_find_nebulae(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let len = GetWindowTextLengthW(hwnd);
+        if len > 0 {
+            let mut buf = vec![0u16; (len + 1) as usize];
+            let read = GetWindowTextW(hwnd, &mut buf);
+            if read > 0 {
+                let title = String::from_utf16_lossy(&buf[..read as usize]);
+                if title.contains("Nebulae") && !title.contains("Toolbar Speed") {
+                    *(lparam.0 as *mut HWND) = hwnd;
+                    return BOOL(0);
+                }
+            }
+        }
+        BOOL(1)
+    }
+
     fn activate_main_window() {
         unsafe {
-            // Find main Nebulae window by AppUserModelID or title
-            if let Ok(h_neb) = FindWindowW(None, w!("Nebulae")) {
-                let _ = ShowWindow(h_neb, SW_RESTORE);
-                let _ = SetForegroundWindow(h_neb);
+            let mut target_hwnd = HWND(core::ptr::null_mut());
+            let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
+                Some(enum_find_nebulae),
+                LPARAM(&mut target_hwnd as *mut _ as isize),
+            );
+            if !target_hwnd.0.is_null() {
+                let _ = ShowWindow(target_hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(target_hwnd);
             }
         }
     }
