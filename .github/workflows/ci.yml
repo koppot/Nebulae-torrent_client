@@ -59,12 +59,23 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Python (for D3D11 regression checks)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Windows compile check
         run: cargo check --lib
         working-directory: ./src-tauri
 
       - name: Windows unit tests
         run: cargo test --lib
+
+      - name: D3D11 HDR-to-SDR plugin regression check
+        run: |
+          python3 scripts/windows/regression-check-d3d11.py
+          python3 -m unittest discover -s scripts/windows/tests
+        shell: bash
         working-directory: ./src-tauri
 
   # macOS compile + test gate: compiles and tests macOS-specific code paths
