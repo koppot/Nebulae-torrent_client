@@ -153,6 +153,8 @@ export interface TorrentItem {
   is_media: boolean;
   poster_url?: string;
   info_hash: string;
+  raw_name?: string;
+  content_path?: string;
   save_path: string;
   historical_save_path?: string;
   added_on: number;

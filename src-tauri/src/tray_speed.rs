@@ -153,6 +153,8 @@ mod tests {
             category: String::new(),
             is_media: false,
             poster_url: None,
+            raw_name: None,
+            content_path: None,
             info_hash: "".to_string(),
             save_path: "".to_string(),
             added_on: 0,

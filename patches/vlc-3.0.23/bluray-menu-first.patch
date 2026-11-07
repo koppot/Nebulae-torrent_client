@@ -1,6 +1,6 @@
 diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
---- a/include/vlc/libvlc_media_player.h	2026-10-28 16:46:05
-+++ b/include/vlc/libvlc_media_player.h	2026-10-28 16:47:42
+--- a/include/vlc/libvlc_media_player.h	2026-11-06 15:59:39
++++ b/include/vlc/libvlc_media_player.h	2026-11-06 15:59:39
 @@ -989,6 +989,7 @@
                                                unsigned navigate );
  LIBVLC_API void libvlc_media_player_navigate_menu( libvlc_media_player_t* p_mi );
@@ -10,8 +10,8 @@ diff -ruN a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.
  /**
   * Set if, and how, the video title will be shown when media is played.
 diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
---- a/lib/libvlc.sym	2026-10-28 16:46:05
-+++ b/lib/libvlc.sym	2026-10-28 16:47:42
+--- a/lib/libvlc.sym	2026-11-06 15:59:39
++++ b/lib/libvlc.sym	2026-11-06 15:59:39
 @@ -204,6 +204,7 @@
  libvlc_media_player_will_play
  libvlc_media_player_navigate
@@ -21,8 +21,8 @@ diff -ruN a/lib/libvlc.sym b/lib/libvlc.sym
  libvlc_media_player_set_video_title_display
  libvlc_media_release
 diff -ruN a/lib/media_player.c b/lib/media_player.c
---- a/lib/media_player.c	2026-10-28 16:46:05
-+++ b/lib/media_player.c	2026-10-28 16:47:42
+--- a/lib/media_player.c	2026-11-06 15:59:39
++++ b/lib/media_player.c	2026-11-06 15:59:39
 @@ -1857,6 +1857,31 @@
      return i_val;
  }
@@ -56,8 +56,8 @@ diff -ruN a/lib/media_player.c b/lib/media_player.c
  libvlc_track_description_t *
          libvlc_get_track_description( libvlc_media_player_t *p_mi,
 diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
---- a/modules/access/bluray.c	2026-10-28 16:46:05
-+++ b/modules/access/bluray.c	2026-10-28 16:47:42
+--- a/modules/access/bluray.c	2026-11-06 15:59:39
++++ b/modules/access/bluray.c	2026-11-06 15:59:39
 @@ -59,6 +59,7 @@
  
  
@@ -86,7 +86,31 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
      var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
  
      /* Open BluRay */
-@@ -2166,6 +2173,27 @@
+@@ -864,9 +871,8 @@
+     if (disc_info->aacs_detected) {
+         msg_Dbg(p_demux, "Disc is using AACS");
+         if (!disc_info->libaacs_detected)
+-            BLURAY_ERROR(_("This Blu-ray Disc needs a library for AACS decoding"
+-                      ", and your system does not have it."));
+-        if (!disc_info->aacs_handled) {
++            msg_Warn(p_demux, "This Blu-ray Disc has an AACS directory, but no AACS decoding library was found. Continuing in case streams are unencrypted.");
++        if (disc_info->libaacs_detected && !disc_info->aacs_handled) {
+             if (disc_info->aacs_error_code) {
+                 switch (disc_info->aacs_error_code) {
+                 case BD_AACS_CORRUPTED_DISC:
+@@ -890,9 +896,8 @@
+     if (disc_info->bdplus_detected) {
+         msg_Dbg(p_demux, "Disc is using BD+");
+         if (!disc_info->libbdplus_detected)
+-            BLURAY_ERROR(_("This Blu-ray Disc needs a library for BD+ decoding"
+-                      ", and your system does not have it."));
+-        if (!disc_info->bdplus_handled)
++            msg_Warn(p_demux, "This Blu-ray Disc has a BD+ directory, but no BD+ decoding library was found. Continuing in case streams are unencrypted.");
++        if (disc_info->libbdplus_detected && !disc_info->bdplus_handled)
+             BLURAY_ERROR(_("Your system BD+ decoding library does not work. "
+                       "Missing configuration?"));
+     }
+@@ -2166,6 +2171,27 @@
  }
  
  /*****************************************************************************
@@ -114,7 +138,7 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
   * bluraySetTitle: select new BD title
   *****************************************************************************/
  static int bluraySetTitle(demux_t *p_demux, int i_title)
-@@ -2176,7 +2215,7 @@
+@@ -2176,7 +2202,7 @@
          int result;
          if (i_title <= 0) {
              msg_Dbg(p_demux, "Playing TopMenu Title");
@@ -123,7 +147,7 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
          } else if (i_title >= (int)p_sys->i_title - 1) {
              msg_Dbg(p_demux, "Playing FirstPlay Title");
              result = bd_play_title(p_sys->bluray, BLURAY_TITLE_FIRST_PLAY);
-@@ -2490,7 +2529,7 @@
+@@ -2490,7 +2516,7 @@
          return sendKeyEvent(p_sys, BD_VK_POPUP);
      case DEMUX_NAV_MENU:
          if (p_sys->b_menu) {
@@ -132,7 +156,7 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
                  p_demux->info.i_update |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT;
                  return VLC_SUCCESS;
              }
-@@ -2816,6 +2855,8 @@
+@@ -2816,6 +2842,8 @@
  #endif
      case BD_EVENT_MENU:
          p_sys->b_menu_open = e->param;

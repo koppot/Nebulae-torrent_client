@@ -69,6 +69,9 @@ pub trait TorrentEngine: Send + Sync {
     fn force_recheck(&self, id: &str) -> Result<(), String>;
     fn reannounce(&self, id: &str) -> Result<(), String>;
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String>;
+    fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
+        self.set_location(id, new_path)
+    }
     fn set_category(&self, id: &str, category: &str) -> Result<(), String>;
     fn set_torrent_limits(
         &self,

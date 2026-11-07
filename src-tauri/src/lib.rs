@@ -9,6 +9,7 @@ pub mod qbit_import;
 pub mod speed_format;
 pub mod status_bar;
 pub mod tailscale;
+pub mod taskbar_speed;
 pub mod taskbar_windows;
 pub mod thumbs;
 #[cfg(target_os = "windows")]
@@ -792,11 +793,13 @@ pub fn run() {
             commands::media::set_external_media_title,
             commands::media::relink_external_media,
             commands::media::relink_torrent_media,
+            commands::media::set_custom_poster,
             commands::media::check_media_path,
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
             commands::torrent::select_disc_folder,
             commands::torrent::select_disc_file,
+            commands::torrent::select_image_file,
             commands::media::player_list_tracks,
             commands::media::player_track_languages,
             commands::media::window_begin_drag,

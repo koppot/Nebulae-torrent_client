@@ -174,18 +174,24 @@ export async function openInPlayer(
       const inDownload = useTorrentStore
         .getState()
         .torrents.some((t) => {
-          if (!t.save_path) return false;
-          // Normalize to forward slashes for comparison (Windows uses \).
           const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
-          const contentRoot = `${norm(t.save_path)}/${t.name}`;
           const filePath = norm(info.resolved_path);
-          // Component-aware check: filePath must be contentRoot itself, or
-          // start with contentRoot + separator so that /Downloads-2 or
-          // /Downloads/Other do not falsely match /Downloads.
-          return (
-            filePath === contentRoot ||
-            filePath.startsWith(contentRoot + '/')
-          );
+          if (t.content_path) {
+            const cp = norm(t.content_path);
+            if (filePath === cp || filePath.startsWith(cp + '/')) return true;
+          }
+          if (t.save_path) {
+            const sp = norm(t.save_path);
+            if (t.raw_name) {
+              const root = `${sp}/${t.raw_name}`;
+              if (filePath === root || filePath.startsWith(root + '/')) return true;
+            }
+            if (t.name) {
+              const root = `${sp}/${t.name}`;
+              if (filePath === root || filePath.startsWith(root + '/')) return true;
+            }
+          }
+          return false;
         });
       if (!inDownload) {
         invoke('add_external_media', {

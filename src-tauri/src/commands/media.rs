@@ -131,11 +131,24 @@ pub fn check_media_path(file_path: String) -> PathDiagnostic {
 
 #[tauri::command]
 pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>, String> {
-    let path = Path::new(&file_path);
-    if !path.exists() {
+    let raw_path = Path::new(&file_path);
+    let path = if raw_path.exists() {
+        raw_path
+    } else if let Some(parent) = raw_path.parent() {
+        if parent.exists()
+            && (parent.join("BDMV").exists()
+                || parent.join("VIDEO_TS").exists()
+                || DiscDetector::inspect(parent).is_some())
+        {
+            parent
+        } else {
+            let diag = diagnose_media_path(&file_path);
+            return Err(diag.message);
+        }
+    } else {
         let diag = diagnose_media_path(&file_path);
         return Err(diag.message);
-    }
+    };
     Ok(DiscDetector::inspect(path))
 }
 
@@ -144,12 +157,26 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
 #[tauri::command]
 pub async fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
     tokio::task::spawn_blocking(move || {
-        let path = Path::new(&file_path);
-        if !path.exists() {
+        let raw_path = Path::new(&file_path);
+        let path = if raw_path.exists() {
+            raw_path
+        } else if let Some(parent) = raw_path.parent() {
+            if parent.exists()
+                && (parent.join("BDMV").exists()
+                    || parent.join("VIDEO_TS").exists()
+                    || DiscDetector::inspect(parent).is_some())
+            {
+                parent
+            } else {
+                let diag = diagnose_media_path(&file_path);
+                tracing::warn!("[disc-set] path missing: {file_path} - {}", diag.message);
+                return Err(diag.message);
+            }
+        } else {
             let diag = diagnose_media_path(&file_path);
             tracing::warn!("[disc-set] path missing: {file_path} - {}", diag.message);
             return Err(diag.message);
-        }
+        };
         let set = DiscDetector::inspect_all(path);
         tracing::info!(
             "[disc-set] {file_path} -> {} disc(s): {}",
@@ -310,11 +337,24 @@ fn best_display_title_for_disc(path: &Path, default_title: &str) -> String {
 /// disc folder ALWAYS wins over loose episode files; a disc-less folder
 /// plays its largest video file (the main feature).
 fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
-    let path = Path::new(file_path);
-    if !path.exists() {
+    let raw_path = Path::new(file_path);
+    let path = if raw_path.exists() {
+        raw_path
+    } else if let Some(parent) = raw_path.parent() {
+        if parent.exists()
+            && (parent.join("BDMV").exists()
+                || parent.join("VIDEO_TS").exists()
+                || DiscDetector::inspect(parent).is_some())
+        {
+            parent
+        } else {
+            let diag = diagnose_media_path(file_path);
+            return Err(diag.message);
+        }
+    } else {
         let diag = diagnose_media_path(file_path);
         return Err(diag.message);
-    }
+    };
     if let Some(disc) = DiscDetector::inspect(path) {
         let title = best_display_title_for_disc(path, &disc.title);
         return Ok(ResolvedPlayback {
@@ -951,10 +991,13 @@ fn start_playback_inner(
                                 // On Blu-ray the demuxer's menu-visible ground truth must agree:
                                 // the title report alone can be the announce of a refused set_title.
                                 // On DVD or non-Blu-ray discs, the title report alone decides.
-                                if unsafe { engine::is_menu_title(&lib, mp) }
+                                if (unsafe { engine::is_menu_title(&lib, mp) }
                                     && (!is_bluray_disc
                                         || unsafe { engine::bluray_menu_open(&lib, mp) }
-                                            != Some(false))
+                                            != Some(false)))
+                                    || (is_bluray_disc
+                                        && unsafe { engine::bluray_menu_open(&lib, mp) }
+                                            == Some(true))
                                 {
                                     tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
@@ -984,16 +1027,29 @@ fn start_playback_inner(
                                 let nav_menu = {
                                     let lib_clone = lib.clone();
                                     move || unsafe {
+                                        if is_bluray_disc
+                                            && engine::bluray_menu_open(&lib_clone, mp)
+                                                == Some(true)
+                                        {
+                                            tracing::info!("[menu-diag] menu watcher: bluray_menu_open is true; skipping nav_menu");
+                                            return;
+                                        }
+                                        let mut navigated = false;
                                         if let Some(navigate_menu) =
                                             lib_clone.libvlc_media_player_navigate_menu
                                         {
                                             navigate_menu(mp as *mut c_void);
+                                            navigated = true;
                                         }
-                                        if let Some(mt) = engine::find_menu_title(&lib_clone, mp) {
-                                            (lib_clone.libvlc_media_player_set_title)(
-                                                mp as *mut c_void,
-                                                mt,
-                                            );
+                                        if !navigated {
+                                            if let Some(mt) =
+                                                engine::find_menu_title(&lib_clone, mp)
+                                            {
+                                                (lib_clone.libvlc_media_player_set_title)(
+                                                    mp as *mut c_void,
+                                                    mt,
+                                                );
+                                            }
                                         }
                                     }
                                 };
@@ -4359,10 +4415,21 @@ fn release_root_of(path: &str) -> String {
         disc_num.is_some()
     }
 
+    fn is_disc_internal_file(name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        lower.ends_with(".m2ts")
+            || lower.ends_with(".clpi")
+            || lower.ends_with(".mpls")
+            || lower.ends_with(".bdmv")
+            || lower.ends_with(".ifo")
+            || lower.ends_with(".bup")
+            || lower.ends_with(".vob")
+    }
+
     while parts.len() > 1 {
         let last = *parts.last().unwrap();
-        // If last segment is a file (e.g. .mkv, .iso, .bdmv), pop it
-        if last.contains('.') && !last.ends_with(".disc") {
+        // If last segment is a disc-internal file (e.g. index.bdmv, VIDEO_TS.IFO), pop it
+        if is_disc_internal_file(last) {
             parts.pop();
             continue;
         }
@@ -4396,13 +4463,39 @@ fn release_root_of(path: &str) -> String {
 #[tauri::command]
 pub fn add_external_media(
     app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     path: String,
     title: String,
 ) -> Result<(), String> {
     let release_root = release_root_of(&path);
     let path = release_root;
+    let target_key = path.trim().to_lowercase().replace('\\', "/");
+    let target_norm = target_key.trim_end_matches('/');
+
+    // Check if path is already managed by a torrent or transitioned external record in DB
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (_, meta) in all_meta {
+            if let Some(ref sp) = meta.save_path {
+                let sp_key = sp.trim().to_lowercase().replace('\\', "/");
+                let sp_norm = sp_key.trim_end_matches('/');
+                let display = meta.display_title.as_deref().unwrap_or("");
+                let full_key = format!("{sp_norm}/{}", display.trim().to_lowercase());
+                if target_norm == sp_norm
+                    || target_norm == full_key
+                    || target_norm.starts_with(&format!("{sp_norm}/"))
+                {
+                    // Already managed in library — do not create duplicate
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let mut items = read_external_store(&app);
-    if items.iter().any(|m| m.path == path) {
+    if items.iter().any(|m| {
+        let k = m.path.trim().to_lowercase().replace('\\', "/");
+        k.trim_end_matches('/') == target_norm
+    }) {
         return Ok(());
     }
     // Use MediaTitleParser so TMDB metadata (library banner, poster, overview, runtime)
@@ -4416,11 +4509,14 @@ pub fn add_external_media(
     let year = parsed.year.map(|y| y as i32);
     // If an entry for the exact same filesystem path already exists, update missing metadata and do not duplicate.
     // Distinct paths (e.g. separate cuts/editions sharing title or artwork) are strictly preserved as separate entries.
-    let target_key = path.trim().to_lowercase().replace('\\', "/");
-    if let Some(existing) = items
-        .iter_mut()
-        .find(|m| m.path.trim().to_lowercase().replace('\\', "/") == target_key)
-    {
+    if let Some(existing) = items.iter_mut().find(|m| {
+        m.path
+            .trim()
+            .to_lowercase()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            == target_norm
+    }) {
         if existing.year.is_none() && year.is_some() {
             existing.year = year;
         }
@@ -4459,9 +4555,6 @@ pub fn list_external_media(
     let mut seen_live_paths = std::collections::HashSet::new();
     for mut m in sidecar_items {
         m.path = release_root_of(&m.path);
-        if !std::path::Path::new(&m.path).exists() {
-            continue;
-        }
         let key = m.path.trim().to_lowercase().replace('\\', "/");
         if seen_live_paths.insert(key) {
             live.push(m);
@@ -4509,8 +4602,10 @@ pub fn list_external_media(
 
             let norm_path = if full_path.exists() {
                 full_path.to_string_lossy().to_string()
+            } else if candidate_path.exists() {
+                candidate_path.to_string_lossy().to_string()
             } else {
-                release_root_of(raw_path)
+                full_path.to_string_lossy().to_string()
             };
 
             let norm_key = norm_path.trim().to_lowercase().replace('\\', "/");
@@ -4678,7 +4773,10 @@ pub fn relink_torrent_media(
     info_hash: String,
     new_path: String,
 ) -> Result<(), String> {
-    let _ = engine.set_location(&info_hash, &new_path);
+    if !Path::new(&new_path).exists() {
+        return Err(format!("Selected path does not exist on disk: {new_path}"));
+    }
+    let _ = engine.relink_location(&info_hash, &new_path);
 
     if let Ok(Some(mut meta)) = db.get_torrent_metadata(&info_hash) {
         meta.save_path = Some(new_path.clone());
@@ -4687,6 +4785,103 @@ pub fn relink_torrent_media(
 
     tracing::info!("[relink] torrent {info_hash} relinked to '{new_path}'");
     Ok(())
+}
+
+/// Allows selecting and saving a user-supplied poster image.
+/// Converts the image to .webp in managed artwork storage, persists to database/JSON,
+/// and returns the canonical webp path.
+#[tauri::command]
+pub fn set_custom_poster(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    target_type: String,
+    target_id: String,
+    source_image_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let source = Path::new(&source_image_path);
+    if !source.is_file() {
+        return Err(format!(
+            "Selected file does not exist or is not a file: {source_image_path}"
+        ));
+    }
+
+    // Verify it is a readable image file
+    let _img =
+        image::open(source).map_err(|e| format!("Unsupported or invalid image format: {e}"))?;
+
+    let thumbs_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not get app data directory: {e}"))?
+        .join("thumbnails");
+    std::fs::create_dir_all(&thumbs_dir)
+        .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
+
+    let webp_path = crate::thumbs::convert_single_image(&thumbs_dir, source)
+        .map_err(|e| format!("Failed to convert image to WebP: {e}"))?;
+    let webp_str = webp_path.to_string_lossy().to_string();
+
+    match target_type.as_str() {
+        "torrent" => {
+            let hash = target_id.to_lowercase();
+            if let Ok(Some(mut meta)) = db.get_torrent_metadata(&hash) {
+                meta.poster_path = Some(webp_str.clone());
+                db.upsert_torrent_metadata(&meta)
+                    .map_err(|e| format!("Failed to update torrent metadata: {e}"))?;
+            } else {
+                return Err(format!(
+                    "Torrent with info hash '{target_id}' not found in database"
+                ));
+            }
+        }
+        "external" => {
+            let norm_target = release_root_of(&target_id);
+            let mut items = read_external_store(&app);
+            let mut found = false;
+            for item in &mut items {
+                if item.path == target_id || item.path == norm_target {
+                    item.poster_url = Some(webp_str.clone());
+                    found = true;
+                }
+            }
+            if !found {
+                items.push(ExternalMedia {
+                    path: target_id.clone(),
+                    title: Path::new(&target_id)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("External Media")
+                        .to_string(),
+                    year: None,
+                    kind: classify_external(&target_id),
+                    added_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0),
+                    poster_url: Some(webp_str.clone()),
+                });
+            }
+            write_external_store(&app, &items)?;
+
+            if let Ok(all_meta) = db.list_all_torrent_metadata() {
+                for (_, mut meta) in all_meta {
+                    if meta.is_external {
+                        if let Some(ref sp) = meta.save_path {
+                            if sp == &target_id || release_root_of(sp) == norm_target {
+                                meta.poster_path = Some(webp_str.clone());
+                                let _ = db.upsert_torrent_metadata(&meta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => return Err(format!("Unknown target type: {target_type}")),
+    }
+
+    tracing::info!("[poster] Set custom poster for {target_type}:{target_id} -> {webp_str}");
+    Ok(webp_str)
 }
 
 /// Toggle the player window's always-on-top pin (owner: a little mark in

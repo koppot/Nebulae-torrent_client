@@ -113,8 +113,13 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
                         continue;
                     }
 
-                    // Only reclassify completed downloads, not in-progress ones.
-                    if meta.completed_on.is_none() {
+                    // Reclassify when completed or when media exists on disk.
+                    let files_exist = meta
+                        .save_path
+                        .as_deref()
+                        .map(|p| std::path::Path::new(p).exists())
+                        .unwrap_or(false);
+                    if meta.completed_on.is_none() && !files_exist {
                         continue;
                     }
 

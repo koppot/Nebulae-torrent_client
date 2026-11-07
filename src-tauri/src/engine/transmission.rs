@@ -672,6 +672,15 @@ impl TransmissionRpcClient {
             "location": location,
             "move": move_data
         });
+        if !move_data {
+            // Relink (move: false) is instantaneous — execute synchronously through standard RPC
+            self.request("torrent-set-location", Some(args))?;
+            return Ok(());
+        }
+        let payload = json!({
+            "method": "torrent-set-location",
+            "arguments": args
+        });
         // Moving terabyte-scale libraries takes FAR longer than the shared
         // client's 15 s timeout (the move blocks this RPC until done), so
         // the call is fired on a dedicated thread with a 30-minute window
@@ -683,12 +692,11 @@ impl TransmissionRpcClient {
             .map(|g| g.clone())
             .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
         let auth = self.auth_header.clone();
-        // Clone the current token as a mutable local — the thread will update
-        // it in-place whenever Transmission returns 409 with a new token,
-        // so subsequent retries use the refreshed value.
         let mut sid = self.session_id.lock().unwrap().clone();
         let id = id.to_string();
         let location = location.to_string();
+        let session_mutex = std::sync::Arc::new(std::sync::Mutex::new(sid.clone()));
+        let session_mutex_clone = session_mutex.clone();
         std::thread::spawn(move || {
             let client = match reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(1800))
@@ -701,7 +709,7 @@ impl TransmissionRpcClient {
                 }
             };
             for _attempt in 0..3 {
-                let mut req = client.post(&rpc_url).json(&args);
+                let mut req = client.post(&rpc_url).json(&payload);
                 if let Some(ref s) = sid {
                     req = req.header("X-Transmission-Session-Id", s);
                 }
@@ -718,15 +726,29 @@ impl TransmissionRpcClient {
                             .map(|h| h.to_str())
                         {
                             sid = Some(new_token.to_string());
+                            if let Ok(mut lock) = session_mutex_clone.lock() {
+                                *lock = Some(new_token.to_string());
+                            }
                         }
                         continue;
                     }
                     Ok(resp) => {
+                        let status = resp.status();
+                        let result_str = resp
+                            .json::<Value>()
+                            .ok()
+                            .and_then(|v| {
+                                v.get("result")
+                                    .and_then(|r| r.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_else(|| "unknown".to_string());
                         tracing::info!(
-                            "[set-location] move of {} -> {} finished: {}",
+                            "[set-location] move of {} -> {} finished: status={} result='{}'",
                             id,
                             location,
-                            resp.status()
+                            status,
+                            result_str
                         );
                         return;
                     }
@@ -2533,11 +2555,25 @@ impl TransmissionTorrentEngine {
 
         let poster_url = meta.and_then(|m| m.poster_path.clone());
 
+        let raw_name = name.clone();
         let (resolved_save_path, hist_save_path) = Self::resolve_torrent_save_path(
             meta.and_then(|m| m.save_path.as_deref()),
             &download_dir,
             &name,
         );
+
+        let canonical_content_path = {
+            let p = std::path::Path::new(&resolved_save_path);
+            if p.is_file() {
+                resolved_save_path.clone()
+            } else if p.join(&raw_name).exists() {
+                p.join(&raw_name).to_string_lossy().to_string()
+            } else if p.file_name().is_some_and(|f| f == raw_name.as_str()) || p.exists() {
+                resolved_save_path.clone()
+            } else {
+                p.join(&raw_name).to_string_lossy().to_string()
+            }
+        };
 
         TorrentItem {
             id,
@@ -2558,6 +2594,8 @@ impl TransmissionTorrentEngine {
             category: meta.and_then(|m| m.category.clone()).unwrap_or_default(),
             is_media,
             poster_url,
+            raw_name: Some(raw_name),
+            content_path: Some(canonical_content_path),
             info_hash: info_hash.clone(),
             save_path: resolved_save_path,
             historical_save_path: hist_save_path,
@@ -2904,22 +2942,96 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String> {
-        self.rpc_client.torrent_set_location(id, new_path, true)?;
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
+        let target_id = if id.parse::<i64>().is_ok() {
+            id.to_string()
+        } else {
+            hash.clone()
+        };
+        self.rpc_client
+            .torrent_set_location(&target_id, new_path, true)?;
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
+            if let Some(meta) = cache.get_mut(&hash) {
                 meta.save_path = Some(new_path.to_string());
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
         }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.save_path = Some(new_path.to_string());
+            let _ = self.db.upsert_torrent_metadata(&meta);
+        }
+        Ok(())
+    }
+
+    fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
+        let target_id = if id.parse::<i64>().is_ok() {
+            id.to_string()
+        } else {
+            hash.clone()
+        };
+        let target_path = std::path::Path::new(new_path);
+        let eff_location = if target_path.is_file() {
+            target_path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| new_path.to_string())
+        } else if target_path.is_dir() {
+            if let Ok(Some(meta)) = self.db.get_torrent_metadata(&hash) {
+                let name = meta.display_title.as_deref().unwrap_or("");
+                if let Some(folder_name) = target_path.file_name().and_then(|n| n.to_str()) {
+                    if !name.is_empty()
+                        && (folder_name == name || folder_name.eq_ignore_ascii_case(name))
+                    {
+                        target_path
+                            .parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| new_path.to_string())
+                    } else {
+                        new_path.to_string()
+                    }
+                } else {
+                    new_path.to_string()
+                }
+            } else {
+                new_path.to_string()
+            }
+        } else {
+            new_path.to_string()
+        };
+        self.rpc_client
+            .torrent_set_location(&target_id, &eff_location, false)?;
+        if let Ok(mut cache) = self.metadata_cache.lock() {
+            if let Some(meta) = cache.get_mut(&hash) {
+                meta.save_path = Some(eff_location.clone());
+                let _ = self.db.upsert_torrent_metadata(meta);
+            }
+        }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.save_path = Some(eff_location.clone());
+            let _ = self.db.upsert_torrent_metadata(&meta);
+        }
+        let _ = self.force_recheck(&target_id);
         Ok(())
     }
 
     fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
+            if let Some(meta) = cache.get_mut(&hash) {
                 meta.category = Some(category.to_string());
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
+        }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.category = Some(category.to_string());
+            let _ = self.db.upsert_torrent_metadata(&meta);
         }
         Ok(())
     }
@@ -2931,6 +3043,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
         ul_kib: u32,
         ratio_limit: f32,
     ) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
         // Negative ratio_limit means "use global default" (no per-torrent override).
         // Transmission interprets seedRatioLimited=false as "follow session default".
         let args = json!({
@@ -2944,12 +3059,18 @@ impl TorrentEngine for TransmissionTorrentEngine {
         self.rpc_client.torrent_set(id, args)?;
 
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
+            if let Some(meta) = cache.get_mut(&hash) {
                 meta.download_limit_kib = dl_kib;
                 meta.upload_limit_kib = ul_kib;
                 meta.ratio_limit = ratio_limit;
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
+        }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.download_limit_kib = dl_kib;
+            meta.upload_limit_kib = ul_kib;
+            meta.ratio_limit = ratio_limit;
+            let _ = self.db.upsert_torrent_metadata(&meta);
         }
         Ok(())
     }

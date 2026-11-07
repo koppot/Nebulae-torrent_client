@@ -51,7 +51,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy, Trash2, Pencil, GripVertical, Check, RotateCcw, Link } from 'lucide-react';
+  Copy, Trash2, Pencil, GripVertical, Check, RotateCcw, Link, Image } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -90,10 +90,14 @@ const isMac = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCas
  * release folder/file is save_path + name.
  */
 export const contentPath = (t: TorrentItem): string => {
+  if (t.content_path && t.content_path.trim().length > 0) {
+    return t.content_path;
+  }
   const isWindows = t.save_path.includes('\\');
   const sep = isWindows ? '\\' : '/';
   const base = t.save_path.replace(/[\\/]+$/, '');
-  return base.endsWith(t.name) ? base : `${base}${sep}${t.name}`;
+  const actualName = t.raw_name || t.name;
+  return base.endsWith(actualName) ? base : `${base}${sep}${actualName}`;
 };
 
 /** Folder to reveal in Finder/Explorer: the release folder, or the parent of a file. */
@@ -262,6 +266,33 @@ export const SimpleMediaView: React.FC = () => {
       setFeedbackNotice({
         type: 'error',
         message: errorMessage(err, 'Failed to relink media.'),
+      });
+    }
+  };
+
+  const handleSetCustomPoster = async (targetType: 'torrent' | 'external', targetId: string) => {
+    try {
+      const selected = await invoke<string | null>('select_image_file');
+      if (!selected) return;
+      const webpPath = await invoke<string>('set_custom_poster', {
+        targetType,
+        targetId,
+        sourceImagePath: selected,
+      });
+      if (targetType === 'torrent') {
+        setThumbMap((prev) => ({ ...prev, [targetId]: webpPath }));
+      } else {
+        setExternalPosterMap((prev) => ({ ...prev, [targetId]: webpPath }));
+        void refreshExternalMedia();
+      }
+      setFeedbackNotice({
+        type: 'info',
+        message: 'Poster updated successfully',
+      });
+    } catch (err: unknown) {
+      setFeedbackNotice({
+        type: 'error',
+        message: errorMessage(err, 'Failed to set custom poster'),
       });
     }
   };
@@ -2282,6 +2313,16 @@ export const SimpleMediaView: React.FC = () => {
                   </button>
                   <button
                     className={act}
+                    onClick={() => {
+                      const path = extCtx.path;
+                      setExtCtx(null);
+                      void handleSetCustomPoster('external', path);
+                    }}
+                  >
+                    <Image className="w-3.5 h-3.5" /> Set Custom Poster...
+                  </button>
+                  <button
+                    className={act}
                     onClick={async () => {
                       setExtCtx(null);
                       try {
@@ -2439,6 +2480,16 @@ export const SimpleMediaView: React.FC = () => {
                     }}
                   >
                     <Link className="w-3.5 h-3.5" /> Relink Media...
+                  </button>
+                  <button
+                    className={act}
+                    onClick={() => {
+                      const hash = item.info_hash || item.id;
+                      setCtxMenu(null);
+                      void handleSetCustomPoster('torrent', hash);
+                    }}
+                  >
+                    <Image className="w-3.5 h-3.5" /> Set Custom Poster...
                   </button>
                   <button
                     className={act}

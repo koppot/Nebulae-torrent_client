@@ -30,12 +30,20 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
                     // Windows-only: tray title speed readout
                     #[cfg(target_os = "windows")]
                     crate::tray_speed::update_tray_title(&app_handle, &torrents, &mut tray_speed);
+
+                    // Windows taskbar speed band (Nebulae icon + stacked rates)
+                    crate::taskbar_speed::update_taskbar_speed(
+                        &app_handle,
+                        upload_rate,
+                        download_rate,
+                    );
                 }
                 Err(_) => {
                     // Clear stale rates on engine stop or failure
                     status_bar::clear_status_bar(&app_handle);
                     #[cfg(target_os = "windows")]
                     crate::tray_speed::clear_tray_title(&app_handle, &mut tray_speed);
+                    crate::taskbar_speed::clear_taskbar_speed(&app_handle);
                 }
             }
         }

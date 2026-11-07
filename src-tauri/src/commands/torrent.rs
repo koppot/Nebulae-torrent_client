@@ -60,6 +60,12 @@ pub struct TorrentItem {
     pub is_media: bool,
     pub poster_url: Option<String>,
 
+    // Canonical filesystem name and content path
+    #[serde(default)]
+    pub raw_name: Option<String>,
+    #[serde(default)]
+    pub content_path: Option<String>,
+
     // qBittorrent metadata & control fields
     pub info_hash: String,
     pub save_path: String,
@@ -649,8 +655,32 @@ pub fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
     engine: State<'_, SharedEngine>,
+    db: State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<(), String> {
-    engine.remove_torrent(&id, delete_files.unwrap_or(false))
+    let del = delete_files.unwrap_or(false);
+    let info_hash = if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(id.to_lowercase())
+    } else if let Ok(torrents) = engine.list_torrents() {
+        torrents
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.info_hash.to_lowercase())
+    } else {
+        None
+    };
+
+    let res = engine.remove_torrent(&id, del);
+
+    if let Some(ref hash) = info_hash {
+        if del {
+            let _ = db.delete_torrent_metadata(hash);
+        } else {
+            let _ = db.mark_as_external(hash);
+            let _ = db.mark_snatched_record_external(hash);
+        }
+    }
+
+    res
 }
 
 #[tauri::command]
@@ -1656,6 +1686,24 @@ pub async fn select_disc_file() -> Result<Option<String>, String> {
         let picked = rfd::FileDialog::new()
             .set_title("Add Movie - select an ISO disc image")
             .add_filter("Disc images (*.iso, *.img)", &["iso", "img"])
+            .add_filter("All files", &["*"])
+            .pick_file();
+        Ok(picked.map(|p| p.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| format!("file picker join error: {e}"))?
+}
+
+/// Dedicated file selection for custom poster images.
+#[tauri::command]
+pub async fn select_image_file() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let picked = rfd::FileDialog::new()
+            .set_title("Select Poster Image")
+            .add_filter(
+                "Image files (*.jpg, *.jpeg, *.png, *.webp)",
+                &["jpg", "jpeg", "png", "webp"],
+            )
             .add_filter("All files", &["*"])
             .pick_file();
         Ok(picked.map(|p| p.to_string_lossy().to_string()))
