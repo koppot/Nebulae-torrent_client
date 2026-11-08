@@ -1001,13 +1001,10 @@ fn start_playback_inner(
                                 // On Blu-ray the demuxer's menu-visible ground truth must agree:
                                 // the title report alone can be the announce of a refused set_title.
                                 // On DVD or non-Blu-ray discs, the title report alone decides.
-                                if (unsafe { engine::is_menu_title(&lib, mp) }
+                                if unsafe { engine::is_menu_title(&lib, mp) }
                                     && (!is_bluray_disc
                                         || unsafe { engine::bluray_menu_open(&lib, mp) }
-                                            != Some(false)))
-                                    || (is_bluray_disc
-                                        && unsafe { engine::bluray_menu_open(&lib, mp) }
-                                            == Some(true))
+                                            != Some(false))
                                 {
                                     tracing::info!(
                                     "[menu-diag] menu watcher (session_gen={menu_gen}): disc already at authored menu [Outcome A]"
@@ -1037,29 +1034,16 @@ fn start_playback_inner(
                                 let nav_menu = {
                                     let lib_clone = lib.clone();
                                     move || unsafe {
-                                        if is_bluray_disc
-                                            && engine::bluray_menu_open(&lib_clone, mp)
-                                                == Some(true)
-                                        {
-                                            tracing::info!("[menu-diag] menu watcher: bluray_menu_open is true; skipping nav_menu");
-                                            return;
-                                        }
-                                        let mut navigated = false;
                                         if let Some(navigate_menu) =
                                             lib_clone.libvlc_media_player_navigate_menu
                                         {
                                             navigate_menu(mp as *mut c_void);
-                                            navigated = true;
                                         }
-                                        if !navigated {
-                                            if let Some(mt) =
-                                                engine::find_menu_title(&lib_clone, mp)
-                                            {
-                                                (lib_clone.libvlc_media_player_set_title)(
-                                                    mp as *mut c_void,
-                                                    mt,
-                                                );
-                                            }
+                                        if let Some(mt) = engine::find_menu_title(&lib_clone, mp) {
+                                            (lib_clone.libvlc_media_player_set_title)(
+                                                mp as *mut c_void,
+                                                mt,
+                                            );
                                         }
                                     }
                                 };
