@@ -322,6 +322,10 @@ export const TorrentManagerView: React.FC = () => {
     torrentId: '',
   });
 
+  // WKWebView drops window.alert(), so operation failures use an in-app modal.
+  const [notice, setNotice] = useState<string | null>(null);
+  const showNotice = (message: string) => setNotice(message);
+
   const [filesViewMode, setFilesViewMode] = useState<'tree' | 'flat'>('tree');
 
   // Poster hover popup state (ADC torrents.php behavior): ~250 ms settle
@@ -993,7 +997,7 @@ export const TorrentManagerView: React.FC = () => {
   return (
     <div className="flex-1 flex overflow-hidden font-sans select-none bg-[#141414] text-white">
       <PosterHoverPopup
-        target={posterPopup?.target ?? null}
+        target={contextMenu.visible ? null : (posterPopup?.target ?? null)}
         x={posterPopup?.x ?? 0}
         y={posterPopup?.y ?? 0}
       />
@@ -1507,7 +1511,7 @@ export const TorrentManagerView: React.FC = () => {
                                 try {
                                   await toggleSequential(selectedTorrent.id);
                                 } catch (err: unknown) {
-                                  alert(`Could not toggle sequential download:\n${err}`);
+                                  showNotice(`Could not toggle sequential download:\n${err}`);
                                 }
                               }}
                               className={`px-2 py-1 rounded border text-[11px] flex items-center gap-1.5 transition ${
@@ -2039,7 +2043,7 @@ export const TorrentManagerView: React.FC = () => {
                   try {
                     await setLocation(t.id, folder);
                   } catch (err) {
-                    alert(`Could not move the torrent:\n${err}`);
+                    showNotice(`Could not move the torrent:\n${err}`);
                   }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
@@ -2060,7 +2064,7 @@ export const TorrentManagerView: React.FC = () => {
                         newPath: selected,
                       });
                     } catch (err) {
-                      alert(`Could not relink the torrent:\n${err}`);
+                      showNotice(`Could not relink the torrent:\n${err}`);
                     } finally {
                       await useTorrentStore.getState().fetchTorrents();
                     }
@@ -2119,7 +2123,7 @@ export const TorrentManagerView: React.FC = () => {
                 try {
                   await invoke('open_torrent_folder', { path: resolveTorrentDataDir(t) });
                 } catch (err: unknown) {
-                  alert(`Could not reveal in Finder:\n${err}`);
+                  showNotice(`Could not reveal in Finder:\n${err}`);
                 }
               }
             }}
@@ -2135,12 +2139,12 @@ export const TorrentManagerView: React.FC = () => {
                   // Confirm what happened - the dialog can land behind
                   // other windows and look like nothing happened.
                   if (typeof savedPath === 'string' && savedPath) {
-                    alert(`Torrent file saved to:\n${savedPath}`);
+                    showNotice(`Torrent file saved to:\n${savedPath}`);
                   }
                 })
                 .catch((e) => {
                   if (typeof e === 'string' && e.includes('cancelled')) return;
-                  alert(`Could not save the torrent file:\n${e}`);
+                  showNotice(`Could not save the torrent file:\n${e}`);
                 });
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
@@ -2182,7 +2186,7 @@ export const TorrentManagerView: React.FC = () => {
                   try {
                     await toggleSequential(tid);
                   } catch (err: unknown) {
-                    alert(`Could not toggle sequential download:\n${err}`);
+                    showNotice(`Could not toggle sequential download:\n${err}`);
                   }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
@@ -2227,6 +2231,27 @@ export const TorrentManagerView: React.FC = () => {
       )}
 
       {/* 5. Rename Modal with Strict External qBittorrent Protection */}
+      {notice !== null && (
+        <div
+          className="fixed inset-0 z-[300] bg-black/70 flex items-center justify-center p-4"
+          role="alertdialog"
+          aria-modal="true"
+          data-testid="manager-notice"
+        >
+          <div className="w-full max-w-md bg-[#141414] border border-[#262626] rounded-lg shadow-2xl p-5 text-xs">
+            <pre className="whitespace-pre-wrap break-words font-sans text-white mb-4">{notice}</pre>
+            <div className="flex justify-end">
+              <button
+                autoFocus
+                onClick={() => setNotice(null)}
+                className="px-4 py-1.5 rounded bg-[#e50914] hover:bg-[#f6121d] text-white transition"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {renameModal.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
           <div className="relative w-full max-w-md bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col text-white">
