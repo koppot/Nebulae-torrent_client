@@ -621,6 +621,13 @@ pub fn run() {
             {
                 let native_menu = app_menu::build_app_menu(app.handle())?;
                 let _ = app.set_menu(native_menu);
+                // The window draws its own title bar. On Windows the native
+                // menu bar would otherwise sit inside the window's frame,
+                // over the video surface that is sized to the window rect.
+                #[cfg(target_os = "windows")]
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide_menu();
+                }
             }
 
             Ok(())
