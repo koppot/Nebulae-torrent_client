@@ -328,13 +328,6 @@ mod windows_impl {
 
     fn reposition_band(hwnd: HWND) {
         let (x, y, w, h) = calculate_taskbar_position();
-        let _ = std::fs::write(
-            "C:\\Temp\\taskbar_speed.log",
-            format!(
-                "reposition: hwnd={:?} x={} y={} w={} h={}\n",
-                hwnd, x, y, w, h
-            ),
-        );
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
         }
