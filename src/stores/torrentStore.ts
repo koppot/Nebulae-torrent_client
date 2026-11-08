@@ -387,14 +387,13 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   setLocation: async (id: string, newPath: string) => {
+    // The daemon moves the files in the background; the stored location only
+    // changes after it has finished, so show what the engine reports.
     try {
       await invoke('set_torrent_location', { id, newPath });
-    } catch {
-      //
+    } finally {
+      await get().fetchTorrents();
     }
-    set({
-      torrents: get().torrents.map((t) => (t.id === id ? { ...t, save_path: newPath } : t)),
-    });
   },
 
   setCategory: async (id: string, category: string) => {

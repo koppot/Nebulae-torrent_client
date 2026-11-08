@@ -375,6 +375,54 @@ fn relink_location_for(chosen: &std::path::Path, torrent_name: Option<&str>) -> 
     as_string(chosen)
 }
 
+type MoveDoneCallback = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+/// Transmission answers "success" for a move even when the data is not at the
+/// old location, and it overwrites same-named files already in the destination.
+/// Both are checked here so a move never misreports or destroys anything.
+fn check_move_preflight(
+    current_dir: Option<&std::path::Path>,
+    name: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    if dest.exists() && !dest.is_dir() {
+        return Err(format!("{} is not a folder", dest.display()));
+    }
+    let Some(current_dir) = current_dir else {
+        return Ok(());
+    };
+    let same = |a: &std::path::Path, b: &std::path::Path| {
+        a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .map_or(a == b, |(x, y)| x == y)
+    };
+    if same(current_dir, dest) {
+        return Err("The torrent is already in that folder".to_string());
+    }
+    if name.is_empty() {
+        return Ok(());
+    }
+    let source = current_dir.join(name);
+    if !source.exists() {
+        return Err(format!(
+            "The files are not at {}. Use Relink to point the torrent at them instead of moving",
+            source.display()
+        ));
+    }
+    if dest.starts_with(&source) {
+        return Err("A folder cannot be moved into itself".to_string());
+    }
+    let target = dest.join(name);
+    if target.exists() {
+        return Err(format!(
+            "{} already exists. Nothing was moved, so nothing was overwritten",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
 impl TransmissionRpcClient {
     pub fn new(port: u16, username: &str, password: &str) -> Self {
         let auth = if !username.is_empty() || !password.is_empty() {
@@ -685,11 +733,15 @@ impl TransmissionRpcClient {
         Ok(())
     }
 
+    /// `on_done` is only used for a data move: it runs on the move thread with
+    /// the daemon's final verdict, because the call itself returns before the
+    /// files have been relocated.
     pub fn torrent_set_location(
         &self,
         id: &str,
         location: &str,
         move_data: bool,
+        on_done: Option<MoveDoneCallback>,
     ) -> Result<(), String> {
         let args = json!({
             "ids": [rpc_id(id)],
@@ -721,14 +773,26 @@ impl TransmissionRpcClient {
         let location = location.to_string();
         let session_mutex = std::sync::Arc::new(std::sync::Mutex::new(sid.clone()));
         let session_mutex_clone = session_mutex.clone();
+        let mut on_done = on_done;
         std::thread::spawn(move || {
+            let (report_id, report_location) = (id.clone(), location.clone());
+            let mut report = move |verdict: Result<(), String>| {
+                if let Err(e) = &verdict {
+                    tracing::error!(
+                        "[set-location] move of {report_id} -> {report_location} failed: {e}"
+                    );
+                }
+                if let Some(cb) = on_done.take() {
+                    cb(verdict);
+                }
+            };
             let client = match reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(1800))
                 .build()
             {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("[set-location] client build failed: {e}");
+                    report(Err(format!("client build failed: {e}")));
                     return;
                 }
             };
@@ -774,14 +838,20 @@ impl TransmissionRpcClient {
                             status,
                             result_str
                         );
+                        if status.is_success() && result_str == "success" {
+                            report(Ok(()));
+                        } else {
+                            report(Err(format!("daemon answered '{result_str}' ({status})")));
+                        }
                         return;
                     }
                     Err(e) => {
-                        tracing::error!("[set-location] move failed: {e}");
+                        report(Err(e.to_string()));
                         return;
                     }
                 }
             }
+            report(Err("session handshake with the daemon failed".to_string()));
         });
         Ok(())
     }
@@ -2990,19 +3060,48 @@ impl TorrentEngine for TransmissionTorrentEngine {
         } else {
             hash.clone()
         };
-        self.rpc_client
-            .torrent_set_location(&target_id, new_path, true)?;
-        if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(&hash) {
-                meta.save_path = Some(new_path.to_string());
-                let _ = self.db.upsert_torrent_metadata(meta);
+        let current = self
+            .rpc_client
+            .torrent_get(Some(vec![rpc_id(&target_id)]))?;
+        let current = current
+            .first()
+            .ok_or_else(|| format!("Torrent {id} not found in Transmission"))?;
+        let name = current.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let current_dir = current.get("downloadDir").and_then(|v| v.as_str());
+        let dest = std::path::Path::new(new_path);
+        check_move_preflight(current_dir.map(std::path::Path::new), name, dest)?;
+
+        // The stored location only changes once the daemon has really finished
+        // the move and the files are at the destination.
+        let db = self.db.clone();
+        let cache = self.metadata_cache.clone();
+        let moved_hash = hash.clone();
+        let moved_to = new_path.to_string();
+        let moved_item = dest.join(name);
+        let on_done: MoveDoneCallback = Box::new(move |verdict| {
+            if verdict.is_err() {
+                return;
             }
-        }
-        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
-            meta.save_path = Some(new_path.to_string());
-            let _ = self.db.upsert_torrent_metadata(&meta);
-        }
-        Ok(())
+            if !moved_item.exists() {
+                tracing::error!(
+                    "[set-location] daemon reported success but {} is missing; stored location left unchanged",
+                    moved_item.display()
+                );
+                return;
+            }
+            if let Ok(mut cache) = cache.lock() {
+                if let Some(meta) = cache.get_mut(&moved_hash) {
+                    meta.save_path = Some(moved_to.clone());
+                    let _ = db.upsert_torrent_metadata(meta);
+                }
+            }
+            if let Ok(Some(mut meta)) = db.get_torrent_metadata(&moved_hash) {
+                meta.save_path = Some(moved_to.clone());
+                let _ = db.upsert_torrent_metadata(&meta);
+            }
+        });
+        self.rpc_client
+            .torrent_set_location(&target_id, new_path, true, Some(on_done))
     }
 
     fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
@@ -3021,7 +3120,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let eff_location =
             relink_location_for(std::path::Path::new(new_path), torrent_name.as_deref());
         self.rpc_client
-            .torrent_set_location(&target_id, &eff_location, false)?;
+            .torrent_set_location(&target_id, &eff_location, false, None)?;
         if let Ok(mut cache) = self.metadata_cache.lock() {
             if let Some(meta) = cache.get_mut(&hash) {
                 meta.save_path = Some(eff_location.clone());
@@ -3861,6 +3960,88 @@ impl TorrentEngine for TransmissionTorrentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Needs a disposable daemon: NEB_MOVE_TEST_PORT, NEB_MOVE_TEST_TORRENT
+    /// (a .torrent whose data sits in NEB_MOVE_TEST_SRC) and an empty
+    /// NEB_MOVE_TEST_DST. Run with `-- --ignored`.
+    #[test]
+    #[ignore]
+    fn data_move_reports_the_daemon_verdict_to_the_callback() {
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} not set"));
+        let port: u16 = env("NEB_MOVE_TEST_PORT").parse().unwrap();
+        let (torrent, src, dst) = (
+            env("NEB_MOVE_TEST_TORRENT"),
+            env("NEB_MOVE_TEST_SRC"),
+            env("NEB_MOVE_TEST_DST"),
+        );
+        let client = TransmissionRpcClient::new(port, "", "");
+        let id = client
+            .torrent_add(json!({ "filename": torrent, "download-dir": src, "paused": false }))
+            .expect("add");
+        let (tx, rx) = std::sync::mpsc::channel();
+        client
+            .torrent_set_location(
+                &id,
+                &dst,
+                true,
+                Some(Box::new(move |v| {
+                    let _ = tx.send(v);
+                })),
+            )
+            .expect("move accepted");
+        let verdict = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("callback ran");
+        assert!(verdict.is_ok(), "{verdict:?}");
+        let got = client.torrent_get(Some(vec![rpc_id(&id)])).unwrap();
+        assert_eq!(got[0]["downloadDir"].as_str(), Some(dst.as_str()));
+        assert!(std::path::Path::new(&dst)
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some());
+
+        // A daemon that cannot answer must produce an Err verdict, not silence.
+        let dead = TransmissionRpcClient::new(1, "", "");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = dead.torrent_set_location(
+            "1",
+            &dst,
+            true,
+            Some(Box::new(move |v| {
+                let _ = tx.send(v);
+            })),
+        );
+        let verdict = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("callback ran for the failing daemon");
+        assert!(verdict.is_err(), "{verdict:?}");
+    }
+
+    #[test]
+    fn move_preflight_refuses_misreported_or_destructive_moves() {
+        let root = std::env::temp_dir().join(format!("neb_move_pre_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (src, dst, conf) = (root.join("src"), root.join("dst"), root.join("conf"));
+        std::fs::create_dir_all(src.join("Show")).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::create_dir_all(conf.join("Show")).unwrap();
+        std::fs::write(root.join("afile"), b"x").unwrap();
+
+        assert!(check_move_preflight(Some(&src), "Show", &dst).is_ok());
+        assert!(check_move_preflight(Some(&src), "Show", &root.join("new/parent")).is_ok());
+        let e = check_move_preflight(Some(&src), "Show", &src).unwrap_err();
+        assert!(e.contains("already in that folder"), "{e}");
+        let e = check_move_preflight(Some(&src), "Missing", &dst).unwrap_err();
+        assert!(e.contains("Relink"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &conf).unwrap_err();
+        assert!(e.contains("already exists"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &src.join("Show").join("in")).unwrap_err();
+        assert!(e.contains("into itself"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &root.join("afile")).unwrap_err();
+        assert!(e.contains("not a folder"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn relink_location_uses_torrent_name_not_library_title() {

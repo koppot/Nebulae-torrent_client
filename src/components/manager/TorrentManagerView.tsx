@@ -2035,7 +2035,12 @@ export const TorrentManagerView: React.FC = () => {
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                   if (!t) return;
                   const folder = await selectDownloadDirectory();
-                  if (folder) setLocation(t.id, folder);
+                  if (!folder) return;
+                  try {
+                    await setLocation(t.id, folder);
+                  } catch (err) {
+                    alert(`Could not move the torrent:\n${err}`);
+                  }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
               >
@@ -2049,11 +2054,16 @@ export const TorrentManagerView: React.FC = () => {
                   if (!t) return;
                   const selected = await invoke<string | null>('select_disc_source', { kind: null });
                   if (selected) {
-                    await invoke('relink_torrent_media', {
-                      infoHash: t.info_hash || t.id,
-                      newPath: selected,
-                    });
-                    await useTorrentStore.getState().fetchTorrents();
+                    try {
+                      await invoke('relink_torrent_media', {
+                        infoHash: t.info_hash || t.id,
+                        newPath: selected,
+                      });
+                    } catch (err) {
+                      alert(`Could not relink the torrent:\n${err}`);
+                    } finally {
+                      await useTorrentStore.getState().fetchTorrents();
+                    }
                   }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
