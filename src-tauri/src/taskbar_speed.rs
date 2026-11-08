@@ -55,8 +55,6 @@ mod windows_impl {
     static BAND_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
     static INIT_ONCE: Once = Once::new();
 
-    const BAND_WIDTH: i32 = 80;
-    const BAND_HEIGHT: i32 = 40;
     const CLASS_NAME: PCWSTR = w!("NebulaeTaskbarSpeedBand");
 
     pub fn init_taskbar_speed(app: &AppHandle) {
@@ -105,14 +103,7 @@ mod windows_impl {
             let _ = RegisterClassExW(&wc);
 
             // Compute initial position based on Shell_TrayWnd
-            let (init_x, init_y, init_h) = calculate_taskbar_position();
-            let _ = std::fs::write(
-                "C:\\Temp\\taskbar_speed_init.log",
-                format!(
-                    "init: x={} y={} w={} h={}\n",
-                    init_x, init_y, BAND_WIDTH, init_h
-                ),
-            );
+            let (init_x, init_y, init_w, init_h) = calculate_taskbar_position();
 
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
@@ -121,7 +112,7 @@ mod windows_impl {
                 WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
                 init_x,
                 init_y,
-                BAND_WIDTH,
+                init_w,
                 init_h,
                 None,
                 None,
@@ -156,16 +147,19 @@ mod windows_impl {
         }
     }
 
-    fn calculate_taskbar_position() -> (i32, i32, i32) {
+    fn calculate_taskbar_position() -> (i32, i32, i32, i32) {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
                 Ok(h) => h,
-                Err(_) => return (100, 1000, BAND_HEIGHT),
+                Err(_) => return (100, 1000, 80, 40),
             };
 
             let mut tray_rect = RECT::default();
             let _ = GetWindowRect(h_tray, &mut tray_rect);
             let tray_h = (tray_rect.bottom - tray_rect.top).max(30);
+            let dpi_scale = tray_h as f32 / 40.0;
+            let band_w = (80.0 * dpi_scale).round() as i32;
+            let slot_w = (46.0 * dpi_scale).round() as i32;
 
             // Look for TaskList (MSTaskListWClass) inside ReBarWindow32
             let h_rebar =
@@ -203,8 +197,17 @@ mod windows_impl {
                 )
             };
 
+            // Look for TrayNotifyWnd (notification area / system tray on right)
+            let h_notify =
+                FindWindowExW(Some(h_tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok();
+            let mut notify_rect = RECT::default();
+            let notify_found = if let Some(notify) = h_notify {
+                GetWindowRect(notify, &mut notify_rect).is_ok()
+            } else {
+                false
+            };
+
             let mut target_x = 0;
-            const SLOT_W: i32 = 46;
 
             // Dynamically scan toolbar for the Nebulae application icon
             let hdc_screen = windows::Win32::Graphics::Gdi::GetDC(None);
@@ -244,18 +247,23 @@ mod windows_impl {
 
                 // Search slot by slot for the Nebulae application icon
                 // Nebulae icon has:
-                // 1. Dark tile background (r < 55, g < 55, b < 55)
+                // 1. Dark tile background (20 <= r < 55, 20 <= g < 55, 20 <= b < 55)
                 // 2. White "N" characters (r > 200, g > 200, b > 200)
                 // 3. Distinct ADC orange dot in top-right (r > 190, 80 <= g <= 170, b < 60)
-                let num_slots = capture_w / SLOT_W;
-                let mut neb_slot = -1;
+                let num_slots = capture_w / slot_w;
+                let mut best_slot = -1;
+                let mut best_score: i64 = 0;
+
+                let min_white = (50.0 * dpi_scale) as i64;
+                let min_orange = (15.0 * dpi_scale) as i64;
+                let min_dark = (100.0 * dpi_scale) as i64;
 
                 for slot in 0..num_slots {
-                    let sx = slot * SLOT_W;
-                    let ex = std::cmp::min(capture_w, sx + SLOT_W);
-                    let mut orange_count = 0;
-                    let mut white_count = 0;
-                    let mut dark_tile_count = 0;
+                    let sx = slot * slot_w;
+                    let ex = std::cmp::min(capture_w, sx + slot_w);
+                    let mut orange_count: i64 = 0;
+                    let mut white_count: i64 = 0;
+                    let mut dark_tile_count: i64 = 0;
 
                     for x in sx..ex {
                         for y in (capture_h / 6)..(5 * capture_h / 6) {
@@ -279,15 +287,21 @@ mod windows_impl {
                         }
                     }
 
-                    // A genuine Nebulae button slot contains both the white N and orange dot
-                    if orange_count >= 2 && white_count >= 6 && dark_tile_count >= 10 {
-                        neb_slot = slot;
-                        break;
+                    // A genuine Nebulae button slot has a substantial white "N", orange dot, and dark tile
+                    if white_count >= min_white
+                        && orange_count >= min_orange
+                        && dark_tile_count >= min_dark
+                    {
+                        let score = white_count * orange_count;
+                        if score > best_score {
+                            best_score = score;
+                            best_slot = slot;
+                        }
                     }
                 }
 
-                if neb_slot >= 0 {
-                    let slot_right = (neb_slot + 1) * SLOT_W;
+                if best_slot >= 0 {
+                    let slot_right = (best_slot + 1) * slot_w;
                     target_x = base_x + slot_right + 2;
                 }
 
@@ -297,40 +311,32 @@ mod windows_impl {
                 let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
             }
 
-            if target_x < 900 {
-                // Nebulae is Button 11 on the taskbar toolbar (base_x = 445, 12 slots * 46px = 552px, right edge = 997).
-                // Anchor immediately adjacent to the Nebulae application icon:
-                target_x = 998;
+            if target_x == 0 {
+                // If visual scan did not find the exact slot (e.g. icon partially occluded),
+                // use Button 10/11 on the taskbar toolbar (base_x + 11 slots):
+                target_x = base_x + (11 * slot_w) + 2;
             }
 
-            // Ensure band does not spill into TrafficMonitor (starts at 1224)
-            if target_x + BAND_WIDTH > 1220 {
-                target_x = 1220 - BAND_WIDTH;
+            // Ensure band does not spill into notification area / system tray
+            if notify_found && target_x + band_w > notify_rect.left - 10 {
+                target_x = notify_rect.left - band_w - 10;
             }
 
-            (target_x, tray_rect.top, tray_h)
+            (target_x, tray_rect.top, band_w, tray_h)
         }
     }
 
     fn reposition_band(hwnd: HWND) {
-        let (x, y, h) = calculate_taskbar_position();
+        let (x, y, w, h) = calculate_taskbar_position();
         let _ = std::fs::write(
             "C:\\Temp\\taskbar_speed.log",
             format!(
                 "reposition: hwnd={:?} x={} y={} w={} h={}\n",
-                hwnd, x, y, BAND_WIDTH, h
+                hwnd, x, y, w, h
             ),
         );
         unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                x,
-                y,
-                BAND_WIDTH,
-                h,
-                SWP_NOACTIVATE,
-            );
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
         }
     }
 
@@ -385,6 +391,10 @@ mod windows_impl {
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
 
+        if width <= 0 || height <= 0 {
+            return;
+        }
+
         let mem_dc = CreateCompatibleDC(Some(hdc));
         let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
         let old_bmp = SelectObject(mem_dc, mem_bmp.into());
@@ -401,8 +411,11 @@ mod windows_impl {
         let up_str = format!("↑ {}", crate::speed_format::format_adaptive_rate(up));
         let down_str = format!("↓ {}", crate::speed_format::format_adaptive_rate(down));
 
+        let dpi_scale = (height as f32 / 40.0).max(1.0);
+        let font_h = (13.0 * dpi_scale).round() as i32;
+
         let font = CreateFontW(
-            13,
+            font_h,
             0,
             0,
             0,
@@ -427,9 +440,9 @@ mod windows_impl {
 
         // Top line: Upload rate (↑)
         // Bottom line: Download rate (↓)
-        let text_x = 4;
-        let up_y = 4;
-        let down_y = 21;
+        let text_x = (4.0 * dpi_scale).round() as i32;
+        let up_y = (4.0 * dpi_scale).round() as i32;
+        let down_y = (21.0 * dpi_scale).round() as i32;
 
         let _ = TextOutW(mem_dc, text_x, up_y, &up_wide);
         let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
