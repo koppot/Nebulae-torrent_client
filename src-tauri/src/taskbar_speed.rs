@@ -281,45 +281,52 @@ mod windows_impl {
                     );
                 }
 
-                // Search for the Nebulae application icon across the toolbar
+                // Search slot by slot for the Nebulae application icon
                 // Nebulae icon has:
-                // 1. Dark background
+                // 1. Dark tile background (r < 55, g < 55, b < 55)
                 // 2. White "N" characters (r > 200, g > 200, b > 200)
-                // 3. Orange dot in top-right (r > 185, 70 <= g <= 180, b < 65)
-                let max_scan_x = (capture_w - 10).max(50);
-                let mut best_icon_x = -1;
-                let mut best_score = 0;
+                // 3. Distinct ADC orange dot in top-right (r > 190, 80 <= g <= 170, b < 60)
+                let num_slots = capture_w / SLOT_W;
+                let mut neb_slot = -1;
 
-                for x in 10..max_scan_x {
+                for slot in 0..num_slots {
+                    let sx = slot * SLOT_W;
+                    let ex = std::cmp::min(capture_w, sx + SLOT_W);
                     let mut orange_count = 0;
                     let mut white_count = 0;
-                    for y in (capture_h / 5)..(4 * capture_h / 5) {
-                        let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
-                        let r = (pixel.0 & 0xFF) as i32;
-                        let g = ((pixel.0 >> 8) & 0xFF) as i32;
-                        let b = ((pixel.0 >> 16) & 0xFF) as i32;
+                    let mut dark_tile_count = 0;
 
-                        if r > 185 && g >= 70 && g <= 180 && b < 65 {
-                            orange_count += 1;
-                        }
-                        if r > 200 && g > 200 && b > 200 {
-                            white_count += 1;
+                    for x in sx..ex {
+                        for y in (capture_h / 6)..(5 * capture_h / 6) {
+                            let pixel = windows::Win32::Graphics::Gdi::GetPixel(hdc_mem, x, y);
+                            let r = (pixel.0 & 0xFF) as i32;
+                            let g = ((pixel.0 >> 8) & 0xFF) as i32;
+                            let b = ((pixel.0 >> 16) & 0xFF) as i32;
+
+                            if r > 190 && g >= 80 && g <= 170 && b < 60 {
+                                orange_count += 1;
+                            }
+                            if r > 200 && g > 200 && b > 200 {
+                                white_count += 1;
+                            }
+                            if (20..55).contains(&r)
+                                && (20..55).contains(&g)
+                                && (20..55).contains(&b)
+                            {
+                                dark_tile_count += 1;
+                            }
                         }
                     }
 
-                    if orange_count >= 1 && white_count >= 2 {
-                        let score = orange_count * 4 + white_count;
-                        if score > best_score {
-                            best_score = score;
-                            best_icon_x = x;
-                        }
+                    // A genuine Nebulae button slot contains both the white N and orange dot
+                    if orange_count >= 2 && white_count >= 6 && dark_tile_count >= 10 {
+                        neb_slot = slot;
+                        break;
                     }
                 }
 
-                if best_icon_x > 0 {
-                    // Found Nebulae icon! Determine the button slot right edge
-                    let slot_idx = best_icon_x / SLOT_W;
-                    let slot_right = (slot_idx + 1) * SLOT_W;
+                if neb_slot >= 0 {
+                    let slot_right = (neb_slot + 1) * SLOT_W;
                     target_x = base_x + slot_right + 2;
                 }
 
@@ -330,14 +337,10 @@ mod windows_impl {
             }
 
             if target_x == 0 {
-                // Heuristic fallback if visual scan was occluded:
-                // Count taskbar buttons to estimate button slot
-                let btn_count = count_taskbar_buttons();
-                target_x = base_x + (btn_count * SLOT_W) + 2;
-            }
-
-            if target_x == 0 {
-                target_x = 998; // Default baseline right next to toolbar Nebulae icon
+                // If visual scan did not find the exact slot (e.g. icon partially occluded),
+                // use the baseline right adjacent to Button 11 on the toolbar:
+                // Base tasklist starts at 445; 12 app buttons * 46px = 552px; right edge = 997.
+                target_x = 998;
             }
 
             // Ensure band does not spill into TrafficMonitor (starts at 1224) or beyond taskbar bounds
@@ -347,8 +350,8 @@ mod windows_impl {
             if notify_found && target_x + BAND_WIDTH > notify_rect.left - 4 {
                 target_x = notify_rect.left - BAND_WIDTH - 4;
             }
-            if target_x < tray_rect.left + 50 {
-                target_x = tray_rect.left + 50;
+            if target_x < base_x + 50 {
+                target_x = base_x + 50;
             }
 
             (target_x, tray_rect.top, tray_h)
@@ -464,8 +467,8 @@ mod windows_impl {
         // Top line: Upload rate (↑)
         // Bottom line: Download rate (↓)
         let text_x = 4;
-        let up_y = (height / 2) - 15;
-        let down_y = (height / 2) + 1;
+        let up_y = 4;
+        let down_y = 21;
 
         let _ = TextOutW(mem_dc, text_x, up_y, &up_wide);
         let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
