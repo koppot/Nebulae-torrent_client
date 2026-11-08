@@ -340,8 +340,10 @@ mod windows_impl {
                             }
                         }
 
-                        // Exactly 5px padding between icon and numbers
-                        let padding = (5.0 * dpi_scale).round() as i32;
+                        // Exactly 5px visual padding between icon and numbers
+                        // Accounting for font glyph bearing (2px at 200% DPI, 1px at 100% DPI)
+                        let glyph_bearing = if dpi_scale > 1.5 { 2 } else { 1 };
+                        let padding = (5 - glyph_bearing).max(1);
                         target_x = base_x + icon_right_local + padding;
                     }
                 }
