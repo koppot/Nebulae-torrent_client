@@ -351,6 +351,30 @@ fn rpc_id(id: &str) -> serde_json::Value {
     }
 }
 
+/// Download location to give Transmission when the user points a torrent at
+/// `chosen` (either the folder that CONTAINS the release or the release
+/// folder/file itself). Transmission resolves data as `<location>/<name>`.
+fn relink_location_for(chosen: &std::path::Path, torrent_name: Option<&str>) -> String {
+    let as_string = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let parent = chosen.parent().map(as_string);
+    if chosen.is_file() {
+        return parent.unwrap_or_else(|| as_string(chosen));
+    }
+    let Some(name) = torrent_name.filter(|n| !n.is_empty()) else {
+        return as_string(chosen);
+    };
+    let chosen_is_release = chosen
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case(name));
+    if chosen_is_release && !chosen.join(name).exists() {
+        if let Some(p) = parent {
+            return p;
+        }
+    }
+    as_string(chosen)
+}
+
 impl TransmissionRpcClient {
     pub fn new(port: u16, username: &str, password: &str) -> Self {
         let auth = if !username.is_empty() || !password.is_empty() {
@@ -2990,35 +3014,12 @@ impl TorrentEngine for TransmissionTorrentEngine {
         } else {
             hash.clone()
         };
-        let target_path = std::path::Path::new(new_path);
-        let eff_location = if target_path.is_file() {
-            target_path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| new_path.to_string())
-        } else if target_path.is_dir() {
-            if let Ok(Some(meta)) = self.db.get_torrent_metadata(&hash) {
-                let name = meta.display_title.as_deref().unwrap_or("");
-                if let Some(folder_name) = target_path.file_name().and_then(|n| n.to_str()) {
-                    if !name.is_empty()
-                        && (folder_name == name || folder_name.eq_ignore_ascii_case(name))
-                    {
-                        target_path
-                            .parent()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| new_path.to_string())
-                    } else {
-                        new_path.to_string()
-                    }
-                } else {
-                    new_path.to_string()
-                }
-            } else {
-                new_path.to_string()
-            }
-        } else {
-            new_path.to_string()
-        };
+        // Transmission looks for the data at <location>/<torrent name>, so the
+        // location is derived from the torrent's real name (the library title is
+        // a cleaned display name and never matches the folder on disk).
+        let torrent_name = self.get_torrent_details(&target_id).ok().map(|t| t.name);
+        let eff_location =
+            relink_location_for(std::path::Path::new(new_path), torrent_name.as_deref());
         self.rpc_client
             .torrent_set_location(&target_id, &eff_location, false)?;
         if let Ok(mut cache) = self.metadata_cache.lock() {
@@ -3860,6 +3861,46 @@ impl TorrentEngine for TransmissionTorrentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relink_location_uses_torrent_name_not_library_title() {
+        let root = std::env::temp_dir().join(format!("neb_relink_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let release = root.join("Shakugan no Shana S - OVA Series (2009-10) DVD Funimation");
+        std::fs::create_dir_all(&release).unwrap();
+        let name = "Shakugan no Shana S - OVA Series (2009-10) DVD Funimation";
+
+        // Picking the release folder itself relinks to its parent.
+        assert_eq!(
+            relink_location_for(&release, Some(name)),
+            root.to_string_lossy()
+        );
+        // Picking the containing folder keeps it.
+        assert_eq!(
+            relink_location_for(&root, Some(name)),
+            root.to_string_lossy()
+        );
+        // Case differences in the folder name still identify the release folder.
+        let upper = root.join(name.to_uppercase());
+        std::fs::create_dir_all(&upper).unwrap();
+        assert_eq!(
+            relink_location_for(&upper, Some(name)),
+            root.to_string_lossy()
+        );
+        // Unknown name: the chosen folder is used as given.
+        assert_eq!(
+            relink_location_for(&release, None),
+            release.to_string_lossy()
+        );
+        // A release folder that itself contains a same-named folder is a container.
+        let nested = release.join(name);
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            relink_location_for(&release, Some(name)),
+            release.to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn test_csrf_session_id_negotiation_logic() {

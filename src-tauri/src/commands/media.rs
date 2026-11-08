@@ -1065,6 +1065,29 @@ fn start_playback_inner(
                                 let mut progress = menu_watch::Progress::default();
                                 let mut logged_kind = None;
                                 let mut menu_claim_logged = false;
+                                // Subtitle-display repair (see menu_watch::pg_repair_target):
+                                // done at most once per watcher run; the deselected track is
+                                // restored when its settle time has passed.
+                                let mut pg_repair_done = false;
+                                let mut pg_restore: Option<(i32, u64)> = None;
+                                let restore_spu = |prev: i32| {
+                                    let st = app_menu.state::<PlayerState>();
+                                    let still_current =
+                                        st.session_gen.load(std::sync::atomic::Ordering::SeqCst)
+                                            == menu_gen
+                                            && *poison(&st.media_player) == menu_mp;
+                                    if still_current {
+                                        unsafe {
+                                            (lib.libvlc_video_set_spu)(
+                                                menu_mp as *mut c_void,
+                                                prev,
+                                            );
+                                        }
+                                        tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): subtitle track {prev} restored after menu repair"
+                                        );
+                                    }
+                                };
                                 let watch_started = std::time::Instant::now();
                                 let mut sleep_ms = progress.next_poll_ms(0);
                                 loop {
@@ -1107,6 +1130,42 @@ fn start_playback_inner(
                                             engine::is_active_feature_playback(&lib, mp)
                                         },
                                     };
+                                    if let Some((prev, due_ms)) = pg_restore {
+                                        if t_ms >= due_ms {
+                                            pg_restore = None;
+                                            restore_spu(prev);
+                                        }
+                                    }
+                                    if is_bluray_disc
+                                        && !pg_repair_done
+                                        && sample.at_menu
+                                        && sample.menu_open == Some(true)
+                                    {
+                                        let (spu_count, active_spu) = unsafe {
+                                            (
+                                                (lib.libvlc_video_get_spu_count)(mp as *mut c_void),
+                                                (lib.libvlc_video_get_spu)(mp as *mut c_void),
+                                            )
+                                        };
+                                        if let Some(prev) = menu_watch::pg_repair_target(
+                                            is_bluray_disc,
+                                            pg_repair_done,
+                                            true,
+                                            spu_count,
+                                            active_spu,
+                                        ) {
+                                            pg_repair_done = true;
+                                            tracing::info!(
+                                                "[menu-diag] menu watcher (session_gen={menu_gen}): T+{t_ms}ms: subtitle display is on (track {prev}); clearing it and repeating the menu request so the disc's menu page selection sees it off"
+                                            );
+                                            unsafe {
+                                                (lib.libvlc_video_set_spu)(mp as *mut c_void, -1);
+                                            }
+                                            nav_menu();
+                                            pg_restore =
+                                                Some((prev, t_ms + menu_watch::MENU_CONFIRM_MS));
+                                        }
+                                    }
                                     let decision = menu_watch::decide(&mut progress, t_ms, sample);
                                     match progress.menu_claim_since_ms() {
                                         Some(since) if !menu_claim_logged => {
@@ -1132,9 +1191,20 @@ fn start_playback_inner(
                                             "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at T+{t_ms}ms (held for {}ms) [Outcome A]",
                                             menu_watch::MENU_CONFIRM_MS
                                         );
+                                            if let Some((prev, due_ms)) = pg_restore.take() {
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(
+                                                        due_ms.saturating_sub(t_ms),
+                                                    ),
+                                                );
+                                                restore_spu(prev);
+                                            }
                                             return;
                                         }
                                         menu_watch::Decision::PlainPlayback => {
+                                            if let Some((prev, _)) = pg_restore.take() {
+                                                restore_spu(prev);
+                                            }
                                             // Outcome B: Confirmed active feature playback engaged on discs without a menu
                                             let cur = unsafe {
                                                 (lib.libvlc_media_player_get_title)(
@@ -1173,6 +1243,9 @@ fn start_playback_inner(
                                         }
                                     }
                                     sleep_ms = progress.next_poll_ms(t_ms);
+                                }
+                                if let Some((prev, _)) = pg_restore.take() {
+                                    restore_spu(prev);
                                 }
                                 tracing::info!(
                                 "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms",
@@ -1560,6 +1633,67 @@ fn start_playback_inner(
                             tokio::task::spawn_blocking(move || {
                                 select_normal_audio_track(&lib_audio, audio_mp, audio_gen);
                             });
+                        }
+
+                        // Incomplete disc copy: a playlist references a stream file the
+                        // folder lacks. libbluray stops with a fatal error on reaching it,
+                        // which looks like a menu that plays briefly and goes black.
+                        // Name the missing file instead of leaving a blank screen.
+                        {
+                            let missing = if bypass_menu {
+                                Vec::new()
+                            } else {
+                                crate::player::bluray_meta::missing_playlist_clips(
+                                    &resolved.resolved_path,
+                                )
+                            };
+                            if !missing.is_empty() {
+                                tracing::warn!(
+                                    "[disc-integrity] {} references stream file(s) the folder lacks: {}",
+                                    resolved.resolved_path,
+                                    missing.join(", ")
+                                );
+                                let app_i = app.clone();
+                                let gen_i =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                let mp_i = session.media_player;
+                                let lib_i = lib.clone();
+                                std::thread::spawn(move || {
+                                    use tauri::{Emitter, Manager};
+                                    for _ in 0..120 {
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                        let st = app_i.state::<PlayerState>();
+                                        if st.session_gen.load(std::sync::atomic::Ordering::SeqCst)
+                                            != gen_i
+                                            || !*poison(&st.started)
+                                            || *poison(&st.media_player) != mp_i
+                                        {
+                                            return;
+                                        }
+                                        let state_code = unsafe {
+                                            (lib_i.libvlc_media_player_get_state)(
+                                                mp_i as *mut c_void,
+                                            )
+                                        };
+                                        if state_code == 6 || state_code == 7 {
+                                            tracing::error!(
+                                                "[disc-integrity] session_gen={gen_i}: playback ended (state {state_code}) with missing stream file(s): {}",
+                                                missing.join(", ")
+                                            );
+                                            let _ = app_i.emit(
+                                                "nebulae://player-error",
+                                                format!(
+                                                    "This disc copy is incomplete: BDMV/STREAM/{} is missing, \
+                                                    and the disc needs it to continue. Playback stopped there. \
+                                                    Restore the file from the original disc or torrent.",
+                                                    missing.join(", ")
+                                                ),
+                                            );
+                                            return;
+                                        }
+                                    }
+                                });
+                            }
                         }
 
                         // Deferred liveness check: detect silent decryption failure.
@@ -4802,19 +4936,19 @@ pub fn relink_external_media(
 #[tauri::command]
 pub fn relink_torrent_media(
     engine: tauri::State<'_, crate::engine::SharedEngine>,
-    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    _db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     info_hash: String,
     new_path: String,
 ) -> Result<(), String> {
     if !Path::new(&new_path).exists() {
         return Err(format!("Selected path does not exist on disk: {new_path}"));
     }
-    let _ = engine.relink_location(&info_hash, &new_path);
-
-    if let Ok(Some(mut meta)) = db.get_torrent_metadata(&info_hash) {
-        meta.save_path = Some(new_path.clone());
-        let _ = db.upsert_torrent_metadata(&meta);
-    }
+    // The engine derives the download location (the folder that CONTAINS the
+    // release) and records it as save_path. Overwriting it here with the raw
+    // picked path made the library file the item under the wrong root.
+    engine
+        .relink_location(&info_hash, &new_path)
+        .map_err(|e| format!("Relink failed: {e}"))?;
 
     tracing::info!("[relink] torrent {info_hash} relinked to '{new_path}'");
     Ok(())
@@ -4831,7 +4965,6 @@ pub fn set_custom_poster(
     target_id: String,
     source_image_path: String,
 ) -> Result<String, String> {
-    use tauri::Manager;
     let source = Path::new(&source_image_path);
     if !source.is_file() {
         return Err(format!(
@@ -4839,20 +4972,16 @@ pub fn set_custom_poster(
         ));
     }
 
-    // Verify it is a readable image file
-    let _img =
-        image::open(source).map_err(|e| format!("Unsupported or invalid image format: {e}"))?;
-
-    let thumbs_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not get app data directory: {e}"))?
+    // The managed artwork store is <data dir>/Nebulae/thumbnails, the same
+    // place TMDB and ADC artwork lives. Tauri's app_data_dir() resolves to
+    // the bundle-identifier folder instead, which no other artwork code reads.
+    let thumbs_dir = dirs::data_dir()
+        .ok_or_else(|| "Could not get app data directory".to_string())?
+        .join("Nebulae")
         .join("thumbnails");
-    std::fs::create_dir_all(&thumbs_dir)
-        .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
     let webp_path = crate::thumbs::convert_single_image(&thumbs_dir, source)
-        .map_err(|e| format!("Failed to convert image to WebP: {e}"))?;
+        .map_err(|e| format!("Unsupported or invalid image: {e}"))?;
     let webp_str = webp_path.to_string_lossy().to_string();
 
     match target_type.as_str() {

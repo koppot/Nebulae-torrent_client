@@ -171,6 +171,7 @@ export default function PlayerOverlay() {
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
   const lastMenuMoveRef = useRef<number>(0);
+  const lastMenuClickRef = useRef<number>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
   const [pinnedTop, setPinnedTop] = useState(false);
@@ -1242,18 +1243,23 @@ export default function PlayerOverlay() {
   };
 
   const onVideoClick = (e: React.MouseEvent) => {
+    // Authored disc menu: act on the click at once. The pause-vs-double-click
+    // delay below would postpone it by 250 ms, and a double click would cancel
+    // it altogether (and toggle fullscreen). One physical click must produce
+    // exactly one activation; the pointer position was already forwarded by
+    // the mouse-move handler, so only the activate is sent (forwarding a click
+    // as well would activate twice on menus that do deliver pointer events).
+    if (player.isDisc && pollRef.current.at_menu) {
+      const now = Date.now();
+      if (now - lastMenuClickRef.current < 350) return;
+      lastMenuClickRef.current = now;
+      invoke('player_menu_mouse_move', { x: e.clientX, y: e.clientY }).catch(() => {});
+      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+      return;
+    }
     if (clickTimerRef.current !== null) return;
-    const clientX = e.clientX;
-    const clientY = e.clientY;
     clickTimerRef.current = window.setTimeout(() => {
       clickTimerRef.current = null;
-      if (player.isDisc && pollRef.current.at_menu) {
-        // Forward click to native video view for authored button selection & activation,
-        // and send navigate(activate) to advance menu.
-        invoke('player_menu_mouse_click', { x: clientX, y: clientY }).catch(() => {});
-        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
-        return;
-      }
       togglePause();
     }, 250);
   };
@@ -1272,6 +1278,7 @@ export default function PlayerOverlay() {
     }, 300);
   };
   const onVideoDoubleClick = () => {
+    if (player.isDisc && pollRef.current.at_menu) return;
     if (clickTimerRef.current !== null) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;

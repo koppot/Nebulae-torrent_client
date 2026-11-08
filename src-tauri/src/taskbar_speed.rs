@@ -15,6 +15,47 @@
 //! - Preserves normal application activation (left-click focuses/restores) and context menu (right-click).
 //! - Shows current Nebulae transfer rates only.
 
+/// Pixel geometry of the speed chip, derived from the taskbar height so it
+/// scales with DPI and taskbar size. Kept free of Win32 types so the sizing
+/// rules are unit-tested on every platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct BandLayout {
+    pub width: i32,
+    pub height: i32,
+    /// Em height of the rate text (CreateFontW takes it negated).
+    pub font_px: i32,
+    /// Edge of the direction triangles.
+    pub arrow: i32,
+    pub pad_x: i32,
+    pub corner: i32,
+}
+
+/// `tray_h` is the taskbar thickness in pixels. The chip nearly fills it: the
+/// two rate lines get about 18 px each on a 48 px taskbar, where the earlier
+/// 22 px band left roughly 10 px of text that was hard to read.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
+    let tray_h = tray_h.max(30);
+    let height = ((tray_h as f32) * 0.80).round() as i32;
+    let line_h = height / 2;
+    let font_px = ((line_h as f32) * 0.74).round() as i32;
+    let arrow = ((line_h as f32) * 0.46).round() as i32;
+    let pad_x = ((height as f32) * 0.20).round() as i32;
+    // Worst-case field is "1023.99 KB/s": 12 glyphs at roughly 0.58 em, plus
+    // the arrow column and padding. A fixed width keeps neighbours still.
+    let text_w = ((font_px as f32) * 0.58 * 12.0).round() as i32;
+    let width = pad_x + arrow + pad_x / 2 + text_w + pad_x;
+    BandLayout {
+        width,
+        height,
+        font_px,
+        arrow,
+        pad_x,
+        corner: (height as f32 * 0.22).round() as i32,
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn init_taskbar_speed(_app: &tauri::AppHandle) {}
 
@@ -38,11 +79,11 @@ mod windows_impl {
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
     };
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
-        CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, SelectObject,
-        SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
-        CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, FW_SEMIBOLD, HDC, OUT_DEFAULT_PRECIS,
-        PAINTSTRUCT, ROP_CODE, SRCCOPY, TRANSPARENT,
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+        CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, Polygon,
+        RoundRect, SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, FW_BOLD,
+        HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, ROP_CODE, SRCCOPY, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
@@ -158,7 +199,10 @@ mod windows_impl {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
                 Ok(h) => h,
-                Err(_) => return (100, 1000, 72, 22),
+                Err(_) => {
+                    let l = super::band_layout(48);
+                    return (100, 1000, l.width, l.height);
+                }
             };
 
             let mut tray_rect = RECT::default();
@@ -166,10 +210,10 @@ mod windows_impl {
             let tray_h = (tray_rect.bottom - tray_rect.top).max(30);
             let dpi_scale = (tray_h as f32 / 40.0).max(1.0);
 
-            // Icon height is standard 22px at 100% DPI, scaled with taskbar DPI
-            let icon_h = (22.0 * dpi_scale).round() as i32;
+            let layout = super::band_layout(tray_h);
+            let icon_h = layout.height;
             let icon_y = tray_rect.top + (tray_h - icon_h) / 2;
-            let band_w = (72.0 * dpi_scale).round() as i32;
+            let band_w = layout.width;
 
             // Look for Windows Taskbar Toolbar container (ReBarWindow32 -> MSTaskSwWClass -> MSTaskListWClass)
             let h_rebar =
@@ -443,23 +487,45 @@ mod windows_impl {
         FillRect(mem_dc, &rect, bg_brush);
         let _ = DeleteObject(bg_brush.into());
 
-        let dpi_scale = (height as f32 / 22.0).max(1.0);
+        let layout = super::band_layout(height * 5 / 4);
+        let line_h = height / 2;
 
-        // Draw Stacked Transfer Rates fitting within icon height
-        // 5px padding from icon; no duplicate/miniature icon inside the band
+        // Opaque dark chip with a thin light edge: readable on light and dark
+        // taskbars alike. Pixels outside the rounded corners keep the black
+        // colour key and stay transparent.
+        let chip_brush = CreateSolidBrush(COLORREF(0x001E1B1B)); // #1B1B1E
+        let chip_pen = CreatePen(PS_SOLID, 1, COLORREF(0x00605A5A)); // #5A5A60
+        let old_brush = SelectObject(mem_dc, chip_brush.into());
+        let old_pen = SelectObject(mem_dc, chip_pen.into());
+        let _ = RoundRect(
+            mem_dc,
+            0,
+            0,
+            width,
+            height,
+            layout.corner * 2,
+            layout.corner * 2,
+        );
+        let _ = SelectObject(mem_dc, old_pen);
+        let _ = SelectObject(mem_dc, old_brush);
+        let _ = DeleteObject(chip_pen.into());
+        let _ = DeleteObject(chip_brush.into());
+
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
+        let up_wide: Vec<u16> = crate::speed_format::format_adaptive_rate(up)
+            .encode_utf16()
+            .collect();
+        let down_wide: Vec<u16> = crate::speed_format::format_adaptive_rate(down)
+            .encode_utf16()
+            .collect();
 
-        let up_str = format!("↑ {}", crate::speed_format::format_adaptive_rate(up));
-        let down_str = format!("↓ {}", crate::speed_format::format_adaptive_rate(down));
-
-        let font_h = (9.5 * dpi_scale).round() as i32;
         let font = CreateFontW(
-            font_h,
+            -layout.font_px,
             0,
             0,
             0,
-            FW_SEMIBOLD.0 as i32,
+            FW_BOLD.0 as i32,
             0,
             0,
             0,
@@ -471,22 +537,71 @@ mod windows_impl {
             w!("Segoe UI"),
         );
         let old_font = SelectObject(mem_dc, font.into());
-
         let _ = SetBkMode(mem_dc, TRANSPARENT);
-        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // Crisp white
+        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF));
 
-        let up_wide: Vec<u16> = up_str.encode_utf16().collect();
-        let down_wide: Vec<u16> = down_str.encode_utf16().collect();
+        let text_x = layout.pad_x + layout.arrow + layout.pad_x / 2;
+        // Em height plus Segoe UI's line gap is about 1.33 em.
+        let text_box = ((layout.font_px as f32) * 1.33).round() as i32;
+        let text_dy = ((line_h - text_box) / 2).max(0);
+        let half = layout.arrow / 2;
+        let arrow_cx = layout.pad_x + half;
 
-        // Top line: Upload rate (↑)
-        // Bottom line: Download rate (↓)
-        // Starts with 0 left margin inside window so 5px padding to icon is exact
-        let text_x = 0;
-        let up_y = 1;
-        let down_y = (height / 2) + 1;
+        // Upload (top line, amber up-triangle) and download (bottom line,
+        // green down-triangle). Triangles are drawn, not font glyphs, so
+        // they do not depend on the font having arrow characters.
+        for (idx, (text, color, up_arrow)) in [
+            (&up_wide, COLORREF(0x0020B0FF), true),    // #FFB020
+            (&down_wide, COLORREF(0x0084DC3D), false), // #3DDC84
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y0 = idx as i32 * line_h;
+            let cy = y0 + line_h / 2;
+            let tri = if up_arrow {
+                [
+                    POINT {
+                        x: arrow_cx,
+                        y: cy - half,
+                    },
+                    POINT {
+                        x: arrow_cx - half,
+                        y: cy + half,
+                    },
+                    POINT {
+                        x: arrow_cx + half,
+                        y: cy + half,
+                    },
+                ]
+            } else {
+                [
+                    POINT {
+                        x: arrow_cx - half,
+                        y: cy - half,
+                    },
+                    POINT {
+                        x: arrow_cx + half,
+                        y: cy - half,
+                    },
+                    POINT {
+                        x: arrow_cx,
+                        y: cy + half,
+                    },
+                ]
+            };
+            let tri_brush = CreateSolidBrush(color);
+            let tri_pen = CreatePen(PS_SOLID, 1, color);
+            let ob = SelectObject(mem_dc, tri_brush.into());
+            let op = SelectObject(mem_dc, tri_pen.into());
+            let _ = Polygon(mem_dc, &tri);
+            let _ = SelectObject(mem_dc, op);
+            let _ = SelectObject(mem_dc, ob);
+            let _ = DeleteObject(tri_pen.into());
+            let _ = DeleteObject(tri_brush.into());
 
-        let _ = TextOutW(mem_dc, text_x, up_y, &up_wide);
-        let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
+            let _ = TextOutW(mem_dc, text_x, y0 + text_dy, text);
+        }
 
         // Blit to screen
         let _ = BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY);
@@ -552,5 +667,36 @@ mod windows_impl {
             None,
         );
         let _ = DestroyMenu(hmenu);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::band_layout;
+
+    #[test]
+    fn text_is_clearly_larger_than_the_old_ten_pixel_band() {
+        // Common taskbar thicknesses: Win10 40, Win11 48, 150% 72, 200% 96.
+        for (tray_h, min_font) in [(40, 12), (48, 14), (72, 21), (96, 28)] {
+            let l = band_layout(tray_h);
+            assert!(l.font_px >= min_font, "tray {tray_h}: font {}", l.font_px);
+        }
+    }
+
+    #[test]
+    fn two_lines_always_fit_inside_the_chip_and_the_taskbar() {
+        for tray_h in [30, 40, 48, 60, 72, 96, 144] {
+            let l = band_layout(tray_h);
+            assert!(l.height <= tray_h);
+            // Em height plus ~33% line gap per line.
+            assert!(((l.font_px as f32) * 1.34) <= (l.height / 2) as f32 + 1.0);
+        }
+    }
+
+    #[test]
+    fn width_is_fixed_per_taskbar_size_and_holds_the_widest_rate() {
+        let l = band_layout(48);
+        assert_eq!(l, band_layout(48));
+        assert!(l.width >= l.pad_x + l.arrow + (l.font_px as f32 * 0.58 * 12.0) as i32);
     }
 }
