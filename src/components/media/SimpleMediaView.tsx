@@ -1096,7 +1096,14 @@ export const SimpleMediaView: React.FC = () => {
         }`}
       >
         <div className="rounded-lg overflow-hidden">
-          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626]">
+          <div
+            onClick={() => {
+              if (!isReordering && !isLaunchingDisc) {
+                handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
+              }
+            }}
+            className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626]"
+          >
             {posterArt}
 
             {isReordering ? (
@@ -1108,7 +1115,8 @@ export const SimpleMediaView: React.FC = () => {
               hoveredId === group.id && (
                 <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                   {(() => {
-                    const onPrimary = () => {
+                    const onPrimary = (e: React.MouseEvent) => {
+                      e.stopPropagation();
                       handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
                     };
                     return (
@@ -1124,7 +1132,10 @@ export const SimpleMediaView: React.FC = () => {
                     );
                   })()}
                   <button
-                    onClick={() => openDetailsPopup(group.id, currentItem)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openDetailsPopup(group.id, currentItem);
+                    }}
                     className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
                     title="Name, year, duration, disc sizes and summary"
                   >

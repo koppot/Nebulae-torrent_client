@@ -912,7 +912,7 @@ fn start_playback_inner(
                                 };
                             std::thread::spawn(move || {
                                 use tauri::Manager;
-                                let max_wait_attempts = 150; // 150 * 20ms = 3s
+                                let max_wait_attempts = 500; // 500 * 20ms = 10s
                                 let mut ready = false;
                                 for _ in 0..max_wait_attempts {
                                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -940,7 +940,7 @@ fn start_playback_inner(
                                 }
                                 if !ready {
                                     tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 3s; exiting"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 10s; exiting"
                                 );
                                     return;
                                 }
@@ -1802,24 +1802,13 @@ pub async fn player_open_inner(
     };
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
-    // webview may still be loading when the open happens, so the event is
-    // repeated a few times; the frontend's playerStore.open is idempotent,
-    // and the generation fence drops repeats that outlive a later close.
     use tauri::Emitter;
-    let emitter = app.clone();
-    let payload = result.clone();
-    std::thread::spawn(move || {
-        for delay in [0, 1500, 4000, 8000] {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
-            tracing::info!(
-                "[lifecycle-diag] player-opened emitted: session_gen={} delay={}ms path='{}'",
-                payload.gen,
-                delay,
-                payload.info.resolved_path
-            );
-            let _ = emitter.emit("player-opened", &payload);
-        }
-    });
+    tracing::info!(
+        "[lifecycle-diag] player-opened emitted: session_gen={} path='{}'",
+        result.gen,
+        result.info.resolved_path
+    );
+    let _ = app.emit("player-opened", &result);
     Ok(result)
 }
 /// What the engine is currently playing (for the frontend's readiness
@@ -2876,66 +2865,13 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// navigate(activate) works on the first call), so the overlay wires the
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
-pub async fn player_menu_navigate(
-    app: tauri::AppHandle,
+pub fn player_menu_navigate(
+    _app: tauri::AppHandle,
     state: tauri::State<'_, PlayerState>,
     mode: i32,
 ) -> Result<(), String> {
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
-
-    // Check if this is an activate command (mode 0) on a Blu-ray disc currently at menu.
-    // In upstream VLC 3.0.x, blurayControl only implements DEMUX_NAV_POPUP and DEMUX_NAV_MENU,
-    // and completely lacks a handler for DEMUX_NAV_ACTIVATE. Consequently,
-    // libvlc_media_player_navigate(mp, 0) returns VLC_EGENERIC and drops the activation.
-    // On Blu-ray discs at the interactive menu, Menu Select activates feature playback.
-    if mode == 0 {
-        let is_bluray_at_menu = {
-            let _mp_guard = state
-                .media_player_cell
-                .lock()
-                .map_err(|_| "player state poisoned")?;
-            let mp = *poison(&state.media_player);
-            if mp != 0 {
-                let lib = loaded_lib(&state)?;
-                let at_menu = unsafe {
-                    engine::is_menu_title(&lib, mp)
-                        || engine::bluray_menu_open(&lib, mp).unwrap_or(false)
-                };
-                let path_opt = poison(&state.current_resolved)
-                    .clone()
-                    .or_else(|| poison(&state.current_path).clone());
-                let is_bluray = path_opt
-                    .map(|p_str| {
-                        let p = std::path::Path::new(&p_str);
-                        if p.is_dir() {
-                            p.join("BDMV").exists() || p.join("bdmv").exists()
-                        } else {
-                            crate::utils::disc_detector::DiscDetector::inspect(p)
-                                .map(|d| {
-                                    matches!(
-                                        d.disc_type,
-                                        crate::utils::disc_detector::DiscType::BluRay
-                                            | crate::utils::disc_detector::DiscType::UhdBluRay
-                                    )
-                                })
-                                .unwrap_or(false)
-                        }
-                    })
-                    .unwrap_or(false);
-                is_bluray && at_menu
-            } else {
-                false
-            }
-        };
-
-        if is_bluray_at_menu {
-            tracing::info!(
-                "[player] menu_navigate(0): Blu-ray disc at menu; transitioning to main feature via player_play_main_feature"
-            );
-            return player_play_main_feature(app, state).await;
-        }
-    }
 
     let _mp_guard = state
         .media_player_cell

@@ -46,20 +46,27 @@ export const App: React.FC = () => {
   // engine only knows the disc folder name, so look the torrent up by the
   // session path and use its media metadata.
   const featureLabelForPath = (p: string): string | undefined => {
+    if (!p) return undefined;
+    const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const filePath = norm(p);
     const torrents = useTorrentStore.getState().torrents;
-    // MOST-SPECIFIC match wins: a torrent saved at a broad parent (e.g. a
-    // whole volume) must not label every external disc under it with its
-    // own title - the longest save_path that still contains the session
-    // path identifies the release.
-    let best: { root: string; label: string } | null = null;
+    let best: { len: number; label: string } | null = null;
     for (const t of torrents) {
-      const root = t.save_path?.replace(/\/+$/, '');
-      if (!root || !p.startsWith(root)) continue;
-      const mm = t.media_meta;
-      const label = mm?.clean_title
-        ? mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title
-        : t.name;
-      if (!best || root.length > best.root.length) best = { root, label };
+      const candidates: string[] = [];
+      if (t.content_path) candidates.push(norm(t.content_path));
+      if (t.save_path && t.raw_name) candidates.push(norm(`${t.save_path}/${t.raw_name}`));
+      if (t.save_path && t.name) candidates.push(norm(`${t.save_path}/${t.name}`));
+      for (const root of candidates) {
+        if (filePath === root || filePath.startsWith(root + '/')) {
+          const mm = t.media_meta;
+          const label = mm?.clean_title
+            ? (mm.year ? `${mm.clean_title} (${mm.year})` : mm.clean_title)
+            : t.name;
+          if (!best || root.length > best.len) {
+            best = { len: root.length, label };
+          }
+        }
+      }
     }
     return best?.label;
   };

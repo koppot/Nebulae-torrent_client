@@ -65,7 +65,14 @@ export const playerStore = {
   },
   close() {
     invoke('log_frontend', { message: `[frontend-diag] playerStore.close() called` }).catch(() => {});
-    state = { ...state, open: false };
+    state = {
+      open: false,
+      title: '',
+      year: null,
+      resolvedPath: '',
+      isDisc: false,
+      gen: null,
+    };
     try {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('player-active');
