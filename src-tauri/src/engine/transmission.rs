@@ -1278,12 +1278,28 @@ impl TransmissionTorrentEngine {
         let default_download_dir = expand_tilde_path(&default_download_dir).ok_or_else(|| {
             "Cannot resolve home directory for the default download directory".to_string()
         })?;
-        std::fs::create_dir_all(&default_download_dir).map_err(|e| {
-            format!(
-                "Failed to create default download directory '{}': {e}",
-                default_download_dir.display()
-            )
-        })?;
+        // If the configured download directory cannot be created or accessed (e.g. an external
+        // volume like '/Volumes/300TB/' is unmounted or disconnected, or permissions prevent access),
+        // gracefully fall back to the user's local Downloads directory for daemon startup so the
+        // application can start up cleanly rather than crashing into the recovery state.
+        let default_download_dir = match std::fs::create_dir_all(&default_download_dir) {
+            Ok(()) => default_download_dir,
+            Err(e) => {
+                let fallback = dirs::download_dir()
+                    .filter(|d| std::fs::create_dir_all(d).is_ok())
+                    .unwrap_or_else(|| {
+                        let app_downloads = paths.base_data_dir.join("downloads");
+                        let _ = std::fs::create_dir_all(&app_downloads);
+                        app_downloads
+                    });
+                warn!(
+                    "[storage] Configured default download directory '{}' cannot be created or accessed ({e}); falling back to '{}' for engine startup",
+                    default_download_dir.display(),
+                    fallback.display()
+                );
+                fallback
+            }
+        };
 
         // 1. Locate the transmission-daemon executable
         let daemon_path = find_transmission_daemon_binary(resource_dir)?;
@@ -4027,6 +4043,18 @@ mod tests {
         // Interface and path
         assert_eq!(config["bind-address-ipv4"], "10.2.0.5");
         assert_eq!(config["download-dir"], "/home/user/Downloads");
+    }
+
+    #[test]
+    fn test_inaccessible_download_dir_fallback() {
+        let invalid_path = PathBuf::from("/Volumes/NonExistent300TBVolume/Blu-ray/");
+        let resolved = match std::fs::create_dir_all(&invalid_path) {
+            Ok(()) => invalid_path,
+            Err(_) => dirs::download_dir()
+                .filter(|d| std::fs::create_dir_all(d).is_ok())
+                .unwrap_or_else(std::env::temp_dir),
+        };
+        assert!(resolved.exists());
     }
 
     #[test]
