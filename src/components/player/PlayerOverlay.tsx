@@ -894,6 +894,9 @@ export default function PlayerOverlay() {
     const bump = () => {
       setControlsVisible(true);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      if (popoverOpen || !pollRef.current.playing || (pollRef.current.at_menu && player.isDisc) || ended) {
+        return;
+      }
       hideTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3000);
     };
     bump();
@@ -905,7 +908,7 @@ export default function PlayerOverlay() {
       unlistenMove?.();
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     };
-  }, [player.open]);
+  }, [player.open, popoverOpen, ended, player.isDisc]);
   useEffect(() => {
     if (popoverOpen || !poll.playing || (poll.at_menu && player.isDisc) || ended) {
       setControlsVisible(true);
