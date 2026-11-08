@@ -6,10 +6,11 @@
 //! [EXISTING NEBULAE ICON] ↓ 56.78 MB/s
 //!
 //! Requirements:
-//! - Positioned immediately to the right of the normal Nebulae taskbar button.
+//! - Positioned right next to the Nebulae icon with 5px padding in between icon and numbers.
+//! - Numbers fit within the icon height, forming one unified icon with numbers.
 //! - Retains the original application icon at its normal size on the taskbar.
 //! - Upload is the upper line; download is the lower line.
-//! - No miniature icon inside the band (existing application button is the anchor).
+//! - No duplicate/miniature icon inside the band (existing application icon is the anchor).
 //! - Both lines visible continuously while Nebulae is running, including when minimized.
 //! - Preserves normal application activation (left-click focuses/restores) and context menu (right-click).
 //! - Shows current Nebulae transfer rates only.
@@ -47,10 +48,11 @@ mod windows_impl {
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, PeekMessageW, PostQuitMessage, RegisterClassExW,
-        SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, HWND_TOPMOST, MF_STRING,
-        MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-        TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW,
-        WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, TrackPopupMenu,
+        HWND_TOPMOST, LWA_COLORKEY, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE,
+        SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
@@ -105,11 +107,11 @@ mod windows_impl {
 
             let _ = RegisterClassExW(&wc);
 
-            // Compute initial position immediately to the right of Nebulae's taskbar icon
+            // Compute initial position: right next to Nebulae's taskbar icon (5px padding, matching icon height)
             let (init_x, init_y, init_w, init_h) = calculate_taskbar_position();
 
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
                 CLASS_NAME,
                 w!("Nebulae Toolbar Speed"),
                 WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
@@ -124,6 +126,8 @@ mod windows_impl {
             );
 
             if let Ok(hwnd) = hwnd {
+                // Color-key transparency on 0x00000000 so the background is transparent
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00000000), 0, LWA_COLORKEY);
                 BAND_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
                 let _ = ShowWindow(hwnd, SW_SHOWNA);
 
@@ -154,14 +158,18 @@ mod windows_impl {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
                 Ok(h) => h,
-                Err(_) => return (100, 1000, 85, 40),
+                Err(_) => return (100, 1000, 72, 22),
             };
 
             let mut tray_rect = RECT::default();
             let _ = GetWindowRect(h_tray, &mut tray_rect);
             let tray_h = (tray_rect.bottom - tray_rect.top).max(30);
             let dpi_scale = (tray_h as f32 / 40.0).max(1.0);
-            let band_w = (85.0 * dpi_scale).round() as i32;
+
+            // Icon height is standard 22px at 100% DPI, scaled with taskbar DPI
+            let icon_h = (22.0 * dpi_scale).round() as i32;
+            let icon_y = tray_rect.top + (tray_h - icon_h) / 2;
+            let band_w = (72.0 * dpi_scale).round() as i32;
 
             // Look for Windows Taskbar Toolbar container (ReBarWindow32 -> MSTaskSwWClass -> MSTaskListWClass)
             let h_rebar =
@@ -307,10 +315,34 @@ mod windows_impl {
 
                     if !orange_cols.is_empty() {
                         let orange_center_x = orange_cols[orange_cols.len() / 2];
-                        // The button containing this icon has its right edge at:
-                        // orange_center_x + (19.0 * dpi_scale).round() as i32
-                        let button_right = orange_center_x + (19.0 * dpi_scale).round() as i32;
-                        target_x = base_x + button_right + 2;
+
+                        // Detect the exact right edge of the dark icon tile
+                        let mut icon_right_local =
+                            orange_center_x + (5.5 * dpi_scale).round() as i32;
+                        let search_max = (orange_center_x + (20.0 * dpi_scale).round() as i32)
+                            .min(capture_w - 1);
+                        for x in orange_center_x..=search_max {
+                            let mut dark_count = 0;
+                            for y in y_start..y_end {
+                                let widx = (y * cap_w + x as usize) * 4;
+                                let wb = pixel_data[widx] as i32;
+                                let wg = pixel_data[widx + 1] as i32;
+                                let wr = pixel_data[widx + 2] as i32;
+                                if (15..=60).contains(&wr)
+                                    && (15..=60).contains(&wg)
+                                    && (15..=60).contains(&wb)
+                                {
+                                    dark_count += 1;
+                                }
+                            }
+                            if dark_count >= (8.0 * dpi_scale).round() as i32 {
+                                icon_right_local = x;
+                            }
+                        }
+
+                        // Exactly 5px padding between icon and numbers
+                        let padding = (5.0 * dpi_scale).round() as i32;
+                        target_x = base_x + icon_right_local + padding;
                     }
                 }
 
@@ -323,7 +355,7 @@ mod windows_impl {
             // Fallback: slot index based on typical running task position if visual scan unavailable
             if target_x == 0 {
                 let slot_w = (49.0 * dpi_scale).round() as i32;
-                target_x = base_x + (11 * slot_w) + 2;
+                target_x = base_x + (10 * slot_w) + (5.0 * dpi_scale).round() as i32;
             }
 
             // Keep within taskbar bounds
@@ -334,7 +366,7 @@ mod windows_impl {
                 target_x = base_x;
             }
 
-            (target_x, tray_rect.top, band_w, tray_h)
+            (target_x, icon_y, band_w, icon_h)
         }
     }
 
@@ -404,22 +436,22 @@ mod windows_impl {
         let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
         let old_bmp = SelectObject(mem_dc, mem_bmp.into());
 
-        // Fill background with taskbar-matching dark color
-        let bg_brush = CreateSolidBrush(COLORREF(0x00101010));
+        // Fill background with black color key (0x00000000) for clean transparency
+        let bg_brush = CreateSolidBrush(COLORREF(0x00000000));
         FillRect(mem_dc, &rect, bg_brush);
         let _ = DeleteObject(bg_brush.into());
 
-        let dpi_scale = (height as f32 / 40.0).max(1.0);
+        let dpi_scale = (height as f32 / 22.0).max(1.0);
 
-        // Draw Stacked Transfer Rates immediately adjacent to existing Nebulae taskbar icon
-        // No duplicate/miniature icon inside the band
+        // Draw Stacked Transfer Rates fitting within icon height
+        // 5px padding from icon; no duplicate/miniature icon inside the band
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
 
         let up_str = format!("↑ {}", crate::speed_format::format_adaptive_rate(up));
         let down_str = format!("↓ {}", crate::speed_format::format_adaptive_rate(down));
 
-        let font_h = (12.5 * dpi_scale).round() as i32;
+        let font_h = (9.5 * dpi_scale).round() as i32;
         let font = CreateFontW(
             font_h,
             0,
@@ -446,9 +478,10 @@ mod windows_impl {
 
         // Top line: Upload rate (↑)
         // Bottom line: Download rate (↓)
-        let text_x = (6.0 * dpi_scale).round() as i32;
-        let up_y = (height / 2) - (14.0 * dpi_scale).round() as i32;
-        let down_y = (height / 2) + (1.0 * dpi_scale).round() as i32;
+        // Starts with 0 left margin inside window so 5px padding to icon is exact
+        let text_x = 0;
+        let up_y = 1;
+        let down_y = (height / 2) + 1;
 
         let _ = TextOutW(mem_dc, text_x, up_y, &up_wide);
         let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
