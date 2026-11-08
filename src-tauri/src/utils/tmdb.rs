@@ -449,7 +449,7 @@ pub fn fetch_poster(
         let bytes = img_resp
             .bytes()
             .map_err(|e| format!("TMDB image body: {e}"))?;
-        let thumbs_dir = dirs::data_dir()
+        let thumbs_dir = crate::utils::paths::user_data_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("Nebulae")
             .join("thumbnails");
@@ -656,7 +656,7 @@ fn trakt_fallback(
     let bytes = img_resp
         .bytes()
         .map_err(|e| format!("TMDB image body: {e}"))?;
-    let thumbs_dir = dirs::data_dir()
+    let thumbs_dir = crate::utils::paths::user_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
         .join("thumbnails");

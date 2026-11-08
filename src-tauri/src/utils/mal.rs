@@ -151,7 +151,7 @@ fn download_and_cache_poster(
     let bytes = resp.bytes().map_err(|e| format!("MAL poster body: {e}"))?;
 
     // Convert in-memory bytes directly to WebP without temporary files or directory scanning
-    let thumbs_dir = dirs::data_dir()
+    let thumbs_dir = crate::utils::paths::user_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
         .join("thumbnails");

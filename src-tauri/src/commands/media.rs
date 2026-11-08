@@ -4975,7 +4975,7 @@ pub fn set_custom_poster(
     // The managed artwork store is <data dir>/Nebulae/thumbnails, the same
     // place TMDB and ADC artwork lives. Tauri's app_data_dir() resolves to
     // the bundle-identifier folder instead, which no other artwork code reads.
-    let thumbs_dir = dirs::data_dir()
+    let thumbs_dir = crate::utils::paths::user_data_dir()
         .ok_or_else(|| "Could not get app data directory".to_string())?
         .join("Nebulae")
         .join("thumbnails");
