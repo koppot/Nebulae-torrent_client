@@ -99,6 +99,9 @@ pub fn spawn_seeding_rules_loop(engine: SharedEngine, db: Arc<Database>) {
             // never accumulate misses and are never auto-reclassified.
             if let Ok(all_meta) = db.list_all_torrent_metadata() {
                 for (hash, meta) in &all_meta {
+                    if hash.len() < 20 {
+                        continue;
+                    }
                     let lower_hash = hash.to_lowercase();
                     // Skip entries already reclassified as External.
                     if meta.is_external {

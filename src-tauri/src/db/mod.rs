@@ -914,6 +914,12 @@ impl Database {
              WHERE info_hash = ?1",
             params![info_hash],
         )?;
+        let _ = conn.execute(
+            "UPDATE snatched_records
+             SET external_moved_at = NULL
+             WHERE info_hash = ?1",
+            params![info_hash],
+        );
         Ok(())
     }
 }

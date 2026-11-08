@@ -2876,7 +2876,67 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// navigate(activate) works on the first call), so the overlay wires the
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
-pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
+pub async fn player_menu_navigate(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, PlayerState>,
+    mode: i32,
+) -> Result<(), String> {
+    let mode = mode.clamp(0, 5);
+    tracing::info!("[player] menu_navigate({mode})");
+
+    // Check if this is an activate command (mode 0) on a Blu-ray disc currently at menu.
+    // In upstream VLC 3.0.x, blurayControl only implements DEMUX_NAV_POPUP and DEMUX_NAV_MENU,
+    // and completely lacks a handler for DEMUX_NAV_ACTIVATE. Consequently,
+    // libvlc_media_player_navigate(mp, 0) returns VLC_EGENERIC and drops the activation.
+    // On Blu-ray discs at the interactive menu, Menu Select activates feature playback.
+    if mode == 0 {
+        let is_bluray_at_menu = {
+            let _mp_guard = state
+                .media_player_cell
+                .lock()
+                .map_err(|_| "player state poisoned")?;
+            let mp = *poison(&state.media_player);
+            if mp != 0 {
+                let lib = loaded_lib(&state)?;
+                let at_menu = unsafe {
+                    engine::is_menu_title(&lib, mp)
+                        || engine::bluray_menu_open(&lib, mp).unwrap_or(false)
+                };
+                let path_opt = poison(&state.current_resolved)
+                    .clone()
+                    .or_else(|| poison(&state.current_path).clone());
+                let is_bluray = path_opt
+                    .map(|p_str| {
+                        let p = std::path::Path::new(&p_str);
+                        if p.is_dir() {
+                            p.join("BDMV").exists() || p.join("bdmv").exists()
+                        } else {
+                            crate::utils::disc_detector::DiscDetector::inspect(p)
+                                .map(|d| {
+                                    matches!(
+                                        d.disc_type,
+                                        crate::utils::disc_detector::DiscType::BluRay
+                                            | crate::utils::disc_detector::DiscType::UhdBluRay
+                                    )
+                                })
+                                .unwrap_or(false)
+                        }
+                    })
+                    .unwrap_or(false);
+                is_bluray && at_menu
+            } else {
+                false
+            }
+        };
+
+        if is_bluray_at_menu {
+            tracing::info!(
+                "[player] menu_navigate(0): Blu-ray disc at menu; transitioning to main feature via player_play_main_feature"
+            );
+            return player_play_main_feature(app, state).await;
+        }
+    }
+
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -2886,8 +2946,6 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
         return Ok(());
     }
     let lib = loaded_lib(&state)?;
-    let mode = mode.clamp(0, 5);
-    tracing::info!("[player] menu_navigate({mode})");
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
     Ok(())
@@ -4567,7 +4625,7 @@ pub fn list_external_media(
     // metadata imported before the torrent was removed.
     if let Ok(all_meta) = db.list_all_torrent_metadata() {
         for (_, meta) in all_meta {
-            if !meta.is_external {
+            if !meta.is_external || meta.info_hash.len() < 20 {
                 continue;
             }
 

@@ -519,29 +519,29 @@ mod tests {
     #[test]
     fn adaptive_rate_formatting() {
         // Idle
-        assert_eq!(format_adaptive_rate(0), "0 KB/s");
+        assert_eq!(format_adaptive_rate(0), "0.00 KB/s");
 
         // Low-rate (< 1 KiB)
-        assert_eq!(format_adaptive_rate(500), "500 B/s");
-        assert_eq!(format_adaptive_rate(1023), "1023 B/s");
+        assert_eq!(format_adaptive_rate(500), "500.00 B/s");
+        assert_eq!(format_adaptive_rate(1023), "1023.00 B/s");
 
         // KB/s range
-        assert_eq!(format_adaptive_rate(1024), "1 KB/s");
-        assert_eq!(format_adaptive_rate(1536), "1.5 KB/s");
-        assert_eq!(format_adaptive_rate(4096), "4 KB/s");
-        assert_eq!(format_adaptive_rate(12 * 1024), "12 KB/s");
-        assert_eq!(format_adaptive_rate(50 * 1024), "50 KB/s");
-        assert_eq!(format_adaptive_rate(500 * 1024), "500 KB/s");
+        assert_eq!(format_adaptive_rate(1024), "1.00 KB/s");
+        assert_eq!(format_adaptive_rate(1536), "1.50 KB/s");
+        assert_eq!(format_adaptive_rate(4096), "4.00 KB/s");
+        assert_eq!(format_adaptive_rate(12 * 1024), "12.00 KB/s");
+        assert_eq!(format_adaptive_rate(50 * 1024), "50.00 KB/s");
+        assert_eq!(format_adaptive_rate(500 * 1024), "500.00 KB/s");
 
-        // MB/s range (e.g. 1584 KB/s -> 1.5 MB/s instead of 1584.0 KB/s)
-        assert_eq!(format_adaptive_rate(1584 * 1024), "1.5 MB/s");
-        assert_eq!(format_adaptive_rate(10 * 1024 * 1024), "10 MB/s");
-        assert_eq!(format_adaptive_rate(51 * 1024 * 1024), "51 MB/s");
-        assert_eq!(format_adaptive_rate(78_900_000), "75.2 MB/s");
-        assert_eq!(format_adaptive_rate(120 * 1024 * 1024), "120 MB/s");
+        // MB/s range
+        assert_eq!(format_adaptive_rate(1584 * 1024), "1.55 MB/s");
+        assert_eq!(format_adaptive_rate(10 * 1024 * 1024), "10.00 MB/s");
+        assert_eq!(format_adaptive_rate(51 * 1024 * 1024), "51.00 MB/s");
+        assert_eq!(format_adaptive_rate(78_900_000), "75.24 MB/s");
+        assert_eq!(format_adaptive_rate(120 * 1024 * 1024), "120.00 MB/s");
 
         // GB/s range
-        assert_eq!(format_adaptive_rate(1024u64.pow(3) * 2), "2 GB/s");
+        assert_eq!(format_adaptive_rate(1024u64.pow(3) * 2), "2.00 GB/s");
     }
 
     #[test]
@@ -549,15 +549,15 @@ mod tests {
         // Idle state
         let idle = format_status_bar_title(0, 0);
         assert!(idle.contains("↓") && idle.contains("↑"));
-        assert!(idle.contains("0 KB/s"));
+        assert!(idle.contains("0.00 KB/s"));
 
         // Low rate
         let low = format_status_bar_title(500, 200);
-        assert!(low.contains("500 B/s") && low.contains("200 B/s"));
+        assert!(low.contains("500.00 B/s") && low.contains("200.00 B/s"));
 
         // High rate
         let high = format_status_bar_title(78 * 1024 * 1024, 1536);
-        assert!(high.contains("78 MB/s") && high.contains("1.5 KB/s"));
+        assert!(high.contains("78.00 MB/s") && high.contains("1.50 KB/s"));
     }
 
     #[test]

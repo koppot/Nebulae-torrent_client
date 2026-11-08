@@ -1114,11 +1114,12 @@ export const SimpleMediaView: React.FC = () => {
                     return (
                       <button
                         onClick={onPrimary}
-                        className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                        disabled={isLaunchingDisc}
+                        className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition disabled:opacity-60"
                         title="Play (interactive disc menus)"
                       >
                         <Play className="w-3 h-3 fill-black" />
-                        <span>Play</span>
+                        <span>{isLaunchingDisc ? 'Launching...' : 'Play'}</span>
                       </button>
                     );
                   })()}
@@ -1213,7 +1214,10 @@ export const SimpleMediaView: React.FC = () => {
               extHovered === m.path && (
                 <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                   <button
+                    disabled={isLaunchingDisc}
                     onClick={async () => {
+                      if (isLaunchingDisc) return;
+                      setIsLaunchingDisc(true);
                       try {
                         await openInPlayer(m.path, {
                           displayTitle: m.title,
@@ -1241,13 +1245,15 @@ export const SimpleMediaView: React.FC = () => {
                               }
                             : undefined,
                         });
+                      } finally {
+                        setIsLaunchingDisc(false);
                       }
                     }}
-                    className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                    className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition disabled:opacity-60"
                     title="Play (interactive disc menus)"
                   >
                     <Play className="w-3 h-3 fill-black" />
-                    <span>Play</span>
+                    <span>{isLaunchingDisc ? 'Launching...' : 'Play'}</span>
                   </button>
                   <button
                     onClick={() =>
