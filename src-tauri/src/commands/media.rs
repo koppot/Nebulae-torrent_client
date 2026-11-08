@@ -1856,6 +1856,12 @@ pub fn player_engine_playback(state: tauri::State<PlayerState>) -> Option<Engine
 /// Begin a native window drag (title-bar mousedown handler).
 #[tauri::command]
 pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let state = app.state::<PlayerState>();
+    if state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        tracing::info!("[drag] window_begin_drag suppressed: currently at disc menu");
+        return Ok(());
+    }
     tracing::info!("[drag] window_begin_drag invoked");
     let r = crate::player::begin_window_drag(&app);
     tracing::info!("[drag] begin_window_drag -> {:?}", r);
@@ -2791,6 +2797,9 @@ pub fn player_poll(
             is_menu_title(&lib, mp),
         )
     };
+    state
+        .at_menu
+        .store(at_menu, std::sync::atomic::Ordering::SeqCst);
 
     framing_tick(app, &state, &lib, mp, title, at_menu, playing);
 
@@ -2884,6 +2893,42 @@ pub fn player_menu_navigate(
     let lib = loaded_lib(&state)?;
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
+    Ok(())
+}
+
+/// Forward mouse move coordinates to the native video view during interactive disc menus.
+#[tauri::command]
+pub fn player_menu_mouse_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::player::embed_macos::forward_mouse_move(&app, x, y)?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::player::embed_linux::forward_mouse_move(&app, x, y)?;
+    }
+    Ok(())
+}
+
+/// Forward mouse click coordinates to the native video view during interactive disc menus.
+#[tauri::command]
+pub fn player_menu_mouse_click(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::player::embed_macos::forward_mouse_click(&app, x, y)?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::player::embed_windows::forward_mouse_click(&app, x, y)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::player::embed_linux::forward_mouse_click(&app, x, y)?;
+    }
     Ok(())
 }
 

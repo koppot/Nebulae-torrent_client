@@ -806,6 +806,8 @@ pub fn run() {
             commands::media::player_engine_playback,
             commands::media::player_set_track,
             commands::media::player_menu_navigate,
+            commands::media::player_menu_mouse_move,
+            commands::media::player_menu_mouse_click,
             commands::media::player_return_to_menu,
             commands::media::player_play_main_feature,
             commands::media::player_sync_viewport,

@@ -79,6 +79,8 @@ pub struct PlayerState {
     /// Indicates whether the active session is playing in direct main-feature mode
     /// with menus bypassed (via :no-bluray-menu and :no-dvdnav-menu).
     pub bypass_menu: std::sync::atomic::AtomicBool,
+    /// Indicates whether the active player session is currently at an authored disc menu.
+    pub at_menu: std::sync::atomic::AtomicBool,
     /// The loaded libVLC, created on first use.
     pub lib: Mutex<Option<std::sync::Arc<engine::VlcLib>>>,
     /// libvlc_instance_t*

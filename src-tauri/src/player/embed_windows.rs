@@ -879,6 +879,48 @@ pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(),
     Ok(())
 }
 
+pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let hwnd_val = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return Ok(());
+    }
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
+    let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_MOUSEMOVE, WPARAM(0), lparam);
+    }
+    Ok(())
+}
+
+pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let hwnd_val = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return Ok(());
+    }
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        PostMessageW, MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    };
+    let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(hwnd_val as _)),
+            WM_LBUTTONDOWN,
+            WPARAM(MK_LBUTTON.0 as _),
+            lparam,
+        );
+        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_LBUTTONUP, WPARAM(0), lparam);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

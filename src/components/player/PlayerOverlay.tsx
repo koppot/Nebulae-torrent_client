@@ -170,6 +170,7 @@ export default function PlayerOverlay() {
   const lastChapterProbeRef = useRef('');
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
+  const lastMenuMoveRef = useRef<number>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
   const [pinnedTop, setPinnedTop] = useState(false);
@@ -402,6 +403,13 @@ export default function PlayerOverlay() {
       // the user returns to the menu. The title index at arm time is recorded
       // in pendingResumeTitleRef so the seek is not applied to a different
       // episode if the user later selects a different title from the menu.
+      if (!wasAtMenuRef.current && p.at_menu) {
+        const el = holderRef.current;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          invoke('player_menu_mouse_move', { x: r.width * 0.45, y: r.height * 0.42 }).catch(() => {});
+        }
+      }
       if (wasAtMenuRef.current && !p.at_menu) {
         justLeftMenuRef.current = true;
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
@@ -1215,6 +1223,9 @@ export default function PlayerOverlay() {
   // handlers remain as a fallback for clicks that reach the webview.)
   const onVideoPointerDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    if (player.isDisc && pollRef.current.at_menu) {
+      return;
+    }
     dragArmedRef.current = true;
     invoke('window_begin_drag').catch(() => {});
   };
@@ -1222,14 +1233,24 @@ export default function PlayerOverlay() {
   // also fires click, so the pause toggle waits 250 ms and is cancelled by
   // the double-click handler. During an authored disc menu (at_menu) a left
   // click activates the currently highlighted menu entry instead.
-  const onVideoClick = () => {
+  const onVideoMouseMove = (e: React.MouseEvent) => {
+    if (!player.isDisc || !pollRef.current.at_menu) return;
+    const now = Date.now();
+    if (now - lastMenuMoveRef.current < 40) return; // ~25 fps throttle
+    lastMenuMoveRef.current = now;
+    invoke('player_menu_mouse_move', { x: e.clientX, y: e.clientY }).catch(() => {});
+  };
+
+  const onVideoClick = (e: React.MouseEvent) => {
     if (clickTimerRef.current !== null) return;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
     clickTimerRef.current = window.setTimeout(() => {
       clickTimerRef.current = null;
       if (player.isDisc && pollRef.current.at_menu) {
-        // Left click activates the highlighted disc-menu entry; do not also
-        // toggle pause. The native click-through to VLC's authored button
-        // highlight is handled by the native NSView layer.
+        // Forward click to native video view for authored button selection & activation,
+        // and send navigate(activate) to advance menu.
+        invoke('player_menu_mouse_click', { x: clientX, y: clientY }).catch(() => {});
         invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
         return;
       }
@@ -1274,6 +1295,7 @@ export default function PlayerOverlay() {
         ref={holderRef}
         className="absolute inset-0"
         onMouseDown={onVideoPointerDown}
+        onMouseMove={onVideoMouseMove}
         onClick={onVideoClick}
         onDoubleClick={onVideoDoubleClick}
         onWheel={onVideoWheel}
