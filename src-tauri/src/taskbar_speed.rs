@@ -241,14 +241,20 @@ mod windows_impl {
                 target_x = tray_rect.right - band_w - (300.0 * dpi_scale).round() as i32;
             }
 
-            // Ensure band does not overlap MSTaskListWClass
-            if task_found && target_x < task_rect.right + 4 {
-                target_x = task_rect.right + 4;
+            // Ensure band stays bounded within the toolbar and never overlaps TrafficMonitor
+            if let Some(tm) = tm_hwnd {
+                let mut tm_rect = RECT::default();
+                if GetWindowRect(tm, &mut tm_rect).is_ok() && tm_rect.left > 100 {
+                    if target_x + band_w > tm_rect.left - 2 {
+                        target_x = tm_rect.left - band_w - 2;
+                    }
+                }
             }
-
-            // Ensure band stays bounded within the taskbar tray
             if notify_found && target_x + band_w > notify_rect.left - 4 {
                 target_x = notify_rect.left - band_w - 4;
+            }
+            if target_x < tray_rect.left + 50 {
+                target_x = tray_rect.left + 50;
             }
 
             (target_x, tray_rect.top, band_w, tray_h)
