@@ -905,15 +905,15 @@ pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String
         return Ok(());
     }
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        PostMessageW, MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
+    // MK_LBUTTON lives in Win32_System_SystemServices, which this crate does not enable.
+    const MK_LBUTTON: usize = 0x0001;
     let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
     unsafe {
         let _ = PostMessageW(
             Some(HWND(hwnd_val as _)),
             WM_LBUTTONDOWN,
-            WPARAM(MK_LBUTTON.0 as _),
+            WPARAM(MK_LBUTTON),
             lparam,
         );
         let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_LBUTTONUP, WPARAM(0), lparam);
