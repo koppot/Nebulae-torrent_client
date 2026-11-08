@@ -106,6 +106,13 @@ mod windows_impl {
 
             // Compute initial position based on Shell_TrayWnd
             let (init_x, init_y, init_h) = calculate_taskbar_position();
+            let _ = std::fs::write(
+                "C:\\Temp\\taskbar_speed_init.log",
+                format!(
+                    "init: x={} y={} w={} h={}\n",
+                    init_x, init_y, BAND_WIDTH, init_h
+                ),
+            );
 
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
@@ -307,6 +314,13 @@ mod windows_impl {
 
     fn reposition_band(hwnd: HWND) {
         let (x, y, h) = calculate_taskbar_position();
+        let _ = std::fs::write(
+            "C:\\Temp\\taskbar_speed.log",
+            format!(
+                "reposition: hwnd={:?} x={} y={} w={} h={}\n",
+                hwnd, x, y, BAND_WIDTH, h
+            ),
+        );
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
