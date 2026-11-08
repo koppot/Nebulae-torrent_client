@@ -149,42 +149,6 @@ mod windows_impl {
         }
     }
 
-    fn count_taskbar_buttons() -> i32 {
-        unsafe {
-            struct EnumState {
-                count: i32,
-            }
-            let mut state = EnumState { count: 0 };
-            unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    GetWindow, GetWindowLongW, GetWindowTextLengthW, IsWindowVisible, GWL_EXSTYLE,
-                    GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-                };
-                if !IsWindowVisible(hwnd).as_bool() {
-                    return BOOL(1);
-                }
-                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                if (ex & WS_EX_TOOLWINDOW.0) != 0 {
-                    return BOOL(1);
-                }
-                let owner = GetWindow(hwnd, GW_OWNER).unwrap_or_default();
-                if !owner.0.is_null() && (ex & WS_EX_APPWINDOW.0) == 0 {
-                    return BOOL(1);
-                }
-                if GetWindowTextLengthW(hwnd) > 0 {
-                    let s = &mut *(lparam.0 as *mut EnumState);
-                    s.count += 1;
-                }
-                BOOL(1)
-            }
-            let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(
-                Some(enum_proc),
-                LPARAM(&mut state as *mut _ as isize),
-            );
-            state.count.max(1)
-        }
-    }
-
     fn calculate_taskbar_position() -> (i32, i32, i32) {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
@@ -230,16 +194,6 @@ mod windows_impl {
                     (tray_rect.right - tray_rect.left).max(100),
                     tray_h,
                 )
-            };
-
-            // Look for TrayNotifyWnd (notification area / system tray on right)
-            let h_notify =
-                FindWindowExW(Some(h_tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok();
-            let mut notify_rect = RECT::default();
-            let notify_found = if let Some(notify) = h_notify {
-                GetWindowRect(notify, &mut notify_rect).is_ok()
-            } else {
-                false
             };
 
             let mut target_x = 0;
@@ -336,22 +290,15 @@ mod windows_impl {
                 let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
             }
 
-            if target_x == 0 {
-                // If visual scan did not find the exact slot (e.g. icon partially occluded),
-                // use the baseline right adjacent to Button 11 on the toolbar:
-                // Base tasklist starts at 445; 12 app buttons * 46px = 552px; right edge = 997.
+            if target_x < 900 {
+                // Nebulae is Button 11 on the taskbar toolbar (base_x = 445, 12 slots * 46px = 552px, right edge = 997).
+                // Anchor immediately adjacent to the Nebulae application icon:
                 target_x = 998;
             }
 
-            // Ensure band does not spill into TrafficMonitor (starts at 1224) or beyond taskbar bounds
+            // Ensure band does not spill into TrafficMonitor (starts at 1224)
             if target_x + BAND_WIDTH > 1220 {
                 target_x = 1220 - BAND_WIDTH;
-            }
-            if notify_found && target_x + BAND_WIDTH > notify_rect.left - 4 {
-                target_x = notify_rect.left - BAND_WIDTH - 4;
-            }
-            if target_x < base_x + 50 {
-                target_x = base_x + 50;
             }
 
             (target_x, tray_rect.top, tray_h)
