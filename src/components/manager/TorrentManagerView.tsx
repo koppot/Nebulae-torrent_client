@@ -1119,53 +1119,53 @@ export const TorrentManagerView: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-hidden bg-[#141414]">
         {/* Data Table: Classic Grid */}
         <div className="flex-1 overflow-auto bg-[#141414]">
-          <table className="w-full table-fixed text-left border-collapse text-xs">
+          <table className="w-full min-w-[1100px] table-fixed text-left border-collapse text-xs">
             <colgroup>
-              <col className="w-auto min-w-[200px]" />
-              <col className="w-24" />
-              <col className="w-48" />
-              <col className="w-28" />
-              <col className="w-28" />
-              <col className="w-28" />
+              <col className="w-auto" />
               <col className="w-20" />
+              <col className="w-40" />
+              <col className="w-24" />
+              <col className="w-24" />
+              <col className="w-24" />
               <col className="w-16" />
               <col className="w-16" />
-              <col className="w-16" />
-              <col className="w-32" />
+              <col className="w-14" />
+              <col className="w-14" />
+              <col className="w-[136px]" />
             </colgroup>
             <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#262626] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider z-10">
               <tr>
                 <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none">
                   Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none">
                   Size {sortField === 'size' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-48 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-40 cursor-pointer hover:text-white select-none">
                   Progress {sortField === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-28 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
                   Status {sortField === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-28 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
                   Down Speed {sortField === 'down_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-28 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
                   Up Speed {sortField === 'up_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
                   ETA {sortField === 'eta' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
                 <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
                   Ratio {sortField === 'ratio' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Seeds {sortField === 'seeds' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Peers {sortField === 'peers' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-32 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-[136px] cursor-pointer hover:text-white select-none">
                   Last Checked {sortField === 'last_checked' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
               </tr>
@@ -1216,8 +1216,10 @@ export const TorrentManagerView: React.FC = () => {
                           : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
                     }`}
                   >
-                    <td className={`py-2 px-3 font-sans font-medium truncate max-w-xs ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
+                    <td className={`py-2 px-3 font-sans font-medium truncate ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
                       <span
+                        className="truncate block"
+                        title={t.name}
                         onMouseEnter={(e) => openPosterPopup(t, e)}
                         onMouseLeave={closePosterPopup}
                       >
