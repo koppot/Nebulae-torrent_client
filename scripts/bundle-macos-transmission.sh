@@ -36,6 +36,7 @@ EXPECTED_SHA256="ce7d2d8b101f7eb54bc3cf0bc55f52f7ebd4a25fa48e00bdca9a7e0fc02617d
 TARGET_DIR="${1:-src-tauri/resources/engine/transmission}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/patches/transmission-${VERSION}-identity-override.patch"
 
 # Staging dir OUTSIDE target/ (rust-cache nesting precedent).

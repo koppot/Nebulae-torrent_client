@@ -1215,7 +1215,44 @@ export const SimpleMediaView: React.FC = () => {
         }}
       >
         <div className="rounded-lg overflow-hidden">
-          <div className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition">
+          <div
+            onClick={async () => {
+              if (!isReordering && !isLaunchingDisc) {
+                setIsLaunchingDisc(true);
+                try {
+                  await openInPlayer(m.path, {
+                    displayTitle: m.title,
+                    year: displayYear,
+                  });
+                  void refreshExternalMedia();
+                  setFeedbackNotice(null);
+                } catch (err) {
+                  const msg = errorMessage(err, 'Could not launch the disc.');
+                  const isPathErr =
+                    msg.includes('path') ||
+                    msg.includes('exist') ||
+                    msg.includes('operating system') ||
+                    msg.includes('not found') ||
+                    msg.includes('disconnected');
+                  setFeedbackNotice({
+                    type: 'error',
+                    message: msg,
+                    relinkTarget: isPathErr
+                      ? {
+                          kind: 'external',
+                          id: m.path,
+                          name: m.title,
+                          path: m.path,
+                        }
+                      : undefined,
+                  });
+                } finally {
+                  setIsLaunchingDisc(false);
+                }
+              }
+            }}
+            className="aspect-[660/800] w-full rounded-lg bg-[#141414] relative overflow-hidden border border-[#262626] group-hover:border-[#e50914]/50 transition"
+          >
             {extCover ? (
               <img
                 src={localSrc(extCover as string)}
@@ -1238,7 +1275,8 @@ export const SimpleMediaView: React.FC = () => {
                 <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                   <button
                     disabled={isLaunchingDisc}
-                    onClick={async () => {
+                    onClick={async (e) => {
+                      e.stopPropagation();
                       if (isLaunchingDisc) return;
                       setIsLaunchingDisc(true);
                       try {
@@ -1279,9 +1317,10 @@ export const SimpleMediaView: React.FC = () => {
                     <span>{isLaunchingDisc ? 'Launching...' : 'Play'}</span>
                   </button>
                   <button
-                    onClick={() =>
-                      setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind })
-                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExtDetails({ path: m.path, title: m.title, year: m.year ?? null, kind: m.kind });
+                    }}
                     className="flex-1 px-1.5 py-1.5 rounded-md bg-[#2a2a2a] hover:bg-[#333333] border border-[#3a3a3a] text-[#e5e5e5] text-[10px] font-medium flex items-center justify-center transition"
                     title="Detailed movie information"
                   >

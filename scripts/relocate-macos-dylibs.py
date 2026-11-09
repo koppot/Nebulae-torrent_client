@@ -161,9 +161,16 @@ def discover(
             known = libs.get(name)
             if known is not None:
                 if os.path.realpath(known.src) != src:
-                    raise RelocationError(
-                        f"two different libraries want the name {name}: {known.src} and {src}"
+                    same_basename = os.path.basename(known.src) == os.path.basename(src)
+                    source_dir_real = os.path.realpath(SOURCE_DIR) if SOURCE_DIR else None
+                    from_source_or_lib = source_dir_real and (
+                        os.path.dirname(os.path.realpath(known.src)) in (source_dir_real, os.path.realpath(lib_dir))
+                        or os.path.dirname(os.path.realpath(src)) in (source_dir_real, os.path.realpath(lib_dir))
                     )
+                    if not (same_basename and from_source_or_lib):
+                        raise RelocationError(
+                            f"two different libraries want the name {name}: {known.src} and {src}"
+                        )
             else:
                 lib_arch = archs_of(src)
                 if len(lib_arch) != 1 or (arch and lib_arch[0] != arch):
