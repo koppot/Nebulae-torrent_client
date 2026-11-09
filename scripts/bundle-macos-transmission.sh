@@ -166,6 +166,11 @@ cp -L "$DAEMON_BIN" "$TARGET_DIR/transmission-daemon"
 chmod 755 "$TARGET_DIR/transmission-daemon"
 
 # --- 2. Bundle every non-system dependency and rewrite the load commands ---
+# Build the macOS 11.0 dependency replacements from source so the shipped app
+# does not silently raise its effective minimum above the declared 11.0.
+DEPS_DIR="$TARGET_DIR/../macos-deps-11"
+"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$STAGING_DIR/build-deps.log" 2>&1
+
 ARCH="$(uname -m)"
 RELOCATE_ARGS=(
     --lib-dir "$TARGET_DIR/lib"
@@ -173,6 +178,7 @@ RELOCATE_ARGS=(
     --arch "$ARCH"
     --manifest "$TARGET_DIR/bundled-libraries.json"
     --licenses-dir "$TARGET_DIR/licenses"
+    --source-dir "$DEPS_DIR"
 )
 if [ -n "$SIGNING_IDENTITY" ]; then
     RELOCATE_ARGS+=(--sign "$SIGNING_IDENTITY")

@@ -49,6 +49,14 @@ from macho_tools import SYSTEM_PREFIXES, archs_of, is_macho, parse_load_commands
 CELLAR_RE = re.compile(r"/Cellar/([^/]+)/([^/]+)/")
 LICENSE_RE = re.compile(r"^(COPYING|LICEN[CS]E|COPYRIGHT|NOTICE|AUTHORS|UNLICENSE)([._-].*)?$", re.I)
 
+# Optional override directory for dependency sources. When set, absolute
+# load commands (for example Homebrew cellar paths) are first looked up
+# here by basename before falling back to the resolved path. Used to
+# substitute source-built macOS 11.0 libraries for Homebrew bottles that
+# target a newer minimum OS. The directory should contain the .dylib files
+# directly (flat layout).
+SOURCE_DIR: str | None = None
+
 
 class RelocationError(Exception):
     pass
@@ -108,6 +116,10 @@ def resolve(ref: str, img: Image, lib_dir: str) -> "str | None":
         cand = expand(ref, src_dir, root_dir)
         return os.path.realpath(cand) if os.path.isfile(cand) else None
     if ref.startswith("/"):
+        if SOURCE_DIR:
+            src_candidate = os.path.join(SOURCE_DIR, os.path.basename(ref))
+            if os.path.isfile(src_candidate):
+                return os.path.realpath(src_candidate)
         return os.path.realpath(ref) if os.path.isfile(ref) else None
     return None
 
@@ -306,11 +318,19 @@ def main() -> int:
     )
     ap.add_argument("--manifest", help="write the list of bundled libraries as JSON")
     ap.add_argument("--licenses-dir", help="copy the license files of the Homebrew kegs used")
+    ap.add_argument(
+        "--source-dir",
+        help="directory containing source-built replacements for absolute-path "
+        "dependencies (looked up by basename; used to substitute "
+        "macOS 11.0 libraries for Homebrew bottles)",
+    )
     args = ap.parse_args()
 
     lib_dir = os.path.abspath(args.lib_dir)
     targets = [os.path.abspath(t) for t in args.targets]
     provided = set(args.provided)
+    global SOURCE_DIR
+    SOURCE_DIR = args.source_dir
     try:
         roots, libs = discover(targets, lib_dir, args.arch, provided)
         copy_libs(libs)
