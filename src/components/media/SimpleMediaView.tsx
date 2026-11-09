@@ -563,11 +563,18 @@ export const SimpleMediaView: React.FC = () => {
   // with a permanent null so retry after temporary provider recovery works.
   useEffect(() => {
     torrents.forEach((t) => {
-      if (thumbMap[t.id]) return;
+      if (thumbMap[t.id] || thumbMap[t.info_hash]) return;
       resolvePoster(t.info_hash, t.name, contentPath(t))
         .then((src) => {
           if (src) {
-            setThumbMap((prev) => ({ ...prev, [t.id]: src }));
+            // Store under both the numeric id (what the card reads) and the
+            // info hash (what set_custom_poster writes), so a custom poster
+            // set at runtime is immediately visible on the card.
+            setThumbMap((prev) => ({
+              ...prev,
+              [t.id]: src,
+              [t.info_hash]: src,
+            }));
           }
         })
         .catch(() => {
@@ -1009,7 +1016,12 @@ export const SimpleMediaView: React.FC = () => {
     const progressPct = Math.round(group.overall_progress * 100);
     // Cover priority: structure-detected scan, then the WebP poster cache,
     // then TMDB (fetched lazily below), then any remote poster URL.
-    const localCover = discInfo?.cover_image || thumbMap[currentItem.id];
+    // Custom poster (set at runtime, keyed by info_hash) takes precedence
+    // over the auto-resolved poster (keyed by numeric id).
+    const localCover =
+      discInfo?.cover_image ||
+      thumbMap[currentItem.info_hash] ||
+      thumbMap[currentItem.id];
     const coverImage = localCover || tmdbMap[group.id]?.poster || currentItem.poster_url;
 
     // Unified playable discs: separate torrents (boxset) OR the images of a
@@ -2589,8 +2601,11 @@ export const SimpleMediaView: React.FC = () => {
               const durationStr = detailsData?.runtimeMin ? (fmtRuntime(detailsData.runtimeMin) ?? `${detailsData.runtimeMin}m`) : '—';
               const totalSizeStr = formatBytes(group.total_bytes);
 
+              // Custom poster (set at runtime, keyed by info_hash) takes
+              // precedence over the auto-resolved poster (keyed by numeric id).
               const cover =
                 (discSetMap[item.id] ?? [])[0]?.cover_image ||
+                thumbMap[item.info_hash] ||
                 thumbMap[item.id] ||
                 tmdbMap[group.id]?.poster ||
                 item.poster_url;

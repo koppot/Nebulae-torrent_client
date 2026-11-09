@@ -801,13 +801,10 @@ fn start_playback_inner(
                     return Err(e);
                 }
             };
-            // The overlay is created hidden; make it visible BEFORE the vout
-            // attaches, or the video renders into a hidden view (a dead
-            // black rectangle that receives no clicks).
-            if let Err(e) = player::set_overlay_hidden(app, false) {
-                tracing::error!("player_open: overlay unhide failed: {e}");
-                return Err(e);
-            }
+            // Attach the vout to the overlay view while it is still hidden,
+            // then reveal the overlay. This ensures the caopengllayer vout is
+            // bound to the view before the view becomes visible, avoiding a
+            // frame of transparency where the video has not yet landed.
             match VlcSession::open_shared(
                 &lib,
                 &state.shared_instance,
@@ -823,6 +820,12 @@ fn start_playback_inner(
                     *poison(&state.media_player) = session.media_player;
                     *poison(&state.started) = true;
                     poison(&state.framing).reset();
+
+                    // Reveal the overlay now that the vout is attached, so the
+                    // first frame the user sees is video, not transparency.
+                    if let Err(e) = player::set_overlay_hidden(app, false) {
+                        tracing::error!("player_open: overlay unhide failed: {e}");
+                    }
 
                     // HDR: detect UHD / HDR content from disc metadata or file path,
                     // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
