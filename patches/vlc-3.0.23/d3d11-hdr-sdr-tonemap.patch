@@ -207,15 +207,15 @@
  } PS_CONSTANT_BUFFER;
  
  typedef struct {
-@@ -93,6 +95,8 @@
+@@ -92,6 +94,8 @@
+ 
  float GetFormatLuminance(vlc_object_t *, const video_format_t *);
  #define GetFormatLuminance(a,b)  GetFormatLuminance(VLC_OBJECT(a),b)
- 
-+float GetFormatSourcePeak(const video_format_t *);
 +
++float GetFormatSourcePeak(const video_format_t *);
+ 
  HRESULT D3D11_CreateRenderTargets(d3d11_device_t *, ID3D11Resource *, const d3d_format_t *,
                                    ID3D11RenderTargetView *output[D3D11_MAX_SHADER_VIEW]);
- 
 --- a/modules/video_output/win32/direct3d11.c
 +++ b/modules/video_output/win32/direct3d11.c
 @@ -1216,6 +1216,15 @@
@@ -234,3 +234,41 @@
      if (picture->format.mastering.max_luminance)
      {
          D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad, (float)sys->display.luminance_peak / GetFormatLuminance(VLC_OBJECT(vd), &picture->format));
+@@ -2440,12 +2449,33 @@
+         vout_display_place_t place;
+         vout_display_PlacePicture(&place, &vd->source, &place_cfg, false);
+ 
+-        quad->cropViewport.Width =  (FLOAT) r->fmt.i_visible_width  * place.width  / subpicture->i_original_picture_width;
+-        quad->cropViewport.Height = (FLOAT) r->fmt.i_visible_height * place.height / subpicture->i_original_picture_height;
++        unsigned src_w = vd->source.i_visible_width ? (unsigned)vd->source.i_visible_width : (unsigned)subpicture->i_original_picture_width;
++        unsigned src_h = vd->source.i_visible_height ? (unsigned)vd->source.i_visible_height : (unsigned)subpicture->i_original_picture_height;
++        if (!src_w) src_w = 1;
++        if (!src_h) src_h = 1;
++
++        FLOAT vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / src_w;
++        FLOAT vp_h = (FLOAT) r->fmt.i_visible_height * place.height / src_h;
++
++        FLOAT top_x = place.x + (FLOAT)((int)r->i_x - (int)vd->source.i_x_offset) * place.width  / src_w;
++        FLOAT top_y = place.y + (FLOAT)((int)r->i_y - (int)vd->source.i_y_offset) * place.height / src_h;
++
++        /* Subtitles originally placed in the removed black-bar area or extending
++         * beyond the active picture: clamp into the visible presentation area
++         * with padding so they remain fully visible and unclipped. */
++        FLOAT bottom_limit = (FLOAT)place.y + (FLOAT)place.height - 4.0f;
++        if (top_y + vp_h > bottom_limit)
++            top_y = bottom_limit - vp_h;
++        FLOAT top_limit = (FLOAT)place.y + 4.0f;
++        if (top_y < top_limit)
++            top_y = top_limit;
++
++        quad->cropViewport.Width  = vp_w;
++        quad->cropViewport.Height = vp_h;
+         quad->cropViewport.MinDepth = 0.0f;
+         quad->cropViewport.MaxDepth = 1.0f;
+-        quad->cropViewport.TopLeftX = place.x + (FLOAT) r->i_x * place.width  / subpicture->i_original_picture_width;
+-        quad->cropViewport.TopLeftY = place.y + (FLOAT) r->i_y * place.height / subpicture->i_original_picture_height;
++        quad->cropViewport.TopLeftX = top_x;
++        quad->cropViewport.TopLeftY = top_y;
+ 
+         D3D11_UpdateQuadOpacity(vd, &sys->d3d_dev, quad, r->i_alpha / 255.0f );
+     }

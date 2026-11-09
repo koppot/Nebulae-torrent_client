@@ -19,18 +19,18 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CreateRectRgn, FillRect, GetMonitorInfoW, GetStockObject, MonitorFromWindow,
-    SetWindowRgn, BLACK_BRUSH, HBRUSH, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, FillRect, GetMonitorInfoW, GetStockObject, MonitorFromWindow, BLACK_BRUSH,
+    HBRUSH, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, IsIconic, LoadCursorW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -72,23 +72,7 @@ static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 /// Saved pre-player window rect for restoring window size on close.
 static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 
-/// Active crop bars detected by letterbox observer.
-static ACTIVE_CROP: Mutex<Option<crate::player::letterbox::Bars>> = Mutex::new(None);
-
-pub fn set_active_crop(app: &AppHandle, crop: Option<crate::player::letterbox::Bars>) {
-    if let Ok(mut lock) = ACTIVE_CROP.lock() {
-        *lock = crop;
-    }
-    let hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
-    if hwnd_val == 0 {
-        return;
-    }
-    let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Ok(main_h) = main_hwnd(&app2) else { return };
-        update_video_surface_position(main_h);
-    });
-}
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
 
 pub(crate) fn update_video_surface_position(main_h: HWND) {
     let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
@@ -107,51 +91,9 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
             return;
         }
 
-        let crop_opt = ACTIVE_CROP.lock().ok().and_then(|c| *c);
-
-        if let Some(crop) = crop_opt {
-            let total_h = crop.frame_height as f64;
-            let total_w = crop.frame_width as f64;
-            let active_h = (crop.frame_height.saturating_sub(crop.top + crop.bottom)) as f64;
-            let active_w = (crop.frame_width.saturating_sub(crop.left + crop.right)) as f64;
-
-            if total_h > 0.0
-                && total_w > 0.0
-                && active_h > 0.0
-                && active_w > 0.0
-                && (crop.top > 0 || crop.bottom > 0)
-            {
-                let vh = ((cw as f64) * (total_h / total_w)).round() as i32;
-                let offset_y = ((vh as f64) * (crop.top as f64 / total_h)).round() as i32;
-
-                let _ = SetWindowPos(
-                    video_hwnd,
-                    Some(main_h),
-                    cx,
-                    cy - offset_y,
-                    cw,
-                    vh,
-                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                );
-
-                let hrgn = CreateRectRgn(0, offset_y, cw, offset_y + ch);
-                let _ = SetWindowRgn(video_hwnd, Some(hrgn), true);
-
-                let _ = SetWindowPos(
-                    main_h,
-                    Some(HWND_TOP),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-                );
-                return;
-            }
-        }
-
-        // Uncropped or crop cleared: remove region clipping and align to client rect
-        let _ = SetWindowRgn(video_hwnd, None, true);
+        // Align video surface 1:1 to the client area of the main window.
+        // Direct3D 11 renders the video (including any active black-bar crop)
+        // directly into this swapchain with correct isotropic subtitle placement.
         let _ = SetWindowPos(
             video_hwnd,
             Some(main_h),
@@ -412,11 +354,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         if hidden {
-            if let Ok(mut lock) = ACTIVE_CROP.lock() {
-                *lock = None;
-            }
             unsafe {
-                let _ = SetWindowRgn(video_hwnd, None, true);
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
                 // When player is closed, restore rounded corners on the application window
                 let round: u32 = DWMWCP_ROUND.0 as u32;
@@ -954,7 +892,15 @@ pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), S
                 return;
             }
 
-            let new_h = ((cur_w as f64) / aspect).round() as i32;
+            let mut cr = RECT::default();
+            let _ = GetClientRect(main_h, &mut cr);
+            let client_w = cr.right - cr.left;
+            let client_h = cr.bottom - cr.top;
+            let border_w = cur_w - client_w;
+            let border_h = cur_h - client_h;
+
+            let target_client_h = ((client_w as f64) / aspect).round() as i32;
+            let new_h = target_client_h + border_h;
             if (new_h - cur_h).abs() < 2 {
                 return;
             }
@@ -975,12 +921,14 @@ pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), S
 
                 if final_h > work_h {
                     final_h = work_h;
-                    final_w = ((final_h as f64) * aspect).round() as i32;
+                    let target_cw = (((final_h - border_h) as f64) * aspect).round() as i32;
+                    final_w = target_cw + border_w;
                     new_x = r.left + (cur_w - final_w) / 2;
                 }
                 if final_w > work_w {
                     final_w = work_w;
-                    final_h = ((final_w as f64) / aspect).round() as i32;
+                    let target_ch = (((final_w - border_w) as f64) / aspect).round() as i32;
+                    final_h = target_ch + border_h;
                     new_y = r.top + (cur_h - final_h) / 2;
                 }
 
@@ -1005,7 +953,7 @@ pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), S
                 new_y,
                 final_w,
                 final_h,
-                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
             );
 
             tracing::info!(

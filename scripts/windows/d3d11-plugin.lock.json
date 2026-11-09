@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "description": "Pinned Nebulae Direct3D 11 video output plugin (HDR/HLG to SDR tone mapping). stage_runtime.py refuses a modified VLC runtime whose plugins/video_output/libdirect3d11_plugin.dll is not exactly this build.",
+  "description": "Pinned Nebulae Direct3D 11 video output plugin (HDR/HLG to SDR tone mapping and isotropic cropped subtitle positioning). stage_runtime.py refuses a modified VLC runtime whose plugins/video_output/libdirect3d11_plugin.dll is not exactly this build.",
   "file": "plugins/video_output/libdirect3d11_plugin.dll",
-  "sha256": "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993",
+  "sha256": "836a7f98877121cb83fc4d0a72a8840804214925aae3339a73b4a37ef21f024c",
   "bytes": 401920,
   "stock_sha256": "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8",
   "stock_bytes": 408472,
@@ -12,7 +12,7 @@
     "patched_sources": "patches/vlc-3.0.23/d3d11-patched-sources.sha256",
     "vlc_source_sha256": "e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0",
     "link_target_zip_sha256": "992d19dbd0b8a7cde9167d2f7780b1ef6f92acc8a71acfa736101a21f35181e1",
-    "amf_headers": "AMF-headers 1.4.34 (sha512 2f6e4390\u202696f6c, as VLC contrib/src/amf)",
+    "amf_headers": "AMF-headers 1.4.34 (sha512 2f6e4390…96f6c, as VLC contrib/src/amf)",
     "toolchain": "x86_64-w64-mingw32-gcc 16.2.0 -mcrtdll=msvcrt-os -fno-stack-protector",
     "reproducible": "bit-identical across two independent work directories"
   }

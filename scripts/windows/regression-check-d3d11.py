@@ -24,8 +24,8 @@ SCRIPT = Path(__file__).resolve().parent
 LOCK_PATH = SCRIPT / "d3d11-plugin.lock.json"
 PLUGIN_REL = "plugins/video_output/libdirect3d11_plugin.dll"
 
-# Accepted baseline (user-verified candidate, delivered 2026-11-06).
-ACCEPTED_SHA256 = "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993"
+# Accepted baseline (user-verified candidate, delivered 2026-11-09).
+ACCEPTED_SHA256 = "836a7f98877121cb83fc4d0a72a8840804214925aae3339a73b4a37ef21f024c"
 ACCEPTED_BYTES = 401920
 STOCK_SHA256 = "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8"
 STOCK_BYTES = 408472

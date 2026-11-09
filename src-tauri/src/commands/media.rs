@@ -2625,22 +2625,12 @@ fn framing_sample_path(gen: usize) -> PathBuf {
 }
 
 fn apply_crop_spec(lib: &engine::VlcLib, mp: usize, spec: &str) {
-    #[cfg(not(target_os = "windows"))]
     if let Some(set_crop) = lib.libvlc_video_set_crop_geometry {
         if let Ok(c) = std::ffi::CString::new(spec) {
             unsafe {
                 set_crop(mp as *mut c_void, c.as_ptr());
             }
         }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // On Windows, black-bar cropping is handled natively via window reshaping
-        // and surface alignment in embed_windows.rs. Calling libvlc_video_set_crop_geometry
-        // causes VLC's libass / SPU scaler to compress subtitles vertically and shift
-        // them to the screen center. Leaving VLC uncropped maintains 100% isotropic glyph
-        // scaling and author-intended subtitle placement.
-        let _ = (lib, mp, spec);
     }
 }
 

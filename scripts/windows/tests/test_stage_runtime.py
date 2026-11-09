@@ -530,7 +530,7 @@ class D3D11LockIdentityTests(unittest.TestCase):
         lock = json.loads(stage_runtime.D3D11_PLUGIN_LOCK.read_text(encoding="utf-8"))
         self.assertEqual(
             lock["sha256"].lower(),
-            "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993",
+            "836a7f98877121cb83fc4d0a72a8840804214925aae3339a73b4a37ef21f024c",
         )
         self.assertEqual(lock["bytes"], 401920)
         self.assertEqual(
