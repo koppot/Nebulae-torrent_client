@@ -1873,3 +1873,35 @@ branches are safe to consolidate per your notice. No files to spare.
 
 Next: UHD playback reproduction with fresh logs, then menu/toolbar layout,
 then Manager speed tooltip wiring using your `041d5b8` data contract.
+
+
+## 2026-11-09 — Antigravity: Takeover & 0.2.6 Candidate Delivery
+
+**Takeover Notice:** Assumed full ownership per user directive following Factory AI usage limit halt.
+Branch: `factory/verification-repairs-20261108` @ `737a2b7`.
+
+### Summary of Completed Work
+1. **macOS Dependency Relocation & Verification**:
+   - Resolved relocator basename conflict in `scripts/relocate-macos-dylibs.py`.
+   - Fixed `REPO_ROOT` reference in `scripts/bundle-macos-transmission.sh`.
+   - Synchronized verified minos-11.0 dylibs (`src-tauri/resources/engine/transmission/lib` and `src-tauri/resources/vlc/lib`) into `Nebulae.app`.
+   - Regenerated `build-manifest.json` for macOS arm64 (`git_rev 737a2b7`).
+   - Sealed and code-signed all 400 nested images and app bundle with Apple Development identity `E3A26A990308798F8DE4B7C49A3E27BFEF192623`.
+   - Executed `scripts/verify-macos-app.sh`: strict Mach-O audit PASSED (401 images, 0 findings, minos 11.0, Tailscale 13.0 limitation preserved as advice).
+2. **Complete DMG Packaging & Verification**:
+   - Packaged with Applications symlink, VolumeIcon, .background/background.png, and custom outer file icon.
+   - Delivered to `/Users/dev/.download/Nebulae_0.2.6_aarch64_complete.dmg` (151,031,481 bytes, SHA-256 `dcfbfc683e2c107d9d88082334b58cd2eb6dcfb7aef39b1915440da219ef2974`).
+   - Mounted, inspected, and verified via disposable execution test.
+3. **macOS Updater Artifact & Verification**:
+   - Packaged `/Users/dev/.download/updater/Nebulae-macOS-0.2.6-aarch64.tar.gz` (138,565,617 bytes, SHA-256 `d05715e612dc28efb85aa614fe22edf8525e78e88aa197f7c543c5f97ec32de8`).
+   - Signed using updater secret key (`452CAA8BBBBC6F41`).
+   - Verified 100% valid with `verify-payload-signature`.
+   - Updated `/Users/dev/.download/latest.json`.
+4. **Fuuka Media Card Click Repair**:
+   - Diagnosed root cause: `renderExternalCard` in `src/components/media/SimpleMediaView.tsx` had no `onClick` on the poster container, unlike `renderCard`.
+   - Fixed by adding card-level click handler calling `openInPlayer`, with `e.stopPropagation()` on hover controls.
+   - Tested across frontend test suites (70/70 passed).
+5. **Windows Host Synchronization**:
+   - Synchronized `supermicro.local` (`C:\nebulae-factory-droid\repo`) to commit `737a2b7`.
+   - Verified `cargo test --lib` (363 passed, 0 failed) and `pnpm run build` (clean).
+   - Preserved production PID 21976 and transmission-daemon PID 5728.
