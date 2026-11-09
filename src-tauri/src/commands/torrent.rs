@@ -658,16 +658,18 @@ pub fn remove_torrent(
     db: State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<(), String> {
     let del = delete_files.unwrap_or(false);
-    let info_hash = if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(id.to_lowercase())
-    } else if let Ok(torrents) = engine.list_torrents() {
-        torrents
-            .iter()
-            .find(|t| t.id == id)
-            .map(|t| t.info_hash.to_lowercase())
-    } else {
-        None
-    };
+    let (info_hash, display_name): (Option<String>, Option<String>) =
+        if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            (Some(id.to_lowercase()), None)
+        } else if let Ok(torrents) = engine.list_torrents() {
+            torrents
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| (Some(t.info_hash.to_lowercase()), Some(t.name.clone())))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
 
     let res = engine.remove_torrent(&id, del);
 
@@ -675,6 +677,18 @@ pub fn remove_torrent(
         if del {
             let _ = db.delete_torrent_metadata(hash);
         } else {
+            // Preserve the torrent's display name before reclassifying to
+            // External, so the External shelf shows the title instead of the
+            // raw info hash. Transmission-sourced torrents never have
+            // display_title populated in the DB.
+            if let Some(name) = &display_name {
+                if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
+                    if meta.display_title.is_none() {
+                        meta.display_title = Some(name.clone());
+                        let _ = db.upsert_torrent_metadata(&meta);
+                    }
+                }
+            }
             let _ = db.mark_as_external(hash);
             let _ = db.mark_snatched_record_external(hash);
         }

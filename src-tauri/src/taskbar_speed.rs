@@ -363,10 +363,14 @@ mod windows_impl {
                     if !orange_cols.is_empty() {
                         let orange_center_x = orange_cols[orange_cols.len() / 2];
 
-                        // Detect the exact right edge of the dark icon tile
+                        // Detect the exact right edge of the dark icon tile.
+                        // Scan far enough right to cover the full icon width —
+                        // the previous 20px*dpi_scale limit stopped inside the
+                        // icon, leaving the band positioned over it instead of
+                        // to its right.
                         let mut icon_right_local =
                             orange_center_x + (5.5 * dpi_scale).round() as i32;
-                        let search_max = (orange_center_x + (20.0 * dpi_scale).round() as i32)
+                        let search_max = (orange_center_x + (90.0 * dpi_scale).round() as i32)
                             .min(capture_w - 1);
                         for x in orange_center_x..=search_max {
                             let mut dark_count = 0;
@@ -401,10 +405,10 @@ mod windows_impl {
                 let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, hdc_screen);
             }
 
-            // Fallback: slot index based on typical running task position if visual scan unavailable
+            // Fallback: if the visual scan failed to find the icon, position at the right
+            // side of the taskbar so the band never overlaps any application icon.
             if target_x == 0 {
-                let slot_w = (49.0 * dpi_scale).round() as i32;
-                target_x = base_x + (10 * slot_w) + (5.0 * dpi_scale).round() as i32;
+                target_x = tray_rect.right - band_w - 10;
             }
 
             // Keep within taskbar bounds

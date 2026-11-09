@@ -4744,11 +4744,22 @@ pub fn list_external_media(
                 continue;
             }
 
-            // Use user-defined title if set; fall back to provider title, then info_hash.
+            // Use user-defined title if set; fall back to provider title, then
+            // a title derived from the save_path folder name, then info_hash.
+            // Transmission-sourced torrents never have display_title populated
+            // in the DB, so without this fallback they would appear in External
+            // under their raw info hash.
+            let derived_title = meta
+                .save_path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
             let title = meta
                 .user_display_title
                 .as_deref()
                 .or(meta.display_title.as_deref())
+                .or(derived_title.as_deref())
                 .unwrap_or(&meta.info_hash)
                 .to_string();
 
@@ -4758,7 +4769,11 @@ pub fn list_external_media(
                 _ => continue,
             };
             let candidate_path = std::path::Path::new(raw_path);
-            let torrent_name = meta.display_title.as_deref().unwrap_or(&title);
+            let torrent_name = meta
+                .display_title
+                .as_deref()
+                .or(derived_title.as_deref())
+                .unwrap_or(&title);
             let full_path = if candidate_path.ends_with(torrent_name)
                 || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
             {
@@ -4989,6 +5004,12 @@ pub fn set_custom_poster(
             let hash = target_id.to_lowercase();
             if let Ok(Some(mut meta)) = db.get_torrent_metadata(&hash) {
                 meta.poster_path = Some(webp_str.clone());
+                // upsert_torrent_metadata does NOT persist poster_path — use
+                // set_torrent_poster which writes it to both torrent_metadata
+                // and snatched_records.
+                db.set_torrent_poster(&hash, &webp_str)
+                    .map_err(|e| format!("Failed to persist poster: {e}"))?;
+                // Keep the in-memory struct in sync for any subsequent reads.
                 db.upsert_torrent_metadata(&meta)
                     .map_err(|e| format!("Failed to update torrent metadata: {e}"))?;
             } else {
