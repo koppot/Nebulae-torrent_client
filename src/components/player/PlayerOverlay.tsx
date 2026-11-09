@@ -1331,24 +1331,24 @@ export default function PlayerOverlay() {
           and track menus all render above the video and stay clickable. */}
       <div
         data-player-bar
-        className={`absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
+        // Black glow so the bar stays readable over bright video (the bar
+        // itself is background-less and floats over the native video). The
+        // glow is applied per control (see .player-glow in index.css): one
+        // filter over the whole wide bar was rasterised in tiles by WKWebView
+        // and left hard-edged dark rectangles behind the right-hand controls.
+        className={`player-glow absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
-        // Black glow so the bar stays readable over bright video (the bar
-        // itself is background-less and floats over the native video).
-        style={{
-          filter:
-            'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
-        }}
       >
         <div className="px-4 py-3 flex items-center gap-2.5">
           {/* The current disc, by number (owner: "Disc 1", never a filename),
-              bordered in the same color as its text. Clicking it cycles to
-              the next disc of the release (owner: no disc-list popup). */}
-          <button
-            type="button"
-            onClick={() => {
-              if (discChoices && discChoices.length > 1) {
+              bordered in the same color as its text. Shown only for a
+              multi-disc release; clicking it cycles to the next disc
+              (owner: no disc-list popup). */}
+          {player.isDisc && discChoices && discChoices.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
                 const rp = normPath(player.resolvedPath);
                 let idx = discChoices.findIndex((d) => {
                   const dp = normPath(d.path);
@@ -1357,17 +1357,13 @@ export default function PlayerOverlay() {
                 if (idx < 0) idx = 0;
                 const next = discChoices[(idx + 1) % discChoices.length];
                 void switchDisc(next.path);
-              }
-            }}
-            className="shrink-0 text-xs text-white font-medium truncate max-w-[240px] border border-white rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
-            title={
-              discChoices && discChoices.length > 1
-                ? `${discLabel} — click to switch to the next disc`
-                : discLabel
-            }
-          >
-            {discLabel}
-          </button>
+              }}
+              className="shrink-0 text-xs text-white font-medium truncate max-w-[240px] border border-white rounded-md px-2 py-1 hover:text-white hover:border-white transition text-left"
+              title={`${discLabel} — click to switch to the next disc`}
+            >
+              {discLabel}
+            </button>
+          )}
 
           {/* Menu: leaves the feature and re-opens the disc's interactive
               menu, in the same gray as the rest of the bar. Always available
@@ -1396,7 +1392,9 @@ export default function PlayerOverlay() {
             </button>
           )}
 
-          {player.isDisc && (
+          {/* Only offered while the disc menu is showing; it disappears as soon
+              as the feature is playing. */}
+          {player.isDisc && poll.at_menu && (
             <button
               type="button"
               onClick={() => {
@@ -1679,7 +1677,7 @@ export default function PlayerOverlay() {
                 button into the list never crosses a closing gap; styled like
                 the play bar: semi-transparent, white hairline, black glow. */
             <div
-              className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
+              data-popover className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {subTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1732,7 +1730,7 @@ export default function PlayerOverlay() {
           </button>
           {showAudio && (
             <div
-              className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
+              data-popover className="absolute bottom-full left-1/2 -translate-x-1/2 w-max max-w-[260px] max-h-52 overflow-y-auto flex flex-col items-stretch p-1 rounded-lg bg-black/30 border border-white/40 backdrop-blur-sm space-y-0.5"
               style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))' }}
             >
               {audioTracks.filter((x) => x.id >= 0).length === 0 && (
@@ -1788,15 +1786,12 @@ export default function PlayerOverlay() {
 
       {/* Top title and close bar */}
       <div
-        className={`absolute inset-x-0 top-0 h-10 z-20 flex items-center justify-between px-4 transition-opacity duration-300 ${
+        className={`player-glow absolute inset-x-0 top-0 h-10 z-20 flex items-center justify-between px-4 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
-        style={{
-          filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.95)) drop-shadow(0 0 6px rgba(0,0,0,0.8))',
-        }}
       >
         <div
-          className="max-w-[70%] truncate text-sm text-white font-medium"
+          className="glow-text max-w-[70%] truncate text-sm text-white font-medium"
           title={`${displayTitleInfo.title}${displayTitleInfo.year ? ` (${displayTitleInfo.year})` : ''}`}
         >
           <span>{displayTitleInfo.title}</span>

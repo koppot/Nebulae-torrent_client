@@ -73,3 +73,13 @@ body.player-active #root {
 ::-webkit-scrollbar-thumb:hover {
   background: #e50914;
 }
+
+/* Readability glow for the floating player controls, applied per control so
+   no single filter layer spans the whole bar (WKWebView tiled such a layer and
+   left hard-edged dark rectangles). Popovers carry their own glow. */
+.player-glow button:not([data-popover] button),
+.player-glow .tabular-nums,
+.player-glow .glow-text,
+.player-glow [data-testid="seek-track"] {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.95)) drop-shadow(0 0 6px rgba(0, 0, 0, 0.8));
+}
