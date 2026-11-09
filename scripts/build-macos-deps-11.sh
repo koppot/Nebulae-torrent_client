@@ -49,6 +49,7 @@ if ! have libdeflate.0.dylib; then
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libdeflate.make.log" 2>&1 \
       && make install >>"$WORK/libdeflate.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libdeflate.0.dylib" "$OUT_DIR/libdeflate.0.dylib"
+    ln -sf "../libdeflate.0.dylib" "$OUT_DIR/lib/libdeflate.0.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -65,6 +66,7 @@ if ! have libevent-2.1.7.dylib; then
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libevent.make.log" 2>&1 \
       && make install >>"$WORK/libevent.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libevent-2.1.7.dylib" "$OUT_DIR/libevent-2.1.7.dylib"
+    ln -sf "../libevent-2.1.7.dylib" "$OUT_DIR/lib/libevent-2.1.7.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -79,8 +81,25 @@ if ! have libiconv.2.dylib; then
                      >>"$WORK/libiconv.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libiconv.make.log" 2>&1 \
       && make install >>"$WORK/libiconv.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
+    cp "$OUT_DIR/lib/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    # Fix the install name so other libraries can find libiconv at the
+    # top-level location (the file was moved out of lib/).
+    install_name_tool -id "$OUT_DIR/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
+    # libiconv does not install a pkg-config file by default; libpsl needs one.
+    mkdir -p "$OUT_DIR/lib/pkgconfig"
+    cat > "$OUT_DIR/lib/pkgconfig/libiconv.pc" <<PCFILE
+prefix=$OUT_DIR
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: libiconv
+Description: GNU character encoding conversion library
+Version: 1.17
+Libs: -L\${libdir} -liconv
+Cflags: -I\${includedir}
+PCFILE
 fi
 
 # --- libintl/gettext 0.21 (used by transmission and VLC) ---------------------
@@ -97,6 +116,7 @@ if ! have libintl.8.dylib; then
       && make -C gettext-runtime -j"$(sysctl -n hw.ncpu)" >>"$WORK/gettext.make.log" 2>&1 \
       && make -C gettext-runtime install >>"$WORK/gettext.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libintl.8.dylib" "$OUT_DIR/libintl.8.dylib"
+    ln -sf "../libintl.8.dylib" "$OUT_DIR/lib/libintl.8.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -115,6 +135,7 @@ if ! have libminiupnpc.21.dylib; then
       && cmake --build build -j"$(sysctl -n hw.ncpu)" >>"$WORK/miniupnpc.make.log" 2>&1 \
       && cmake --install build >>"$WORK/miniupnpc.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libminiupnpc.21.dylib" "$OUT_DIR/libminiupnpc.21.dylib"
+    ln -sf "../libminiupnpc.21.dylib" "$OUT_DIR/lib/libminiupnpc.21.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -126,11 +147,13 @@ if ! have libpsl.5.dylib; then
     ( cd "$WORK/libpsl-0.23.3" \
       && ./configure --prefix="$OUT_DIR" --disable-static --enable-shared=yes \
                      CFLAGS="$COMMON_CFLAGS -I$OUT_DIR/include" \
-                     LDFLAGS="$COMMON_LDFLAGS -L$OUT_DIR/lib" \
+                     LDFLAGS="$COMMON_LDFLAGS -L$OUT_DIR/lib -Wl,-rpath,$OUT_DIR/lib" \
+                     PKG_CONFIG_PATH="$OUT_DIR/lib/pkgconfig" \
                      >>"$WORK/libpsl.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libpsl.make.log" 2>&1 \
       && make install >>"$WORK/libpsl.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libpsl.5.dylib" "$OUT_DIR/libpsl.5.dylib"
+    ln -sf "../libpsl.5.dylib" "$OUT_DIR/lib/libpsl.5.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -146,6 +169,7 @@ if ! have libpng16.16.dylib; then
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libpng.make.log" 2>&1 \
       && make install >>"$WORK/libpng.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libpng16.16.dylib" "$OUT_DIR/libpng16.16.dylib"
+    ln -sf "../libpng16.16.dylib" "$OUT_DIR/lib/libpng16.16.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -164,6 +188,7 @@ if ! have libfreetype.6.dylib; then
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/freetype.make.log" 2>&1 \
       && make install >>"$WORK/freetype.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libfreetype.6.dylib" "$OUT_DIR/libfreetype.6.dylib"
+    ln -sf "../libfreetype.6.dylib" "$OUT_DIR/lib/libfreetype.6.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -182,6 +207,7 @@ if ! have libfontconfig.1.dylib; then
       && ninja -C build -j"$(sysctl -n hw.ncpu)" >>"$WORK/fontconfig.ninja.log" 2>&1 \
       && meson install -C build >>"$WORK/fontconfig.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libfontconfig.1.dylib" "$OUT_DIR/libfontconfig.1.dylib"
+    ln -sf "../libfontconfig.1.dylib" "$OUT_DIR/lib/libfontconfig.1.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
@@ -199,6 +225,7 @@ if ! have libudfread.3.dylib; then
       && ninja -C build -j"$(sysctl -n hw.ncpu)" >>"$WORK/udfread.ninja.log" 2>&1 \
       && meson install -C build >>"$WORK/udfread.install.log" 2>&1 )
     mv "$OUT_DIR/lib/libudfread.3.dylib" "$OUT_DIR/libudfread.3.dylib"
+    ln -sf "../libudfread.3.dylib" "$OUT_DIR/lib/libudfread.3.dylib" 2>/dev/null || true
     rmdir "$OUT_DIR/lib" 2>/dev/null || true
 fi
 
