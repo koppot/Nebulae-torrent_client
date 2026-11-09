@@ -1942,3 +1942,30 @@ Branch: `factory/verification-repairs-20261108` @ `737a2b7`.
 The transient `Tailnet · ADC host up, port 443 not open` warning was identified as a port collision on `127.0.0.1:1055` caused by an orphaned disposable test daemon left behind by earlier packaging verification. With the test orphan terminated, the embedded daemon binds cleanly on port 1055, connects to `asiandvdclub` (`100.64.0.1`), and proxy requests to ADC port 443 return HTTP 200 OK. Running status in `/Applications/Nebulae.app` is verified healthy.
 
 Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate Delivery & Release Gate Preparation
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `c664cf4`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Windows Release Candidate Artifacts
+
+1. **Windows NSIS Installer:**
+   - Canonical Path: `C:\Users\administrator\Downloads\Nebulae_0.2.6_x64-setup.exe`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae_0.2.6_x64-setup.exe`
+   - Size: 339,782,944 bytes
+   - SHA-256: `5bcafbc6547eced281b02c7b173ac937054066d7198d8fc755fcfb23b16ccae6`
+   - Signature: Minisign key `452CAA8BBBBC6F41` with trusted comment `timestamp:1794236418\tfile:Nebulae_0.2.6_x64-setup.exe\tversion:0.2.6`; verified 100% SUCCESSFUL via `verify-payload-signature`.
+
+2. **Windows Checksum & Signature Files:**
+   - `Nebulae_0.2.6_x64-setup.exe.sha256` (115 B)
+   - `Nebulae_0.2.6_x64-setup.exe.sig` (436 B)
+
+3. **Combined Inactive Updater Feed:**
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/latest.json` (1,448 B)
+   - Configured with release version `0.2.6` targeting both `darwin-aarch64` and `windows-x86_64` authentic signatures.
+
+### Inclusions & Runtime State
+- Incorporates `b34bcbc` (taskbar rate band layout geometry cache), `017ef56` (external media DB row deletion), and `737a2b7` (Fuuka card-level click handler).
+- Preserves D3D11 HDR plugin `E1BE02CD...9993` and libbluray plugin `C5AD85B6...3A3FF`.
+- Active production processes PID 21976 and PID 5728 on `supermicro.local` remain running and untouched.
+- Ready for execution of the 7 manual acceptance checks on Windows.
