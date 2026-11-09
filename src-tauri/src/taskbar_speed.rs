@@ -68,7 +68,7 @@ pub use windows_impl::*;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
     use std::sync::Once;
     use std::time::Instant;
     use tauri::AppHandle;
@@ -101,6 +101,15 @@ mod windows_impl {
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
     static DOWN_RATE: AtomicU64 = AtomicU64::new(0);
     static BAND_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    /// Cached `BandLayout` fields so `render_band` uses identical text geometry
+    /// (font height, line height, arrow, padding) to the window's actual
+    /// dimensions. Stored as five `AtomicI32` because `BandLayout` is 20 bytes
+    /// and cannot be transmuted through `isize` (8 bytes).
+    static BAND_W: AtomicI32 = AtomicI32::new(0);
+    static BAND_H: AtomicI32 = AtomicI32::new(0);
+    static BAND_FONT: AtomicI32 = AtomicI32::new(0);
+    static BAND_ARROW: AtomicI32 = AtomicI32::new(0);
+    static BAND_PAD: AtomicI32 = AtomicI32::new(0);
     static INIT_ONCE: Once = Once::new();
 
     const CLASS_NAME: PCWSTR = w!("NebulaeTaskbarSpeedBand");
@@ -151,7 +160,12 @@ mod windows_impl {
             let _ = RegisterClassExW(&wc);
 
             // Compute initial position: right next to Nebulae's taskbar icon (5px padding, matching icon height)
-            let (init_x, init_y, init_w, init_h) = calculate_taskbar_position();
+            let (init_x, init_y, init_w, init_h, init_layout) = calculate_taskbar_position();
+            BAND_W.store(init_layout.width, Ordering::Relaxed);
+            BAND_H.store(init_layout.height, Ordering::Relaxed);
+            BAND_FONT.store(init_layout.font_px, Ordering::Relaxed);
+            BAND_ARROW.store(init_layout.arrow, Ordering::Relaxed);
+            BAND_PAD.store(init_layout.pad_x, Ordering::Relaxed);
 
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
@@ -198,13 +212,13 @@ mod windows_impl {
         }
     }
 
-    fn calculate_taskbar_position() -> (i32, i32, i32, i32) {
+    fn calculate_taskbar_position() -> (i32, i32, i32, i32, super::BandLayout) {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
                 Ok(h) => h,
                 Err(_) => {
                     let l = super::band_layout(48);
-                    return (100, 1000, l.width, l.height);
+                    return (100, 1000, l.width, l.height, l);
                 }
             };
 
@@ -419,15 +433,20 @@ mod windows_impl {
                 target_x = base_x;
             }
 
-            (target_x, icon_y, band_w, icon_h)
+            (target_x, icon_y, band_w, icon_h, layout)
         }
     }
 
     fn reposition_band(hwnd: HWND) {
-        let (x, y, w, h) = calculate_taskbar_position();
+        let (x, y, w, h, layout) = calculate_taskbar_position();
         unsafe {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
         }
+        BAND_W.store(layout.width, Ordering::Relaxed);
+        BAND_H.store(layout.height, Ordering::Relaxed);
+        BAND_FONT.store(layout.font_px, Ordering::Relaxed);
+        BAND_ARROW.store(layout.arrow, Ordering::Relaxed);
+        BAND_PAD.store(layout.pad_x, Ordering::Relaxed);
     }
 
     unsafe extern "system" fn band_wndproc(
@@ -524,7 +543,13 @@ mod windows_impl {
         let len = (width * height * 4) as usize;
         let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, len);
 
-        let layout = super::band_layout(height * 5 / 4);
+        let layout = super::BandLayout {
+            width: BAND_W.load(Ordering::Relaxed),
+            height: BAND_H.load(Ordering::Relaxed),
+            font_px: BAND_FONT.load(Ordering::Relaxed),
+            arrow: BAND_ARROW.load(Ordering::Relaxed),
+            pad_x: BAND_PAD.load(Ordering::Relaxed),
+        };
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
         let lines: [Vec<u16>; 2] = [
