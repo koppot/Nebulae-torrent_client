@@ -168,8 +168,8 @@ chmod 755 "$TARGET_DIR/transmission-daemon"
 # --- 2. Bundle every non-system dependency and rewrite the load commands ---
 # Build the macOS 11.0 dependency replacements from source so the shipped app
 # does not silently raise its effective minimum above the declared 11.0.
-DEPS_DIR="$TARGET_DIR/../macos-deps-11"
-"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$STAGING_DIR/build-deps.log" 2>&1
+DEPS_DIR="$REPO_ROOT/src-tauri/macos-deps-11"
+"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$DEPS_DIR/build-deps.log" 2>&1
 
 ARCH="$(uname -m)"
 RELOCATE_ARGS=(

@@ -211,8 +211,8 @@ chmod u+w "$DEST/lib/"*.dylib "$DEST/plugins/"*.dylib
 # loads the plugin supplies it.
 # Build the macOS 11.0 dependency replacements from source so the shipped app
 # does not silently raise its effective minimum above the declared 11.0.
-DEPS_DIR="$STAGING_DIR/macos-deps-11"
-"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$STAGING_DIR/build-deps.log" 2>&1
+DEPS_DIR="$REPO_ROOT/src-tauri/macos-deps-11"
+"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$DEPS_DIR/build-deps.log" 2>&1
 python3 "$SCRIPT_DIR/relocate-macos-dylibs.py" \
   --lib-dir "$DEST/lib" \
   --provided libvlccore.dylib \
