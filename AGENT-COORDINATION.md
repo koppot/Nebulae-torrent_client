@@ -1905,3 +1905,40 @@ Branch: `factory/verification-repairs-20261108` @ `737a2b7`.
    - Synchronized `supermicro.local` (`C:\nebulae-factory-droid\repo`) to commit `737a2b7`.
    - Verified `cargo test --lib` (363 passed, 0 failed) and `pnpm run build` (clean).
    - Preserved production PID 21976 and transmission-daemon PID 5728.
+
+## 2026-11-09 — Antigravity: macOS 0.2.6 Candidate Acceptance & Release Freeze
+
+**Directive Notice:** User confirmed macOS 0.2.6 candidate is accepted and ready for release. macOS candidate is now completely frozen and preserved.
+
+### Acceptance & Preservation Status
+- **User Confirmed:** macOS 0.2.6 candidate accepted and approved for production release.
+- **Confirmed Passes Preserved:** Custom poster persistence, Relink media, and complete macOS DMG presentation/contents.
+- **Process State:** All running macOS application, Transmission daemon, and Tailscale processes preserved. macOS troubleshooting stopped.
+- **Freeze Policy:** No rebuilding, re-signing, repackaging, or modification of macOS binaries, runtimes, or updater archives. Any shared-code adjustments for Windows will not rebuild macOS or alter the accepted macOS payload bytes.
+
+### Preserved Release Artifacts (Immutable Release Copies in `/Users/dev/.download/release-0.2.6/`)
+
+1. **Complete macOS DMG:**
+   - Canonical Path: `/Users/dev/.download/Nebulae_0.2.6_aarch64_complete.dmg`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae_0.2.6_aarch64_complete.dmg`
+   - Size: 151,031,481 bytes
+   - SHA-256: `dcfbfc683e2c107d9d88082334b58cd2eb6dcfb7aef39b1915440da219ef2974`
+   - Signatures: Apple Development identity `E3A26A990308798F8DE4B7C49A3E27BFEF192623` on all nested runtimes and app bundle; verified via `scripts/verify-macos-app.sh` (401 images, 0 findings, minos 11.0).
+
+2. **macOS Updater Tarball:**
+   - Canonical Path: `/Users/dev/.download/updater/Nebulae-macOS-0.2.6-aarch64.tar.gz`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae-macOS-0.2.6-aarch64.tar.gz`
+   - Size: 138,565,617 bytes
+   - SHA-256: `d05715e612dc28efb85aa614fe22edf8525e78e88aa197f7c543c5f97ec32de8`
+   - Signature: Minisign key `452CAA8BBBBC6F41`, comment `timestamp:1794233977\tfile:Nebulae-macOS-0.2.6-aarch64.tar.gz\tversion:0.2.6`; verified 100% SUCCESSFUL via `verify-payload-signature`.
+
+3. **Updater Metadata:**
+   - Canonical Path: `/Users/dev/.download/latest.json`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/latest.json`
+   - Size: 1,460 bytes
+   - SHA-256: `65c41e63bbac24f96d3b4d5e08faa0dadd38dc16d4b26863d90f6684cdfd89d3`
+
+### Tailscale Connectivity Resolution
+The transient `Tailnet · ADC host up, port 443 not open` warning was identified as a port collision on `127.0.0.1:1055` caused by an orphaned disposable test daemon left behind by earlier packaging verification. With the test orphan terminated, the embedded daemon binds cleanly on port 1055, connects to `asiandvdclub` (`100.64.0.1`), and proxy requests to ADC port 443 return HTTP 200 OK. Running status in `/Applications/Nebulae.app` is verified healthy.
+
+Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
