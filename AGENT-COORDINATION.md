@@ -1969,3 +1969,36 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
 - Preserves D3D11 HDR plugin `E1BE02CD...9993` and libbluray plugin `C5AD85B6...3A3FF`.
 - Active production processes PID 21976 and PID 5728 on `supermicro.local` remain running and untouched.
 - Ready for execution of the 7 manual acceptance checks on Windows.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate cdd0481 Delivery (Direct3D 11 Isotropic Subtitle Scaling & Surface Region Decoupling)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `cdd0481`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe.sig`
+- **Revision:** `cdd0481` (`cdd0481b490fdfc9728cb11ba30c500e5720027f`)
+- **File Size:** 339,777,301 bytes
+- **SHA-256 Checksum:** `ea08aa2edb60a5da07b2cb764241a6d092ff5249ace7313b9c561795316239f4`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794265895	file:Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe	version:0.2.6`
+
+### Summary of Targeted Fixes in cdd0481
+1. **Direct3D 11 Subpicture Quad Viewport Scaling:**
+   - In upstream VLC 3.0.23 (`direct3d11.c:2440-2448`), subpicture rendering coupled cropped `place.height` with uncropped `subpicture->i_original_picture_height`, causing a 25.6% vertical squash and vertical displacement toward the screen center when crop was active.
+   - Patched `direct3d11.c` in `patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch` to use active video source dimensions (`vd->source.i_visible_width` / `i_visible_height`) and relative coordinate translation `(r->i_x - vd->source.i_x_offset)` / `(r->i_y - vd->source.i_y_offset)`, maintaining 1:1 isotropic glyph scaling matching video proportions.
+   - Subtitles authored inside removed black bars or extending beyond active picture boundaries are clamped to remain fully visible with 4px safety margins rather than cut off.
+   - Pinned `libdirect3d11_plugin.dll` hash: `836a7f98877121cb83fc4d0a72a8840804214925aae3339a73b4a37ef21f024c`.
+2. **Complete Removal of `SetWindowRgn` Native Video Surface Clipping:**
+   - Decoupled video surface rendering from native window region clipping in `src-tauri/src/player/embed_windows.rs`. Direct3D 11 handles letterbox/pillarbox cropping natively into its swapchain.
+   - Removed repeated per-frame `SetWindowRgn` calls that invalidated the DWM redirection surface and caused presentation stalls/instability.
+3. **Refined Window Aspect Fitting:**
+   - Accounted for non-client window borders and monitor work area bounds in `fit_player_window_to_aspect`.
+4. **Preserved Invariants:**
+   - Fuuka disc menu fixes (`ded1b77`) and `--no-direct3d11-hw-blending` remain active and untouched.
+   - 4:3 content remains excluded from automatic black-bar cropping.
+   - Frozen macOS 0.2.6 release artifacts remain untouched and publication remains on hold pending Windows acceptance.
