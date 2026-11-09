@@ -28,7 +28,6 @@ pub(crate) struct BandLayout {
     /// Edge of the direction triangles.
     pub arrow: i32,
     pub pad_x: i32,
-    pub corner: i32,
 }
 
 /// `tray_h` is the taskbar thickness in pixels. The chip nearly fills it: the
@@ -52,7 +51,6 @@ pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
         font_px,
         arrow,
         pad_x,
-        corner: (height as f32 * 0.22).round() as i32,
     }
 }
 
@@ -76,25 +74,29 @@ mod windows_impl {
     use tauri::AppHandle;
     use windows::core::{w, BOOL, PCWSTR};
     use windows::Win32::Foundation::{
-        COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+        COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
     };
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-        CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, InvalidateRect, Polygon,
-        RoundRect, SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER,
-        BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, FW_BOLD,
-        HDC, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, ROP_CODE, SRCCOPY, TRANSPARENT,
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW,
+        CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, GdiFlush, GetDC, Polygon, ReleaseDC,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, AC_SRC_ALPHA, AC_SRC_OVER,
+        ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+        CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, FW_BOLD, HDC, OUT_DEFAULT_PRECIS,
+        PS_SOLID, ROP_CODE, SRCCOPY, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
-        GetWindowTextLengthW, GetWindowTextW, PeekMessageW, PostQuitMessage, RegisterClassExW,
-        SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, TrackPopupMenu,
-        HWND_TOPMOST, LWA_COLORKEY, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE,
-        SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+        GetWindowTextLengthW, GetWindowTextW, PeekMessageW, PostMessageW, PostQuitMessage,
+        RegisterClassExW, SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu,
+        UpdateLayeredWindow, HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE,
+        SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_COMMAND,
+        WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED,
         WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
+
+    /// Posted by `update_taskbar_speed` so the window's own thread redraws.
+    const WM_RENDER_BAND: u32 = WM_APP + 1;
 
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
     static DOWN_RATE: AtomicU64 = AtomicU64::new(0);
@@ -124,7 +126,7 @@ mod windows_impl {
         if hwnd_raw != 0 {
             let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
             unsafe {
-                let _ = InvalidateRect(Some(hwnd), None, false);
+                let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -167,8 +169,9 @@ mod windows_impl {
             );
 
             if let Ok(hwnd) = hwnd {
-                // Color-key transparency on 0x00000000 so the background is transparent
-                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00000000), 0, LWA_COLORKEY);
+                // Per-pixel alpha (UpdateLayeredWindow): fully transparent
+                // background, anti-aliased text, no colour-key fringes.
+                render_band(hwnd);
                 BAND_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
                 let _ = ShowWindow(hwnd, SW_SHOWNA);
 
@@ -430,11 +433,8 @@ mod windows_impl {
         lparam: LPARAM,
     ) -> LRESULT {
         match msg {
-            WM_PAINT => {
-                let mut ps = PAINTSTRUCT::default();
-                let hdc = BeginPaint(hwnd, &mut ps);
-                paint_band(hwnd, hdc);
-                let _ = EndPaint(hwnd, &ps);
+            WM_RENDER_BAND => {
+                render_band(hwnd);
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
@@ -468,57 +468,69 @@ mod windows_impl {
         }
     }
 
-    unsafe fn paint_band(hwnd: HWND, hdc: HDC) {
-        let mut rect = RECT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect);
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-
+    /// Draws the two rate lines into a 32-bit DIB and presents it with per-pixel
+    /// alpha, so the band has no background at all: only anti-aliased glyphs and
+    /// the direction triangles are opaque. Everything drawn is a bright colour
+    /// over black, so a pixel's alpha is its brightest channel and the colour is
+    /// already premultiplied. A soft dark halo keeps the text readable on light
+    /// taskbars. Background pixels get alpha 1 (invisible) so clicks still reach
+    /// the band's handlers; fully transparent pixels would pass clicks through.
+    unsafe fn render_band(hwnd: HWND) {
+        let mut win = RECT::default();
+        if GetWindowRect(hwnd, &mut win).is_err() {
+            return;
+        }
+        let width = win.right - win.left;
+        let height = win.bottom - win.top;
         if width <= 0 || height <= 0 {
             return;
         }
 
-        let mem_dc = CreateCompatibleDC(Some(hdc));
-        let mem_bmp = CreateCompatibleBitmap(hdc, width, height);
-        let old_bmp = SelectObject(mem_dc, mem_bmp.into());
-
-        // Fill background with black color key (0x00000000) for clean transparency
-        let bg_brush = CreateSolidBrush(COLORREF(0x00000000));
-        FillRect(mem_dc, &rect, bg_brush);
-        let _ = DeleteObject(bg_brush.into());
+        let hdc_screen = GetDC(None);
+        if hdc_screen.is_invalid() {
+            return;
+        }
+        let mem_dc = CreateCompatibleDC(Some(hdc_screen));
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let dib = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
+        let Ok(dib) = dib else {
+            let _ = DeleteDC(mem_dc);
+            ReleaseDC(None, hdc_screen);
+            return;
+        };
+        if bits.is_null() {
+            let _ = DeleteObject(dib.into());
+            let _ = DeleteDC(mem_dc);
+            ReleaseDC(None, hdc_screen);
+            return;
+        }
+        let old_bmp = SelectObject(mem_dc, dib.into());
+        let len = (width * height * 4) as usize;
+        let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, len);
 
         let layout = super::band_layout(height * 5 / 4);
-        let line_h = height / 2;
-
-        // Opaque dark chip with a thin light edge: readable on light and dark
-        // taskbars alike. Pixels outside the rounded corners keep the black
-        // colour key and stay transparent.
-        let chip_brush = CreateSolidBrush(COLORREF(0x001E1B1B)); // #1B1B1E
-        let chip_pen = CreatePen(PS_SOLID, 1, COLORREF(0x00605A5A)); // #5A5A60
-        let old_brush = SelectObject(mem_dc, chip_brush.into());
-        let old_pen = SelectObject(mem_dc, chip_pen.into());
-        let _ = RoundRect(
-            mem_dc,
-            0,
-            0,
-            width,
-            height,
-            layout.corner * 2,
-            layout.corner * 2,
-        );
-        let _ = SelectObject(mem_dc, old_pen);
-        let _ = SelectObject(mem_dc, old_brush);
-        let _ = DeleteObject(chip_pen.into());
-        let _ = DeleteObject(chip_brush.into());
-
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
-        let up_wide: Vec<u16> = crate::speed_format::format_adaptive_rate(up)
-            .encode_utf16()
-            .collect();
-        let down_wide: Vec<u16> = crate::speed_format::format_adaptive_rate(down)
-            .encode_utf16()
-            .collect();
+        let lines: [Vec<u16>; 2] = [
+            crate::speed_format::format_adaptive_rate(up)
+                .encode_utf16()
+                .collect(),
+            crate::speed_format::format_adaptive_rate(down)
+                .encode_utf16()
+                .collect(),
+        ];
 
         let font = CreateFontW(
             -layout.font_px,
@@ -532,14 +544,15 @@ mod windows_impl {
             DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
+            // Grey-scale anti-aliasing: ClearType needs an opaque backdrop.
+            ANTIALIASED_QUALITY,
             0,
             w!("Segoe UI"),
         );
         let old_font = SelectObject(mem_dc, font.into());
         let _ = SetBkMode(mem_dc, TRANSPARENT);
-        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF));
 
+        let line_h = height / 2;
         let text_x = layout.pad_x + layout.arrow + layout.pad_x / 2;
         // Em height plus Segoe UI's line gap is about 1.33 em.
         let text_box = ((layout.font_px as f32) * 1.33).round() as i32;
@@ -547,12 +560,27 @@ mod windows_impl {
         let half = layout.arrow / 2;
         let arrow_cx = layout.pad_x + half;
 
-        // Upload (top line, amber up-triangle) and download (bottom line,
-        // green down-triangle). Triangles are drawn, not font glyphs, so
-        // they do not depend on the font having arrow characters.
+        // Pass 1: halo mask (white glyphs offset by one pixel).
+        std::ptr::write_bytes(pixels.as_mut_ptr(), 0, len);
+        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF));
+        for (idx, text) in lines.iter().enumerate() {
+            let y0 = idx as i32 * line_h;
+            let _ = TextOutW(mem_dc, text_x + 1, y0 + text_dy + 1, text);
+        }
+        let _ = GdiFlush();
+        let halo: Vec<u8> = pixels
+            .chunks_exact(4)
+            .map(|p| p[0].max(p[1]).max(p[2]))
+            .collect();
+
+        // Pass 2: foreground. Upload is the top line (amber up-triangle),
+        // download the bottom line (green down-triangle). Triangles are drawn,
+        // not font glyphs, so they do not depend on the font's arrow glyphs.
+        std::ptr::write_bytes(pixels.as_mut_ptr(), 0, len);
+        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF));
         for (idx, (text, color, up_arrow)) in [
-            (&up_wide, COLORREF(0x0020B0FF), true),    // #FFB020
-            (&down_wide, COLORREF(0x0084DC3D), false), // #3DDC84
+            (&lines[0], COLORREF(0x0020B0FF), true),  // #FFB020
+            (&lines[1], COLORREF(0x0084DC3D), false), // #3DDC84
         ]
         .into_iter()
         .enumerate()
@@ -602,16 +630,46 @@ mod windows_impl {
 
             let _ = TextOutW(mem_dc, text_x, y0 + text_dy, text);
         }
+        let _ = GdiFlush();
 
-        // Blit to screen
-        let _ = BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY);
+        // Composite halo (black, 60 % strength) under the foreground and write
+        // premultiplied BGRA.
+        for (px, &h) in pixels.chunks_exact_mut(4).zip(halo.iter()) {
+            let fg = px[0].max(px[1]).max(px[2]) as u32;
+            let halo_a = (h as u32 * 153) / 255;
+            let a = (fg + halo_a * (255 - fg) / 255).max(1);
+            px[3] = a as u8;
+        }
 
-        // Cleanup GDI objects
+        let size = SIZE {
+            cx: width,
+            cy: height,
+        };
+        let src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let _ = UpdateLayeredWindow(
+            hwnd,
+            Some(hdc_screen),
+            None,
+            Some(&size),
+            Some(mem_dc),
+            Some(&src),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        );
+
         let _ = SelectObject(mem_dc, old_font);
         let _ = DeleteObject(font.into());
         let _ = SelectObject(mem_dc, old_bmp);
-        let _ = DeleteObject(mem_bmp.into());
+        let _ = DeleteObject(dib.into());
         let _ = DeleteDC(mem_dc);
+        ReleaseDC(None, hdc_screen);
     }
 
     unsafe extern "system" fn enum_find_nebulae(hwnd: HWND, lparam: LPARAM) -> BOOL {
