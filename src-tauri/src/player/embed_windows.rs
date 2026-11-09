@@ -13,12 +13,14 @@ use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
-use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
@@ -182,6 +184,19 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     Ok(hwnd)
 }
 
+/// Helper: compute the exact screen coordinates and pixel size of the
+/// main window's client area (where WebView2 renders). This eliminates
+/// DWM invisible sizing frames and non-client border gaps on Windows 10 & 11.
+pub(crate) fn get_client_rect_in_screen(hwnd: HWND) -> (i32, i32, i32, i32) {
+    let mut cr = RECT::default();
+    let mut pt = POINT::default();
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut cr);
+        let _ = ClientToScreen(hwnd, &mut pt);
+    }
+    (pt.x, pt.y, cr.right - cr.left, cr.bottom - cr.top)
+}
+
 fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
@@ -189,19 +204,12 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let parent = win.hwnd().map_err(|e| format!("no parent HWND: {e}"))?;
     let main_hwnd = HWND(parent.0);
 
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetWindowRect(main_hwnd, &mut rect);
-    }
-    let x = rect.left;
-    let y = rect.top;
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
+    let (x, y, w, h) = get_client_rect_in_screen(main_hwnd);
 
     ensure_surface_class();
 
     // Create the video surface as an independent WS_POPUP window with no owner,
-    // positioned directly behind the transparent main window with a black background.
+    // positioned directly behind the transparent main window's client area with a black background.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
@@ -364,8 +372,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
 
-            let w = r.right - r.left;
-            let h = r.bottom - r.top;
+            let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
                 let _ = SetWindowPos(
@@ -380,10 +387,10 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 let _ = SetWindowPos(
                     video_hwnd,
                     Some(main_h),
-                    r.left,
-                    r.top,
-                    w,
-                    h,
+                    cx,
+                    cy,
+                    cw,
+                    ch,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
                 );
                 // During video playback, ensure no DWM border or rounded corners appear around the video screen
@@ -441,17 +448,14 @@ pub fn sync_frame(
     app.run_on_main_thread(move || {
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
-        let mut r = RECT::default();
+        let (x, y, w, h) = get_client_rect_in_screen(main_h);
         unsafe {
-            let _ = GetWindowRect(main_h, &mut r);
-            let w = r.right - r.left;
-            let h = r.bottom - r.top;
-            // Video window matches main_hwnd exactly in full-bleed dimensions with zero cutouts.
+            // Video window matches main_hwnd client area exactly with zero border offset.
             let _ = SetWindowPos(
                 video_hwnd,
                 Some(main_h),
-                r.left,
-                r.top,
+                x,
+                y,
                 w,
                 h,
                 SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
@@ -619,15 +623,12 @@ unsafe extern "system" fn main_wndproc(
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
             } else {
-                let mut r = RECT::default();
-                let _ = GetWindowRect(hwnd, &mut r);
-                let w = r.right - r.left;
-                let h = r.bottom - r.top;
+                let (x, y, w, h) = get_client_rect_in_screen(hwnd);
                 let _ = SetWindowPos(
                     video_hwnd,
                     Some(hwnd),
-                    r.left,
-                    r.top,
+                    x,
+                    y,
                     w,
                     h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
@@ -762,11 +763,8 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
             .overlay_view
             .load(std::sync::atomic::Ordering::SeqCst);
         if hwnd != 0 {
+            let (x, y, w, h) = get_client_rect_in_screen(main_h);
             unsafe {
-                let mut r = RECT::default();
-                let _ = GetWindowRect(main_h, &mut r);
-                let w = r.right - r.left;
-                let h = r.bottom - r.top;
                 let _ = SetWindowPos(
                     main_h,
                     Some(HWND_TOP),
@@ -779,8 +777,8 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 let _ = SetWindowPos(
                     HWND(hwnd as _),
                     Some(main_h),
-                    r.left,
-                    r.top,
+                    x,
+                    y,
                     w,
                     h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
