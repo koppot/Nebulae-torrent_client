@@ -31,12 +31,12 @@ pub(crate) struct BandLayout {
 }
 
 /// `tray_h` is the taskbar thickness in pixels. The chip nearly fills it: the
-/// two rate lines get about 18 px each on a 48 px taskbar, where the earlier
-/// 22 px band left roughly 10 px of text that was hard to read.
+/// two rate lines get about 20 px each on a 48 px taskbar, with enough vertical
+/// headroom that the upload and download lines never overlap.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
     let tray_h = tray_h.max(30);
-    let height = ((tray_h as f32) * 0.80).round() as i32;
+    let height = ((tray_h as f32) * 0.85).round() as i32;
     let line_h = height / 2;
     let font_px = ((line_h as f32) * 0.74).round() as i32;
     let arrow = ((line_h as f32) * 0.46).round() as i32;
