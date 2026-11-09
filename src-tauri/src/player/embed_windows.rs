@@ -19,7 +19,8 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC,
+    ClientToScreen, CreateRectRgn, FillRect, GetMonitorInfoW, GetStockObject, MonitorFromWindow,
+    SetWindowRgn, BLACK_BRUSH, HBRUSH, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -70,6 +71,107 @@ static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Saved pre-player window rect for restoring window size on close.
 static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
+
+/// Active crop bars detected by letterbox observer.
+static ACTIVE_CROP: Mutex<Option<crate::player::letterbox::Bars>> = Mutex::new(None);
+
+pub fn set_active_crop(app: &AppHandle, crop: Option<crate::player::letterbox::Bars>) {
+    if let Ok(mut lock) = ACTIVE_CROP.lock() {
+        *lock = crop;
+    }
+    let hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+    if hwnd_val == 0 {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Ok(main_h) = main_hwnd(&app2) else { return };
+        update_video_surface_position(main_h);
+    });
+}
+
+pub(crate) fn update_video_surface_position(main_h: HWND) {
+    let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+    if v_hwnd_val == 0 {
+        return;
+    }
+    let video_hwnd = HWND(v_hwnd_val as _);
+    unsafe {
+        if IsIconic(main_h).as_bool() {
+            let _ = ShowWindow(video_hwnd, SW_HIDE);
+            return;
+        }
+
+        let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
+        if cw <= 0 || ch <= 0 {
+            return;
+        }
+
+        let crop_opt = ACTIVE_CROP.lock().ok().and_then(|c| *c);
+
+        if let Some(crop) = crop_opt {
+            let total_h = crop.frame_height as f64;
+            let total_w = crop.frame_width as f64;
+            let active_h = (crop.frame_height.saturating_sub(crop.top + crop.bottom)) as f64;
+            let active_w = (crop.frame_width.saturating_sub(crop.left + crop.right)) as f64;
+
+            if total_h > 0.0
+                && total_w > 0.0
+                && active_h > 0.0
+                && active_w > 0.0
+                && (crop.top > 0 || crop.bottom > 0)
+            {
+                let vh = ((cw as f64) * (total_h / total_w)).round() as i32;
+                let offset_y = ((vh as f64) * (crop.top as f64 / total_h)).round() as i32;
+
+                let _ = SetWindowPos(
+                    video_hwnd,
+                    Some(main_h),
+                    cx,
+                    cy - offset_y,
+                    cw,
+                    vh,
+                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                );
+
+                let hrgn = CreateRectRgn(0, offset_y, cw, offset_y + ch);
+                let _ = SetWindowRgn(video_hwnd, Some(hrgn), true);
+
+                let _ = SetWindowPos(
+                    main_h,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+                );
+                return;
+            }
+        }
+
+        // Uncropped or crop cleared: remove region clipping and align to client rect
+        let _ = SetWindowRgn(video_hwnd, None, true);
+        let _ = SetWindowPos(
+            video_hwnd,
+            Some(main_h),
+            cx,
+            cy,
+            cw,
+            ch,
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+        );
+        let _ = SetWindowPos(
+            main_h,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+        );
+    }
+}
 
 /// Returns the cached `AppHandle` if `ensure_overlay` has already run.
 pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
@@ -310,7 +412,11 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         if hidden {
+            if let Ok(mut lock) = ACTIVE_CROP.lock() {
+                *lock = None;
+            }
             unsafe {
+                let _ = SetWindowRgn(video_hwnd, None, true);
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
                 // When player is closed, restore rounded corners on the application window
                 let round: u32 = DWMWCP_ROUND.0 as u32;
@@ -372,27 +478,8 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
 
-            let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
-                let _ = SetWindowPos(
-                    main_h,
-                    Some(HWND_TOP),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-                );
-                let _ = SetWindowPos(
-                    video_hwnd,
-                    Some(main_h),
-                    cx,
-                    cy,
-                    cw,
-                    ch,
-                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                );
                 // During video playback, ensure no DWM border or rounded corners appear around the video screen
                 let no_border: u32 = DWMWA_COLOR_NONE;
                 let _ = DwmSetWindowAttribute(
@@ -421,6 +508,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     std::mem::size_of::<u32>() as u32,
                 );
             }
+            update_video_surface_position(main_h);
             if let Some(win) = app2.get_webview_window("main") {
                 let _ = win.set_focus();
             }
@@ -446,30 +534,8 @@ pub fn sync_frame(
     }
     let app2 = app.clone();
     app.run_on_main_thread(move || {
-        let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
-        let (x, y, w, h) = get_client_rect_in_screen(main_h);
-        unsafe {
-            // Video window matches main_hwnd client area exactly with zero border offset.
-            let _ = SetWindowPos(
-                video_hwnd,
-                Some(main_h),
-                x,
-                y,
-                w,
-                h,
-                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-            );
-            let _ = SetWindowPos(
-                main_h,
-                Some(HWND_TOP),
-                0,
-                0,
-                0,
-                0,
-                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-            );
-        }
+        update_video_surface_position(main_h);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
@@ -619,21 +685,7 @@ unsafe extern "system" fn main_wndproc(
     if msg == WM_WINDOWPOSCHANGED {
         let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
         if v_hwnd_val != 0 {
-            let video_hwnd = HWND(v_hwnd_val as _);
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(video_hwnd, SW_HIDE);
-            } else {
-                let (x, y, w, h) = get_client_rect_in_screen(hwnd);
-                let _ = SetWindowPos(
-                    video_hwnd,
-                    Some(hwnd),
-                    x,
-                    y,
-                    w,
-                    h,
-                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                );
-            }
+            update_video_surface_position(hwnd);
         }
     } else if msg == WM_DISPLAYCHANGE {
         // Re-apply EDR/tone-mapping on screen change. If the window moved
@@ -873,8 +925,98 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
     }
 }
 
-pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(), String> {
-    Ok(())
+pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), String> {
+    if !aspect.is_finite() || !(0.5..=4.0).contains(&aspect) {
+        return Err(format!("implausible aspect {aspect}"));
+    }
+    let app2 = app.clone();
+    app.run_on_main_thread(move || {
+        let Ok(main_h) = main_hwnd(&app2) else { return };
+        let is_fs = app2
+            .get_webview_window("main")
+            .and_then(|w| w.is_fullscreen().ok())
+            .unwrap_or(false);
+        if is_fs {
+            return;
+        }
+
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+            if IsIconic(main_h).as_bool() || IsZoomed(main_h).as_bool() {
+                return;
+            }
+
+            let mut r = RECT::default();
+            let _ = GetWindowRect(main_h, &mut r);
+            let cur_w = r.right - r.left;
+            let cur_h = r.bottom - r.top;
+            if cur_w < 100 || cur_h < 100 {
+                return;
+            }
+
+            let new_h = ((cur_w as f64) / aspect).round() as i32;
+            if (new_h - cur_h).abs() < 2 {
+                return;
+            }
+
+            let hmon = MonitorFromWindow(main_h, MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let mut final_w = cur_w;
+            let mut final_h = new_h;
+            let mut new_x = r.left;
+            let mut new_y = r.top + (cur_h - new_h) / 2;
+
+            if GetMonitorInfoW(hmon, &mut mi).as_bool() {
+                let work_w = mi.rcWork.right - mi.rcWork.left;
+                let work_h = mi.rcWork.bottom - mi.rcWork.top;
+
+                if final_h > work_h {
+                    final_h = work_h;
+                    final_w = ((final_h as f64) * aspect).round() as i32;
+                    new_x = r.left + (cur_w - final_w) / 2;
+                }
+                if final_w > work_w {
+                    final_w = work_w;
+                    final_h = ((final_w as f64) / aspect).round() as i32;
+                    new_y = r.top + (cur_h - final_h) / 2;
+                }
+
+                if new_x < mi.rcWork.left {
+                    new_x = mi.rcWork.left;
+                }
+                if new_x + final_w > mi.rcWork.right {
+                    new_x = mi.rcWork.right - final_w;
+                }
+                if new_y < mi.rcWork.top {
+                    new_y = mi.rcWork.top;
+                }
+                if new_y + final_h > mi.rcWork.bottom {
+                    new_y = mi.rcWork.bottom - final_h;
+                }
+            }
+
+            let _ = SetWindowPos(
+                main_h,
+                None,
+                new_x,
+                new_y,
+                final_w,
+                final_h,
+                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+            );
+
+            tracing::info!(
+                "[player] framing: window fitted to aspect {:.3}:1 ({}x{})",
+                aspect,
+                final_w,
+                final_h
+            );
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
 }
 
 pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {

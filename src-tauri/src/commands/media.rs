@@ -2625,12 +2625,22 @@ fn framing_sample_path(gen: usize) -> PathBuf {
 }
 
 fn apply_crop_spec(lib: &engine::VlcLib, mp: usize, spec: &str) {
+    #[cfg(not(target_os = "windows"))]
     if let Some(set_crop) = lib.libvlc_video_set_crop_geometry {
         if let Ok(c) = std::ffi::CString::new(spec) {
             unsafe {
                 set_crop(mp as *mut c_void, c.as_ptr());
             }
         }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, black-bar cropping is handled natively via window reshaping
+        // and surface alignment in embed_windows.rs. Calling libvlc_video_set_crop_geometry
+        // causes VLC's libass / SPU scaler to compress subtitles vertically and shift
+        // them to the screen center. Leaving VLC uncropped maintains 100% isotropic glyph
+        // scaling and author-intended subtitle placement.
+        let _ = (lib, mp, spec);
     }
 }
 
@@ -2755,6 +2765,7 @@ fn framing_tick(
         if fs.applied.is_some() || fs.settled {
             tracing::info!("[framing] menu active: clearing crop");
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
         }
         if fs.window_fitted_aspect.is_some() {
             let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
@@ -2774,6 +2785,7 @@ fn framing_tick(
         );
         if fs.applied.is_some() {
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
         }
         if fs.window_fitted_aspect.is_some() {
             let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
@@ -2799,6 +2811,7 @@ fn framing_tick(
                 bars.frame_height
             );
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
             fs.source = (w, h);
             fs.sar = unsafe { engine::video_track_sar(lib, mp) };
             if fs.window_fitted_aspect.is_some() {
@@ -2822,6 +2835,7 @@ fn framing_tick(
                 bars.frame_height
             );
             apply_crop_spec(lib, mp, &bars.crop_spec());
+            player::set_active_crop(&app, Some(bars));
 
             // Fit window to confirmed cropped display aspect ratio (4:3 exception preserved)
             let active_aspect = bars.active_aspect();
@@ -2846,6 +2860,7 @@ fn framing_tick(
         if fs.polls_since_reassert >= 30 {
             fs.polls_since_reassert = 0;
             apply_crop_spec(lib, mp, &bars.crop_spec());
+            player::set_active_crop(&app, Some(bars));
         }
     }
 

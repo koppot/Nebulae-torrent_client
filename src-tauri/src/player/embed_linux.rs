@@ -275,6 +275,8 @@ pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(),
     Ok(())
 }
 
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
+
 pub fn forward_mouse_move(_app: &AppHandle, _x: f64, _y: f64) -> Result<(), String> {
     Ok(())
 }

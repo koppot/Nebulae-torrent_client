@@ -898,6 +898,8 @@ pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), S
     .map_err(|e| e.to_string())
 }
 
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
+
 /// Show/hide the overlay without tearing the view down.
 ///
 /// Waits for the main thread to apply the change: callers are the async
