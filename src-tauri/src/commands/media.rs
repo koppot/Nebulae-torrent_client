@@ -4849,11 +4849,57 @@ pub fn list_external_media(
     Ok(live)
 }
 /// Remove an entry explicitly (owner-initiated delete in the collection).
+/// Removes from both the JSON sidecar store and the DB row (is_external = 1)
+/// so the item does not reappear on the next list_external_media call.
 #[tauri::command]
-pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), String> {
+pub fn remove_external_media(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    path: String,
+) -> Result<(), String> {
     let mut items = read_external_store(&app);
     items.retain(|m| m.path != path);
-    write_external_store(&app, &items)
+    write_external_store(&app, &items)?;
+
+    // Also delete the corresponding DB row(s) so the item does not
+    // reappear on the next list_external_media call. The DB stores the
+    // release root path as save_path (possibly joined with the title).
+    let norm = release_root_of(&path);
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (info_hash, meta) in all_meta {
+            if !meta.is_external {
+                continue;
+            }
+            let Some(save_path) = meta.save_path.as_deref() else {
+                continue;
+            };
+            let candidate_path = std::path::Path::new(save_path);
+            let torrent_name = meta
+                .display_title
+                .as_deref()
+                .or_else(|| candidate_path.file_name().and_then(|n| n.to_str()))
+                .unwrap_or(&info_hash);
+            let full_path = if candidate_path.ends_with(torrent_name)
+                || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
+            {
+                candidate_path.to_path_buf()
+            } else {
+                candidate_path.join(torrent_name)
+            };
+            let norm_path = if full_path.exists() {
+                full_path.to_string_lossy().to_string()
+            } else if candidate_path.exists() {
+                candidate_path.to_string_lossy().to_string()
+            } else {
+                full_path.to_string_lossy().to_string()
+            };
+            if release_root_of(&norm_path) == norm {
+                let _ = db.delete_torrent_metadata(&info_hash);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Update the display title and optional poster of an external media item.
