@@ -1166,6 +1166,15 @@ impl VlcSession {
                 tracing::warn!("No active audio playback devices detected on Windows (waveOutGetNumDevs=0); using --aout=adummy to prevent mmdevice crash");
                 args.push(CString::new("--aout=adummy").unwrap());
             }
+
+            // Subpicture hardware blending in Direct3D 11 causes 1px horizontal and vertical line
+            // artifacts around HDMV Interactive Graphics button quads (Fuuka disc menu) due to
+            // bilinear sampler edge clamping and quad viewport rasterization boundaries.
+            // Disabling Direct3D 11 hardware blending delegates subpicture compositing to VLC core's
+            // software blender, which composites bit-perfect subpictures directly into the video
+            // buffer before D3D11 presentation, matching macOS behavior and completely eliminating
+            // the unwanted lines.
+            args.push(CString::new("--no-direct3d11-hw-blending").unwrap());
         }
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {
