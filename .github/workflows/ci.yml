@@ -56,6 +56,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Ensure frontend dist directory exists
+        run: mkdir dist
+        shell: bash
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -85,6 +89,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Ensure frontend dist directory exists
+        run: mkdir dist
+        shell: bash
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
