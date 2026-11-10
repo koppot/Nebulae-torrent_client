@@ -364,6 +364,25 @@ pub fn format_speed_title(down: u64, up: u64) -> String {
     format!("↑{}  ↓{}", up_str, down_str)
 }
 
+/// Format the window / taskbar button title with fixed layout space:
+/// `Nebulae  [ ↑ <up>   ↓ <down> ]`
+/// When rates are active, both rates are formatted with `format_rate_components`,
+/// ensuring a fixed-width character representation (5 chars value padded with figure spaces + 4 chars unit)
+/// so that the title does not jitter or shift the taskbar button on rate and unit changes.
+/// When idle (both zero), restores "Nebulae".
+pub fn format_taskbar_title(up: u64, down: u64) -> String {
+    if up == 0 && down == 0 {
+        "Nebulae".to_string()
+    } else {
+        let (up_val, up_unit) = format_rate_components(up);
+        let (down_val, down_unit) = format_rate_components(down);
+        format!(
+            "Nebulae  [ ↑ {}{}   ↓ {}{} ]",
+            up_val, up_unit, down_val, down_unit
+        )
+    }
+}
+
 /// Sum the current download and upload rates across all active torrents,
 /// returning the client-wide bytes-per-second for each direction.
 ///
@@ -602,5 +621,29 @@ mod tests {
         // Ensure non-zero pixels in text regions
         let has_text_pixels = icon_bytes.as_chunks::<4>().0.iter().any(|p| p[3] > 0);
         assert!(has_text_pixels);
+    }
+
+    #[test]
+    fn taskbar_title_formatting_and_fixed_width() {
+        assert_eq!(format_taskbar_title(0, 0), "Nebulae");
+
+        // Verify that across varying rates and units, the title has a strictly identical character length
+        let t1 = format_taskbar_title(1024, 500); // KB/s and B/s
+        let t2 = format_taskbar_title(15 * 1024 * 1024, 75 * 1024 * 1024); // MB/s
+        let t3 = format_taskbar_title(2 * 1024 * 1024 * 1024, 850 * 1024); // GB/s and KB/s
+        let t4 = format_taskbar_title(999_999_999_000, 100);
+
+        let len1 = t1.chars().count();
+        let len2 = t2.chars().count();
+        let len3 = t3.chars().count();
+        let len4 = t4.chars().count();
+
+        assert_eq!(len1, len2, "t1 vs t2 length mismatch");
+        assert_eq!(len2, len3, "t2 vs t3 length mismatch");
+        assert_eq!(len3, len4, "t3 vs t4 length mismatch");
+        assert_eq!(
+            len1, 38,
+            "expected exactly 38 characters for fixed-width taskbar title"
+        );
     }
 }

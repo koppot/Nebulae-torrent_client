@@ -445,8 +445,7 @@ export const TorrentManagerView: React.FC = () => {
     | 'eta'
     | 'ratio'
     | 'seeds'
-    | 'peers'
-    | 'last_checked';
+    | 'peers';
 
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -500,12 +499,6 @@ export const TorrentManagerView: React.FC = () => {
         case 'peers':
           comparison = a.peers - b.peers;
           break;
-        case 'last_checked': {
-          const aTime = a.last_checked ?? 0;
-          const bTime = b.last_checked ?? 0;
-          comparison = aTime - bTime;
-          break;
-        }
       }
       return sortDirection === 'asc' ? comparison : -comparison;
     });
@@ -1120,12 +1113,12 @@ export const TorrentManagerView: React.FC = () => {
       </aside>
 
       {/* 2. Main Right Area: Dense Transfer Grid + Inspector */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-[#141414]">
+      <div className="flex-1 flex flex-col overflow-hidden bg-[#141414] min-w-0">
         {/* Data Table: Classic Grid */}
-        <div className="flex-1 overflow-auto bg-[#141414]">
-          <table className="w-full min-w-[1100px] table-fixed text-left border-collapse text-xs">
+        <div className="flex-1 overflow-auto bg-[#141414] min-w-0">
+          <table className="w-full min-w-[720px] table-fixed text-left border-collapse text-xs">
             <colgroup>
-              <col className="w-auto" />
+              <col />
               <col className="w-20" />
               <col className="w-40" />
               <col className="w-24" />
@@ -1135,49 +1128,45 @@ export const TorrentManagerView: React.FC = () => {
               <col className="w-16" />
               <col className="w-14" />
               <col className="w-14" />
-              <col className="w-[136px]" />
             </colgroup>
             <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#262626] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider z-10">
               <tr>
-                <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none text-left">
                   Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Size {sortField === 'size' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-40 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-40 cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Progress {sortField === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Status {sortField === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Down Speed {sortField === 'down_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Up Speed {sortField === 'up_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   ETA {sortField === 'eta' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Ratio {sortField === 'ratio' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Seeds {sortField === 'seeds' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none whitespace-nowrap">
                   Peers {sortField === 'peers' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
-                </th>
-                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-[136px] cursor-pointer hover:text-white select-none">
-                  Last Checked {sortField === 'last_checked' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#262626] font-mono">
               {displayedTorrents.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="py-24 text-center">
+                  <td colSpan={10} className="py-24 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <HardDrive className="w-8 h-8 text-[#333333]" />
                       <p className="text-sm font-sans font-medium text-white">No torrents in list</p>
@@ -1291,18 +1280,6 @@ export const TorrentManagerView: React.FC = () => {
                       {trackersAllFailing ? '—' : (t.seeds ?? '—')}
                     </td>
                     <td className="py-2 px-2.5 text-right tabular-nums">{trackersAllFailing ? '—' : t.peers}</td>
-                    <td
-                      className="py-2 px-2.5 text-white whitespace-nowrap text-[11px]"
-                      title={t.last_checked && t.last_checked > 0 ? new Date(t.last_checked * 1000).toLocaleString() : undefined}
-                    >
-                      {t.status === 'Queued for checking'
-                        ? 'Queued'
-                        : t.status === 'Checking'
-                          ? `Checking… (${progressPct}%)`
-                          : t.last_checked && t.last_checked > 0
-                            ? new Date(t.last_checked * 1000).toLocaleString()
-                            : '—'}
-                    </td>
                   </tr>
                 );
               })}
@@ -1580,16 +1557,6 @@ export const TorrentManagerView: React.FC = () => {
                               <span className="text-white">
                                 {selectedTorrent.completed_on && selectedTorrent.completed_on > 0
                                   ? new Date(selectedTorrent.completed_on * 1000).toLocaleString()
-                                  : '—'}
-                              </span>
-                            </div>
-                            <div className="space-y-0.5">
-                              <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
-                                Last Checked
-                              </span>
-                              <span className="text-white">
-                                {selectedTorrent.last_checked && selectedTorrent.last_checked > 0
-                                  ? new Date(selectedTorrent.last_checked * 1000).toLocaleString()
                                   : '—'}
                               </span>
                             </div>
