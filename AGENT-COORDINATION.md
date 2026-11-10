@@ -2106,3 +2106,12 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
 
 #### Linux Status Review
 - Final source diff between `v0.2.5` and `0.2.6` reviewed: only interface stubs in `embed_linux.rs` (`forward_mouse_move`, `forward_mouse_click`, `set_active_crop`) were added for cross-platform compilation. No functional Linux changes are included, and Linux is not part of the established 0.2.6 release configuration (following v0.2.5).
+
+
+### 2026-11-10 — User Confirmation: Windows 0.2.5 -> 0.2.6 End-to-End In-App Auto-Update Verified
+- **User-Observed Flow:** User installed 0.2.5 on Windows; client detected 0.2.6 from production `latest.json`, downloaded and verified payload silently in background, staged update, and applied on restart.
+- **Post-Update Verification on supermicro.local:**
+  - `C:\Users\administrator\AppData\Local\Nebulae\nebulae.exe` ProductVersion: `0.2.6`.
+  - `libdirect3d11_plugin.dll` SHA-256: `E1BE02CD0DCA2F515F7F67B12CF0F5E425D762D3051506CA2E744E5DA0DD9993`.
+  - SQLite database `%APPDATA%\Nebulae\nebulae.db` and active torrents preserved intact.
+  - Active running instance PID 21228 and transmission-daemon PID 5572 running healthy.
