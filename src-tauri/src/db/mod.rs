@@ -115,6 +115,14 @@ impl Database {
         })
     }
 
+    /// Checkpoints SQLite WAL frames to the database file during graceful shutdown.
+    pub fn flush_wal(&self) -> Result<()> {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+        }
+        Ok(())
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;

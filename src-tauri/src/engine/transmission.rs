@@ -1939,15 +1939,7 @@ impl TransmissionTorrentEngine {
 
     /// Gracefully shutdown the engine: stop daemon sidecar cleanly and prevent watchdog respawn.
     pub fn shutdown(&self) {
-        self.is_shutting_down.store(true, Ordering::SeqCst);
-        let _ = self.rpc_client.request("session-close", None);
-        if let Ok(mut lock) = self.child_process.lock() {
-            if let Some(ref mut child) = *lock {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-        let _ = std::fs::remove_file(self.config_dir.join("daemon.pid"));
+        self.shutdown_engine();
     }
 
     /// Stores a torrent's own Racing Mode choice (`Some(true)` pinned on,
@@ -2125,14 +2117,38 @@ impl Drop for TransmissionTorrentEngine {
 impl TransmissionTorrentEngine {
     /// Graceful shutdown (tray Quit / app exit): flip the shutdown flag so
     /// the watchdog stops respawning, then terminate the daemon. Bounded
-    /// wait, then hard kill. Idempotent.
+    /// wait for state flush, then hard kill if unresponsive. Idempotent.
     pub fn shutdown_engine(&self) {
         self.shutdown_flag.store(true, Ordering::SeqCst);
+        self.is_shutting_down.store(true, Ordering::SeqCst);
         let _ = self.rpc_client.request("session-close", None);
         if let Ok(mut lock) = self.child_process.lock() {
             if let Some(ref mut child) = *lock {
-                let _ = child.kill();
-                let _ = child.wait();
+                // Bounded wait for transmission-daemon to flush fastresume state and settings to disk
+                let start = std::time::Instant::now();
+                let timeout = std::time::Duration::from_millis(2500);
+                let mut exited = false;
+                while start.elapsed() < timeout {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            info!("transmission-daemon exited cleanly with {status}");
+                            exited = true;
+                            break;
+                        }
+                        Ok(None) => {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(e) => {
+                            warn!("error polling transmission-daemon status: {e}");
+                            break;
+                        }
+                    }
+                }
+                if !exited {
+                    warn!("transmission-daemon did not exit within timeout; terminating");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
                 *lock = None;
             }
         }

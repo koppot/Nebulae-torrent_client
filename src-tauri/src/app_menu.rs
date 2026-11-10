@@ -22,7 +22,8 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::
         let hide_others_i = PredefinedMenuItem::hide_others(app, None)?;
         let show_all_i = PredefinedMenuItem::show_all(app, None)?;
         let sep4 = PredefinedMenuItem::separator(app)?;
-        let quit_i = PredefinedMenuItem::quit(app, None)?;
+        let quit_i =
+            MenuItem::with_id(app, "menu-quit", "Quit Nebulae", true, Some("CmdOrCtrl+Q"))?;
 
         Submenu::with_items(
             app,
@@ -256,7 +257,7 @@ pub fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::
 pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id().as_ref();
     if id == "quit" || id == "menu-quit" || id == "menu-exit" {
-        crate::commands::diagnostics::quit_app(app.clone());
+        crate::shutdown::initiate_shutdown(app);
         return;
     }
     if let Some(window) = app

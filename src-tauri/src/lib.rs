@@ -6,6 +6,7 @@ pub mod engine;
 pub mod models;
 pub mod player;
 pub mod qbit_import;
+pub mod shutdown;
 pub mod speed_format;
 pub mod status_bar;
 pub mod tailscale;
@@ -522,7 +523,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        crate::commands::diagnostics::quit_app(app.clone());
+                        crate::shutdown::initiate_shutdown(app);
                     }
                     "show" => {
                         if let Some(window) = app
@@ -615,6 +616,7 @@ pub fn run() {
                 status_bar::init_status_bar(app.handle());
                 // The tray ID is "nebulae-tray" as defined in the TrayIconBuilder
                 status_bar::set_tray_id("nebulae-tray".to_string());
+                crate::shutdown::install_macos_terminate_hook(app.handle().clone());
             }
 
             #[cfg(desktop)]
@@ -635,6 +637,10 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 use tauri::Manager;
+                // If explicit application shutdown has been initiated, allow windows to close cleanly
+                if crate::shutdown::is_shutting_down() {
+                    return;
+                }
                 // Only intercept close on the main window; individual player or dialog windows close normally
                 if window.label() == "main" {
                     let should_close_to_tray = if let Some(db) =
@@ -664,7 +670,7 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        crate::commands::diagnostics::quit_app(app.clone());
+                        crate::shutdown::initiate_shutdown(app);
                     }
                 }
             }
@@ -878,15 +884,7 @@ pub fn run() {
     let _event_payloads = initial_payloads.clone();
     app.run(move |_app_handle, _event| match &_event {
         tauri::RunEvent::ExitRequested { .. } => {
-            use tauri::Manager;
-            if let Some(player_state) = _app_handle.try_state::<crate::player::PlayerState>() {
-                crate::commands::media::stop_session(_app_handle, &player_state);
-            }
-            if let Some(engine) = _app_handle.try_state::<SharedEngine>() {
-                engine.shutdown();
-            }
-            tailscale::shutdown();
-            updater::apply_staged_update_if_present(_app_handle);
+            crate::shutdown::initiate_shutdown(_app_handle);
         }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         tauri::RunEvent::Opened { urls } => {

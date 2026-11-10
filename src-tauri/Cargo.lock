@@ -2736,7 +2736,7 @@ dependencies = [
 
 [[package]]
 name = "nebulae_torrent_client"
-version = "0.2.5"
+version = "0.2.7"
 dependencies = [
  "axum",
  "base64 0.22.1",
