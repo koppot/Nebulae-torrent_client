@@ -821,6 +821,11 @@ fn start_playback_inner(
                     *poison(&state.started) = true;
                     poison(&state.framing).reset();
 
+                    #[cfg(target_os = "windows")]
+                    {
+                        apply_crop_spec(&lib, session.media_player, "");
+                    }
+
                     // Reveal the overlay now that the vout is attached, so the
                     // first frame the user sees is video, not transparency.
                     if let Err(e) = player::set_overlay_hidden(app, false) {
@@ -2745,6 +2750,28 @@ fn framing_tick(
     playing: bool,
 ) {
     if !playing || mp == 0 {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (title, at_menu, playing);
+        // Automatic black-bar cropping is disabled on Windows for 0.2.6 (deferred).
+        // Ensure any applied crop is cleared and player returns to uncropped 16:9 / source framing.
+        let mut fs = poison(&state.framing);
+        if fs.applied.is_some() || fs.settled {
+            tracing::info!(
+                "[framing] Windows 0.2.6: clearing crop and returning to uncropped presentation"
+            );
+            apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
+        }
+        if fs.window_fitted_aspect.is_some() {
+            let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+            let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+            fs.window_fitted_aspect = None;
+        }
+        fs.forget_measurements();
         return;
     }
 

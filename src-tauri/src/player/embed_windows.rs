@@ -19,18 +19,17 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, FillRect, GetMonitorInfoW, GetStockObject, MonitorFromWindow, BLACK_BRUSH,
-    HBRUSH, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, IsIconic, LoadCursorW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -863,108 +862,8 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
     }
 }
 
-pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), String> {
-    if !aspect.is_finite() || !(0.5..=4.0).contains(&aspect) {
-        return Err(format!("implausible aspect {aspect}"));
-    }
-    let app2 = app.clone();
-    app.run_on_main_thread(move || {
-        let Ok(main_h) = main_hwnd(&app2) else { return };
-        let is_fs = app2
-            .get_webview_window("main")
-            .and_then(|w| w.is_fullscreen().ok())
-            .unwrap_or(false);
-        if is_fs {
-            return;
-        }
-
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
-            if IsIconic(main_h).as_bool() || IsZoomed(main_h).as_bool() {
-                return;
-            }
-
-            let mut r = RECT::default();
-            let _ = GetWindowRect(main_h, &mut r);
-            let cur_w = r.right - r.left;
-            let cur_h = r.bottom - r.top;
-            if cur_w < 100 || cur_h < 100 {
-                return;
-            }
-
-            let mut cr = RECT::default();
-            let _ = GetClientRect(main_h, &mut cr);
-            let client_w = cr.right - cr.left;
-            let client_h = cr.bottom - cr.top;
-            let border_w = cur_w - client_w;
-            let border_h = cur_h - client_h;
-
-            let target_client_h = ((client_w as f64) / aspect).round() as i32;
-            let new_h = target_client_h + border_h;
-            if (new_h - cur_h).abs() < 2 {
-                return;
-            }
-
-            let hmon = MonitorFromWindow(main_h, MONITOR_DEFAULTTONEAREST);
-            let mut mi = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            let mut final_w = cur_w;
-            let mut final_h = new_h;
-            let mut new_x = r.left;
-            let mut new_y = r.top + (cur_h - new_h) / 2;
-
-            if GetMonitorInfoW(hmon, &mut mi).as_bool() {
-                let work_w = mi.rcWork.right - mi.rcWork.left;
-                let work_h = mi.rcWork.bottom - mi.rcWork.top;
-
-                if final_h > work_h {
-                    final_h = work_h;
-                    let target_cw = (((final_h - border_h) as f64) * aspect).round() as i32;
-                    final_w = target_cw + border_w;
-                    new_x = r.left + (cur_w - final_w) / 2;
-                }
-                if final_w > work_w {
-                    final_w = work_w;
-                    let target_ch = (((final_w - border_w) as f64) / aspect).round() as i32;
-                    final_h = target_ch + border_h;
-                    new_y = r.top + (cur_h - final_h) / 2;
-                }
-
-                if new_x < mi.rcWork.left {
-                    new_x = mi.rcWork.left;
-                }
-                if new_x + final_w > mi.rcWork.right {
-                    new_x = mi.rcWork.right - final_w;
-                }
-                if new_y < mi.rcWork.top {
-                    new_y = mi.rcWork.top;
-                }
-                if new_y + final_h > mi.rcWork.bottom {
-                    new_y = mi.rcWork.bottom - final_h;
-                }
-            }
-
-            let _ = SetWindowPos(
-                main_h,
-                None,
-                new_x,
-                new_y,
-                final_w,
-                final_h,
-                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
-            );
-
-            tracing::info!(
-                "[player] framing: window fitted to aspect {:.3}:1 ({}x{})",
-                aspect,
-                final_w,
-                final_h
-            );
-        }
-    })
-    .map_err(|e| format!("main thread unavailable: {e}"))
+pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(), String> {
+    Ok(())
 }
 
 pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {

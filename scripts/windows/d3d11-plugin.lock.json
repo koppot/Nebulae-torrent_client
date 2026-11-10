@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "description": "Pinned Nebulae Direct3D 11 video output plugin (HDR/HLG to SDR tone mapping and isotropic cropped subtitle positioning). stage_runtime.py refuses a modified VLC runtime whose plugins/video_output/libdirect3d11_plugin.dll is not exactly this build.",
+  "description": "Pinned Nebulae Direct3D 11 video output plugin (HDR/HLG to SDR tone mapping). stage_runtime.py refuses a modified VLC runtime whose plugins/video_output/libdirect3d11_plugin.dll is not exactly this build.",
   "file": "plugins/video_output/libdirect3d11_plugin.dll",
-  "sha256": "11cc763d3639e86683a1ff3d318abc9e707e3da55150f450e0d417daf7fb2c79",
-  "bytes": 402432,
+  "sha256": "e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993",
+  "bytes": 401920,
   "stock_sha256": "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8",
   "stock_bytes": 408472,
   "build": {

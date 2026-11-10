@@ -2055,3 +2055,18 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
 - Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `11cc763d3639e86683a1ff3d318abc9e707e3da55150f450e0d417daf7fb2c79`.
 - Updated all lockfiles and verified 61 unit tests pass.
 - Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
+
+
+## 2026-11-09 — Antigravity: Final 0.2.6 Release State (Windows Black-Bar Cropping Disabled & Deferred)
+
+**Status Update:** In accordance with final direction, automatic black-bar cropping on Windows has been completely disabled and deferred to a later release.
+
+### Final Windows Behavior
+1. **Automatic Cropping Disabled:** In `src-tauri/src/commands/media.rs`, `framing_tick` clears any active crop geometry via `apply_crop_spec(lib, mp, "")` on Windows and returns immediately. `start_playback_inner` clears crop on media load. No sampling thread is spawned and no crop geometry is applied.
+2. **Window Reshaping Disabled:** `fit_player_window_to_aspect` on Windows is a clean no-op returning `Ok(())`.
+3. **Normal Subtitle Path Restored:** Reverted experimental crop-specific bottom anchoring from `713847c`. Restored pristine VLC 3.0.23 subpicture mapping in `patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch`. `libdirect3d11_plugin.dll` hash returned to accepted baseline `e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993`.
+4. **Fuuka Fixes Preserved:**
+   - `--no-direct3d11-hw-blending` remains active in `engine.rs` (eliminating horizontal/vertical menu lines).
+   - Video surface pinning 1:1 to client rect in `embed_windows.rs` remains active (eliminating DWM sizing frame borders).
+   - Surface clipping (`SetWindowRgn`) remains completely eliminated.
+5. **Frozen macOS 0.2.6 Artifacts:** Kept strictly byte-for-byte identical; macOS automatic cropping remains enabled.
