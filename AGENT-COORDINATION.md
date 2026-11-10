@@ -2115,3 +2115,64 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
   - `libdirect3d11_plugin.dll` SHA-256: `E1BE02CD0DCA2F515F7F67B12CF0F5E425D762D3051506CA2E744E5DA0DD9993`.
   - SQLite database `%APPDATA%\Nebulae\nebulae.db` and active torrents preserved intact.
   - Active running instance PID 21228 and transmission-daemon PID 5572 running healthy.
+
+
+## 2026-11-10 — Antigravity: Production Release 0.2.7 Publication & Rollout
+
+**Status Update:** Completed release of Nebulae v0.2.7 across macOS and Windows.
+
+### Release Summary
+- **Release Version:** `0.2.7`
+- **Release Tag:** `v0.2.7`
+- **Source Tip:** `b308168` (`b30816801968858ba5fc965415bf3c6ad457ee8c`) on branch `main`
+- **GitHub Release URL:** `https://github.com/koppot/Nebulae-torrent_client/releases/tag/v0.2.7`
+- **Production Updater Endpoint:** `https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json`
+
+### Scope and Corrections in 0.2.7
+
+1. **macOS Explicit Application Shutdown vs Close-to-Tray (`63db430`):**
+   - Clicking the red window close button hides Nebulae to the tray/menu bar while torrent engine activity and active downloads/seeding continue uninterrupted.
+   - Explicit quit actions (`Quit Nebulae`, `Cmd-Q`, tray/menu bar `Quit`) route to one unified, intentional shutdown path (`initiate_shutdown`).
+   - Graceful shutdown persists user settings, checkpoints SQLite WAL, flushes Transmission resume state with a bounded wait, stops owned helpers without affecting unrelated daemons, removes the tray icon, applies staged updates if present, and exits cleanly.
+   - Explicit quit functions reliably whether the window is visible or already hidden in the background.
+
+2. **Windows Taskbar Presentation of Rates (`b308168`):**
+   - Replaced unanchored `WS_EX_TOPMOST` floating window and GDI screen-scraping with native Windows Shell integration.
+   - Transfer rates are formatted with fixed-width layout padding (`format_taskbar_title` with Unicode figure spaces) and displayed directly on the native taskbar button via `SetWindowTextW`, keeping icon and transfer indicators visually unified.
+   - Continuous visual progress feedback on the native button is driven by `ITaskbarList3` (`TBPF_NORMAL` for active downloads, `TBPF_INDETERMINATE` for active seeding, `TBPF_NOPROGRESS` for idle).
+   - Eliminates button overlap, stays anchored during taskbar rearrangement, respects multi-monitor taskbars, and tracks taskbar auto-hide without floating artifact windows.
+
+3. **Shared Manager Screen Layout Corrections (`b308168`):**
+   - Completely removed the `Last Checked` column from the torrent table (header `<th onClick="handleSort('last_checked')">`, `<col className="w-[136px]">`, and `<td>` cells) and updated empty-state colSpan to 10.
+   - Removed the `Last Checked` field from Card 3 (Torrent Information) in the lower details panel, leaving a clean, balanced 2-column layout.
+   - Made `Name` the primary flexible column (`<col />` unconstrained in `table-fixed w-full`), absorbing all additional horizontal space when widening or maximizing the window.
+   - Fixed columns (`Size`, `Progress`, `Status`, `Down Speed`, `Up Speed`, `ETA`, `Ratio`, `Seeds`, `Peers`) remain at stable, sensible widths, ensuring the trailing column (`Peers`) does not absorb unused space.
+   - Name column cleanly truncates with ellipsis on narrow viewports without overlapping adjacent fields.
+   - Underlying torrent metadata (`last_checked` in types and database) and checking functionality remain intact.
+
+4. **Preserved Accepted Invariants:**
+   - macOS automatic black-bar cropping remains fully enabled.
+   - Windows automatic black-bar cropping remains disabled and deferred to avoid experimental regressions.
+   - Fuuka disc menu fixes (`--no-direct3d11-hw-blending`, surface pinning 1:1, elimination of `SetWindowRgn`) are fully preserved.
+   - Frozen `0.2.6` release tag and assets remain completely untouched.
+
+### Platform Artifacts & Verified Checksums
+
+#### macOS Apple Silicon (aarch64-apple-darwin)
+- **User-Facing Disk Image (DMG):**
+  - `Nebulae_0.2.7_aarch64_complete.dmg` / `Nebulae-macOS-arm64.dmg` (151,036,921 bytes)
+  - SHA-256: `a1bbf093585243342e7ec9674c2bc69ee2edead5df31f4c51f2e567a7ce7e155`
+  - Signed with Apple Development identity `E3A26A990308798F8DE4B7C49A3E27BFEF192623` and audited (401 Mach-O images, 0 external, 0 unresolved, strict codesign passed).
+- **Silent Auto-Update Payload:**
+  - `Nebulae-macOS-0.2.7-aarch64.tar.gz` / `Nebulae.app.tar.gz` / `Nebulae-macOS-arm64.dmg-app.tar.gz` (138,577,399 bytes)
+  - SHA-256: `073a835a12990660c252726e41973d6f7c0a01e0cc420da6ff978f3393a489d7`
+  - Minisign Signature: Key ID `452CAA8BBBBC6F41`, VALID Ed25519 payload signature.
+
+#### Windows x64 (x86_64-pc-windows-msvc)
+- **User-Facing Installer & Updater Setup:**
+  - `Nebulae_0.2.7_x64-setup.exe` / `Nebulae-Setup-x64.exe` (339,800,018 bytes)
+  - SHA-256: `6fe1e3fcfc221ac3260a84d105b1fe49dfc806156347e1f700a40b4acfba1694`
+  - Minisign Signature: Key ID `452CAA8BBBBC6F41`, VALID Ed25519 payload signature.
+
+#### Linux Status Review
+- Linux continues to contain only non-functional cross-platform compilation stubs in `embed_linux.rs`. Linux release packages are excluded from the 0.2.7 distribution, matching the established 0.2.5 and 0.2.6 release baseline.
