@@ -256,7 +256,7 @@ export PKG_CONFIG_PATH="$LB_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_
 case "$WORK" in *[[:space:]]*) fail "the work directory must not contain spaces: $WORK" ;; esac
 PREFIX_MAPS="-ffile-prefix-map=$VLC_SRC/=vlc-${VLC_VERSION}/ -ffile-prefix-map=$VLC_BUILD/=vlc-${VLC_VERSION}-build/ -ffile-prefix-map=$LB_PREFIX/=libbluray-${LIBBLURAY_VERSION}/ -ffile-prefix-map=$REPO_ROOT/=nebulae/"
 run_logged vlc-configure "$VLC_SRC/configure" --prefix="$WORK/vlc-${VLC_VERSION}-install" \
-    --disable-qt --disable-lua --disable-vdpau --disable-wayland --disable-sparkle \
+    --disable-qt --disable-lua --disable-vdpau --disable-wayland --disable-sparkle --disable-avcodec \
     --enable-vlc --enable-bluray --with-macosx-version-min="$MIN_MACOS" \
     CFLAGS="-O2 -g0 $PREFIX_MAPS" CXXFLAGS="-O2 -g0 $PREFIX_MAPS" OBJCFLAGS="-O2 -g0 $PREFIX_MAPS"
 JOBS="$(sysctl -n hw.ncpu)"
