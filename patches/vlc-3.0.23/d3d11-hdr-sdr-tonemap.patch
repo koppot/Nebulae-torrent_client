@@ -234,22 +234,34 @@
      if (picture->format.mastering.max_luminance)
      {
          D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad, (float)sys->display.luminance_peak / GetFormatLuminance(VLC_OBJECT(vd), &picture->format));
-@@ -2440,12 +2449,33 @@
+@@ -2440,12 +2449,45 @@
          vout_display_place_t place;
          vout_display_PlacePicture(&place, &vd->source, &place_cfg, false);
  
 -        quad->cropViewport.Width =  (FLOAT) r->fmt.i_visible_width  * place.width  / subpicture->i_original_picture_width;
 -        quad->cropViewport.Height = (FLOAT) r->fmt.i_visible_height * place.height / subpicture->i_original_picture_height;
-+        unsigned src_w = vd->source.i_visible_width ? (unsigned)vd->source.i_visible_width : (unsigned)subpicture->i_original_picture_width;
-+        unsigned src_h = vd->source.i_visible_height ? (unsigned)vd->source.i_visible_height : (unsigned)subpicture->i_original_picture_height;
-+        if (!src_w) src_w = 1;
-+        if (!src_h) src_h = 1;
++        unsigned orig_h = subpicture->i_original_picture_height ? (unsigned)subpicture->i_original_picture_height : 1;
++        unsigned orig_w = subpicture->i_original_picture_width ? (unsigned)subpicture->i_original_picture_width : 1;
++        unsigned src_h = vd->source.i_visible_height ? (unsigned)vd->source.i_visible_height : orig_h;
++        unsigned src_w = vd->source.i_visible_width ? (unsigned)vd->source.i_visible_width : orig_w;
 +
-+        FLOAT vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / src_w;
-+        FLOAT vp_h = (FLOAT) r->fmt.i_visible_height * place.height / src_h;
++        FLOAT vp_w, vp_h, top_x, top_y;
 +
-+        FLOAT top_x = place.x + (FLOAT)((int)r->i_x - (int)vd->source.i_x_offset) * place.width  / src_w;
-+        FLOAT top_y = place.y + (FLOAT)((int)r->i_y - (int)vd->source.i_y_offset) * place.height / src_h;
++        /* If subpicture coordinate space matches the cropped source (e.g. libass, SRT),
++         * r->i_x and r->i_y are already in [0..src_w] x [0..src_h] space (no offset subtraction).
++         * If subpicture coordinates are authored against the uncropped canvas (e.g. PGS bitmaps,
++         * orig_h > src_h), translate by vd->source crop offsets. */
++        if (orig_h > src_h) {
++            vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / src_w;
++            vp_h = (FLOAT) r->fmt.i_visible_height * place.height / src_h;
++            top_x = place.x + (FLOAT)((int)r->i_x - (int)vd->source.i_x_offset) * place.width  / src_w;
++            top_y = place.y + (FLOAT)((int)r->i_y - (int)vd->source.i_y_offset) * place.height / src_h;
++        } else {
++            vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / orig_w;
++            vp_h = (FLOAT) r->fmt.i_visible_height * place.height / orig_h;
++            top_x = place.x + (FLOAT) r->i_x * place.width  / orig_w;
++            top_y = place.y + (FLOAT) r->i_y * place.height / orig_h;
++        }
 +
 +        /* Subtitles originally placed in the removed black-bar area or extending
 +         * beyond the active picture: clamp into the visible presentation area
