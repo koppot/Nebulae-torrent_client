@@ -1,15 +1,20 @@
 export function formatBytes(bytes: number, decimals: number = 2): string {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0) return (0).toFixed(decimals) + ' B';
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  const val = bytes / Math.pow(k, i);
+  return `${val.toFixed(dm)} ${sizes[i]}`;
 }
 
 export function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec === 0) return '0 B/s';
-  return `${formatBytes(bytesPerSec)}/s`;
+  if (bytesPerSec === 0) return '0.00 B/s';
+  const k = 1024;
+  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  const i = Math.min(Math.floor(Math.log(bytesPerSec) / Math.log(k)), sizes.length - 1);
+  const val = bytesPerSec / Math.pow(k, i);
+  return `${val.toFixed(2)} ${sizes[i]}`;
 }
 
 export function formatEta(seconds?: number): string {

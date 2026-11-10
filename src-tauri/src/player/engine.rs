@@ -47,6 +47,8 @@ pub struct VlcLib {
     // toggles, which a background helper cannot use without racing the viewer.
     pub libvlc_media_player_set_pause: Option<unsafe extern "C" fn(*mut c_void, c_int)>,
     pub libvlc_media_player_is_playing: unsafe extern "C" fn(*mut c_void) -> c_int,
+    /// libvlc_state_t: 6 = Ended, 7 = Error.
+    pub libvlc_media_player_get_state: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
     pub libvlc_media_player_set_position: unsafe extern "C" fn(*mut c_void, f32),
@@ -1006,6 +1008,7 @@ impl VlcLib {
             libvlc_media_player_pause: sym!("libvlc_media_player_pause": unsafe extern "C" fn(*mut c_void)),
             libvlc_media_player_set_pause: sym_opt!("libvlc_media_player_set_pause": unsafe extern "C" fn(*mut c_void, c_int)),
             libvlc_media_player_is_playing: sym!("libvlc_media_player_is_playing": unsafe extern "C" fn(*mut c_void) -> c_int),
+            libvlc_media_player_get_state: sym!("libvlc_media_player_get_state": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),
             libvlc_media_player_set_position: sym!("libvlc_media_player_set_position": unsafe extern "C" fn(*mut c_void, f32)),
@@ -1116,23 +1119,31 @@ impl VlcSession {
             CString::new("--network-caching=3000").unwrap(),
             CString::new("--disc-caching=1000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
-            // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
-            // SDR): handled by the vout's OpenGL tone-mapping shader
-            // pipeline (VLC 3.0.x has no libplacebo; it lives in the
-            // OpenGL vout helper). These variables are inherited by the
-            // vout's GL
-            // helper; they are NOT among the player-object variables that
-            // libvlc_media_player_set_nsobject() resets, so they survive
-            // embedding. A --vout pin is deliberately absent: set_nsobject
-            // resets the player object's "vout" variable anyway (upstream
-            // 3.0.x lib/media_player.c), and the default module probe
-            // already selects caopengllayer for an embedded NSView
-            // (priority 300 > vout_macosx 250, verified in
-            // modules/video_output/caopengllayer.m and macosx.m).
+        ];
+        // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
+        // SDR): handled by the vout's OpenGL tone-mapping shader
+        // pipeline (VLC 3.0.x has no libplacebo; it lives in the
+        // OpenGL vout helper). These variables are inherited by the
+        // vout's GL
+        // helper; they are NOT among the player-object variables that
+        // libvlc_media_player_set_nsobject() resets, so they survive
+        // embedding. A --vout pin is deliberately absent: set_nsobject
+        // resets the player object's "vout" variable anyway (upstream
+        // 3.0.x lib/media_player.c), and the default module probe
+        // already selects caopengllayer for an embedded NSView
+        // (priority 300 > vout_macosx 250, verified in
+        // modules/video_output/caopengllayer.m and macosx.m).
+        //
+        // Not passed on Windows: the Direct3D 11 vout never reads them. It
+        // tone-maps in its own pixel shader (patches/vlc-3.0.23/
+        // d3d11-hdr-sdr-tonemap.patch), so the Hable arguments would only
+        // suggest a behaviour that does not exist.
+        #[cfg(not(target_os = "windows"))]
+        args.extend([
             CString::new("--tone-mapping=3").unwrap(), // Hable filmic
             CString::new("--tone-mapping-param=1.0").unwrap(),
             CString::new("--tone-mapping-desat=0.5").unwrap(),
-        ];
+        ]);
         if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
             if let Some(plugin_str) = plugin_dir.to_str() {
                 if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
@@ -1155,6 +1166,15 @@ impl VlcSession {
                 tracing::warn!("No active audio playback devices detected on Windows (waveOutGetNumDevs=0); using --aout=adummy to prevent mmdevice crash");
                 args.push(CString::new("--aout=adummy").unwrap());
             }
+
+            // Subpicture hardware blending in Direct3D 11 causes 1px horizontal and vertical line
+            // artifacts around HDMV Interactive Graphics button quads (Fuuka disc menu) due to
+            // bilinear sampler edge clamping and quad viewport rasterization boundaries.
+            // Disabling Direct3D 11 hardware blending delegates subpicture compositing to VLC core's
+            // software blender, which composites bit-perfect subpictures directly into the video
+            // buffer before D3D11 presentation, matching macOS behavior and completely eliminating
+            // the unwanted lines.
+            args.push(CString::new("--no-direct3d11-hw-blending").unwrap());
         }
         let argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr() as *const c_char).collect();
         unsafe {

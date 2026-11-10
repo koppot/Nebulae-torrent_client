@@ -64,6 +64,14 @@ CUSTOM_EXPORTS = (
     "libvlc_media_player_get_bluray_playlist_id",
 )
 
+# The Direct3D 11 video output is the one stock VLC plugin Nebulae replaces: the stock one converts
+# PQ/HLG with a Hable curve scaled for 10000 cd/m2, which leaves UHD material far too dark on an SDR
+# display. The replacement is built reproducibly by build-d3d11-plugin.sh from
+# patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch; its SHA-256 is pinned in d3d11-plugin.lock.json.
+D3D11_PLUGIN_REL = "plugins/video_output/libdirect3d11_plugin.dll"
+D3D11_PLUGIN_LOCK = Path(__file__).resolve().parent / "d3d11-plugin.lock.json"
+D3D11_PLUGIN_MARKER = b"HDR to SDR tone mapping:"
+
 MAXMIND_METADATA_MARKER = b"\xab\xcd\xefMaxMind.com"
 
 # Pinned SHA-256 digests for current validated MaxMind databases (SPEC-WIN-VLC-0.2.4-REV1).
@@ -248,6 +256,32 @@ def _vlc_provenance(patched: Path) -> str:
     return f"custom-build from {patched} (provenance manifest incomplete)"
 
 
+def check_d3d11_plugin(root: Path, lock_path: Path | None = None) -> str:
+    """Prove that `root` carries the Nebulae HDR-to-SDR Direct3D 11 plugin, not the stock one."""
+    lock_path = lock_path or D3D11_PLUGIN_LOCK
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        want, stock = lock["sha256"].lower(), lock["stock_sha256"].lower()
+    except (OSError, ValueError, KeyError) as exc:
+        fail(f"cannot read the pinned Direct3D 11 plugin lock {lock_path}: {exc}")
+    plugin = root / D3D11_PLUGIN_REL
+    if not plugin.is_file():
+        fail(f"modified VLC runtime tree at {root} lacks {D3D11_PLUGIN_REL}")
+    data = plugin.read_bytes()
+    got = hashlib.sha256(data).hexdigest()
+    if got == stock:
+        fail(f"{D3D11_PLUGIN_REL} is the stock VLC 3.0.23 Direct3D 11 plugin: UHD/HDR video would render "
+             f"washed out on SDR displays. Stage the plugin built by scripts/windows/build-d3d11-plugin.sh.")
+    if pe_audit.parse_pe(data).machine != 0x8664:
+        fail(f"{D3D11_PLUGIN_REL} is not x64 architecture")
+    if D3D11_PLUGIN_MARKER not in data:
+        fail(f"{D3D11_PLUGIN_REL} lacks the HDR-to-SDR tone mapping code ({D3D11_PLUGIN_MARKER.decode()!r} not found)")
+    if got != want:
+        fail(f"{D3D11_PLUGIN_REL} sha256 {got} differs from the pinned build {want} "
+             f"(rebuild with build-d3d11-plugin.sh, then update d3d11-plugin.lock.json in the same reviewed commit)")
+    return got
+
+
 def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
               patches_dir: Path | None, require_modified: bool = False) -> bool:
     dest = rec.root / "resources" / "vlc"
@@ -349,6 +383,7 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
         for req_cat in ("access", "video_output"):
             if not (patched / "plugins" / req_cat).is_dir():
                 fail(f"modified VLC plugins directory lacks required plugin category '{req_cat}/'")
+        check_d3d11_plugin(patched)
 
     if has_plugins_dir:
         for f in sorted(patched.rglob("*")):

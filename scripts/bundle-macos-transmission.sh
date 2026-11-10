@@ -36,6 +36,7 @@ EXPECTED_SHA256="ce7d2d8b101f7eb54bc3cf0bc55f52f7ebd4a25fa48e00bdca9a7e0fc02617d
 TARGET_DIR="${1:-src-tauri/resources/engine/transmission}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/patches/transmission-${VERSION}-identity-override.patch"
 
 # Staging dir OUTSIDE target/ (rust-cache nesting precedent).
@@ -166,6 +167,11 @@ cp -L "$DAEMON_BIN" "$TARGET_DIR/transmission-daemon"
 chmod 755 "$TARGET_DIR/transmission-daemon"
 
 # --- 2. Bundle every non-system dependency and rewrite the load commands ---
+# Build the macOS 11.0 dependency replacements from source so the shipped app
+# does not silently raise its effective minimum above the declared 11.0.
+DEPS_DIR="$REPO_ROOT/src-tauri/macos-deps-11"
+"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$DEPS_DIR/build-deps.log" 2>&1
+
 ARCH="$(uname -m)"
 RELOCATE_ARGS=(
     --lib-dir "$TARGET_DIR/lib"
@@ -173,6 +179,7 @@ RELOCATE_ARGS=(
     --arch "$ARCH"
     --manifest "$TARGET_DIR/bundled-libraries.json"
     --licenses-dir "$TARGET_DIR/licenses"
+    --source-dir "$DEPS_DIR"
 )
 if [ -n "$SIGNING_IDENTITY" ]; then
     RELOCATE_ARGS+=(--sign "$SIGNING_IDENTITY")

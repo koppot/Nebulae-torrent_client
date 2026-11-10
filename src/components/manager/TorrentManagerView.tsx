@@ -42,6 +42,8 @@ import {
   Zap,
   FolderInput,
   Save,
+  Loader2,
+  Link,
 } from 'lucide-react';
 
 // Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
@@ -244,6 +246,9 @@ export const TorrentManagerView: React.FC = () => {
     torrents,
     selectedId,
     setSelectedId,
+    filesLoadingId,
+    filesError,
+    fetchTorrentDetails,
     pauseTorrent,
     resumeTorrent,
     forceRecheck,
@@ -269,7 +274,16 @@ export const TorrentManagerView: React.FC = () => {
     setDeleteModalTarget,
   } = useUiStore();
 
-  const { peers, fetchPeers, settings: peeringSettings, fetchSettings, saveSettings } = usePeeringStore();
+  const {
+    peers,
+    fetchPeers,
+    clearPeers,
+    isLoading: isPeersLoading,
+    error: peersError,
+    settings: peeringSettings,
+    fetchSettings,
+    saveSettings,
+  } = usePeeringStore();
   const { engineMode, settings } = useSettingsStore();
   // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
   // fulfill instead of offering actions that only produce errors.
@@ -307,6 +321,10 @@ export const TorrentManagerView: React.FC = () => {
     y: 0,
     torrentId: '',
   });
+
+  // WKWebView drops window.alert(), so operation failures use an in-app modal.
+  const [notice, setNotice] = useState<string | null>(null);
+  const showNotice = (message: string) => setNotice(message);
 
   const [filesViewMode, setFilesViewMode] = useState<'tree' | 'flat'>('tree');
 
@@ -378,17 +396,7 @@ export const TorrentManagerView: React.FC = () => {
     ratioLimit: -1,
   });
 
-  useEffect(() => {
-    if (activeManagerTab === 'peers' && selectedId) {
-      fetchPeers(selectedId);
-      const interval = setInterval(() => {
-        fetchPeers(selectedId);
-      }, 2500);
-      return () => clearInterval(interval);
-    } else if (selectedId) {
-      fetchPeers(selectedId);
-    }
-  }, [selectedId, activeManagerTab, fetchPeers]);
+
 
   // Filtered list — declared BEFORE the keyboard effect below, whose deps
   // reference it during render.
@@ -566,6 +574,27 @@ export const TorrentManagerView: React.FC = () => {
   }, [contextMenu.visible]);
 
   const selectedTorrent = torrents.find((t) => t.id === selectedId) || displayedTorrents[0];
+
+  // Auto-select initial torrent if none selected
+  useEffect(() => {
+    if (!selectedId && displayedTorrents.length > 0) {
+      setSelectedId(displayedTorrents[0].id);
+    }
+  }, [selectedId, displayedTorrents, setSelectedId]);
+
+  // Periodic peer query targeting active selected torrent
+  useEffect(() => {
+    const targetId = selectedTorrent?.id;
+    if (activeManagerTab === 'peers' && targetId) {
+      fetchPeers(targetId);
+      const interval = setInterval(() => {
+        fetchPeers(targetId);
+      }, 2500);
+      return () => clearInterval(interval);
+    } else if (!targetId) {
+      clearPeers();
+    }
+  }, [selectedTorrent?.id, activeManagerTab, fetchPeers, clearPeers]);
 
   // Announce/scrape status for the General tab: prefer a tracker that is not
   // working (its failure message is what the user needs to see), otherwise
@@ -968,7 +997,7 @@ export const TorrentManagerView: React.FC = () => {
   return (
     <div className="flex-1 flex overflow-hidden font-sans select-none bg-[#141414] text-white">
       <PosterHoverPopup
-        target={posterPopup?.target ?? null}
+        target={contextMenu.visible ? null : (posterPopup?.target ?? null)}
         x={posterPopup?.x ?? 0}
         y={posterPopup?.y ?? 0}
       />
@@ -1094,40 +1123,53 @@ export const TorrentManagerView: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-hidden bg-[#141414]">
         {/* Data Table: Classic Grid */}
         <div className="flex-1 overflow-auto bg-[#141414]">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full min-w-[1100px] table-fixed text-left border-collapse text-xs">
+            <colgroup>
+              <col className="w-auto" />
+              <col className="w-20" />
+              <col className="w-40" />
+              <col className="w-24" />
+              <col className="w-24" />
+              <col className="w-24" />
+              <col className="w-16" />
+              <col className="w-16" />
+              <col className="w-14" />
+              <col className="w-14" />
+              <col className="w-[136px]" />
+            </colgroup>
             <thead className="sticky top-0 bg-[#1f1f1f] border-b border-[#262626] text-[11px] font-semibold text-[#a3a3a3] uppercase font-mono tracking-wider z-10">
               <tr>
                 <th onClick={() => handleSort('name')} className="py-2 px-3 cursor-pointer hover:text-white select-none">
                   Name {sortField === 'name' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('size')} className="py-2 px-2.5 w-20 text-right cursor-pointer hover:text-white select-none">
                   Size {sortField === 'size' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-36 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('progress')} className="py-2 px-2.5 w-40 cursor-pointer hover:text-white select-none">
                   Progress {sortField === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
                 <th onClick={() => handleSort('status')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
                   Status {sortField === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('down_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
                   Down Speed {sortField === 'down_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('up_speed')} className="py-2 px-2.5 w-24 text-right cursor-pointer hover:text-white select-none">
                   Up Speed {sortField === 'up_speed' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-20 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('eta')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
                   ETA {sortField === 'eta' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('ratio')} className="py-2 px-2.5 w-16 text-right cursor-pointer hover:text-white select-none">
                   Ratio {sortField === 'ratio' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('seeds')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Seeds {sortField === 'seeds' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('peers')} className="py-2 px-2.5 w-14 text-right cursor-pointer hover:text-white select-none">
                   Peers {sortField === 'peers' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
-                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-32 cursor-pointer hover:text-white select-none">
+                <th onClick={() => handleSort('last_checked')} className="py-2 px-2.5 w-[136px] cursor-pointer hover:text-white select-none">
                   Last Checked {sortField === 'last_checked' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}
                 </th>
               </tr>
@@ -1178,17 +1220,19 @@ export const TorrentManagerView: React.FC = () => {
                           : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
                     }`}
                   >
-                    <td className={`py-2 px-3 font-sans font-medium truncate max-w-xs ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
+                    <td className={`py-2 px-3 font-sans font-medium truncate ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
                       <span
+                        className="truncate block"
+                        title={t.name}
                         onMouseEnter={(e) => openPosterPopup(t, e)}
                         onMouseLeave={closePosterPopup}
                       >
                         {t.name}
                       </span>
                     </td>
-                    <td className="py-2 px-2.5">{formatBytes(t.total_bytes)}</td>
-                    <td className="py-2 px-2.5">
-                      <div className="flex flex-col gap-0.5 min-w-[150px]">
+                    <td className="py-2 px-2.5 text-right tabular-nums">{formatBytes(t.total_bytes)}</td>
+                    <td className="py-2 px-2.5 overflow-hidden">
+                      <div className="flex flex-col gap-0.5 w-full max-w-full overflow-hidden">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
                             <div
@@ -1196,11 +1240,11 @@ export const TorrentManagerView: React.FC = () => {
                               style={{ width: `${progressPct}%` }}
                             />
                           </div>
-                          <span className={`text-[10px] w-8 text-right font-mono ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
+                          <span className={`text-[10px] w-8 text-right font-mono flex-shrink-0 ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
                             {progressPct}%
                           </span>
                         </div>
-                        <span className="text-[9px] font-mono text-[#737373] text-center leading-tight">
+                        <span className="text-[9px] font-mono text-[#737373] text-center leading-tight truncate block w-full">
                           {isChecking
                             ? t.status === 'Queued for checking'
                               ? 'Queued for checking'
@@ -1211,7 +1255,7 @@ export const TorrentManagerView: React.FC = () => {
                         </span>
                       </div>
                     </td>
-                    <td className="py-2 px-2.5">
+                    <td className="py-2 px-2.5 overflow-hidden whitespace-nowrap text-ellipsis">
                       {t.status === 'Downloading' && t.racingMode ? (
                         <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
                           <Zap className="w-3 h-3 text-[#e50914] flex-shrink-0" fill="currentColor" />
@@ -1222,33 +1266,31 @@ export const TorrentManagerView: React.FC = () => {
                       )}
                     </td>
                     <td
-                      className="py-2 px-2.5 text-white whitespace-nowrap"
-                      title={t.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_download_rate)}` : undefined}
+                      className="py-2 px-2.5 text-white whitespace-nowrap text-right tabular-nums"
+                      title={t.avg_download_rate ? `Current rate: ${formatSpeed(t.download_rate)} | Since-start average: ${formatSpeed(t.avg_download_rate)}` : undefined}
                     >
                       {formatSpeed(t.download_rate)}
-                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
                     </td>
                     <td
-                      className="py-2 px-2.5 whitespace-nowrap"
-                      title={t.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(t.current_upload_rate)}` : undefined}
+                      className="py-2 px-2.5 whitespace-nowrap text-right tabular-nums"
+                      title={t.avg_upload_rate ? `Current rate: ${formatSpeed(t.upload_rate)} | Since-start average: ${formatSpeed(t.avg_upload_rate)}` : undefined}
                     >
                       {formatSpeed(t.upload_rate)}
-                      <span className="ml-1 text-[9px] uppercase text-[#737373]">avg</span>
                     </td>
                     <td
-                      className="py-2 px-2.5"
+                      className="py-2 px-2.5 text-right tabular-nums"
                       title={t.eta_seconds !== undefined ? 'Estimated from the average download rate since the transfer began' : undefined}
                     >
                       {formatEta(t.eta_seconds)}
                     </td>
-                    <td className="py-2 px-2.5 text-white">{formatRatio(t.ratio)}</td>
-                    <td className="py-2 px-2.5 text-white">
+                    <td className="py-2 px-2.5 text-white text-right tabular-nums">{formatRatio(t.ratio)}</td>
+                    <td className="py-2 px-2.5 text-white text-right tabular-nums">
                       {/* Swarm seed count from the engine's tracker scrape.
                           A dash means no successful scrape yet - never fake
                           a zero. */}
                       {trackersAllFailing ? '—' : (t.seeds ?? '—')}
                     </td>
-                    <td className="py-2 px-2.5">{trackersAllFailing ? '—' : t.peers}</td>
+                    <td className="py-2 px-2.5 text-right tabular-nums">{trackersAllFailing ? '—' : t.peers}</td>
                     <td
                       className="py-2 px-2.5 text-white whitespace-nowrap text-[11px]"
                       title={t.last_checked && t.last_checked > 0 ? new Date(t.last_checked * 1000).toLocaleString() : undefined}
@@ -1368,10 +1410,9 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_download_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_download_rate)}` : undefined}
+                                title={selectedTorrent.avg_download_rate ? `Current rate: ${formatSpeed(selectedTorrent.download_rate)} | Since-start average: ${formatSpeed(selectedTorrent.avg_download_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.download_rate)}
-                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.download_limit_kib > 0 ? ` [${selectedTorrent.download_limit_kib}K]` : ''}
                               </span>
                             </div>
@@ -1381,10 +1422,9 @@ export const TorrentManagerView: React.FC = () => {
                               </span>
                               <span
                                 className="text-white"
-                                title={selectedTorrent.current_upload_rate !== undefined ? `Since-transfer average shown. Current rate: ${formatSpeed(selectedTorrent.current_upload_rate)}` : undefined}
+                                title={selectedTorrent.avg_upload_rate ? `Current rate: ${formatSpeed(selectedTorrent.upload_rate)} | Since-start average: ${formatSpeed(selectedTorrent.avg_upload_rate)}` : undefined}
                               >
                                 {formatSpeed(selectedTorrent.upload_rate)}
-                                <span className="ml-1 text-[9px] uppercase text-[#a3a3a3]">avg</span>
                                 {selectedTorrent.upload_limit_kib > 0 ? ` [${selectedTorrent.upload_limit_kib}K]` : ''}
                               </span>
                             </div>
@@ -1471,7 +1511,7 @@ export const TorrentManagerView: React.FC = () => {
                                 try {
                                   await toggleSequential(selectedTorrent.id);
                                 } catch (err: unknown) {
-                                  alert(`Could not toggle sequential download:\n${err}`);
+                                  showNotice(`Could not toggle sequential download:\n${err}`);
                                 }
                               }}
                               className={`px-2 py-1 rounded border text-[11px] flex items-center gap-1.5 transition ${
@@ -1705,12 +1745,31 @@ export const TorrentManagerView: React.FC = () => {
 
                   {/* Content List / Tree */}
                   <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs pr-1">
-                    {filesViewMode === 'tree' && fileTree ? (
-                      fileTree.children.length > 0 ? (
+                    {filesLoadingId === selectedTorrent.id && (!selectedTorrent.files || selectedTorrent.files.length === 0) ? (
+                      <div className="py-8 text-center text-[#a3a3a3] font-sans text-xs flex flex-col items-center justify-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-[#e50914]" />
+                        <span>Loading torrent files...</span>
+                      </div>
+                    ) : filesError && selectedTorrent.id === selectedId ? (
+                      <div className="py-8 text-center text-[#e50914] font-sans text-xs flex flex-col items-center justify-center gap-2">
+                        <div className="flex items-center gap-1.5 text-red-400">
+                          <AlertCircle className="w-4 h-4" />
+                          <span>Failed to load files: {filesError}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchTorrentDetails(selectedTorrent.id)}
+                          className="mt-1 px-3 py-1 bg-[#262626] hover:bg-[#333333] text-white rounded text-xs transition"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : filesViewMode === 'tree' ? (
+                      fileTree && fileTree.children.length > 0 ? (
                         fileTree.children.map((child) => renderTreeNode(child, 0))
                       ) : (
                         <div className="p-3 text-center text-[#a3a3a3]">
-                          No files found in torrent.
+                          {fileFilter ? 'No matching files found.' : 'No files found in torrent.'}
                         </div>
                       )
                     ) : (
@@ -1843,6 +1902,10 @@ export const TorrentManagerView: React.FC = () => {
                 /* ── Peers Tab ─────────────────────────────────────────── */
                 <PeersTabPanel
                   peers={peers}
+                  isLoading={isPeersLoading}
+                  error={peersError}
+                  onRetry={() => selectedTorrent && fetchPeers(selectedTorrent.id)}
+                  torrentStatus={selectedTorrent?.status}
                   settings={peeringSettings}
                   fetchSettings={fetchSettings}
                   saveSettings={saveSettings}
@@ -1862,7 +1925,7 @@ export const TorrentManagerView: React.FC = () => {
                         <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
                       </div>
                     </div>
-                    <span className="text-[10px]">Average Since Transfer Began (1s samples)</span>
+                    <span className="text-[10px]">Instantaneous Transfer Rates (1s samples)</span>
                   </div>
 
                   <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">
@@ -1969,19 +2032,50 @@ export const TorrentManagerView: React.FC = () => {
             </button>
           )}
           {!isRemoteServer && (
-            <button
-              onClick={async () => {
-                const t = torrents.find((item) => item.id === contextMenu.torrentId);
-                setContextMenu((prev) => ({ ...prev, visible: false }));
-                if (!t) return;
-                const folder = await selectDownloadDirectory();
-                if (folder) setLocation(t.id, folder);
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
-            >
-              <FolderInput className="w-3.5 h-3.5" />
-              <span>Move to Folder...</span>
-            </button>
+            <>
+              <button
+                onClick={async () => {
+                  const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                  if (!t) return;
+                  const folder = await selectDownloadDirectory();
+                  if (!folder) return;
+                  try {
+                    await setLocation(t.id, folder);
+                  } catch (err) {
+                    showNotice(`Could not move the torrent:\n${err}`);
+                  }
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+              >
+                <FolderInput className="w-3.5 h-3.5" />
+                <span>Move to Folder...</span>
+              </button>
+              <button
+                onClick={async () => {
+                  const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                  if (!t) return;
+                  const selected = await invoke<string | null>('select_disc_source', { kind: null });
+                  if (selected) {
+                    try {
+                      await invoke('relink_torrent_media', {
+                        infoHash: t.info_hash || t.id,
+                        newPath: selected,
+                      });
+                    } catch (err) {
+                      showNotice(`Could not relink the torrent:\n${err}`);
+                    } finally {
+                      await useTorrentStore.getState().fetchTorrents();
+                    }
+                  }
+                }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+              >
+                <Link className="w-3.5 h-3.5" />
+                <span>Relink...</span>
+              </button>
+            </>
           )}
           <button
             onClick={async () => {
@@ -2029,7 +2123,7 @@ export const TorrentManagerView: React.FC = () => {
                 try {
                   await invoke('open_torrent_folder', { path: resolveTorrentDataDir(t) });
                 } catch (err: unknown) {
-                  alert(`Could not reveal in Finder:\n${err}`);
+                  showNotice(`Could not reveal in Finder:\n${err}`);
                 }
               }
             }}
@@ -2045,12 +2139,12 @@ export const TorrentManagerView: React.FC = () => {
                   // Confirm what happened - the dialog can land behind
                   // other windows and look like nothing happened.
                   if (typeof savedPath === 'string' && savedPath) {
-                    alert(`Torrent file saved to:\n${savedPath}`);
+                    showNotice(`Torrent file saved to:\n${savedPath}`);
                   }
                 })
                 .catch((e) => {
                   if (typeof e === 'string' && e.includes('cancelled')) return;
-                  alert(`Could not save the torrent file:\n${e}`);
+                  showNotice(`Could not save the torrent file:\n${e}`);
                 });
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
@@ -2092,7 +2186,7 @@ export const TorrentManagerView: React.FC = () => {
                   try {
                     await toggleSequential(tid);
                   } catch (err: unknown) {
-                    alert(`Could not toggle sequential download:\n${err}`);
+                    showNotice(`Could not toggle sequential download:\n${err}`);
                   }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
@@ -2137,6 +2231,27 @@ export const TorrentManagerView: React.FC = () => {
       )}
 
       {/* 5. Rename Modal with Strict External qBittorrent Protection */}
+      {notice !== null && (
+        <div
+          className="fixed inset-0 z-[300] bg-black/70 flex items-center justify-center p-4"
+          role="alertdialog"
+          aria-modal="true"
+          data-testid="manager-notice"
+        >
+          <div className="w-full max-w-md bg-[#141414] border border-[#262626] rounded-lg shadow-2xl p-5 text-xs">
+            <pre className="whitespace-pre-wrap break-words font-sans text-white mb-4">{notice}</pre>
+            <div className="flex justify-end">
+              <button
+                autoFocus
+                onClick={() => setNotice(null)}
+                className="px-4 py-1.5 rounded bg-[#e50914] hover:bg-[#f6121d] text-white transition"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {renameModal.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none font-sans">
           <div className="relative w-full max-w-md bg-[#141414] border border-[#333333] rounded-xl shadow-2xl overflow-hidden flex flex-col text-white">

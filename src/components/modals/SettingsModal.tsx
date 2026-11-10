@@ -52,7 +52,13 @@ type SettingsTab =
   | 'advanced';
 
 export const SettingsModal: React.FC = () => {
-  const { showSettings, setShowSettings, setShowQbitImport } = useUiStore();
+  const {
+    showSettings,
+    setShowSettings,
+    setShowQbitImport,
+    settingsTab: activeTab,
+    setSettingsTab: setActiveTab,
+  } = useUiStore();
   const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
   const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
@@ -65,7 +71,7 @@ export const SettingsModal: React.FC = () => {
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('behavior');
+
   const [skipSplash, setSkipSplash] = useState(
     () => localStorage.getItem('nebulae_pref_skip_splash') === '1',
   );
@@ -1910,9 +1916,10 @@ export const SettingsModal: React.FC = () => {
               </div>
             )}
 
-            {/* 9. MEDIA (Optical Disc Cinema & Player Detection) */}
+            {/* 9. MEDIA (Optical Disc Cinema & Media Player) */}
             {activeTab === 'media' && (
               <div className="space-y-5">
+                {/* Optical Disc Cinema & Media Player */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">

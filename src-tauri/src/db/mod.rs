@@ -63,11 +63,11 @@ impl Database {
             let _ = conn.execute(&sql, []);
         }
 
-        // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash)
+        // Cleanup contaminated Fuuka poster mappings in settings (non-Fuuka entries pointing to contaminated Fuuka hash or fuuka artwork)
         let _ = conn.execute(
             "DELETE FROM settings
              WHERE (key LIKE 'tmdb_poster:%' OR key LIKE 'mal_poster:%')
-               AND value LIKE '%93758aeca10f8450%'
+               AND (value LIKE '%93758aeca10f8450%' OR LOWER(value) LIKE '%fuuka%')
                AND LOWER(key) NOT LIKE '%fuuka%'",
             [],
         );
@@ -76,7 +76,7 @@ impl Database {
         let _ = conn.execute(
             "UPDATE torrent_metadata
              SET poster_path = NULL
-             WHERE poster_path LIKE '%93758aeca10f8450%'
+             WHERE (poster_path LIKE '%93758aeca10f8450%' OR LOWER(poster_path) LIKE '%fuuka%')
                AND COALESCE(user_title_locked, 0) = 0
                AND LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) NOT LIKE '%fuuka%'",
             [],
@@ -90,7 +90,10 @@ impl Database {
                  SELECT s.value FROM settings s
                  WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
                     OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
-                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
+                   AND (
+                       (s.value NOT LIKE '%93758aeca10f8450%' AND LOWER(s.value) NOT LIKE '%fuuka%')
+                       OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%'
+                   )
                  LIMIT 1
              )
              WHERE (poster_path IS NULL OR poster_path = '')
@@ -99,7 +102,10 @@ impl Database {
                  SELECT 1 FROM settings s
                  WHERE (s.key = ('tmdb_poster:v3:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))))
                     OR s.key = ('tmdb_poster:v2:' || LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title)))))
-                   AND (s.value NOT LIKE '%93758aeca10f8450%' OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%')
+                   AND (
+                       (s.value NOT LIKE '%93758aeca10f8450%' AND LOWER(s.value) NOT LIKE '%fuuka%')
+                       OR LOWER(TRIM(COALESCE(torrent_metadata.user_display_title, torrent_metadata.display_title))) LIKE '%fuuka%'
+                   )
                )",
             [],
         );
@@ -579,6 +585,69 @@ impl Database {
         Ok(())
     }
 
+    /// Retrieve the custom ordered list of downloaded torrent info_hashes.
+    pub fn get_downloaded_media_order(&self) -> Result<Vec<String>> {
+        if let Ok(Some(json)) = self.get_setting("media_downloaded_order") {
+            if let Ok(hashes) = serde_json::from_str::<Vec<String>>(&json) {
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<String> = hashes
+                    .into_iter()
+                    .filter(|h| seen.insert(h.to_lowercase()))
+                    .collect();
+                if !unique.is_empty() {
+                    return Ok(unique);
+                }
+            }
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT info_hash FROM torrent_metadata WHERE sort_order IS NOT NULL ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut list = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for r in rows.flatten() {
+            if seen.insert(r.to_lowercase()) {
+                list.push(r);
+            }
+        }
+        Ok(list)
+    }
+
+    /// Retrieve the custom ordered list of external media paths.
+    pub fn get_external_media_order(&self) -> Result<Vec<String>> {
+        if let Ok(Some(json)) = self.get_setting("media_external_order") {
+            if let Ok(paths) = serde_json::from_str::<Vec<String>>(&json) {
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<String> = paths
+                    .into_iter()
+                    .filter(|p| {
+                        let key = p.trim().to_lowercase().replace('\\', "/");
+                        seen.insert(key)
+                    })
+                    .collect();
+                return Ok(unique);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// Persist the custom ordered list of external media paths.
+    pub fn set_external_media_order(&self, paths: &[String]) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<String> = paths
+            .iter()
+            .filter(|p| {
+                let key = p.trim().to_lowercase().replace('\\', "/");
+                seen.insert(key)
+            })
+            .cloned()
+            .collect();
+        let json = serde_json::to_string(&unique)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.set_setting("media_external_order", &json)
+    }
+
     /// Persist a chosen poster path or URL for a torrent.
     pub fn set_torrent_poster(&self, info_hash: &str, poster_path: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -845,6 +914,12 @@ impl Database {
              WHERE info_hash = ?1",
             params![info_hash],
         )?;
+        let _ = conn.execute(
+            "UPDATE snatched_records
+             SET external_moved_at = NULL
+             WHERE info_hash = ?1",
+            params![info_hash],
+        );
         Ok(())
     }
 }
@@ -1338,6 +1413,10 @@ mod tests {
                  -- Provider setting containing contaminated hash
                  INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
                  INSERT INTO settings (key, value) VALUES ('mal_poster:v3:another title', '/thumbs/93758aeca10f8450.webp');
+                 -- Provider setting containing fuuka keyword for non-fuuka title
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:patlabor 2 the movie', '/cache/fuuka.webp');
+                 -- Genuine Fuuka settings
+                 INSERT INTO settings (key, value) VALUES ('tmdb_poster:v3:fuuka (2017)', '/cache/fuuka.webp');
 
                  -- Item 1: Locked custom poster (even if file path contains hash)
                  INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
@@ -1349,7 +1428,15 @@ mod tests {
 
                  -- Item 3: Unlocked item with contaminated hash
                  INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
-                     VALUES ('h_unlocked_contam', 'Regular Item', 0, '/thumbs/93758aeca10f8450.webp', 30);",
+                     VALUES ('h_unlocked_contam', 'Regular Item', 0, '/thumbs/93758aeca10f8450.webp', 30);
+
+                 -- Item 4: Unlocked item with fuuka in path
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_unlocked_fuuka_path', 'Mary and the Witch''s Flower', 0, '/cache/fuuka_scan.webp', 40);
+
+                 -- Item 5: Genuine Fuuka torrent
+                 INSERT INTO torrent_metadata (info_hash, display_title, user_title_locked, poster_path, added_at)
+                     VALUES ('h_genuine_fuuka', 'Fuuka (2017)', 0, '/cache/fuuka.webp', 50);",
             )
             .unwrap();
         }
@@ -1370,6 +1457,19 @@ mod tests {
                 None
             );
             assert_eq!(db.get_setting("mal_poster:v3:another title").unwrap(), None);
+            assert_eq!(
+                db.get_setting("tmdb_poster:v3:patlabor 2 the movie")
+                    .unwrap(),
+                None
+            );
+
+            // Genuine Fuuka setting must be preserved
+            assert_eq!(
+                db.get_setting("tmdb_poster:v3:fuuka (2017)")
+                    .unwrap()
+                    .as_deref(),
+                Some("/cache/fuuka.webp")
+            );
 
             // Locked items must be completely preserved
             let m1 = db.get_torrent_metadata("h_locked_hash").unwrap().unwrap();
@@ -1386,12 +1486,22 @@ mod tests {
             );
             assert!(m2.user_title_locked);
 
-            // Unlocked contaminated item must be reset to NULL
+            // Unlocked contaminated items must be reset to NULL
             let m3 = db
                 .get_torrent_metadata("h_unlocked_contam")
                 .unwrap()
                 .unwrap();
             assert_eq!(m3.poster_path, None);
+
+            let m4 = db
+                .get_torrent_metadata("h_unlocked_fuuka_path")
+                .unwrap()
+                .unwrap();
+            assert_eq!(m4.poster_path, None);
+
+            // Genuine Fuuka item must retain its poster
+            let m5 = db.get_torrent_metadata("h_genuine_fuuka").unwrap().unwrap();
+            assert_eq!(m5.poster_path.as_deref(), Some("/cache/fuuka.webp"));
         }
 
         // Pass 2: Second startup init (assert idempotence)
@@ -1419,5 +1529,149 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
+    }
+
+    #[test]
+    fn test_posters_per_row_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_posters_per_row").unwrap(), None);
+
+        // Persist 7
+        db.set_setting("media_posters_per_row", "7").unwrap();
+        assert_eq!(
+            db.get_setting("media_posters_per_row").unwrap().as_deref(),
+            Some("7")
+        );
+
+        // Clamped preference write
+        let count: u32 = 15;
+        let clamped = count.clamp(2, 12);
+        db.set_setting("media_posters_per_row", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_posters_per_row").unwrap().as_deref(),
+            Some("12")
+        );
+    }
+
+    #[test]
+    fn test_poster_size_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_poster_size").unwrap(), None);
+
+        // Persist 200
+        db.set_setting("media_poster_size", "200").unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_size").unwrap().as_deref(),
+            Some("200")
+        );
+
+        // Clamped preference write (bounds 100 to 300)
+        let size: u32 = 450;
+        let clamped = size.clamp(100, 300);
+        db.set_setting("media_poster_size", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_size").unwrap().as_deref(),
+            Some("300")
+        );
+    }
+
+    #[test]
+    fn test_poster_spacing_persistence() {
+        let db = memory_db();
+        // Unset initially
+        assert_eq!(db.get_setting("media_poster_spacing").unwrap(), None);
+
+        // Persist 24
+        db.set_setting("media_poster_spacing", "24").unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_spacing").unwrap().as_deref(),
+            Some("24")
+        );
+
+        // Clamped preference write (bounds 4 to 48)
+        let spacing: u32 = 64;
+        let clamped = spacing.clamp(4, 48);
+        db.set_setting("media_poster_spacing", &clamped.to_string())
+            .unwrap();
+        assert_eq!(
+            db.get_setting("media_poster_spacing").unwrap().as_deref(),
+            Some("48")
+        );
+    }
+
+    #[test]
+    fn test_downloaded_media_order_roundtrip_and_fallback() {
+        let db = memory_db();
+
+        // 1. Initially empty
+        let initial = db.get_downloaded_media_order().unwrap();
+        assert!(initial.is_empty());
+
+        // 2. Fallback to torrent_metadata sort_order when setting not set
+        db.set_torrent_sort_order("hash_b", Some(1)).unwrap();
+        db.set_torrent_sort_order("hash_a", Some(0)).unwrap();
+        db.set_torrent_sort_order("hash_c", Some(2)).unwrap();
+
+        let fallback_order = db.get_downloaded_media_order().unwrap();
+        assert_eq!(fallback_order, vec!["hash_a", "hash_b", "hash_c"]);
+
+        // 3. Explicit media_downloaded_order setting takes priority
+        let custom = vec![
+            "hash_c".to_string(),
+            "hash_a".to_string(),
+            "hash_b".to_string(),
+        ];
+        let json = serde_json::to_string(&custom).unwrap();
+        db.set_setting("media_downloaded_order", &json).unwrap();
+
+        let loaded = db.get_downloaded_media_order().unwrap();
+        assert_eq!(loaded, custom);
+    }
+
+    #[test]
+    fn test_external_media_order_roundtrip() {
+        let db = memory_db();
+
+        // Initially empty
+        let initial = db.get_external_media_order().unwrap();
+        assert!(initial.is_empty());
+
+        // Save order
+        let order1 = vec![
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+            "/media/Suzume (2022)".to_string(),
+        ];
+        db.set_external_media_order(&order1).unwrap();
+
+        let loaded1 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded1, order1);
+
+        // Reorder (drag Suzume to front)
+        let order2 = vec![
+            "/media/Suzume (2022)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+        ];
+        db.set_external_media_order(&order2).unwrap();
+
+        let loaded2 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded2, order2);
+
+        // Deduplication on set and get: duplicates must be stripped
+        let with_dupes = vec![
+            "/media/Suzume (2022)".to_string(),
+            "/media/Suzume (2022)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+            "/media/Patlabor 2 (1993)".to_string(),
+            "/media/Fuuka (2017)".to_string(),
+        ];
+        db.set_external_media_order(&with_dupes).unwrap();
+        let loaded3 = db.get_external_media_order().unwrap();
+        assert_eq!(loaded3, order2);
     }
 }

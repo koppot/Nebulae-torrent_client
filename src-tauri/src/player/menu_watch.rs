@@ -225,9 +225,54 @@ pub fn window_end(at_menu: bool, keep_playing: bool) -> WindowEnd {
     }
 }
 
+/// Subtitle-display repair for authored Blu-ray menus.
+///
+/// libbluray switches the PG display flag (PSR2 bit 31) on at startup whenever
+/// the audio language differs from the preferred subtitle language (Japanese
+/// audio with English subtitles, for instance). Some discs read that flag in
+/// the Top Menu's page-0 program to choose the menu page. Megazone 23 selects
+/// page `1 + flag`, and its interactive stream only contains pages 0 and 1, so
+/// with the flag on the disc asks for a page that does not exist, libbluray
+/// ignores the command, and the menu stays on its invisible 11x11 trampoline
+/// button: nothing can be highlighted, navigated or activated. Verified against
+/// the bundled libbluray 1.5.0 with trace logging: page 2 -> "page is invalid";
+/// with the flag cleared the same call renders page 1 with its 11 buttons.
+///
+/// The menu request that opens the menu fires before any subtitle track
+/// exists, so it cannot clear the flag first. Once a track exists and is
+/// selected, the watcher deselects it (which makes libVLC clear the flag),
+/// repeats the menu request once, and restores the track after the menu has
+/// settled. Returns the track to restore, or `None` when nothing needs doing.
+pub fn pg_repair_target(
+    is_bluray: bool,
+    already_repaired: bool,
+    menu_open: bool,
+    spu_count: i32,
+    active_spu: i32,
+) -> Option<i32> {
+    if !is_bluray || already_repaired || !menu_open || spu_count <= 0 || active_spu < 0 {
+        return None;
+    }
+    Some(active_spu)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pg_repair_runs_once_for_a_blu_ray_menu_with_a_selected_subtitle() {
+        assert_eq!(pg_repair_target(true, false, true, 3, 4608), Some(4608));
+        assert_eq!(pg_repair_target(true, true, true, 3, 4608), None);
+    }
+
+    #[test]
+    fn pg_repair_never_touches_other_media_or_unselected_subtitles() {
+        assert_eq!(pg_repair_target(false, false, true, 3, 4608), None);
+        assert_eq!(pg_repair_target(true, false, false, 3, 4608), None);
+        assert_eq!(pg_repair_target(true, false, true, 0, 4608), None);
+        assert_eq!(pg_repair_target(true, false, true, 3, -1), None);
+    }
 
     /// Shortest title `engine::is_active_feature_playback` calls a feature.
     const FEATURE_MIN_MS: i64 = 120_000;

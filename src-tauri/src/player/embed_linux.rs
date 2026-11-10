@@ -274,3 +274,13 @@ pub fn window_is_maximized_native(app: &AppHandle) -> Result<bool, String> {
 pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(), String> {
     Ok(())
 }
+
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
+
+pub fn forward_mouse_move(_app: &AppHandle, _x: f64, _y: f64) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn forward_mouse_click(_app: &AppHandle, _x: f64, _y: f64) -> Result<(), String> {
+    Ok(())
+}

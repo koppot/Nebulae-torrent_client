@@ -151,7 +151,7 @@ pub fn convert_single_image(thumbs_dir: &Path, source_file: &Path) -> Result<Pat
     }
     fs::create_dir_all(thumbs_dir).map_err(|e| ThumbError::CacheDir(e.to_string()))?;
     let dest = cache_path(thumbs_dir, source_file);
-    if dest.exists() {
+    if is_decodable_webp(&dest) {
         return Ok(dest);
     }
 
@@ -166,9 +166,24 @@ pub fn convert_single_image(thumbs_dir: &Path, source_file: &Path) -> Result<Pat
 
     let rgb = scaled.to_rgb8();
     let webp = image::DynamicImage::ImageRgb8(rgb);
-    webp.save_with_format(&dest, image::ImageFormat::WebP)
+    // Encode beside the destination and rename, so an interrupted write never
+    // leaves a truncated file under the final name.
+    let tmp = dest.with_extension("webp.part");
+    webp.save_with_format(&tmp, image::ImageFormat::WebP)
         .map_err(|e| ThumbError::Encode(e.to_string()))?;
+    fs::rename(&tmp, &dest).map_err(|e| ThumbError::Encode(e.to_string()))?;
     Ok(dest)
+}
+
+/// True when `path` holds a WebP file the decoder accepts.
+fn is_decodable_webp(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    bytes.len() > 12
+        && &bytes[0..4] == b"RIFF"
+        && &bytes[8..12] == b"WEBP"
+        && image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP).is_ok()
 }
 
 /// Produce (or reuse) a WebP thumbnail directly from in-memory image bytes with a deterministic key.
@@ -326,6 +341,56 @@ mod tests {
         assert_eq!(ensure_result, expected_dest);
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn custom_poster_import_writes_genuine_webp_and_leaves_source_untouched() {
+        use image::{ImageBuffer, Rgb};
+
+        let root = std::env::temp_dir().join(format!("neb_custom_poster_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let src_dir = root.join("user_pictures");
+        let thumbs_dir = root.join("managed").join("thumbnails");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(800, 1200, Rgb([10, 120, 200]));
+        let png = src_dir.join("my poster.png");
+        let jpg = src_dir.join("my poster.jpg");
+        let wp = src_dir.join("already.webp");
+        img.save(&png).unwrap();
+        img.save(&jpg).unwrap();
+        img.save_with_format(&wp, image::ImageFormat::WebP).unwrap();
+
+        for src in [&png, &jpg, &wp] {
+            let before = fs::read(src).unwrap();
+            let out = convert_single_image(&thumbs_dir, src).expect("import");
+            assert_eq!(out.extension().and_then(|e| e.to_str()), Some("webp"));
+            assert!(
+                out.starts_with(&thumbs_dir),
+                "stored in managed artwork dir"
+            );
+            let bytes = fs::read(&out).unwrap();
+            assert_eq!(&bytes[0..4], b"RIFF");
+            assert_eq!(&bytes[8..12], b"WEBP");
+            let (w, _) = image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP)
+                .unwrap()
+                .dimensions();
+            assert_eq!(w, THUMB_WIDTH, "large source is downscaled");
+            assert_eq!(fs::read(src).unwrap(), before, "original is untouched");
+            assert!(!out.with_extension("webp.part").exists());
+        }
+
+        // A truncated leftover under the final name is replaced, not trusted.
+        let out = cache_path(&thumbs_dir, &png);
+        fs::write(&out, b"RIFF\0\0\0\0WEBPjunk").unwrap();
+        let again = convert_single_image(&thumbs_dir, &png).unwrap();
+        assert!(is_decodable_webp(&again));
+
+        let bad = src_dir.join("notes.png");
+        fs::write(&bad, b"not an image").unwrap();
+        assert!(convert_single_image(&thumbs_dir, &bad).is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

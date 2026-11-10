@@ -1873,3 +1873,200 @@ branches are safe to consolidate per your notice. No files to spare.
 
 Next: UHD playback reproduction with fresh logs, then menu/toolbar layout,
 then Manager speed tooltip wiring using your `041d5b8` data contract.
+
+
+## 2026-11-09 — Antigravity: Takeover & 0.2.6 Candidate Delivery
+
+**Takeover Notice:** Assumed full ownership per user directive following Factory AI usage limit halt.
+Branch: `factory/verification-repairs-20261108` @ `737a2b7`.
+
+### Summary of Completed Work
+1. **macOS Dependency Relocation & Verification**:
+   - Resolved relocator basename conflict in `scripts/relocate-macos-dylibs.py`.
+   - Fixed `REPO_ROOT` reference in `scripts/bundle-macos-transmission.sh`.
+   - Synchronized verified minos-11.0 dylibs (`src-tauri/resources/engine/transmission/lib` and `src-tauri/resources/vlc/lib`) into `Nebulae.app`.
+   - Regenerated `build-manifest.json` for macOS arm64 (`git_rev 737a2b7`).
+   - Sealed and code-signed all 400 nested images and app bundle with Apple Development identity `E3A26A990308798F8DE4B7C49A3E27BFEF192623`.
+   - Executed `scripts/verify-macos-app.sh`: strict Mach-O audit PASSED (401 images, 0 findings, minos 11.0, Tailscale 13.0 limitation preserved as advice).
+2. **Complete DMG Packaging & Verification**:
+   - Packaged with Applications symlink, VolumeIcon, .background/background.png, and custom outer file icon.
+   - Delivered to `/Users/dev/.download/Nebulae_0.2.6_aarch64_complete.dmg` (151,031,481 bytes, SHA-256 `dcfbfc683e2c107d9d88082334b58cd2eb6dcfb7aef39b1915440da219ef2974`).
+   - Mounted, inspected, and verified via disposable execution test.
+3. **macOS Updater Artifact & Verification**:
+   - Packaged `/Users/dev/.download/updater/Nebulae-macOS-0.2.6-aarch64.tar.gz` (138,565,617 bytes, SHA-256 `d05715e612dc28efb85aa614fe22edf8525e78e88aa197f7c543c5f97ec32de8`).
+   - Signed using updater secret key (`452CAA8BBBBC6F41`).
+   - Verified 100% valid with `verify-payload-signature`.
+   - Updated `/Users/dev/.download/latest.json`.
+4. **Fuuka Media Card Click Repair**:
+   - Diagnosed root cause: `renderExternalCard` in `src/components/media/SimpleMediaView.tsx` had no `onClick` on the poster container, unlike `renderCard`.
+   - Fixed by adding card-level click handler calling `openInPlayer`, with `e.stopPropagation()` on hover controls.
+   - Tested across frontend test suites (70/70 passed).
+5. **Windows Host Synchronization**:
+   - Synchronized `supermicro.local` (`C:\nebulae-factory-droid\repo`) to commit `737a2b7`.
+   - Verified `cargo test --lib` (363 passed, 0 failed) and `pnpm run build` (clean).
+   - Preserved production PID 21976 and transmission-daemon PID 5728.
+
+## 2026-11-09 — Antigravity: macOS 0.2.6 Candidate Acceptance & Release Freeze
+
+**Directive Notice:** User confirmed macOS 0.2.6 candidate is accepted and ready for release. macOS candidate is now completely frozen and preserved.
+
+### Acceptance & Preservation Status
+- **User Confirmed:** macOS 0.2.6 candidate accepted and approved for production release.
+- **Confirmed Passes Preserved:** Custom poster persistence, Relink media, and complete macOS DMG presentation/contents.
+- **Process State:** All running macOS application, Transmission daemon, and Tailscale processes preserved. macOS troubleshooting stopped.
+- **Freeze Policy:** No rebuilding, re-signing, repackaging, or modification of macOS binaries, runtimes, or updater archives. Any shared-code adjustments for Windows will not rebuild macOS or alter the accepted macOS payload bytes.
+
+### Preserved Release Artifacts (Immutable Release Copies in `/Users/dev/.download/release-0.2.6/`)
+
+1. **Complete macOS DMG:**
+   - Canonical Path: `/Users/dev/.download/Nebulae_0.2.6_aarch64_complete.dmg`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae_0.2.6_aarch64_complete.dmg`
+   - Size: 151,031,481 bytes
+   - SHA-256: `dcfbfc683e2c107d9d88082334b58cd2eb6dcfb7aef39b1915440da219ef2974`
+   - Signatures: Apple Development identity `E3A26A990308798F8DE4B7C49A3E27BFEF192623` on all nested runtimes and app bundle; verified via `scripts/verify-macos-app.sh` (401 images, 0 findings, minos 11.0).
+
+2. **macOS Updater Tarball:**
+   - Canonical Path: `/Users/dev/.download/updater/Nebulae-macOS-0.2.6-aarch64.tar.gz`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae-macOS-0.2.6-aarch64.tar.gz`
+   - Size: 138,565,617 bytes
+   - SHA-256: `d05715e612dc28efb85aa614fe22edf8525e78e88aa197f7c543c5f97ec32de8`
+   - Signature: Minisign key `452CAA8BBBBC6F41`, comment `timestamp:1794233977\tfile:Nebulae-macOS-0.2.6-aarch64.tar.gz\tversion:0.2.6`; verified 100% SUCCESSFUL via `verify-payload-signature`.
+
+3. **Updater Metadata:**
+   - Canonical Path: `/Users/dev/.download/latest.json`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/latest.json`
+   - Size: 1,460 bytes
+   - SHA-256: `65c41e63bbac24f96d3b4d5e08faa0dadd38dc16d4b26863d90f6684cdfd89d3`
+
+### Tailscale Connectivity Resolution
+The transient `Tailnet · ADC host up, port 443 not open` warning was identified as a port collision on `127.0.0.1:1055` caused by an orphaned disposable test daemon left behind by earlier packaging verification. With the test orphan terminated, the embedded daemon binds cleanly on port 1055, connects to `asiandvdclub` (`100.64.0.1`), and proxy requests to ADC port 443 return HTTP 200 OK. Running status in `/Applications/Nebulae.app` is verified healthy.
+
+Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate Delivery & Release Gate Preparation
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `c664cf4`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Windows Release Candidate Artifacts
+
+1. **Windows NSIS Installer:**
+   - Canonical Path: `C:\Users\administrator\Downloads\Nebulae_0.2.6_x64-setup.exe`
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/Nebulae_0.2.6_x64-setup.exe`
+   - Size: 339,782,944 bytes
+   - SHA-256: `5bcafbc6547eced281b02c7b173ac937054066d7198d8fc755fcfb23b16ccae6`
+   - Signature: Minisign key `452CAA8BBBBC6F41` with trusted comment `timestamp:1794236418\tfile:Nebulae_0.2.6_x64-setup.exe\tversion:0.2.6`; verified 100% SUCCESSFUL via `verify-payload-signature`.
+
+2. **Windows Checksum & Signature Files:**
+   - `Nebulae_0.2.6_x64-setup.exe.sha256` (115 B)
+   - `Nebulae_0.2.6_x64-setup.exe.sig` (436 B)
+
+3. **Combined Inactive Updater Feed:**
+   - Preserved Copy: `/Users/dev/.download/release-0.2.6/latest.json` (1,448 B)
+   - Configured with release version `0.2.6` targeting both `darwin-aarch64` and `windows-x86_64` authentic signatures.
+
+### Inclusions & Runtime State
+- Incorporates `b34bcbc` (taskbar rate band layout geometry cache), `017ef56` (external media DB row deletion), and `737a2b7` (Fuuka card-level click handler).
+- Preserves D3D11 HDR plugin `E1BE02CD...9993` and libbluray plugin `C5AD85B6...3A3FF`.
+- Active production processes PID 21976 and PID 5728 on `supermicro.local` remain running and untouched.
+- Ready for execution of the 7 manual acceptance checks on Windows.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate cdd0481 Delivery (Direct3D 11 Isotropic Subtitle Scaling & Surface Region Decoupling)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `cdd0481`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe.sig`
+- **Revision:** `cdd0481` (`cdd0481b490fdfc9728cb11ba30c500e5720027f`)
+- **File Size:** 339,777,301 bytes
+- **SHA-256 Checksum:** `ea08aa2edb60a5da07b2cb764241a6d092ff5249ace7313b9c561795316239f4`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794265895	file:Nebulae_0.2.6-candidate-cdd0481-subtitle-crop-fix_x64-setup.exe	version:0.2.6`
+
+### Summary of Targeted Fixes in cdd0481
+1. **Direct3D 11 Subpicture Quad Viewport Scaling:**
+   - In upstream VLC 3.0.23 (`direct3d11.c:2440-2448`), subpicture rendering coupled cropped `place.height` with uncropped `subpicture->i_original_picture_height`, causing a 25.6% vertical squash and vertical displacement toward the screen center when crop was active.
+   - Patched `direct3d11.c` in `patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch` to use active video source dimensions (`vd->source.i_visible_width` / `i_visible_height`) and relative coordinate translation `(r->i_x - vd->source.i_x_offset)` / `(r->i_y - vd->source.i_y_offset)`, maintaining 1:1 isotropic glyph scaling matching video proportions.
+   - Subtitles authored inside removed black bars or extending beyond active picture boundaries are clamped to remain fully visible with 4px safety margins rather than cut off.
+   - Pinned `libdirect3d11_plugin.dll` hash: `836a7f98877121cb83fc4d0a72a8840804214925aae3339a73b4a37ef21f024c`.
+2. **Complete Removal of `SetWindowRgn` Native Video Surface Clipping:**
+   - Decoupled video surface rendering from native window region clipping in `src-tauri/src/player/embed_windows.rs`. Direct3D 11 handles letterbox/pillarbox cropping natively into its swapchain.
+   - Removed repeated per-frame `SetWindowRgn` calls that invalidated the DWM redirection surface and caused presentation stalls/instability.
+3. **Refined Window Aspect Fitting:**
+   - Accounted for non-client window borders and monitor work area bounds in `fit_player_window_to_aspect`.
+4. **Preserved Invariants:**
+   - Fuuka disc menu fixes (`ded1b77`) and `--no-direct3d11-hw-blending` remain active and untouched.
+   - 4:3 content remains excluded from automatic black-bar cropping.
+   - Frozen macOS 0.2.6 release artifacts remain untouched and publication remains on hold pending Windows acceptance.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate 3bea275 Delivery (Subpicture Coordinate Space Correction)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `3bea275`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe.sig`
+- **Revision:** `3bea275` (`3bea2754659427b3ca96700e1cf6fca2e7ea519f`)
+- **File Size:** 339,784,563 bytes
+- **SHA-256 Checksum:** `525c8983ad9ac1a1fbbd2f49b1416dfa9400c11fda45cbc795877eb9c3632b52`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794271165	file:Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe	version:0.2.6`
+
+### Specific Correction Included in 3bea275
+- In `modules/video_output/win32/direct3d11.c` (`patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch`):
+  Distinguished subpicture canvas coordinate models:
+  - For text/ASS subtitles (`subpicture->i_original_picture_height == vd->source.i_visible_height`), `r->i_x` and `r->i_y` are already relative to the cropped video dimensions. Offset subtraction (`vd->source.i_y_offset`) is eliminated, preventing upward subtitle displacement to the center of the frame and restoring author-intended bottom placement.
+  - For fixed uncropped bitmap canvases (PGS / DVD where `subpicture->i_original_picture_height > vd->source.i_visible_height`), coordinates are offset by `vd->source` crop offsets and clamped with a 4px margin so cues in the black-bar area remain visible within the active picture.
+- Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `b825a0f6dbef7d3f8a223bd934091b764f7b1574cd5654d2685256b5512f6725`.
+- Updated all lockfiles and verified 61 unit tests pass.
+- Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate 713847c Delivery (Order of Operations & Proportional Subtitle Sizing/Placement)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `713847c`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe.sig`
+- **Revision:** `713847c` (`713847c3af4b85377a15d3267d0ee319a35c28ef`)
+- **File Size:** 339,767,980 bytes
+- **SHA-256 Checksum:** `e1a160b9df32101a27f7297c40eee6414b90ced0555fd6df7bd7ef42e403c0a7`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794273095	file:Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe	version:0.2.6`
+
+### Specific Corrections Included in 713847c
+- **Order of Operations in `modules/video_output/win32/direct3d11.c`:**
+  1. **Proportional Sizing:** Computes `scale = (FLOAT) place.width / (orig_w > src_w ? src_w : orig_w)`. Calculates subtitle viewport width and height `vp_w = (FLOAT) r->fmt.i_visible_width * scale` and `vp_h = (FLOAT) r->fmt.i_visible_height * scale`, preserving glyph proportions with the exact same scale factor horizontally and vertically.
+  2. **Placement from Scaled Bounds:** Anchors bottom-aligned cues using the resulting scaled height `vp_h` and dynamic bottom margin `max(10.0f, place.height * 0.055f)`: `top_y = place.y + place.height - vp_h - bottom_margin`.
+  3. **Multiline & Clipping Safety:** Multiline cues expand upward by `vp_h` naturally from the bottom anchor without clipping below the crop boundary. Subtitles originally authored into black-bar space are safely fitted into the active visible area.
+  4. **Uncropped Content Untouched:** If uncropped (`vd->source.i_y_offset == 0 && vd->source.i_x_offset == 0`), stock VLC coordinate handling is preserved identically.
+- Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `11cc763d3639e86683a1ff3d318abc9e707e3da55150f450e0d417daf7fb2c79`.
+- Updated all lockfiles and verified 61 unit tests pass.
+- Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
+
+
+## 2026-11-09 — Antigravity: Final 0.2.6 Release State (Windows Black-Bar Cropping Disabled & Deferred)
+
+**Status Update:** In accordance with final direction, automatic black-bar cropping on Windows has been completely disabled and deferred to a later release.
+
+### Final Windows Behavior
+1. **Automatic Cropping Disabled:** In `src-tauri/src/commands/media.rs`, `framing_tick` clears any active crop geometry via `apply_crop_spec(lib, mp, "")` on Windows and returns immediately. `start_playback_inner` clears crop on media load. No sampling thread is spawned and no crop geometry is applied.
+2. **Window Reshaping Disabled:** `fit_player_window_to_aspect` on Windows is a clean no-op returning `Ok(())`.
+3. **Normal Subtitle Path Restored:** Reverted experimental crop-specific bottom anchoring from `713847c`. Restored pristine VLC 3.0.23 subpicture mapping in `patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch`. `libdirect3d11_plugin.dll` hash returned to accepted baseline `e1be02cd0dca2f515f7f67b12cf0f5e425d762d3051506ca2e744e5da0dd9993`.
+4. **Fuuka Fixes Preserved:**
+   - `--no-direct3d11-hw-blending` remains active in `engine.rs` (eliminating horizontal/vertical menu lines).
+   - Video surface pinning 1:1 to client rect in `embed_windows.rs` remains active (eliminating DWM sizing frame borders).
+   - Surface clipping (`SetWindowRgn`) remains completely eliminated.
+5. **Frozen macOS 0.2.6 Artifacts:** Kept strictly byte-for-byte identical; macOS automatic cropping remains enabled.

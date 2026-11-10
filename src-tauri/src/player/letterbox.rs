@@ -348,8 +348,8 @@ pub fn observe_image(
 
     let top = to_source(sample.top, h, frame_height);
     let bottom = to_source(sample.bottom, h, frame_height);
-    let mut left = to_source(sample.left, w, frame_width);
-    let mut right = to_source(sample.right, w, frame_width);
+    let left = to_source(sample.left, w, frame_width);
+    let right = to_source(sample.right, w, frame_width);
 
     let active_w = frame_width.saturating_sub(left + right);
     let active_h = frame_height.saturating_sub(top + bottom);
@@ -358,13 +358,17 @@ pub fn observe_image(
     } else {
         0.0
     };
+    let stream_aspect = if frame_height > 0 {
+        (frame_width as f64 / frame_height as f64) * sar_val
+    } else {
+        0.0
+    };
 
-    // User rule: Preserve the full intended 4:3 picture and its normal side pillarboxing.
-    // If the active picture has an intended displayed aspect ratio of ~4:3 (1.25 to 1.45),
-    // do NOT crop the vertical left and right bars.
-    if (1.25..=1.45).contains(&displayed_aspect) {
-        left = 0;
-        right = 0;
+    // User rule: Preserve the full intended 4:3 picture and its normal framing/pillarboxing.
+    // If the active picture or the stream has an intended displayed aspect ratio of ~4:3 (1.25 to 1.45),
+    // completely exclude it from automatic black-bar cropping.
+    if (1.25..=1.45).contains(&displayed_aspect) || (1.25..=1.45).contains(&stream_aspect) {
+        return BarObservation::NoBars;
     }
 
     if top == 0 && bottom == 0 && left == 0 && right == 0 {

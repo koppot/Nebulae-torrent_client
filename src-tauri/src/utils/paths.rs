@@ -14,10 +14,22 @@ pub struct AppPaths {
     pub debug_dir: PathBuf,
 }
 
+/// The per-user data directory that holds the "Nebulae" folder. Normally the
+/// platform standard one; `NEBULAE_DATA_DIR` redirects it so a test build can
+/// run beside an installed app without touching its database, thumbnails or
+/// engine state (Windows ignores %APPDATA% overrides, so HOME-style
+/// redirection is not available there).
+pub fn user_data_dir() -> Option<PathBuf> {
+    std::env::var_os("NEBULAE_DATA_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(dirs::data_dir)
+}
+
 impl AppPaths {
     pub fn init() -> Result<Self, String> {
         // Resolve platform standard app data directory for "Nebulae"
-        let data_dir = dirs::data_dir()
+        let data_dir = user_data_dir()
             .ok_or_else(|| "Failed to resolve platform standard data directory".to_string())?
             .join("Nebulae");
 

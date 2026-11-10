@@ -9,6 +9,7 @@ pub mod qbit_import;
 pub mod speed_format;
 pub mod status_bar;
 pub mod tailscale;
+pub mod taskbar_speed;
 pub mod taskbar_windows;
 pub mod thumbs;
 #[cfg(target_os = "windows")]
@@ -620,6 +621,13 @@ pub fn run() {
             {
                 let native_menu = app_menu::build_app_menu(app.handle())?;
                 let _ = app.set_menu(native_menu);
+                // The window draws its own title bar. On Windows the native
+                // menu bar would otherwise sit inside the window's frame,
+                // over the video surface that is sized to the window rect.
+                #[cfg(target_os = "windows")]
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide_menu();
+                }
             }
 
             Ok(())
@@ -792,17 +800,21 @@ pub fn run() {
             commands::media::set_external_media_title,
             commands::media::relink_external_media,
             commands::media::relink_torrent_media,
+            commands::media::set_custom_poster,
             commands::media::check_media_path,
             commands::torrent::select_iso_file,
             commands::torrent::select_disc_source,
             commands::torrent::select_disc_folder,
             commands::torrent::select_disc_file,
+            commands::torrent::select_image_file,
             commands::media::player_list_tracks,
             commands::media::player_track_languages,
             commands::media::window_begin_drag,
             commands::media::player_engine_playback,
             commands::media::player_set_track,
             commands::media::player_menu_navigate,
+            commands::media::player_menu_mouse_move,
+            commands::media::player_menu_mouse_click,
             commands::media::player_return_to_menu,
             commands::media::player_play_main_feature,
             commands::media::player_sync_viewport,
@@ -833,9 +845,16 @@ pub fn run() {
             commands::library::reset_user_display_title,
             // Feature 3: poster ordering
             commands::library::set_media_order,
-            // Feature 4: posters-per-row
+            commands::library::get_downloaded_media_order,
+            commands::library::get_external_media_order,
+            commands::library::set_external_media_order,
+            // Feature 4: posters-per-row, poster-size & poster-spacing
             commands::library::get_posters_per_row,
             commands::library::set_posters_per_row,
+            commands::library::get_poster_size,
+            commands::library::set_poster_size,
+            commands::library::get_poster_spacing,
+            commands::library::set_poster_spacing,
             // Feature 8/9: metadata provider attribution
             commands::library::set_media_provider,
             commands::library::set_torrent_poster,

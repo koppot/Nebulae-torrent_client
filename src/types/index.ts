@@ -126,10 +126,15 @@ export interface TorrentItem {
   total_bytes: number;
   downloaded_bytes: number;
   uploaded_bytes: number;
+  // Instantaneous transfer rates in bytes/s (raw engine rates).
+  // Strictly 0 when not actively transferring in the respective direction.
   download_rate: number;
   upload_rate: number;
-  // Raw instantaneous engine-reported rates, preserved separately from the
-  // since-transfer-began averages for hover tooltips.
+  // Separate lifetime/since-start averages (cumulative bytes / cumulative active seconds).
+  // Retained for informative tooltips and detailed telemetry; never substituted for current rates.
+  avg_download_rate?: number;
+  avg_upload_rate?: number;
+  // Raw instantaneous engine-reported rates, preserved for backwards compatibility.
   current_download_rate?: number;
   current_upload_rate?: number;
   // Cumulative ACTIVE seconds per direction (Transmission secondsDownloading /
@@ -148,6 +153,8 @@ export interface TorrentItem {
   is_media: boolean;
   poster_url?: string;
   info_hash: string;
+  raw_name?: string;
+  content_path?: string;
   save_path: string;
   historical_save_path?: string;
   added_on: number;

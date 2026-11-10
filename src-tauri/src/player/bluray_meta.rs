@@ -462,6 +462,82 @@ fn parse_disc_playlists(disc_path: &str) -> Vec<NativeMplsInfo> {
     list
 }
 
+/// Clip names (e.g. "00005") that a playlist's play items reference.
+fn mpls_clip_names(d: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    if d.len() < 40 || !d.starts_with(b"MPLS") {
+        return out;
+    }
+    let pl_start = u32::from_be_bytes([d[8], d[9], d[10], d[11]]) as usize;
+    let p = pl_start + 6;
+    if p + 4 > d.len() {
+        return out;
+    }
+    let nitems = u16::from_be_bytes([d[p], d[p + 1]]) as usize;
+    let mut pos = p + 4;
+    for _ in 0..nitems {
+        if pos + 2 > d.len() {
+            break;
+        }
+        let len = u16::from_be_bytes([d[pos], d[pos + 1]]) as usize;
+        if pos + 2 + len > d.len() {
+            break;
+        }
+        let item = &d[pos + 2..pos + 2 + len];
+        if item.len() >= 9 && &item[5..9] == b"M2TS" && item[..5].iter().all(u8::is_ascii_digit) {
+            out.push(String::from_utf8_lossy(&item[..5]).into_owned());
+        }
+        pos += 2 + len;
+    }
+    out
+}
+
+/// Stream files that the disc's playlists reference but the folder lacks
+/// (an incomplete rip or copy). libbluray ends playback with a fatal error
+/// the moment it reaches such a clip, which the user sees as a menu that
+/// plays briefly and then goes black.
+pub fn missing_playlist_clips(disc_path: &str) -> Vec<String> {
+    let root = Path::new(disc_path);
+    let bdmv = if root.join("BDMV").is_dir() {
+        root.join("BDMV")
+    } else if root.join("PLAYLIST").is_dir() {
+        root.to_path_buf()
+    } else {
+        return Vec::new();
+    };
+    let present: std::collections::HashSet<String> = std::fs::read_dir(bdmv.join("STREAM"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    if present.is_empty() {
+        return Vec::new();
+    }
+    let mut missing = std::collections::BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(bdmv.join("PLAYLIST")) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let is_mpls = e
+                .path()
+                .extension()
+                .map(|x| x.eq_ignore_ascii_case("mpls"))
+                .unwrap_or(false);
+            if !is_mpls {
+                continue;
+            }
+            if let Ok(d) = std::fs::read(e.path()) {
+                for clip in mpls_clip_names(&d) {
+                    if !present.contains(&format!("{clip}.m2ts")) {
+                        missing.insert(format!("{clip}.m2ts"));
+                    }
+                }
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
 /// Inspect disc playlists and identify the main feature playlist.
 /// Returns Some((playlist_number, duration_ms)), or None if no feature playlist found.
 pub fn find_main_feature_mpls(disc_path: &str) -> Option<(u32, i64)> {
@@ -1182,6 +1258,54 @@ mod tests {
         assert!(parsed.is_uhd, "format 7 must mark is_uhd=true");
 
         let _ = std::fs::remove_file(&mpls_path);
+    }
+
+    fn synthetic_mpls(clips: &[&str]) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MPLS0300");
+        data.extend_from_slice(&40u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&[0u8; 6]);
+        data.extend_from_slice(&(clips.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        for c in clips {
+            let mut item = Vec::new();
+            item.extend_from_slice(c.as_bytes());
+            item.extend_from_slice(b"M2TS");
+            item.extend_from_slice(&[0u8; 20]);
+            data.extend_from_slice(&(item.len() as u16).to_be_bytes());
+            data.extend_from_slice(&item);
+        }
+        data
+    }
+
+    #[test]
+    fn missing_playlist_clips_reports_only_absent_streams() {
+        let root =
+            std::env::temp_dir().join(format!("nebulae_missing_clips_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("BDMV/PLAYLIST")).unwrap();
+        std::fs::create_dir_all(root.join("BDMV/STREAM")).unwrap();
+        std::fs::write(
+            root.join("BDMV/PLAYLIST/00004.mpls"),
+            synthetic_mpls(&["00004", "00005", "00010"]),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("BDMV/PLAYLIST/00001.mpls"),
+            synthetic_mpls(&["00001"]),
+        )
+        .unwrap();
+        for f in ["00001.M2TS", "00004.m2ts", "00010.m2ts"] {
+            std::fs::write(root.join("BDMV/STREAM").join(f), b"x").unwrap();
+        }
+        let missing = missing_playlist_clips(root.to_str().unwrap());
+        assert_eq!(missing, vec!["00005.m2ts".to_string()]);
+
+        std::fs::write(root.join("BDMV/STREAM/00005.m2ts"), b"x").unwrap();
+        assert!(missing_playlist_clips(root.to_str().unwrap()).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

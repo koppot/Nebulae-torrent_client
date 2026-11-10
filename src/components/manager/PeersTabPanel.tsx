@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Settings, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { Settings, ChevronDown, ChevronUp, ChevronsUpDown, Loader2, AlertCircle, RotateCw } from 'lucide-react';
 import { PeerTelemetry, PeeringSettings, PeeringMode, LocalityTier } from '../../types';
 import { formatSpeed } from '../../lib/formatters';
 
@@ -299,6 +299,10 @@ const PeeringSettingsPanel: React.FC<{
 
 interface PeersTabPanelProps {
   peers: PeerTelemetry[];
+  isLoading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+  torrentStatus?: string;
   settings: PeeringSettings | null;
   fetchSettings: () => Promise<void>;
   saveSettings: (s: PeeringSettings) => Promise<void>;
@@ -307,6 +311,10 @@ interface PeersTabPanelProps {
 
 export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   peers,
+  isLoading = false,
+  error = null,
+  onRetry,
+  torrentStatus,
   settings,
   fetchSettings,
   saveSettings,
@@ -384,10 +392,46 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-[#262626] font-mono text-[11px]">
-            {sorted.length === 0 ? (
+            {isLoading && sorted.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-6 text-center text-[#a3a3a3] font-sans text-xs">
-                  No active peers connected yet
+                <td colSpan={9} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-[#e50914]" />
+                    <span>Loading connected peers...</span>
+                  </div>
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan={9} className="py-8 text-center text-[#e50914] font-sans text-xs">
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <div className="flex items-center gap-1.5 text-red-400">
+                      <AlertCircle className="w-4 h-4" />
+                      <span>Failed to query peer telemetry: {error}</span>
+                    </div>
+                    {onRetry && (
+                      <button
+                        type="button"
+                        onClick={onRetry}
+                        className="mt-1 flex items-center gap-1.5 px-3 py-1 bg-[#262626] hover:bg-[#333333] text-white rounded text-xs transition"
+                      >
+                        <RotateCw className="w-3 h-3" />
+                        <span>Retry</span>
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ) : sorted.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
+                  {torrentStatus === 'Seeding'
+                    ? 'Seeding to swarm — no active downloaders currently connected'
+                    : torrentStatus === 'Paused'
+                    ? 'Torrent is paused — peer connections closed'
+                    : torrentStatus === 'Downloading'
+                    ? 'No peers currently connected — waiting for swarm connections'
+                    : 'No active peers connected to this torrent'}
                 </td>
               </tr>
             ) : (

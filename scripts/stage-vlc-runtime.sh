@@ -192,7 +192,7 @@ SKIPPED=""
 for f in "$OFFICIAL/plugins/"*; do
   name="$(basename "$f")"
   case "$name" in
-    plugins.dat|libbluray-*.jar|libmacosx_plugin.dylib|libosx_notifications_plugin.dylib)
+    plugins.dat)
       SKIPPED="$SKIPPED $name"
       continue
       ;;
@@ -209,6 +209,10 @@ chmod u+w "$DEST/lib/"*.dylib "$DEST/plugins/"*.dylib
 # turn links Homebrew libraries. Bring them all into lib/ and rewrite every
 # reference. libvlccore stays the untouched official file: the process that
 # loads the plugin supplies it.
+# Build the macOS 11.0 dependency replacements from source so the shipped app
+# does not silently raise its effective minimum above the declared 11.0.
+DEPS_DIR="$REPO_ROOT/src-tauri/macos-deps-11"
+"$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$DEPS_DIR/build-deps.log" 2>&1
 python3 "$SCRIPT_DIR/relocate-macos-dylibs.py" \
   --lib-dir "$DEST/lib" \
   --provided libvlccore.dylib \
@@ -216,6 +220,7 @@ python3 "$SCRIPT_DIR/relocate-macos-dylibs.py" \
   --arch "$TARGET_ARCH" \
   --manifest "$DEST/bundled-libraries.json" \
   --licenses-dir "$DEST/licenses" \
+  --source-dir "$DEPS_DIR" \
   "$DEST/plugins/liblibbluray_plugin.dylib"
 
 # libbluray finds its BD-J jars next to the library it was loaded from, and only

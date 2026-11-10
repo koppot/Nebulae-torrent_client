@@ -71,10 +71,13 @@ pub fn fetch_anime_poster(
 ) -> Result<Option<PathBuf>, String> {
     let cache_key = format!("mal_poster:{}", lookup_key.to_lowercase());
 
-    // Check cache first
+    // Check cache first with anti-contamination guard
     if let Ok(Some(cached)) = db.get_setting(&cache_key) {
+        let is_contaminated = (cached.contains("93758aeca10f8450")
+            || cached.to_lowercase().contains("fuuka"))
+            && !lookup_key.to_lowercase().contains("fuuka");
         let path = PathBuf::from(&cached);
-        if path.exists() {
+        if path.exists() && !is_contaminated {
             debug!("[mal] Using cached poster for {}", lookup_key);
             return Ok(Some(path));
         }
@@ -148,7 +151,7 @@ fn download_and_cache_poster(
     let bytes = resp.bytes().map_err(|e| format!("MAL poster body: {e}"))?;
 
     // Convert in-memory bytes directly to WebP without temporary files or directory scanning
-    let thumbs_dir = dirs::data_dir()
+    let thumbs_dir = crate::utils::paths::user_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
         .join("thumbnails");

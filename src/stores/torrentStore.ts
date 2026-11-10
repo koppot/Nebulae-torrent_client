@@ -62,45 +62,66 @@ export function reconcileRecheckState(torrents: TorrentItem[]): TorrentItem[] {
   });
 }
 
-export function averageTransferSpeeds(torrents: TorrentItem[]): TorrentItem[] {
+// Speed presentation: Down Speed and Up Speed represent strictly current
+// instantaneous rates. Historical lifetime/since-start averages are computed
+// into distinct telemetry fields (avg_download_rate, avg_upload_rate) and
+// never substituted into the primary rate columns.
+export function sanitizeTorrentRates(torrents: TorrentItem[], prevTorrents?: TorrentItem[]): TorrentItem[] {
   const now = Date.now();
-  return torrents.map((t) => {
-    // Preserve raw instantaneous engine rates before replacing with since-start averages
-    const rawDown = t.current_download_rate ?? t.download_rate;
-    const rawUp = t.current_upload_rate ?? t.upload_rate;
-
-    const active = t.status === 'Downloading' || t.status === 'Seeding';
-    if (!active) {
-      return {
-        ...t,
-        download_rate: 0,
-        upload_rate: 0,
-        current_download_rate: 0,
-        current_upload_rate: 0,
-      };
+  const prevMap = new Map<string, TorrentItem>();
+  if (prevTorrents) {
+    for (const p of prevTorrents) {
+      prevMap.set(p.id, p);
+      if (p.info_hash) prevMap.set(p.info_hash.toLowerCase(), p);
     }
-    // Average since the respective transfer began: cumulative bytes over
-    // cumulative ACTIVE seconds. A paused stretch does not dilute the rate
-    // because paused time never enters the active-seconds denominator.
+  }
+
+  return torrents.map((t) => {
+    const prev = prevMap.get(t.id) || (t.info_hash ? prevMap.get(t.info_hash.toLowerCase()) : undefined);
+
+    // Preserve files and trackers when the incoming overview item omits them
+    const files = t.files && t.files.length > 0 ? t.files : (prev?.files ?? []);
+    const trackers = t.trackers && t.trackers.length > 0 ? t.trackers : (prev?.trackers ?? []);
+
+    const isDownloading = t.status === 'Downloading';
+    const isSeeding = t.status === 'Seeding';
+    const isTransferring = isDownloading || isSeeding;
+
+    // Raw instantaneous engine rates
+    const rawDown = t.current_download_rate ?? t.download_rate ?? 0;
+    const rawUp = t.current_upload_rate ?? t.upload_rate ?? 0;
+
+    // Instantaneous rates strictly enforced: non-transferring directions are 0
+    const instDown = isDownloading ? rawDown : 0;
+    const instUp = isTransferring ? rawUp : 0;
+
+    // Lifetime/since-start averages kept separate for hover tooltips and details
     const avgDown = lifetimeAverage(t.downloaded_bytes, t.seconds_downloading, t.added_on, now);
     const avgUp = lifetimeAverage(t.uploaded_bytes, t.seconds_seeding, t.added_on, now);
 
-    // ETA from the SAME average the UI displays: remaining bytes / since-start
-    // average. Consistent with the columns and immune to burst flicker.
+    // ETA from remaining bytes over instantaneous rate when actively downloading
     const remaining = Math.max(0, t.total_bytes * (1 - t.progress));
-    const etaSeconds =
-      t.status !== 'Downloading' || avgDown <= 0 ? undefined : Math.round(remaining / avgDown);
+    const etaSeconds = isDownloading
+      ? (t.eta_seconds ?? (instDown > 0 ? Math.round(remaining / instDown) : undefined))
+      : undefined;
 
     return {
       ...t,
-      download_rate: avgDown,
-      upload_rate: avgUp,
+      files,
+      trackers,
+      download_rate: instDown,
+      upload_rate: instUp,
       current_download_rate: rawDown,
       current_upload_rate: rawUp,
+      avg_download_rate: avgDown,
+      avg_upload_rate: avgUp,
       eta_seconds: etaSeconds,
     };
   });
 }
+
+// Backwards-compatibility alias
+export const averageTransferSpeeds = sanitizeTorrentRates;
 
 export interface SystemPathPresets {
   downloads?: string | null;
@@ -113,7 +134,11 @@ interface TorrentState {
   torrents: TorrentItem[];
   selectedId: string | null;
   isLoading: boolean;
+  filesLoadingId: string | null;
+  filesError: string | null;
   fetchTorrents: () => Promise<void>;
+  applyTorrentTelemetry: (incoming: TorrentItem[]) => void;
+  fetchTorrentDetails: (id: string) => Promise<void>;
   setSelectedId: (id: string | null) => void;
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
@@ -148,6 +173,54 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   torrents: [],
   selectedId: null,
   isLoading: false,
+  filesLoadingId: null,
+  filesError: null,
+
+  applyTorrentTelemetry: (incoming: TorrentItem[]) => {
+    const prevTorrents = get().torrents;
+    const sanitized = sanitizeTorrentRates(incoming, prevTorrents);
+    const reconciled = reconcileRecheckState(sanitized);
+
+    set({ torrents: reconciled, isLoading: false });
+
+    // If a torrent is currently selected and lacks file details, trigger fetch
+    const currentSelId = get().selectedId;
+    if (currentSelId) {
+      const match = reconciled.find(
+        (t) => t.id === currentSelId || (t.info_hash && t.info_hash.toLowerCase() === currentSelId.toLowerCase())
+      );
+      if (match && (!match.files || match.files.length === 0) && get().filesLoadingId !== match.id && !get().filesError) {
+        get().fetchTorrentDetails(match.id);
+      }
+    }
+  },
+
+  fetchTorrentDetails: async (id: string) => {
+    set({ filesLoadingId: id, filesError: null });
+    try {
+      const detail = await invoke<TorrentItem>('get_torrent_details', { id });
+      if (detail) {
+        set((state) => ({
+          torrents: state.torrents.map((t) =>
+            t.id === id || (t.info_hash && detail.info_hash && t.info_hash.toLowerCase() === detail.info_hash.toLowerCase())
+              ? { ...t, files: detail.files, trackers: detail.trackers }
+              : t
+          ),
+          filesLoadingId: state.filesLoadingId === id ? null : state.filesLoadingId,
+          filesError: null,
+        }));
+      } else {
+        set((state) => ({
+          filesLoadingId: state.filesLoadingId === id ? null : state.filesLoadingId,
+        }));
+      }
+    } catch (err: unknown) {
+      set((state) => ({
+        filesLoadingId: state.filesLoadingId === id ? null : state.filesLoadingId,
+        filesError: state.selectedId === id ? String(err) : state.filesError,
+      }));
+    }
+  },
 
   fetchTorrents: async () => {
     if (get().torrents.length === 0) {
@@ -155,54 +228,21 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
     try {
       const data = await invoke<TorrentItem[]>('list_torrents');
-      const prevTorrents = get().torrents;
-      const prevMap = new Map<string, TorrentItem>(prevTorrents.map((t) => [t.id, t]));
-
-      const merged = data.map((t) => {
-        const prev = prevMap.get(t.id);
-        if (!prev) return t;
-        return {
-          ...t,
-          files: t.files && t.files.length > 0 ? t.files : prev.files,
-          trackers: t.trackers && t.trackers.length > 0 ? t.trackers : prev.trackers,
-        };
-      });
-
-      set({ torrents: averageTransferSpeeds(reconcileRecheckState(merged)), isLoading: false });
-
-      const selId = get().selectedId;
-      if (selId) {
-        invoke<TorrentItem>('get_torrent_details', { id: selId })
-          .then((detail) => {
-            if (get().selectedId === selId && detail) {
-              set({
-                torrents: get().torrents.map((t) =>
-                  t.id === selId ? { ...t, files: detail.files, trackers: detail.trackers } : t
-                ),
-              });
-            }
-          })
-          .catch(() => {});
-      }
+      get().applyTorrentTelemetry(data);
     } catch {
       set({ isLoading: false });
     }
   },
 
   setSelectedId: (selectedId) => {
-    set({ selectedId });
+    set({ selectedId, filesError: null });
     if (selectedId) {
-      invoke<TorrentItem>('get_torrent_details', { id: selectedId })
-        .then((detail) => {
-          if (get().selectedId === selectedId && detail) {
-            set({
-              torrents: get().torrents.map((t) =>
-                t.id === selectedId ? { ...t, files: detail.files, trackers: detail.trackers } : t
-              ),
-            });
-          }
-        })
-        .catch(() => {});
+      const torrent = get().torrents.find(
+        (t) => t.id === selectedId || (t.info_hash && t.info_hash.toLowerCase() === selectedId.toLowerCase())
+      );
+      if (!torrent?.files || torrent.files.length === 0) {
+        get().fetchTorrentDetails(selectedId);
+      }
     }
   },
 
@@ -347,14 +387,13 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   setLocation: async (id: string, newPath: string) => {
+    // The daemon moves the files in the background; the stored location only
+    // changes after it has finished, so show what the engine reports.
     try {
       await invoke('set_torrent_location', { id, newPath });
-    } catch {
-      //
+    } finally {
+      await get().fetchTorrents();
     }
-    set({
-      torrents: get().torrents.map((t) => (t.id === id ? { ...t, save_path: newPath } : t)),
-    });
   },
 
   setCategory: async (id: string, category: string) => {

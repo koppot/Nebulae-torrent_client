@@ -131,11 +131,24 @@ pub fn check_media_path(file_path: String) -> PathDiagnostic {
 
 #[tauri::command]
 pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>, String> {
-    let path = Path::new(&file_path);
-    if !path.exists() {
+    let raw_path = Path::new(&file_path);
+    let path = if raw_path.exists() {
+        raw_path
+    } else if let Some(parent) = raw_path.parent() {
+        if parent.exists()
+            && (parent.join("BDMV").exists()
+                || parent.join("VIDEO_TS").exists()
+                || DiscDetector::inspect(parent).is_some())
+        {
+            parent
+        } else {
+            let diag = diagnose_media_path(&file_path);
+            return Err(diag.message);
+        }
+    } else {
         let diag = diagnose_media_path(&file_path);
         return Err(diag.message);
-    }
+    };
     Ok(DiscDetector::inspect(path))
 }
 
@@ -144,12 +157,26 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
 #[tauri::command]
 pub async fn detect_disc_set(file_path: String) -> Result<Vec<DiscStructureInfo>, String> {
     tokio::task::spawn_blocking(move || {
-        let path = Path::new(&file_path);
-        if !path.exists() {
+        let raw_path = Path::new(&file_path);
+        let path = if raw_path.exists() {
+            raw_path
+        } else if let Some(parent) = raw_path.parent() {
+            if parent.exists()
+                && (parent.join("BDMV").exists()
+                    || parent.join("VIDEO_TS").exists()
+                    || DiscDetector::inspect(parent).is_some())
+            {
+                parent
+            } else {
+                let diag = diagnose_media_path(&file_path);
+                tracing::warn!("[disc-set] path missing: {file_path} - {}", diag.message);
+                return Err(diag.message);
+            }
+        } else {
             let diag = diagnose_media_path(&file_path);
             tracing::warn!("[disc-set] path missing: {file_path} - {}", diag.message);
             return Err(diag.message);
-        }
+        };
         let set = DiscDetector::inspect_all(path);
         tracing::info!(
             "[disc-set] {file_path} -> {} disc(s): {}",
@@ -310,15 +337,33 @@ fn best_display_title_for_disc(path: &Path, default_title: &str) -> String {
 /// disc folder ALWAYS wins over loose episode files; a disc-less folder
 /// plays its largest video file (the main feature).
 fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
-    let path = Path::new(file_path);
-    if !path.exists() {
+    let raw_path = Path::new(file_path);
+    let path = if raw_path.exists() {
+        raw_path
+    } else if let Some(parent) = raw_path.parent() {
+        if parent.exists()
+            && (parent.join("BDMV").exists()
+                || parent.join("VIDEO_TS").exists()
+                || DiscDetector::inspect(parent).is_some())
+        {
+            parent
+        } else {
+            let diag = diagnose_media_path(file_path);
+            return Err(diag.message);
+        }
+    } else {
         let diag = diagnose_media_path(file_path);
         return Err(diag.message);
-    }
+    };
     if let Some(disc) = DiscDetector::inspect(path) {
         let title = best_display_title_for_disc(path, &disc.title);
+        let play_path = if Path::new(&disc.play_target).is_file() {
+            disc.play_target.clone()
+        } else {
+            disc.root_path.clone()
+        };
         return Ok(ResolvedPlayback {
-            resolved_path: disc.root_path.clone(),
+            resolved_path: play_path,
             title,
             is_disc: true,
             external: false,
@@ -350,8 +395,13 @@ fn resolve_playback(file_path: &str) -> Result<ResolvedPlayback, String> {
         if let Some(target) = resolve_disc_target(path) {
             if let Some(disc) = DiscDetector::inspect(&target) {
                 let title = best_display_title_for_disc(&target, &disc.title);
+                let play_path = if Path::new(&disc.play_target).is_file() {
+                    disc.play_target.clone()
+                } else {
+                    disc.root_path.clone()
+                };
                 return Ok(ResolvedPlayback {
-                    resolved_path: disc.root_path.clone(),
+                    resolved_path: play_path,
                     title,
                     is_disc: true,
                     external: false,
@@ -751,13 +801,10 @@ fn start_playback_inner(
                     return Err(e);
                 }
             };
-            // The overlay is created hidden; make it visible BEFORE the vout
-            // attaches, or the video renders into a hidden view (a dead
-            // black rectangle that receives no clicks).
-            if let Err(e) = player::set_overlay_hidden(app, false) {
-                tracing::error!("player_open: overlay unhide failed: {e}");
-                return Err(e);
-            }
+            // Attach the vout to the overlay view while it is still hidden,
+            // then reveal the overlay. This ensures the caopengllayer vout is
+            // bound to the view before the view becomes visible, avoiding a
+            // frame of transparency where the video has not yet landed.
             match VlcSession::open_shared(
                 &lib,
                 &state.shared_instance,
@@ -773,6 +820,17 @@ fn start_playback_inner(
                     *poison(&state.media_player) = session.media_player;
                     *poison(&state.started) = true;
                     poison(&state.framing).reset();
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        apply_crop_spec(&lib, session.media_player, "");
+                    }
+
+                    // Reveal the overlay now that the vout is attached, so the
+                    // first frame the user sees is video, not transparency.
+                    if let Err(e) = player::set_overlay_hidden(app, false) {
+                        tracing::error!("player_open: overlay unhide failed: {e}");
+                    }
 
                     // HDR: detect UHD / HDR content from disc metadata or file path,
                     // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
@@ -862,7 +920,7 @@ fn start_playback_inner(
                                 };
                             std::thread::spawn(move || {
                                 use tauri::Manager;
-                                let max_wait_attempts = 150; // 150 * 20ms = 3s
+                                let max_wait_attempts = 500; // 500 * 20ms = 10s
                                 let mut ready = false;
                                 for _ in 0..max_wait_attempts {
                                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -890,7 +948,7 @@ fn start_playback_inner(
                                 }
                                 if !ready {
                                     tracing::info!(
-                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 3s; exiting"
+                                    "[menu-diag] menu watcher (session_gen={menu_gen}): titles not ready within 10s; exiting"
                                 );
                                     return;
                                 }
@@ -1015,6 +1073,29 @@ fn start_playback_inner(
                                 let mut progress = menu_watch::Progress::default();
                                 let mut logged_kind = None;
                                 let mut menu_claim_logged = false;
+                                // Subtitle-display repair (see menu_watch::pg_repair_target):
+                                // done at most once per watcher run; the deselected track is
+                                // restored when its settle time has passed.
+                                let mut pg_repair_done = false;
+                                let mut pg_restore: Option<(i32, u64)> = None;
+                                let restore_spu = |prev: i32| {
+                                    let st = app_menu.state::<PlayerState>();
+                                    let still_current =
+                                        st.session_gen.load(std::sync::atomic::Ordering::SeqCst)
+                                            == menu_gen
+                                            && *poison(&st.media_player) == menu_mp;
+                                    if still_current {
+                                        unsafe {
+                                            (lib.libvlc_video_set_spu)(
+                                                menu_mp as *mut c_void,
+                                                prev,
+                                            );
+                                        }
+                                        tracing::info!(
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): subtitle track {prev} restored after menu repair"
+                                        );
+                                    }
+                                };
                                 let watch_started = std::time::Instant::now();
                                 let mut sleep_ms = progress.next_poll_ms(0);
                                 loop {
@@ -1057,6 +1138,42 @@ fn start_playback_inner(
                                             engine::is_active_feature_playback(&lib, mp)
                                         },
                                     };
+                                    if let Some((prev, due_ms)) = pg_restore {
+                                        if t_ms >= due_ms {
+                                            pg_restore = None;
+                                            restore_spu(prev);
+                                        }
+                                    }
+                                    if is_bluray_disc
+                                        && !pg_repair_done
+                                        && sample.at_menu
+                                        && sample.menu_open == Some(true)
+                                    {
+                                        let (spu_count, active_spu) = unsafe {
+                                            (
+                                                (lib.libvlc_video_get_spu_count)(mp as *mut c_void),
+                                                (lib.libvlc_video_get_spu)(mp as *mut c_void),
+                                            )
+                                        };
+                                        if let Some(prev) = menu_watch::pg_repair_target(
+                                            is_bluray_disc,
+                                            pg_repair_done,
+                                            true,
+                                            spu_count,
+                                            active_spu,
+                                        ) {
+                                            pg_repair_done = true;
+                                            tracing::info!(
+                                                "[menu-diag] menu watcher (session_gen={menu_gen}): T+{t_ms}ms: subtitle display is on (track {prev}); clearing it and repeating the menu request so the disc's menu page selection sees it off"
+                                            );
+                                            unsafe {
+                                                (lib.libvlc_video_set_spu)(mp as *mut c_void, -1);
+                                            }
+                                            nav_menu();
+                                            pg_restore =
+                                                Some((prev, t_ms + menu_watch::MENU_CONFIRM_MS));
+                                        }
+                                    }
                                     let decision = menu_watch::decide(&mut progress, t_ms, sample);
                                     match progress.menu_claim_since_ms() {
                                         Some(since) if !menu_claim_logged => {
@@ -1082,9 +1199,20 @@ fn start_playback_inner(
                                             "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at T+{t_ms}ms (held for {}ms) [Outcome A]",
                                             menu_watch::MENU_CONFIRM_MS
                                         );
+                                            if let Some((prev, due_ms)) = pg_restore.take() {
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(
+                                                        due_ms.saturating_sub(t_ms),
+                                                    ),
+                                                );
+                                                restore_spu(prev);
+                                            }
                                             return;
                                         }
                                         menu_watch::Decision::PlainPlayback => {
+                                            if let Some((prev, _)) = pg_restore.take() {
+                                                restore_spu(prev);
+                                            }
                                             // Outcome B: Confirmed active feature playback engaged on discs without a menu
                                             let cur = unsafe {
                                                 (lib.libvlc_media_player_get_title)(
@@ -1123,6 +1251,9 @@ fn start_playback_inner(
                                         }
                                     }
                                     sleep_ms = progress.next_poll_ms(t_ms);
+                                }
+                                if let Some((prev, _)) = pg_restore.take() {
+                                    restore_spu(prev);
                                 }
                                 tracing::info!(
                                 "[menu-diag] menu watcher (session_gen={menu_gen}): authored menu not reached within {}ms",
@@ -1512,6 +1643,67 @@ fn start_playback_inner(
                             });
                         }
 
+                        // Incomplete disc copy: a playlist references a stream file the
+                        // folder lacks. libbluray stops with a fatal error on reaching it,
+                        // which looks like a menu that plays briefly and goes black.
+                        // Name the missing file instead of leaving a blank screen.
+                        {
+                            let missing = if bypass_menu {
+                                Vec::new()
+                            } else {
+                                crate::player::bluray_meta::missing_playlist_clips(
+                                    &resolved.resolved_path,
+                                )
+                            };
+                            if !missing.is_empty() {
+                                tracing::warn!(
+                                    "[disc-integrity] {} references stream file(s) the folder lacks: {}",
+                                    resolved.resolved_path,
+                                    missing.join(", ")
+                                );
+                                let app_i = app.clone();
+                                let gen_i =
+                                    state.session_gen.load(std::sync::atomic::Ordering::SeqCst);
+                                let mp_i = session.media_player;
+                                let lib_i = lib.clone();
+                                std::thread::spawn(move || {
+                                    use tauri::{Emitter, Manager};
+                                    for _ in 0..120 {
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                        let st = app_i.state::<PlayerState>();
+                                        if st.session_gen.load(std::sync::atomic::Ordering::SeqCst)
+                                            != gen_i
+                                            || !*poison(&st.started)
+                                            || *poison(&st.media_player) != mp_i
+                                        {
+                                            return;
+                                        }
+                                        let state_code = unsafe {
+                                            (lib_i.libvlc_media_player_get_state)(
+                                                mp_i as *mut c_void,
+                                            )
+                                        };
+                                        if state_code == 6 || state_code == 7 {
+                                            tracing::error!(
+                                                "[disc-integrity] session_gen={gen_i}: playback ended (state {state_code}) with missing stream file(s): {}",
+                                                missing.join(", ")
+                                            );
+                                            let _ = app_i.emit(
+                                                "nebulae://player-error",
+                                                format!(
+                                                    "This disc copy is incomplete: BDMV/STREAM/{} is missing, \
+                                                    and the disc needs it to continue. Playback stopped there. \
+                                                    Restore the file from the original disc or torrent.",
+                                                    missing.join(", ")
+                                                ),
+                                            );
+                                            return;
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
                         // Deferred liveness check: detect silent decryption failure.
                         // When AACS keys (libaacs + KEYDB.cfg) are absent, the Blu-ray
                         // demuxer opens the BDMV but cannot decrypt stream data.
@@ -1752,24 +1944,13 @@ pub async fn player_open_inner(
     };
     // Programmatic opens (diagnostics, autoplay) must reach the frontend so
     // the overlay mounts and the shell clears away from the video. The
-    // webview may still be loading when the open happens, so the event is
-    // repeated a few times; the frontend's playerStore.open is idempotent,
-    // and the generation fence drops repeats that outlive a later close.
     use tauri::Emitter;
-    let emitter = app.clone();
-    let payload = result.clone();
-    std::thread::spawn(move || {
-        for delay in [0, 1500, 4000, 8000] {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
-            tracing::info!(
-                "[lifecycle-diag] player-opened emitted: session_gen={} delay={}ms path='{}'",
-                payload.gen,
-                delay,
-                payload.info.resolved_path
-            );
-            let _ = emitter.emit("player-opened", &payload);
-        }
-    });
+    tracing::info!(
+        "[lifecycle-diag] player-opened emitted: session_gen={} path='{}'",
+        result.gen,
+        result.info.resolved_path
+    );
+    let _ = app.emit("player-opened", &result);
     Ok(result)
 }
 /// What the engine is currently playing (for the frontend's readiness
@@ -1817,6 +1998,12 @@ pub fn player_engine_playback(state: tauri::State<PlayerState>) -> Option<Engine
 /// Begin a native window drag (title-bar mousedown handler).
 #[tauri::command]
 pub fn window_begin_drag(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let state = app.state::<PlayerState>();
+    if state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        tracing::info!("[drag] window_begin_drag suppressed: currently at disc menu");
+        return Ok(());
+    }
     tracing::info!("[drag] window_begin_drag invoked");
     let r = crate::player::begin_window_drag(&app);
     tracing::info!("[drag] begin_window_drag -> {:?}", r);
@@ -2566,6 +2753,28 @@ fn framing_tick(
         return;
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (title, at_menu, playing);
+        // Automatic black-bar cropping is disabled on Windows for 0.2.6 (deferred).
+        // Ensure any applied crop is cleared and player returns to uncropped 16:9 / source framing.
+        let mut fs = poison(&state.framing);
+        if fs.applied.is_some() || fs.settled {
+            tracing::info!(
+                "[framing] Windows 0.2.6: clearing crop and returning to uncropped presentation"
+            );
+            apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
+        }
+        if fs.window_fitted_aspect.is_some() {
+            let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
+            let _ = player::fit_player_window_to_aspect(&app, restore_aspect);
+            fs.window_fitted_aspect = None;
+        }
+        fs.forget_measurements();
+        return;
+    }
+
     let mut fs = poison(&state.framing);
 
     // 1. Disc menus must NEVER have black-bar crops applied.
@@ -2573,6 +2782,7 @@ fn framing_tick(
         if fs.applied.is_some() || fs.settled {
             tracing::info!("[framing] menu active: clearing crop");
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
         }
         if fs.window_fitted_aspect.is_some() {
             let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
@@ -2592,6 +2802,7 @@ fn framing_tick(
         );
         if fs.applied.is_some() {
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
         }
         if fs.window_fitted_aspect.is_some() {
             let restore_aspect = fs.source_display_aspect().unwrap_or(16.0 / 9.0);
@@ -2617,6 +2828,7 @@ fn framing_tick(
                 bars.frame_height
             );
             apply_crop_spec(lib, mp, "");
+            player::set_active_crop(&app, None);
             fs.source = (w, h);
             fs.sar = unsafe { engine::video_track_sar(lib, mp) };
             if fs.window_fitted_aspect.is_some() {
@@ -2640,6 +2852,7 @@ fn framing_tick(
                 bars.frame_height
             );
             apply_crop_spec(lib, mp, &bars.crop_spec());
+            player::set_active_crop(&app, Some(bars));
 
             // Fit window to confirmed cropped display aspect ratio (4:3 exception preserved)
             let active_aspect = bars.active_aspect();
@@ -2664,6 +2877,7 @@ fn framing_tick(
         if fs.polls_since_reassert >= 30 {
             fs.polls_since_reassert = 0;
             apply_crop_spec(lib, mp, &bars.crop_spec());
+            player::set_active_crop(&app, Some(bars));
         }
     }
 
@@ -2752,6 +2966,9 @@ pub fn player_poll(
             is_menu_title(&lib, mp),
         )
     };
+    state
+        .at_menu
+        .store(at_menu, std::sync::atomic::Ordering::SeqCst);
 
     framing_tick(app, &state, &lib, mp, title, at_menu, playing);
 
@@ -2826,7 +3043,14 @@ pub fn player_set_title(state: tauri::State<PlayerState>, title: i32) -> Result<
 /// navigate(activate) works on the first call), so the overlay wires the
 /// keyboard and the on-screen D-pad to this command instead.
 #[tauri::command]
-pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Result<(), String> {
+pub fn player_menu_navigate(
+    _app: tauri::AppHandle,
+    state: tauri::State<'_, PlayerState>,
+    mode: i32,
+) -> Result<(), String> {
+    let mode = mode.clamp(0, 5);
+    tracing::info!("[player] menu_navigate({mode})");
+
     let _mp_guard = state
         .media_player_cell
         .lock()
@@ -2836,10 +3060,44 @@ pub fn player_menu_navigate(state: tauri::State<PlayerState>, mode: i32) -> Resu
         return Ok(());
     }
     let lib = loaded_lib(&state)?;
-    let mode = mode.clamp(0, 5);
-    tracing::info!("[player] menu_navigate({mode})");
 
     unsafe { (lib.libvlc_media_player_navigate)(mp as *mut c_void, mode) };
+    Ok(())
+}
+
+/// Forward mouse move coordinates to the native video view during interactive disc menus.
+#[tauri::command]
+pub fn player_menu_mouse_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::player::embed_macos::forward_mouse_move(&app, x, y)?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::player::embed_linux::forward_mouse_move(&app, x, y)?;
+    }
+    Ok(())
+}
+
+/// Forward mouse click coordinates to the native video view during interactive disc menus.
+#[tauri::command]
+pub fn player_menu_mouse_click(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::player::embed_macos::forward_mouse_click(&app, x, y)?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::player::embed_windows::forward_mouse_click(&app, x, y)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::player::embed_linux::forward_mouse_click(&app, x, y)?;
+    }
     Ok(())
 }
 
@@ -4007,6 +4265,173 @@ mod tests {
         // 11. Again, no repeated seek while active
         assert!(!lifecycle.tick(false, 100, warn_mpls));
     }
+
+    #[test]
+    fn test_auto_heal_external_media_posters() {
+        let mut items = vec![
+            ExternalMedia {
+                path: "/media/external/Fuuka (2017)".to_string(),
+                title: "Fuuka (2017)".to_string(),
+                year: Some(2017),
+                kind: "Folder".to_string(),
+                added_ms: 100,
+                poster_url: Some("/thumbs/93758aeca10f8450.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Patlabor 2 the Movie (1993)".to_string(),
+                title: "Patlabor 2 the Movie (1993)".to_string(),
+                year: Some(1993),
+                kind: "Folder".to_string(),
+                added_ms: 200,
+                poster_url: Some("/thumbs/93758aeca10f8450.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Mary and a witchs flower (2017)".to_string(),
+                title: "Mary and a witchs flower (2017)".to_string(),
+                year: Some(2017),
+                kind: "Folder".to_string(),
+                added_ms: 300,
+                poster_url: Some("/cache/fuuka_scan.webp".to_string()),
+            },
+            ExternalMedia {
+                path: "/media/external/Suzume (2022)".to_string(),
+                title: "Suzume (2022)".to_string(),
+                year: Some(2022),
+                kind: "Folder".to_string(),
+                added_ms: 400,
+                poster_url: Some("/custom/my_suzume_art.jpg".to_string()),
+            },
+        ];
+
+        // First pass: heals contaminated entries, preserves genuine Fuuka and custom art
+        let mutated = auto_heal_external_media_posters(&mut items);
+        assert!(mutated, "Expected mutation on contaminated collection");
+
+        // Genuine Fuuka poster preserved
+        assert_eq!(
+            items[0].poster_url.as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+
+        // Patlabor 2 contaminated hash cleared to None
+        assert_eq!(items[1].poster_url, None);
+
+        // Mary and the Witch's Flower contaminated path cleared to None
+        assert_eq!(items[2].poster_url, None);
+
+        // Suzume intentional custom poster preserved
+        assert_eq!(
+            items[3].poster_url.as_deref(),
+            Some("/custom/my_suzume_art.jpg")
+        );
+
+        // Second pass: idempotent, zero mutations
+        let second_pass = auto_heal_external_media_posters(&mut items);
+        assert!(
+            !second_pass,
+            "Second pass must be idempotent and return false"
+        );
+        assert_eq!(
+            items[0].poster_url.as_deref(),
+            Some("/thumbs/93758aeca10f8450.webp")
+        );
+        assert_eq!(items[1].poster_url, None);
+        assert_eq!(items[2].poster_url, None);
+        assert_eq!(
+            items[3].poster_url.as_deref(),
+            Some("/custom/my_suzume_art.jpg")
+        );
+    }
+
+    #[test]
+    fn test_external_media_path_deduplication_preserves_distinct_releases() {
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut deduplicated: Vec<ExternalMedia> = Vec::new();
+
+        let raw_items = vec![
+            // Two entries with identical path (e.g. historical sidecar duplicates)
+            ExternalMedia {
+                path: "V:\\UHD\\Patlabor 2 the Movie (2002) UHD".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: None,
+                kind: "Blu-ray UHD".to_string(),
+                added_ms: 1000,
+                poster_url: None,
+            },
+            ExternalMedia {
+                path: "V:\\UHD\\Patlabor 2 the Movie (2002) UHD".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: Some(2002),
+                kind: "File".to_string(),
+                added_ms: 2000,
+                poster_url: Some("/thumbs/patlabor.webp".to_string()),
+            },
+            // Legitimate distinct release sharing same title and artwork
+            ExternalMedia {
+                path: "V:\\Blu-ray\\Patlabor 2 the Movie (1993)".to_string(),
+                title: "Patlabor 2: The Movie".to_string(),
+                year: Some(1993),
+                kind: "Blu-ray".to_string(),
+                added_ms: 3000,
+                poster_url: Some("/thumbs/patlabor.webp".to_string()),
+            },
+            // Another unique release
+            ExternalMedia {
+                path: "V:\\Blu-ray\\Fuuka (2017) Funimation".to_string(),
+                title: "Fuuka (2017)".to_string(),
+                year: Some(2017),
+                kind: "Blu-ray".to_string(),
+                added_ms: 4000,
+                poster_url: None,
+            },
+        ];
+
+        for m in &raw_items {
+            let key = m.path.trim().to_lowercase().replace('\\', "/");
+            if !seen_paths.insert(key.clone()) {
+                if let Some(existing) = deduplicated
+                    .iter_mut()
+                    .find(|e| e.path.trim().to_lowercase().replace('\\', "/") == key)
+                {
+                    if existing.year.is_none() && m.year.is_some() {
+                        existing.year = m.year;
+                    }
+                    if existing.poster_url.is_none() && m.poster_url.is_some() {
+                        existing.poster_url = m.poster_url.clone();
+                    }
+                    if m.added_ms > existing.added_ms {
+                        existing.added_ms = m.added_ms;
+                    }
+                }
+                continue;
+            }
+            deduplicated.push(m.clone());
+        }
+
+        // Total deduplicated items must be 3 (2 patlabor paths + 1 fuuka path)
+        assert_eq!(deduplicated.len(), 3);
+        // Patlabor UHD merged metadata from entry 2: year 2002, poster_url preserved, latest added_ms
+        assert_eq!(
+            deduplicated[0].path,
+            "V:\\UHD\\Patlabor 2 the Movie (2002) UHD"
+        );
+        assert_eq!(deduplicated[0].year, Some(2002));
+        assert_eq!(
+            deduplicated[0].poster_url.as_deref(),
+            Some("/thumbs/patlabor.webp")
+        );
+        assert_eq!(deduplicated[0].added_ms, 2000);
+
+        // Legitimate separate Patlabor 1993 release strictly preserved
+        assert_eq!(
+            deduplicated[1].path,
+            "V:\\Blu-ray\\Patlabor 2 the Movie (1993)"
+        );
+        assert_eq!(deduplicated[1].year, Some(1993));
+
+        // Fuuka strictly preserved
+        assert_eq!(deduplicated[2].path, "V:\\Blu-ray\\Fuuka (2017) Funimation");
+    }
 }
 
 /// One externally-opened media item in the persistent collection.
@@ -4061,34 +4486,90 @@ fn classify_external(path: &str) -> String {
     "File".into()
 }
 
+/// Auto-heal historical poster contamination in external media items.
+/// Non-Fuuka items pointing to contaminated Fuuka hashes or Fuuka scan paths
+/// have their `poster_url` safely reset to `None` so genuine artwork re-resolves cleanly.
+/// Preserves genuine Fuuka titles and intentional custom/user-assigned posters.
+pub fn auto_heal_external_media_posters(items: &mut [ExternalMedia]) -> bool {
+    let mut mutated = false;
+    for m in items.iter_mut() {
+        let title_lc = m.title.to_lowercase();
+        if !title_lc.contains("fuuka") {
+            if let Some(ref p) = m.poster_url {
+                let p_lc = p.to_lowercase();
+                if p_lc.contains("93758aeca10f8450") || p_lc.contains("fuuka") {
+                    tracing::info!(
+                        "[media] Auto-healing historical poster contamination for {:?}: resetting poster_url (was {})",
+                        m.title,
+                        p
+                    );
+                    m.poster_url = None;
+                    mutated = true;
+                }
+            }
+        }
+    }
+    mutated
+}
+
 fn read_external_store(app: &tauri::AppHandle) -> Vec<ExternalMedia> {
     let Ok(store) = external_media_path(app) else {
         return Vec::new();
     };
-    std::fs::read(&store)
+    let mut items: Vec<ExternalMedia> = std::fs::read(&store)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let mut seen_paths = std::collections::HashSet::new();
+    let has_path_duplicates = items.iter().any(|m| {
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        !seen_paths.insert(key)
+    });
+
+    let healed = auto_heal_external_media_posters(&mut items);
+    if healed || has_path_duplicates {
+        let _ = write_external_store(app, &items);
+        if has_path_duplicates {
+            let mut seen = std::collections::HashSet::new();
+            items.retain(|m| {
+                let key = m.path.trim().to_lowercase().replace('\\', "/");
+                seen.insert(key)
+            });
+        }
+    }
+    items
 }
 
 fn write_external_store(app: &tauri::AppHandle, items: &[ExternalMedia]) -> Result<(), String> {
-    // Collapse legacy duplicates on every write: one entry per title+year
-    // (owner: "we do not need 2 separate entries"). Keeps the FIRST.
-    let mut seen: Vec<(String, Option<i32>)> = Vec::new();
-    let items: Vec<ExternalMedia> = items
-        .iter()
-        .filter(|m| {
-            let key = (m.title.to_ascii_lowercase(), m.year);
-            if seen.contains(&key) {
-                return false;
+    // Deduplicate entries on every write: strictly one entry per unique filesystem path.
+    // Distinct paths (e.g. separate editions or releases sharing title/artwork) are strictly preserved.
+    let mut seen_paths = std::collections::HashSet::new();
+    let mut deduplicated: Vec<ExternalMedia> = Vec::new();
+    for m in items {
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        if !seen_paths.insert(key.clone()) {
+            // Path was already seen; merge metadata if this entry has more info
+            if let Some(existing) = deduplicated
+                .iter_mut()
+                .find(|e| e.path.trim().to_lowercase().replace('\\', "/") == key)
+            {
+                if existing.year.is_none() && m.year.is_some() {
+                    existing.year = m.year;
+                }
+                if existing.poster_url.is_none() && m.poster_url.is_some() {
+                    existing.poster_url = m.poster_url.clone();
+                }
+                if m.added_ms > existing.added_ms {
+                    existing.added_ms = m.added_ms;
+                }
             }
-            seen.push(key);
-            true
-        })
-        .cloned()
-        .collect();
+            continue;
+        }
+        deduplicated.push(m.clone());
+    }
     let store = external_media_path(app)?;
-    let data = serde_json::to_vec_pretty(&items).map_err(|e| e.to_string())?;
+    let data = serde_json::to_vec_pretty(&deduplicated).map_err(|e| e.to_string())?;
     std::fs::write(store, data).map_err(|e| e.to_string())
 }
 
@@ -4136,10 +4617,21 @@ fn release_root_of(path: &str) -> String {
         disc_num.is_some()
     }
 
+    fn is_disc_internal_file(name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        lower.ends_with(".m2ts")
+            || lower.ends_with(".clpi")
+            || lower.ends_with(".mpls")
+            || lower.ends_with(".bdmv")
+            || lower.ends_with(".ifo")
+            || lower.ends_with(".bup")
+            || lower.ends_with(".vob")
+    }
+
     while parts.len() > 1 {
         let last = *parts.last().unwrap();
-        // If last segment is a file (e.g. .mkv, .iso, .bdmv), pop it
-        if last.contains('.') && !last.ends_with(".disc") {
+        // If last segment is a disc-internal file (e.g. index.bdmv, VIDEO_TS.IFO), pop it
+        if is_disc_internal_file(last) {
             parts.pop();
             continue;
         }
@@ -4173,13 +4665,39 @@ fn release_root_of(path: &str) -> String {
 #[tauri::command]
 pub fn add_external_media(
     app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     path: String,
     title: String,
 ) -> Result<(), String> {
     let release_root = release_root_of(&path);
     let path = release_root;
+    let target_key = path.trim().to_lowercase().replace('\\', "/");
+    let target_norm = target_key.trim_end_matches('/');
+
+    // Check if path is already managed by a torrent or transitioned external record in DB
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (_, meta) in all_meta {
+            if let Some(ref sp) = meta.save_path {
+                let sp_key = sp.trim().to_lowercase().replace('\\', "/");
+                let sp_norm = sp_key.trim_end_matches('/');
+                let display = meta.display_title.as_deref().unwrap_or("");
+                let full_key = format!("{sp_norm}/{}", display.trim().to_lowercase());
+                if target_norm == sp_norm
+                    || target_norm == full_key
+                    || target_norm.starts_with(&format!("{sp_norm}/"))
+                {
+                    // Already managed in library — do not create duplicate
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let mut items = read_external_store(&app);
-    if items.iter().any(|m| m.path == path) {
+    if items.iter().any(|m| {
+        let k = m.path.trim().to_lowercase().replace('\\', "/");
+        k.trim_end_matches('/') == target_norm
+    }) {
         return Ok(());
     }
     // Use MediaTitleParser so TMDB metadata (library banner, poster, overview, runtime)
@@ -4191,14 +4709,20 @@ pub fn add_external_media(
         title.trim().to_string()
     };
     let year = parsed.year.map(|y| y as i32);
-    // One poster per movie (owner): the same title can arrive twice -
-    // auto-adopted on play AND added manually - at different folder
-    // levels. Keep the FIRST entry; later duplicates are dropped.
-    if items
-        .iter()
-        .any(|m| m.title.eq_ignore_ascii_case(&title_clean) && m.year == year)
-    {
-        return Ok(());
+    // If an entry for the exact same filesystem path already exists, update missing metadata and do not duplicate.
+    // Distinct paths (e.g. separate cuts/editions sharing title or artwork) are strictly preserved as separate entries.
+    if let Some(existing) = items.iter_mut().find(|m| {
+        m.path
+            .trim()
+            .to_lowercase()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            == target_norm
+    }) {
+        if existing.year.is_none() && year.is_some() {
+            existing.year = year;
+        }
+        return write_external_store(&app, &items);
     }
     items.push(ExternalMedia {
         path: path.clone(),
@@ -4229,34 +4753,48 @@ pub fn list_external_media(
 
     // Source 1: JSON sidecar (user-added external media).
     let sidecar_items = read_external_store(&app);
-    let mut live: Vec<ExternalMedia> = sidecar_items
-        .into_iter()
-        .map(|mut m| {
-            m.path = release_root_of(&m.path);
-            m
-        })
-        .filter(|m| std::path::Path::new(&m.path).exists())
-        .collect();
+    let mut live: Vec<ExternalMedia> = Vec::new();
+    let mut seen_live_paths = std::collections::HashSet::new();
+    for mut m in sidecar_items {
+        m.path = release_root_of(&m.path);
+        let key = m.path.trim().to_lowercase().replace('\\', "/");
+        if seen_live_paths.insert(key) {
+            live.push(m);
+        }
+    }
     let _ = write_external_store(&app, &live);
 
     // Track paths already in sidecar to avoid duplicates from DB source.
-    let mut seen_paths: std::collections::HashSet<String> =
-        live.iter().map(|m| m.path.clone()).collect();
+    let mut seen_paths: std::collections::HashSet<String> = live
+        .iter()
+        .map(|m| m.path.trim().to_lowercase().replace('\\', "/"))
+        .collect();
 
     // Source 2: DB rows with is_external = 1 (auto-reclassified by seeding.rs).
     // These include the user's custom title, poster associations, and all
     // metadata imported before the torrent was removed.
     if let Ok(all_meta) = db.list_all_torrent_metadata() {
         for (_, meta) in all_meta {
-            if !meta.is_external {
+            if !meta.is_external || meta.info_hash.len() < 20 {
                 continue;
             }
 
-            // Use user-defined title if set; fall back to provider title, then info_hash.
+            // Use user-defined title if set; fall back to provider title, then
+            // a title derived from the save_path folder name, then info_hash.
+            // Transmission-sourced torrents never have display_title populated
+            // in the DB, so without this fallback they would appear in External
+            // under their raw info hash.
+            let derived_title = meta
+                .save_path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
             let title = meta
                 .user_display_title
                 .as_deref()
                 .or(meta.display_title.as_deref())
+                .or(derived_title.as_deref())
                 .unwrap_or(&meta.info_hash)
                 .to_string();
 
@@ -4266,7 +4804,11 @@ pub fn list_external_media(
                 _ => continue,
             };
             let candidate_path = std::path::Path::new(raw_path);
-            let torrent_name = meta.display_title.as_deref().unwrap_or(&title);
+            let torrent_name = meta
+                .display_title
+                .as_deref()
+                .or(derived_title.as_deref())
+                .unwrap_or(&title);
             let full_path = if candidate_path.ends_with(torrent_name)
                 || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
             {
@@ -4277,12 +4819,15 @@ pub fn list_external_media(
 
             let norm_path = if full_path.exists() {
                 full_path.to_string_lossy().to_string()
+            } else if candidate_path.exists() {
+                candidate_path.to_string_lossy().to_string()
             } else {
-                release_root_of(raw_path)
+                full_path.to_string_lossy().to_string()
             };
 
+            let norm_key = norm_path.trim().to_lowercase().replace('\\', "/");
             // Skip if already covered by sidecar.
-            if !seen_paths.insert(norm_path.clone()) {
+            if !seen_paths.insert(norm_key) {
                 continue;
             }
 
@@ -4314,14 +4859,79 @@ pub fn list_external_media(
         }
     }
 
+    // Ensure all live external items (both sidecar and DB-sourced) are free from cross-title contamination
+    auto_heal_external_media_posters(&mut live);
+
+    // Apply saved external media ordering if present
+    if let Ok(order_paths) = db.get_external_media_order() {
+        if !order_paths.is_empty() {
+            let mut order_map: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (i, p) in order_paths.iter().enumerate() {
+                let key = p.trim().to_lowercase().replace('\\', "/");
+                order_map.entry(key).or_insert(i);
+            }
+            live.sort_by_key(|m| {
+                let key = m.path.trim().to_lowercase().replace('\\', "/");
+                order_map.get(&key).copied().unwrap_or(usize::MAX)
+            });
+        }
+    }
+
     Ok(live)
 }
 /// Remove an entry explicitly (owner-initiated delete in the collection).
+/// Removes from both the JSON sidecar store and the DB row (is_external = 1)
+/// so the item does not reappear on the next list_external_media call.
 #[tauri::command]
-pub fn remove_external_media(app: tauri::AppHandle, path: String) -> Result<(), String> {
+pub fn remove_external_media(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    path: String,
+) -> Result<(), String> {
     let mut items = read_external_store(&app);
     items.retain(|m| m.path != path);
-    write_external_store(&app, &items)
+    write_external_store(&app, &items)?;
+
+    // Also delete the corresponding DB row(s) so the item does not
+    // reappear on the next list_external_media call. The DB stores the
+    // release root path as save_path (possibly joined with the title).
+    let norm = release_root_of(&path);
+    if let Ok(all_meta) = db.list_all_torrent_metadata() {
+        for (info_hash, meta) in all_meta {
+            if !meta.is_external {
+                continue;
+            }
+            let Some(save_path) = meta.save_path.as_deref() else {
+                continue;
+            };
+            let candidate_path = std::path::Path::new(save_path);
+            let torrent_name = meta
+                .display_title
+                .as_deref()
+                .or_else(|| candidate_path.file_name().and_then(|n| n.to_str()))
+                .unwrap_or(&info_hash);
+            let full_path = if candidate_path.ends_with(torrent_name)
+                || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
+            {
+                candidate_path.to_path_buf()
+            } else {
+                candidate_path.join(torrent_name)
+            };
+            let norm_path = if full_path.exists() {
+                full_path.to_string_lossy().to_string()
+            } else if candidate_path.exists() {
+                candidate_path.to_string_lossy().to_string()
+            } else {
+                full_path.to_string_lossy().to_string()
+            };
+            if release_root_of(&norm_path) == norm {
+                let _ = db.delete_torrent_metadata(&info_hash);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Update the display title and optional poster of an external media item.
@@ -4422,19 +5032,120 @@ pub fn relink_external_media(
 #[tauri::command]
 pub fn relink_torrent_media(
     engine: tauri::State<'_, crate::engine::SharedEngine>,
-    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    _db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     info_hash: String,
     new_path: String,
 ) -> Result<(), String> {
-    let _ = engine.set_location(&info_hash, &new_path);
-
-    if let Ok(Some(mut meta)) = db.get_torrent_metadata(&info_hash) {
-        meta.save_path = Some(new_path.clone());
-        let _ = db.upsert_torrent_metadata(&meta);
+    if !Path::new(&new_path).exists() {
+        return Err(format!("Selected path does not exist on disk: {new_path}"));
     }
+    // The engine derives the download location (the folder that CONTAINS the
+    // release) and records it as save_path. Overwriting it here with the raw
+    // picked path made the library file the item under the wrong root.
+    engine
+        .relink_location(&info_hash, &new_path)
+        .map_err(|e| format!("Relink failed: {e}"))?;
 
     tracing::info!("[relink] torrent {info_hash} relinked to '{new_path}'");
     Ok(())
+}
+
+/// Allows selecting and saving a user-supplied poster image.
+/// Converts the image to .webp in managed artwork storage, persists to database/JSON,
+/// and returns the canonical webp path.
+#[tauri::command]
+pub fn set_custom_poster(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+    target_type: String,
+    target_id: String,
+    source_image_path: String,
+) -> Result<String, String> {
+    let source = Path::new(&source_image_path);
+    if !source.is_file() {
+        return Err(format!(
+            "Selected file does not exist or is not a file: {source_image_path}"
+        ));
+    }
+
+    // The managed artwork store is <data dir>/Nebulae/thumbnails, the same
+    // place TMDB and ADC artwork lives. Tauri's app_data_dir() resolves to
+    // the bundle-identifier folder instead, which no other artwork code reads.
+    let thumbs_dir = crate::utils::paths::user_data_dir()
+        .ok_or_else(|| "Could not get app data directory".to_string())?
+        .join("Nebulae")
+        .join("thumbnails");
+
+    let webp_path = crate::thumbs::convert_single_image(&thumbs_dir, source)
+        .map_err(|e| format!("Unsupported or invalid image: {e}"))?;
+    let webp_str = webp_path.to_string_lossy().to_string();
+
+    match target_type.as_str() {
+        "torrent" => {
+            let hash = target_id.to_lowercase();
+            if let Ok(Some(mut meta)) = db.get_torrent_metadata(&hash) {
+                meta.poster_path = Some(webp_str.clone());
+                // upsert_torrent_metadata does NOT persist poster_path — use
+                // set_torrent_poster which writes it to both torrent_metadata
+                // and snatched_records.
+                db.set_torrent_poster(&hash, &webp_str)
+                    .map_err(|e| format!("Failed to persist poster: {e}"))?;
+                // Keep the in-memory struct in sync for any subsequent reads.
+                db.upsert_torrent_metadata(&meta)
+                    .map_err(|e| format!("Failed to update torrent metadata: {e}"))?;
+            } else {
+                return Err(format!(
+                    "Torrent with info hash '{target_id}' not found in database"
+                ));
+            }
+        }
+        "external" => {
+            let norm_target = release_root_of(&target_id);
+            let mut items = read_external_store(&app);
+            let mut found = false;
+            for item in &mut items {
+                if item.path == target_id || item.path == norm_target {
+                    item.poster_url = Some(webp_str.clone());
+                    found = true;
+                }
+            }
+            if !found {
+                items.push(ExternalMedia {
+                    path: target_id.clone(),
+                    title: Path::new(&target_id)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("External Media")
+                        .to_string(),
+                    year: None,
+                    kind: classify_external(&target_id),
+                    added_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0),
+                    poster_url: Some(webp_str.clone()),
+                });
+            }
+            write_external_store(&app, &items)?;
+
+            if let Ok(all_meta) = db.list_all_torrent_metadata() {
+                for (_, mut meta) in all_meta {
+                    if meta.is_external {
+                        if let Some(ref sp) = meta.save_path {
+                            if sp == &target_id || release_root_of(sp) == norm_target {
+                                meta.poster_path = Some(webp_str.clone());
+                                let _ = db.upsert_torrent_metadata(&meta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => return Err(format!("Unknown target type: {target_type}")),
+    }
+
+    tracing::info!("[poster] Set custom poster for {target_type}:{target_id} -> {webp_str}");
+    Ok(webp_str)
 }
 
 /// Toggle the player window's always-on-top pin (owner: a little mark in

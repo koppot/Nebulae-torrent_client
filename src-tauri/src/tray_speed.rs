@@ -18,8 +18,7 @@ use tauri::AppHandle;
 
 use crate::commands::torrent::TorrentItem;
 use crate::speed_format::{
-    aggregate_client_rates, create_composite_tray_icon, format_rate, SHOW_THRESHOLD,
-    STALE_AFTER_SECS,
+    aggregate_client_rates, create_composite_tray_icon, SHOW_THRESHOLD, STALE_AFTER_SECS,
 };
 
 /// Tray icon id used by the builder in `lib.rs` (`"nebulae-tray"`).
@@ -94,8 +93,12 @@ pub fn update_tray_title(app: &AppHandle, torrents: &[TorrentItem], state: &mut 
                 let _ = tray.set_icon(Some(img));
                 state.is_custom_icon = true;
 
-                // Also update tooltip with exact rates
-                let tooltip = format!("Nebulae — ↑ {}  ↓ {}", format_rate(up), format_rate(down));
+                // Also update tooltip with adaptive rates (preserving upload-first order)
+                let tooltip = format!(
+                    "Nebulae — ▲ {}   ▼ {}",
+                    crate::speed_format::format_adaptive_rate(up),
+                    crate::speed_format::format_adaptive_rate(down)
+                );
                 let _ = tray.set_tooltip(Some(&tooltip));
             }
             None => {
@@ -108,6 +111,20 @@ pub fn update_tray_title(app: &AppHandle, torrents: &[TorrentItem], state: &mut 
                 }
             }
         }
+    }
+}
+
+/// Clear the tray speed readout and restore default icon/tooltip on engine stop or failure.
+pub fn clear_tray_title(app: &AppHandle, state: &mut TraySpeedState) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if state.is_custom_icon {
+            if let Some(default_icon) = app.default_window_icon() {
+                let _ = tray.set_icon(Some(default_icon.clone()));
+            }
+            let _ = tray.set_tooltip(Some("Nebulae — Client by Asian DVD Club"));
+            state.is_custom_icon = false;
+        }
+        state.last_rates = None;
     }
 }
 
@@ -135,6 +152,8 @@ mod tests {
             category: String::new(),
             is_media: false,
             poster_url: None,
+            raw_name: None,
+            content_path: None,
             info_hash: "".to_string(),
             save_path: "".to_string(),
             added_on: 0,

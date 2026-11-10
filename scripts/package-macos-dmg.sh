@@ -18,7 +18,8 @@
 #
 # Usage:
 #   package-macos-dmg.sh --app <Nebulae.app> --output <name.dmg> \
-#                        [--icon <icon.icns>] [--layout-from <tauri.dmg>]
+#                        [--icon <icon.icns>] [--layout-from <tauri.dmg>] \
+#                        [--background <background.png>]
 #
 #   --app          Nebulae.app to package
 #   --output       final DMG path (absolute or relative to cwd)
@@ -27,6 +28,10 @@
 #   --layout-from  a DMG produced by the tauri bundler whose .DS_Store
 #                  (window size / icon positions from tauri.conf.json) should
 #                  be carried over; optional
+#   --background   background PNG for the DMG window; default:
+#                  <repo>/assets/dmg-background.png (created at build time if
+#                  missing); placed in .background/ on the volume so Finder
+#                  renders it as the mounted window backdrop.
 
 set -euo pipefail
 
@@ -40,6 +45,7 @@ APP_DIR=""
 OUTPUT=""
 ICON_FILE="$REPO_ROOT/src-tauri/icons/icon.icns"
 LAYOUT_DMG=""
+BACKGROUND_FILE="$REPO_ROOT/assets/dmg-background.png"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --output) OUTPUT="$2"; shift 2 ;;
         --icon) ICON_FILE="$2"; shift 2 ;;
         --layout-from) LAYOUT_DMG="$2"; shift 2 ;;
+        --background) BACKGROUND_FILE="$2"; shift 2 ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
@@ -65,6 +72,16 @@ ICON_FILE="$(cd "$(dirname "$ICON_FILE")" && printf '%s/%s\n' "$PWD" "$(basename
 
 command -v SetFile >/dev/null || fail "SetFile not available (needs macOS)"
 command -v osascript >/dev/null || fail "osascript not available (macOS only)"
+
+# --- Background validation (never relative to the caller's cwd) ------------
+if [[ ! -f "$BACKGROUND_FILE" || ! -r "$BACKGROUND_FILE" ]]; then
+    fail "Background image missing or unreadable: $BACKGROUND_FILE"
+fi
+BACKGROUND_FILE="$(cd "$(dirname "$BACKGROUND_FILE")" && printf '%s/%s\n' "$PWD" "$(basename "$BACKGROUND_FILE")")"
+# PNG magic: \x89PNG (first 4 bytes)
+PNG_MAGIC="$(head -c 4 "$BACKGROUND_FILE" | od -An -tx1 | tr -d ' \n')"
+[[ "$PNG_MAGIC" == "89504e47" ]] ||
+    fail "Not a valid PNG file: $BACKGROUND_FILE"
 
 # --- Temporary state with cleanup traps --------------------------------------
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nebulae-dmg.XXXXXX")"
@@ -89,8 +106,12 @@ trap cleanup EXIT
 log "=== Packaging DMG: $(basename "$OUTPUT") ==="
 
 # --- Stage the payload --------------------------------------------------------
-cp -R "$APP_DIR" "$STAGING_DIR/Nebulae.app"
+ditto "$APP_DIR" "$STAGING_DIR/Nebulae.app"
 ln -s /Applications "$STAGING_DIR/Applications"
+
+# --- Background image: Finder renders it as the mounted window backdrop ---
+mkdir -p "$STAGING_DIR/.background"
+cp "$BACKGROUND_FILE" "$STAGING_DIR/.background/background.png"
 
 # Carry over the bundler's .DS_Store so the DMG window layout configured in
 # tauri.conf.json (window size, app / Applications positions) survives.

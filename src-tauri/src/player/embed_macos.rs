@@ -66,7 +66,19 @@ objc2::define_class!(
                 // Become first responder so keyDown reaches us (keyboard
                 // controls).
                 let _: bool = objc2::msg_send![&*win, makeFirstResponder: this];
-                let _: () = objc2::msg_send![&*win, performWindowDragWithEvent: event];
+                let is_fs = FULLSCREEN_ON.load(Ordering::SeqCst);
+                if !is_fs {
+                    let at_menu = overlay_app()
+                        .map(|app| {
+                            app.state::<crate::player::PlayerState>()
+                                .at_menu
+                                .load(Ordering::SeqCst)
+                        })
+                        .unwrap_or(false);
+                    if !at_menu {
+                        let _: () = objc2::msg_send![&*win, performWindowDragWithEvent: event];
+                    }
+                }
             }
         }
 
@@ -886,6 +898,8 @@ pub fn fit_player_window_to_aspect(app: &AppHandle, aspect: f64) -> Result<(), S
     .map_err(|e| e.to_string())
 }
 
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
+
 /// Show/hide the overlay without tearing the view down.
 ///
 /// Waits for the main thread to apply the change: callers are the async
@@ -1032,6 +1046,153 @@ pub fn sync_frame(
             rect.size.width,
             rect.size.height
         );
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
+/// Forward mouse movement to the native video view for interactive disc menus.
+pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let view_ptr = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(Ordering::SeqCst);
+    if view_ptr == 0 {
+        return Ok(());
+    }
+    app.run_on_main_thread(move || unsafe {
+        let view = view_ptr as *mut NSView;
+        if view.is_null() {
+            return;
+        }
+        let win = match (*view).window() {
+            Some(w) => w,
+            None => return,
+        };
+        let content_height = match win.contentView() {
+            Some(cv) => cv.frame().size.height,
+            None => return,
+        };
+        let loc = NSPoint::new(x, content_height - y);
+        let win_num = win.windowNumber();
+
+        // Synthesize NSEventTypeMouseMoved (5)
+        let ev: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            class!(NSEvent),
+            mouseEventWithType: 5usize,
+            location: loc,
+            modifierFlags: 0usize,
+            timestamp: 0.0f64,
+            windowNumber: win_num,
+            context: std::ptr::null::<NSObject>(),
+            eventNumber: 0isize,
+            clickCount: 0isize,
+            pressure: 0.0f32
+        ];
+        if ev.is_null() {
+            return;
+        }
+
+        unsafe fn send_move(v: &NSView, ev: *mut objc2::runtime::AnyObject) {
+            if v.class().name().to_bytes() != b"NebulaeVideoOverlayView" {
+                let sel = sel!(mouseMoved:);
+                if v.respondsToSelector(sel) {
+                    let _: () = objc2::msg_send![v, mouseMoved: ev];
+                }
+            }
+            let subviews = v.subviews();
+            for sub in subviews.iter() {
+                send_move(&sub, ev);
+            }
+        }
+
+        let subviews = (*view).subviews();
+        for sub in subviews.iter() {
+            send_move(&sub, ev);
+        }
+    })
+    .map_err(|e| format!("main thread unavailable: {e}"))
+}
+
+/// Forward mouse click (down + up) to the native video view for interactive disc menus.
+pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let view_ptr = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(Ordering::SeqCst);
+    if view_ptr == 0 {
+        return Ok(());
+    }
+    app.run_on_main_thread(move || unsafe {
+        let view = view_ptr as *mut NSView;
+        if view.is_null() {
+            return;
+        }
+        let win = match (*view).window() {
+            Some(w) => w,
+            None => return,
+        };
+        let content_height = match win.contentView() {
+            Some(cv) => cv.frame().size.height,
+            None => return,
+        };
+        let loc = NSPoint::new(x, content_height - y);
+        let win_num = win.windowNumber();
+
+        // 1: NSLeftMouseDown
+        let ev_down: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            class!(NSEvent),
+            mouseEventWithType: 1usize,
+            location: loc,
+            modifierFlags: 0usize,
+            timestamp: 0.0f64,
+            windowNumber: win_num,
+            context: std::ptr::null::<NSObject>(),
+            eventNumber: 0isize,
+            clickCount: 1isize,
+            pressure: 1.0f32
+        ];
+
+        // 2: NSLeftMouseUp
+        let ev_up: *mut objc2::runtime::AnyObject = objc2::msg_send![
+            class!(NSEvent),
+            mouseEventWithType: 2usize,
+            location: loc,
+            modifierFlags: 0usize,
+            timestamp: 0.0f64,
+            windowNumber: win_num,
+            context: std::ptr::null::<NSObject>(),
+            eventNumber: 0isize,
+            clickCount: 1isize,
+            pressure: 0.0f32
+        ];
+
+        if ev_down.is_null() || ev_up.is_null() {
+            return;
+        }
+
+        unsafe fn send_click(
+            v: &NSView,
+            ev_down: *mut objc2::runtime::AnyObject,
+            ev_up: *mut objc2::runtime::AnyObject,
+        ) {
+            if v.class().name().to_bytes() != b"NebulaeVideoOverlayView" {
+                if v.respondsToSelector(sel!(mouseDown:)) {
+                    let _: () = objc2::msg_send![v, mouseDown: ev_down];
+                }
+                if v.respondsToSelector(sel!(mouseUp:)) {
+                    let _: () = objc2::msg_send![v, mouseUp: ev_up];
+                }
+            }
+            let subviews = v.subviews();
+            for sub in subviews.iter() {
+                send_click(&sub, ev_down, ev_up);
+            }
+        }
+
+        let subviews = (*view).subviews();
+        for sub in subviews.iter() {
+            send_click(&sub, ev_down, ev_up);
+        }
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }

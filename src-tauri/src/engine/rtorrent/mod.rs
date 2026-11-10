@@ -147,6 +147,8 @@ impl RtorrentRemoteEngine {
             category: text(13),
             is_media,
             poster_url: None,
+            raw_name: None,
+            content_path: None,
             info_hash: text(0).to_lowercase(),
             save_path: text(2),
             historical_save_path: None,

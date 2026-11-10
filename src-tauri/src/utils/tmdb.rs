@@ -285,8 +285,9 @@ pub fn fetch_poster(
         let p = PathBuf::from(&cached);
         // Anti-contamination guard: 93758aeca10f8450.webp was an erroneously cross-mapped Fuuka poster.
         // Invalidate it for any non-Fuuka entry so it cleanly re-fetches genuine artwork.
-        let is_contaminated =
-            cached.contains("93758aeca10f8450") && !lookup_key.to_lowercase().contains("fuuka");
+        let is_contaminated = (cached.contains("93758aeca10f8450")
+            || cached.to_lowercase().contains("fuuka"))
+            && !lookup_key.to_lowercase().contains("fuuka");
         if p.exists() && !is_contaminated {
             return Ok(Some(TmdbMatch {
                 poster_webp: p,
@@ -327,6 +328,12 @@ pub fn fetch_poster(
     let v2_key = format!("tmdb_poster:v2:{}", lookup_key.to_lowercase());
     let v2_fallback = || -> Option<TmdbMatch> {
         let p = db.get_setting(&v2_key).ok().flatten()?;
+        let is_contaminated = (p.contains("93758aeca10f8450")
+            || p.to_lowercase().contains("fuuka"))
+            && !lookup_key.to_lowercase().contains("fuuka");
+        if is_contaminated {
+            return None;
+        }
         let path = PathBuf::from(&p);
         if !path.exists() {
             return None;
@@ -442,7 +449,7 @@ pub fn fetch_poster(
         let bytes = img_resp
             .bytes()
             .map_err(|e| format!("TMDB image body: {e}"))?;
-        let thumbs_dir = dirs::data_dir()
+        let thumbs_dir = crate::utils::paths::user_data_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("Nebulae")
             .join("thumbnails");
@@ -649,7 +656,7 @@ fn trakt_fallback(
     let bytes = img_resp
         .bytes()
         .map_err(|e| format!("TMDB image body: {e}"))?;
-    let thumbs_dir = dirs::data_dir()
+    let thumbs_dir = crate::utils::paths::user_data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("Nebulae")
         .join("thumbnails");

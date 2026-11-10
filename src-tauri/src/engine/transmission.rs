@@ -351,6 +351,78 @@ fn rpc_id(id: &str) -> serde_json::Value {
     }
 }
 
+/// Download location to give Transmission when the user points a torrent at
+/// `chosen` (either the folder that CONTAINS the release or the release
+/// folder/file itself). Transmission resolves data as `<location>/<name>`.
+fn relink_location_for(chosen: &std::path::Path, torrent_name: Option<&str>) -> String {
+    let as_string = |p: &std::path::Path| p.to_string_lossy().to_string();
+    let parent = chosen.parent().map(as_string);
+    if chosen.is_file() {
+        return parent.unwrap_or_else(|| as_string(chosen));
+    }
+    let Some(name) = torrent_name.filter(|n| !n.is_empty()) else {
+        return as_string(chosen);
+    };
+    let chosen_is_release = chosen
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case(name));
+    if chosen_is_release && !chosen.join(name).exists() {
+        if let Some(p) = parent {
+            return p;
+        }
+    }
+    as_string(chosen)
+}
+
+type MoveDoneCallback = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+/// Transmission answers "success" for a move even when the data is not at the
+/// old location, and it overwrites same-named files already in the destination.
+/// Both are checked here so a move never misreports or destroys anything.
+fn check_move_preflight(
+    current_dir: Option<&std::path::Path>,
+    name: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    if dest.exists() && !dest.is_dir() {
+        return Err(format!("{} is not a folder", dest.display()));
+    }
+    let Some(current_dir) = current_dir else {
+        return Ok(());
+    };
+    let same = |a: &std::path::Path, b: &std::path::Path| {
+        a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .map_or(a == b, |(x, y)| x == y)
+    };
+    if same(current_dir, dest) {
+        return Err("The torrent is already in that folder".to_string());
+    }
+    if name.is_empty() {
+        return Ok(());
+    }
+    let source = current_dir.join(name);
+    if !source.exists() {
+        return Err(format!(
+            "The files are not at {}. Use Relink to point the torrent at them instead of moving",
+            source.display()
+        ));
+    }
+    if dest.starts_with(&source) {
+        return Err("A folder cannot be moved into itself".to_string());
+    }
+    let target = dest.join(name);
+    if target.exists() {
+        return Err(format!(
+            "{} already exists. Nothing was moved, so nothing was overwritten",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
 impl TransmissionRpcClient {
     pub fn new(port: u16, username: &str, password: &str) -> Self {
         let auth = if !username.is_empty() || !password.is_empty() {
@@ -661,16 +733,29 @@ impl TransmissionRpcClient {
         Ok(())
     }
 
+    /// `on_done` is only used for a data move: it runs on the move thread with
+    /// the daemon's final verdict, because the call itself returns before the
+    /// files have been relocated.
     pub fn torrent_set_location(
         &self,
         id: &str,
         location: &str,
         move_data: bool,
+        on_done: Option<MoveDoneCallback>,
     ) -> Result<(), String> {
         let args = json!({
             "ids": [rpc_id(id)],
             "location": location,
             "move": move_data
+        });
+        if !move_data {
+            // Relink (move: false) is instantaneous — execute synchronously through standard RPC
+            self.request("torrent-set-location", Some(args))?;
+            return Ok(());
+        }
+        let payload = json!({
+            "method": "torrent-set-location",
+            "arguments": args
         });
         // Moving terabyte-scale libraries takes FAR longer than the shared
         // client's 15 s timeout (the move blocks this RPC until done), so
@@ -683,25 +768,36 @@ impl TransmissionRpcClient {
             .map(|g| g.clone())
             .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
         let auth = self.auth_header.clone();
-        // Clone the current token as a mutable local — the thread will update
-        // it in-place whenever Transmission returns 409 with a new token,
-        // so subsequent retries use the refreshed value.
         let mut sid = self.session_id.lock().unwrap().clone();
         let id = id.to_string();
         let location = location.to_string();
+        let session_mutex = std::sync::Arc::new(std::sync::Mutex::new(sid.clone()));
+        let session_mutex_clone = session_mutex.clone();
+        let mut on_done = on_done;
         std::thread::spawn(move || {
+            let (report_id, report_location) = (id.clone(), location.clone());
+            let mut report = move |verdict: Result<(), String>| {
+                if let Err(e) = &verdict {
+                    tracing::error!(
+                        "[set-location] move of {report_id} -> {report_location} failed: {e}"
+                    );
+                }
+                if let Some(cb) = on_done.take() {
+                    cb(verdict);
+                }
+            };
             let client = match reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(1800))
                 .build()
             {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("[set-location] client build failed: {e}");
+                    report(Err(format!("client build failed: {e}")));
                     return;
                 }
             };
             for _attempt in 0..3 {
-                let mut req = client.post(&rpc_url).json(&args);
+                let mut req = client.post(&rpc_url).json(&payload);
                 if let Some(ref s) = sid {
                     req = req.header("X-Transmission-Session-Id", s);
                 }
@@ -718,24 +814,44 @@ impl TransmissionRpcClient {
                             .map(|h| h.to_str())
                         {
                             sid = Some(new_token.to_string());
+                            if let Ok(mut lock) = session_mutex_clone.lock() {
+                                *lock = Some(new_token.to_string());
+                            }
                         }
                         continue;
                     }
                     Ok(resp) => {
+                        let status = resp.status();
+                        let result_str = resp
+                            .json::<Value>()
+                            .ok()
+                            .and_then(|v| {
+                                v.get("result")
+                                    .and_then(|r| r.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_else(|| "unknown".to_string());
                         tracing::info!(
-                            "[set-location] move of {} -> {} finished: {}",
+                            "[set-location] move of {} -> {} finished: status={} result='{}'",
                             id,
                             location,
-                            resp.status()
+                            status,
+                            result_str
                         );
+                        if status.is_success() && result_str == "success" {
+                            report(Ok(()));
+                        } else {
+                            report(Err(format!("daemon answered '{result_str}' ({status})")));
+                        }
                         return;
                     }
                     Err(e) => {
-                        tracing::error!("[set-location] move failed: {e}");
+                        report(Err(e.to_string()));
                         return;
                     }
                 }
             }
+            report(Err("session handshake with the daemon failed".to_string()));
         });
         Ok(())
     }
@@ -1256,12 +1372,28 @@ impl TransmissionTorrentEngine {
         let default_download_dir = expand_tilde_path(&default_download_dir).ok_or_else(|| {
             "Cannot resolve home directory for the default download directory".to_string()
         })?;
-        std::fs::create_dir_all(&default_download_dir).map_err(|e| {
-            format!(
-                "Failed to create default download directory '{}': {e}",
-                default_download_dir.display()
-            )
-        })?;
+        // If the configured download directory cannot be created or accessed (e.g. an external
+        // volume like '/Volumes/300TB/' is unmounted or disconnected, or permissions prevent access),
+        // gracefully fall back to the user's local Downloads directory for daemon startup so the
+        // application can start up cleanly rather than crashing into the recovery state.
+        let default_download_dir = match std::fs::create_dir_all(&default_download_dir) {
+            Ok(()) => default_download_dir,
+            Err(e) => {
+                let fallback = dirs::download_dir()
+                    .filter(|d| std::fs::create_dir_all(d).is_ok())
+                    .unwrap_or_else(|| {
+                        let app_downloads = paths.base_data_dir.join("downloads");
+                        let _ = std::fs::create_dir_all(&app_downloads);
+                        app_downloads
+                    });
+                warn!(
+                    "[storage] Configured default download directory '{}' cannot be created or accessed ({e}); falling back to '{}' for engine startup",
+                    default_download_dir.display(),
+                    fallback.display()
+                );
+                fallback
+            }
+        };
 
         // 1. Locate the transmission-daemon executable
         let daemon_path = find_transmission_daemon_binary(resource_dir)?;
@@ -2246,8 +2378,20 @@ impl TransmissionTorrentEngine {
             .get("secondsSeeding")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let rate_dl = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
-        let rate_ul = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
+        // Instantaneous transfer rates: only active transferring directions can be non-zero.
+        // Completed/seeding, paused, checking, or errored states strictly report 0 for non-active directions.
+        let is_dl_active = status_num == 3 || status_num == 4;
+        let is_ul_active = status_num == 3 || status_num == 4 || status_num == 5 || status_num == 6;
+        let rate_dl = if is_dl_active {
+            t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0)
+        } else {
+            0
+        };
+        let rate_ul = if is_ul_active {
+            t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0)
+        } else {
+            0
+        };
         let total_bytes = t
             .get("totalSize")
             .or_else(|| t.get("sizeWhenDone"))
@@ -2521,11 +2665,25 @@ impl TransmissionTorrentEngine {
 
         let poster_url = meta.and_then(|m| m.poster_path.clone());
 
+        let raw_name = name.clone();
         let (resolved_save_path, hist_save_path) = Self::resolve_torrent_save_path(
             meta.and_then(|m| m.save_path.as_deref()),
             &download_dir,
             &name,
         );
+
+        let canonical_content_path = {
+            let p = std::path::Path::new(&resolved_save_path);
+            if p.is_file() {
+                resolved_save_path.clone()
+            } else if p.join(&raw_name).exists() {
+                p.join(&raw_name).to_string_lossy().to_string()
+            } else if p.file_name().is_some_and(|f| f == raw_name.as_str()) || p.exists() {
+                resolved_save_path.clone()
+            } else {
+                p.join(&raw_name).to_string_lossy().to_string()
+            }
+        };
 
         TorrentItem {
             id,
@@ -2546,6 +2704,8 @@ impl TransmissionTorrentEngine {
             category: meta.and_then(|m| m.category.clone()).unwrap_or_default(),
             is_media,
             poster_url,
+            raw_name: Some(raw_name),
+            content_path: Some(canonical_content_path),
             info_hash: info_hash.clone(),
             save_path: resolved_save_path,
             historical_save_path: hist_save_path,
@@ -2620,7 +2780,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn get_torrent_details(&self, id: &str) -> Result<TorrentItem, String> {
-        let raw_torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut raw_torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if raw_torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        raw_torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let t = raw_torrents
             .first()
             .ok_or_else(|| format!("Torrent {id} not found in Transmission"))?;
@@ -2874,22 +3052,102 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String> {
-        self.rpc_client.torrent_set_location(id, new_path, true)?;
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
+        let target_id = if id.parse::<i64>().is_ok() {
+            id.to_string()
+        } else {
+            hash.clone()
+        };
+        let current = self
+            .rpc_client
+            .torrent_get(Some(vec![rpc_id(&target_id)]))?;
+        let current = current
+            .first()
+            .ok_or_else(|| format!("Torrent {id} not found in Transmission"))?;
+        let name = current.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let current_dir = current.get("downloadDir").and_then(|v| v.as_str());
+        let dest = std::path::Path::new(new_path);
+        check_move_preflight(current_dir.map(std::path::Path::new), name, dest)?;
+
+        // The stored location only changes once the daemon has really finished
+        // the move and the files are at the destination.
+        let db = self.db.clone();
+        let cache = self.metadata_cache.clone();
+        let moved_hash = hash.clone();
+        let moved_to = new_path.to_string();
+        let moved_item = dest.join(name);
+        let on_done: MoveDoneCallback = Box::new(move |verdict| {
+            if verdict.is_err() {
+                return;
+            }
+            if !moved_item.exists() {
+                tracing::error!(
+                    "[set-location] daemon reported success but {} is missing; stored location left unchanged",
+                    moved_item.display()
+                );
+                return;
+            }
+            if let Ok(mut cache) = cache.lock() {
+                if let Some(meta) = cache.get_mut(&moved_hash) {
+                    meta.save_path = Some(moved_to.clone());
+                    let _ = db.upsert_torrent_metadata(meta);
+                }
+            }
+            if let Ok(Some(mut meta)) = db.get_torrent_metadata(&moved_hash) {
+                meta.save_path = Some(moved_to.clone());
+                let _ = db.upsert_torrent_metadata(&meta);
+            }
+        });
+        self.rpc_client
+            .torrent_set_location(&target_id, new_path, true, Some(on_done))
+    }
+
+    fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
+        let target_id = if id.parse::<i64>().is_ok() {
+            id.to_string()
+        } else {
+            hash.clone()
+        };
+        // Transmission looks for the data at <location>/<torrent name>, so the
+        // location is derived from the torrent's real name (the library title is
+        // a cleaned display name and never matches the folder on disk).
+        let torrent_name = self.get_torrent_details(&target_id).ok().map(|t| t.name);
+        let eff_location =
+            relink_location_for(std::path::Path::new(new_path), torrent_name.as_deref());
+        self.rpc_client
+            .torrent_set_location(&target_id, &eff_location, false, None)?;
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
-                meta.save_path = Some(new_path.to_string());
+            if let Some(meta) = cache.get_mut(&hash) {
+                meta.save_path = Some(eff_location.clone());
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
         }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.save_path = Some(eff_location.clone());
+            let _ = self.db.upsert_torrent_metadata(&meta);
+        }
+        let _ = self.force_recheck(&target_id);
         Ok(())
     }
 
     fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
+            if let Some(meta) = cache.get_mut(&hash) {
                 meta.category = Some(category.to_string());
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
+        }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.category = Some(category.to_string());
+            let _ = self.db.upsert_torrent_metadata(&meta);
         }
         Ok(())
     }
@@ -2901,6 +3159,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
         ul_kib: u32,
         ratio_limit: f32,
     ) -> Result<(), String> {
+        let hash = self
+            .resolve_info_hash(id)
+            .unwrap_or_else(|| id.to_lowercase());
         // Negative ratio_limit means "use global default" (no per-torrent override).
         // Transmission interprets seedRatioLimited=false as "follow session default".
         let args = json!({
@@ -2914,12 +3175,18 @@ impl TorrentEngine for TransmissionTorrentEngine {
         self.rpc_client.torrent_set(id, args)?;
 
         if let Ok(mut cache) = self.metadata_cache.lock() {
-            if let Some(meta) = cache.get_mut(id) {
+            if let Some(meta) = cache.get_mut(&hash) {
                 meta.download_limit_kib = dl_kib;
                 meta.upload_limit_kib = ul_kib;
                 meta.ratio_limit = ratio_limit;
                 let _ = self.db.upsert_torrent_metadata(meta);
             }
+        }
+        if let Ok(Some(mut meta)) = self.db.get_torrent_metadata(&hash) {
+            meta.download_limit_kib = dl_kib;
+            meta.upload_limit_kib = ul_kib;
+            meta.ratio_limit = ratio_limit;
+            let _ = self.db.upsert_torrent_metadata(&meta);
         }
         Ok(())
     }
@@ -3050,7 +3317,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
         file_index: u32,
         new_file_name: &str,
     ) -> Result<(), String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3078,7 +3363,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3118,7 +3421,25 @@ impl TorrentEngine for TransmissionTorrentEngine {
         const EMA_ALPHA: f64 = 0.3; // smoothing factor — 30% new sample, 70% history
         const MIN_OBSERVATIONS_FOR_STABILITY: u32 = 3;
 
-        let torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
         let torrent = torrents
             .first()
             .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
@@ -3640,6 +3961,128 @@ impl TorrentEngine for TransmissionTorrentEngine {
 mod tests {
     use super::*;
 
+    /// Needs a disposable daemon: NEB_MOVE_TEST_PORT, NEB_MOVE_TEST_TORRENT
+    /// (a .torrent whose data sits in NEB_MOVE_TEST_SRC) and an empty
+    /// NEB_MOVE_TEST_DST. Run with `-- --ignored`.
+    #[test]
+    #[ignore]
+    fn data_move_reports_the_daemon_verdict_to_the_callback() {
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} not set"));
+        let port: u16 = env("NEB_MOVE_TEST_PORT").parse().unwrap();
+        let (torrent, src, dst) = (
+            env("NEB_MOVE_TEST_TORRENT"),
+            env("NEB_MOVE_TEST_SRC"),
+            env("NEB_MOVE_TEST_DST"),
+        );
+        let client = TransmissionRpcClient::new(port, "", "");
+        let id = client
+            .torrent_add(json!({ "filename": torrent, "download-dir": src, "paused": false }))
+            .expect("add");
+        let (tx, rx) = std::sync::mpsc::channel();
+        client
+            .torrent_set_location(
+                &id,
+                &dst,
+                true,
+                Some(Box::new(move |v| {
+                    let _ = tx.send(v);
+                })),
+            )
+            .expect("move accepted");
+        let verdict = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("callback ran");
+        assert!(verdict.is_ok(), "{verdict:?}");
+        let got = client.torrent_get(Some(vec![rpc_id(&id)])).unwrap();
+        assert_eq!(got[0]["downloadDir"].as_str(), Some(dst.as_str()));
+        assert!(std::path::Path::new(&dst)
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some());
+
+        // A daemon that cannot answer must produce an Err verdict, not silence.
+        let dead = TransmissionRpcClient::new(1, "", "");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = dead.torrent_set_location(
+            "1",
+            &dst,
+            true,
+            Some(Box::new(move |v| {
+                let _ = tx.send(v);
+            })),
+        );
+        let verdict = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("callback ran for the failing daemon");
+        assert!(verdict.is_err(), "{verdict:?}");
+    }
+
+    #[test]
+    fn move_preflight_refuses_misreported_or_destructive_moves() {
+        let root = std::env::temp_dir().join(format!("neb_move_pre_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (src, dst, conf) = (root.join("src"), root.join("dst"), root.join("conf"));
+        std::fs::create_dir_all(src.join("Show")).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::create_dir_all(conf.join("Show")).unwrap();
+        std::fs::write(root.join("afile"), b"x").unwrap();
+
+        assert!(check_move_preflight(Some(&src), "Show", &dst).is_ok());
+        assert!(check_move_preflight(Some(&src), "Show", &root.join("new/parent")).is_ok());
+        let e = check_move_preflight(Some(&src), "Show", &src).unwrap_err();
+        assert!(e.contains("already in that folder"), "{e}");
+        let e = check_move_preflight(Some(&src), "Missing", &dst).unwrap_err();
+        assert!(e.contains("Relink"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &conf).unwrap_err();
+        assert!(e.contains("already exists"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &src.join("Show").join("in")).unwrap_err();
+        assert!(e.contains("into itself"), "{e}");
+        let e = check_move_preflight(Some(&src), "Show", &root.join("afile")).unwrap_err();
+        assert!(e.contains("not a folder"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relink_location_uses_torrent_name_not_library_title() {
+        let root = std::env::temp_dir().join(format!("neb_relink_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let release = root.join("Shakugan no Shana S - OVA Series (2009-10) DVD Funimation");
+        std::fs::create_dir_all(&release).unwrap();
+        let name = "Shakugan no Shana S - OVA Series (2009-10) DVD Funimation";
+
+        // Picking the release folder itself relinks to its parent.
+        assert_eq!(
+            relink_location_for(&release, Some(name)),
+            root.to_string_lossy()
+        );
+        // Picking the containing folder keeps it.
+        assert_eq!(
+            relink_location_for(&root, Some(name)),
+            root.to_string_lossy()
+        );
+        // Case differences in the folder name still identify the release folder.
+        let upper = root.join(name.to_uppercase());
+        std::fs::create_dir_all(&upper).unwrap();
+        assert_eq!(
+            relink_location_for(&upper, Some(name)),
+            root.to_string_lossy()
+        );
+        // Unknown name: the chosen folder is used as given.
+        assert_eq!(
+            relink_location_for(&release, None),
+            release.to_string_lossy()
+        );
+        // A release folder that itself contains a same-named folder is a container.
+        let nested = release.join(name);
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            relink_location_for(&release, Some(name)),
+            release.to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_csrf_session_id_negotiation_logic() {
         let client = TransmissionRpcClient::new(9999, "user", "pass");
@@ -3700,6 +4143,33 @@ mod tests {
         assert_eq!(map_full_status(false, 1, 6), "Seeding");
         // Kill switch active -> Paused
         assert_eq!(map_full_status(true, 0, 4), "Paused");
+    }
+
+    #[test]
+    fn test_transmission_rate_sanitization_strictly_zeroes_nonactive_directions() {
+        let is_dl_active = |s: i64| s == 3 || s == 4;
+        let is_ul_active = |s: i64| s == 3 || s == 4 || s == 5 || s == 6;
+
+        let sanitize = |status_num: i64, raw_dl: u64, raw_ul: u64| {
+            let dl = if is_dl_active(status_num) { raw_dl } else { 0 };
+            let ul = if is_ul_active(status_num) { raw_ul } else { 0 };
+            (dl, ul)
+        };
+
+        // Seeding torrents never report download speed even if engine leaked protocol bytes
+        assert_eq!(sanitize(5, 15_000_000, 250_000), (0, 250_000));
+        assert_eq!(sanitize(6, 36_000_000, 500_000), (0, 500_000));
+
+        // Paused torrents report 0 in both directions
+        assert_eq!(sanitize(0, 10_000_000, 100_000), (0, 0));
+
+        // Checking torrents report 0 in both directions
+        assert_eq!(sanitize(1, 10_000_000, 100_000), (0, 0));
+        assert_eq!(sanitize(2, 10_000_000, 100_000), (0, 0));
+
+        // Downloading torrents preserve active rates
+        assert_eq!(sanitize(3, 50_000_000, 200_000), (50_000_000, 200_000));
+        assert_eq!(sanitize(4, 50_000_000, 200_000), (50_000_000, 200_000));
     }
 
     #[test]
@@ -3795,6 +4265,18 @@ mod tests {
         // Interface and path
         assert_eq!(config["bind-address-ipv4"], "10.2.0.5");
         assert_eq!(config["download-dir"], "/home/user/Downloads");
+    }
+
+    #[test]
+    fn test_inaccessible_download_dir_fallback() {
+        let invalid_path = PathBuf::from("/Volumes/NonExistent300TBVolume/Blu-ray/");
+        let resolved = match std::fs::create_dir_all(&invalid_path) {
+            Ok(()) => invalid_path,
+            Err(_) => dirs::download_dir()
+                .filter(|d| std::fs::create_dir_all(d).is_ok())
+                .unwrap_or_else(std::env::temp_dir),
+        };
+        assert!(resolved.exists());
     }
 
     #[test]

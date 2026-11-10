@@ -55,6 +55,16 @@ if [ -f "$TS_BIN" ]; then
     fi
 fi
 
+VPS_BIN="$APP/Contents/MacOS/verify-payload-signature"
+if [ -f "$VPS_BIN" ]; then
+    echo "--- 1c. Signing verify-payload-signature helper"
+    if [ "$IDENTITY" != "-" ]; then
+        codesign --force --sign "$IDENTITY" -i "org.asiandvdclub.nebulae.verify-payload-signature" "$VPS_BIN"
+    else
+        codesign --force --sign - -i "org.asiandvdclub.nebulae.verify-payload-signature" -r='designated => identifier "org.asiandvdclub.nebulae.verify-payload-signature"' "$VPS_BIN"
+    fi
+fi
+
 # 2. Check all nested images
 echo "--- 2. Nested images check"
 python3 -B "$SCRIPT_DIR/check-macos-signatures.py" "$APP" \

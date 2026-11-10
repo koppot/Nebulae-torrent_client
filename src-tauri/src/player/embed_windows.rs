@@ -8,18 +8,19 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
 use windows::core::w;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
-use windows::Win32::Graphics::Gdi::{FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC};
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
@@ -70,6 +71,49 @@ static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 /// Saved pre-player window rect for restoring window size on close.
 static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 
+pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
+
+pub(crate) fn update_video_surface_position(main_h: HWND) {
+    let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+    if v_hwnd_val == 0 {
+        return;
+    }
+    let video_hwnd = HWND(v_hwnd_val as _);
+    unsafe {
+        if IsIconic(main_h).as_bool() {
+            let _ = ShowWindow(video_hwnd, SW_HIDE);
+            return;
+        }
+
+        let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
+        if cw <= 0 || ch <= 0 {
+            return;
+        }
+
+        // Align video surface 1:1 to the client area of the main window.
+        // Direct3D 11 renders the video (including any active black-bar crop)
+        // directly into this swapchain with correct isotropic subtitle placement.
+        let _ = SetWindowPos(
+            video_hwnd,
+            Some(main_h),
+            cx,
+            cy,
+            cw,
+            ch,
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+        );
+        let _ = SetWindowPos(
+            main_h,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+        );
+    }
+}
+
 /// Returns the cached `AppHandle` if `ensure_overlay` has already run.
 pub(crate) fn overlay_app_handle() -> Option<&'static AppHandle> {
     OVERLAY_APP.get()
@@ -81,49 +125,20 @@ pub(crate) fn overlay_app_init(app: AppHandle) {
     let _ = OVERLAY_APP.set(app);
 }
 
-/// Windows equivalent of macOS `apply_edr_to_video_layer`.
+/// Windows counterpart of macOS `apply_edr_to_video_layer`.
 ///
-/// On Windows there is no Core Animation layer to tag with a colorspace.
-/// Instead we use libVLC's `var_SetChecked` to enforce the tone-mapping
-/// variables on the media player object, ensuring the Hable filmic curve
-/// is active for HDR/UHD content even if `set_hwnd` reset any
-/// player-object variables.
-pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, is_hdr: bool) -> bool {
-    let state = match app.try_state::<crate::player::PlayerState>() {
-        Some(s) => s,
-        None => return false,
-    };
-    let mp = state.media_player.lock().map(|p| *p).unwrap_or(0);
-    if mp == 0 {
-        return false;
-    }
-    let lib = match state.lib.lock() {
-        Ok(l) => l.clone(),
-        Err(_) => return false,
-    };
-    let Some(lib) = lib else {
+/// There is nothing to apply on Windows: HDR (BT.2020 PQ / HLG) is converted to SDR inside the
+/// Direct3D 11 vout's pixel shader (patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch), chosen per
+/// picture from the stream's own transfer function and the swap chain's colour space. The
+/// `tone-mapping*` variables this function used to set belong to the OpenGL vout and are never
+/// read by the Direct3D 11 vout, so setting them only suggested a behaviour that did not exist.
+/// The function stays so the poll-driven retry latch (`edr_applied`) keeps the same shape on both
+/// platforms; it reports whether a media player exists.
+pub(crate) unsafe fn apply_edr_to_video_layer(app: &AppHandle, _is_hdr: bool) -> bool {
+    let Some(state) = app.try_state::<crate::player::PlayerState>() else {
         return false;
     };
-    let var_set_checked = lib.var_set_checked;
-
-    let mp_ptr = mp as *mut c_void;
-    let cstr = |s: &str| std::ffi::CString::new(s).ok();
-
-    if is_hdr {
-        // tone-mapping = 3 (Hable filmic), VLC_VAR_INTEGER = 2
-        if let Some(name) = cstr("tone-mapping") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 2, 3i64 as usize);
-        }
-        // tone-mapping-param = 1.0, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-param") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 1.0_f32.to_bits() as usize);
-        }
-        // tone-mapping-desat = 0.5, VLC_VAR_FLOAT = 4
-        if let Some(name) = cstr("tone-mapping-desat") {
-            let _ = var_set_checked(mp_ptr, name.as_ptr(), 4, 0.5_f32.to_bits() as usize);
-        }
-    }
-    true
+    state.media_player.lock().map(|p| *p).unwrap_or(0) != 0
 }
 
 /// Poll-driven HDR retry for Windows. Ensures tone-mapping is applied to
@@ -212,6 +227,19 @@ pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
     Ok(hwnd)
 }
 
+/// Helper: compute the exact screen coordinates and pixel size of the
+/// main window's client area (where WebView2 renders). This eliminates
+/// DWM invisible sizing frames and non-client border gaps on Windows 10 & 11.
+pub(crate) fn get_client_rect_in_screen(hwnd: HWND) -> (i32, i32, i32, i32) {
+    let mut cr = RECT::default();
+    let mut pt = POINT::default();
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut cr);
+        let _ = ClientToScreen(hwnd, &mut pt);
+    }
+    (pt.x, pt.y, cr.right - cr.left, cr.bottom - cr.top)
+}
+
 fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let win = app
         .get_webview_window("main")
@@ -219,19 +247,12 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
     let parent = win.hwnd().map_err(|e| format!("no parent HWND: {e}"))?;
     let main_hwnd = HWND(parent.0);
 
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetWindowRect(main_hwnd, &mut rect);
-    }
-    let x = rect.left;
-    let y = rect.top;
-    let w = rect.right - rect.left;
-    let h = rect.bottom - rect.top;
+    let (x, y, w, h) = get_client_rect_in_screen(main_hwnd);
 
     ensure_surface_class();
 
     // Create the video surface as an independent WS_POPUP window with no owner,
-    // positioned directly behind the transparent main window with a black background.
+    // positioned directly behind the transparent main window's client area with a black background.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
@@ -394,28 +415,8 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
 
-            let w = r.right - r.left;
-            let h = r.bottom - r.top;
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
-                let _ = SetWindowPos(
-                    main_h,
-                    Some(HWND_TOP),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-                );
-                let _ = SetWindowPos(
-                    video_hwnd,
-                    Some(main_h),
-                    r.left,
-                    r.top,
-                    w,
-                    h,
-                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                );
                 // During video playback, ensure no DWM border or rounded corners appear around the video screen
                 let no_border: u32 = DWMWA_COLOR_NONE;
                 let _ = DwmSetWindowAttribute(
@@ -444,6 +445,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                     std::mem::size_of::<u32>() as u32,
                 );
             }
+            update_video_surface_position(main_h);
             if let Some(win) = app2.get_webview_window("main") {
                 let _ = win.set_focus();
             }
@@ -469,33 +471,8 @@ pub fn sync_frame(
     }
     let app2 = app.clone();
     app.run_on_main_thread(move || {
-        let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
-        let mut r = RECT::default();
-        unsafe {
-            let _ = GetWindowRect(main_h, &mut r);
-            let w = r.right - r.left;
-            let h = r.bottom - r.top;
-            // Video window matches main_hwnd exactly in full-bleed dimensions with zero cutouts.
-            let _ = SetWindowPos(
-                video_hwnd,
-                Some(main_h),
-                r.left,
-                r.top,
-                w,
-                h,
-                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-            );
-            let _ = SetWindowPos(
-                main_h,
-                Some(HWND_TOP),
-                0,
-                0,
-                0,
-                0,
-                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
-            );
-        }
+        update_video_surface_position(main_h);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))
 }
@@ -645,32 +622,15 @@ unsafe extern "system" fn main_wndproc(
     if msg == WM_WINDOWPOSCHANGED {
         let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
         if v_hwnd_val != 0 {
-            let video_hwnd = HWND(v_hwnd_val as _);
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(video_hwnd, SW_HIDE);
-            } else {
-                let mut r = RECT::default();
-                let _ = GetWindowRect(hwnd, &mut r);
-                let w = r.right - r.left;
-                let h = r.bottom - r.top;
-                let _ = SetWindowPos(
-                    video_hwnd,
-                    Some(hwnd),
-                    r.left,
-                    r.top,
-                    w,
-                    h,
-                    SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-                );
-            }
+            update_video_surface_position(hwnd);
         }
     } else if msg == WM_DISPLAYCHANGE {
         // Re-apply EDR/tone-mapping on screen change. If the window moved
-        // to an HDR-capable display, ensure tone-mapping vars are set.
+        // to another display, refresh the per-window state below.
         if let Some(app) = overlay_app_handle() {
             use tauri::Emitter;
             // Reset the latch so the next player_poll / force_apply_edr
-            // re-applies tone-mapping for the new display.
+            // re-checks the player for the new display.
             if let Some(state) = app.try_state::<crate::player::PlayerState>() {
                 state
                     .edr_applied
@@ -792,11 +752,8 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
             .overlay_view
             .load(std::sync::atomic::Ordering::SeqCst);
         if hwnd != 0 {
+            let (x, y, w, h) = get_client_rect_in_screen(main_h);
             unsafe {
-                let mut r = RECT::default();
-                let _ = GetWindowRect(main_h, &mut r);
-                let w = r.right - r.left;
-                let h = r.bottom - r.top;
                 let _ = SetWindowPos(
                     main_h,
                     Some(HWND_TOP),
@@ -809,8 +766,8 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
                 let _ = SetWindowPos(
                     HWND(hwnd as _),
                     Some(main_h),
-                    r.left,
-                    r.top,
+                    x,
+                    y,
                     w,
                     h,
                     SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
@@ -909,6 +866,48 @@ pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(),
     Ok(())
 }
 
+pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let hwnd_val = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return Ok(());
+    }
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
+    let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_MOUSEMOVE, WPARAM(0), lparam);
+    }
+    Ok(())
+}
+
+pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let hwnd_val = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val == 0 {
+        return Ok(());
+    }
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
+    // MK_LBUTTON lives in Win32_System_SystemServices, which this crate does not enable.
+    const MK_LBUTTON: usize = 0x0001;
+    let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(hwnd_val as _)),
+            WM_LBUTTONDOWN,
+            WPARAM(MK_LBUTTON),
+            lparam,
+        );
+        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_LBUTTONUP, WPARAM(0), lparam);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,14 +916,5 @@ mod tests {
     fn overlay_app_handle_returns_none_before_init() {
         // OVERLAY_APP is a OnceLock; before overlay_app_init is called it must be empty.
         assert!(overlay_app_handle().is_none());
-    }
-
-    #[test]
-    fn tone_mapping_bits_match_vlc_expectations() {
-        // VLC_VAR_INTEGER = 2, VLC_VAR_FLOAT = 4; tone-mapping values as shipped
-        // in the instance-level VLC args (--tone-mapping=3, -param=1.0, -desat=0.5).
-        assert_eq!(3i64 as usize, 3);
-        assert_eq!(1.0_f32.to_bits() as usize, 0x3F80_0000);
-        assert_eq!(0.5_f32.to_bits() as usize, 0x3F00_0000);
     }
 }

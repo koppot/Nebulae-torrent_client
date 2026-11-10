@@ -31,6 +31,7 @@ tauri-build = { version = "2", features = [] }
 # window whenever no Vite dev server is running (the reported
 # white-screen-of-death). `tauri build` enables it; `tauri dev` does not.
 [features]
+default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 test-updater = []
 # Enables the CI-only verify-payload-signature bin (cargo run --features
@@ -95,6 +96,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
     "Win32_System_Variant",
 ] }
 
