@@ -2028,3 +2028,30 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
 - Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `b825a0f6dbef7d3f8a223bd934091b764f7b1574cd5654d2685256b5512f6725`.
 - Updated all lockfiles and verified 61 unit tests pass.
 - Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate 713847c Delivery (Order of Operations & Proportional Subtitle Sizing/Placement)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `713847c`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe.sig`
+- **Revision:** `713847c` (`713847c3af4b85377a15d3267d0ee319a35c28ef`)
+- **File Size:** 339,767,980 bytes
+- **SHA-256 Checksum:** `e1a160b9df32101a27f7297c40eee6414b90ced0555fd6df7bd7ef42e403c0a7`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794273095	file:Nebulae_0.2.6-candidate-713847c-subtitle-order-fix_x64-setup.exe	version:0.2.6`
+
+### Specific Corrections Included in 713847c
+- **Order of Operations in `modules/video_output/win32/direct3d11.c`:**
+  1. **Proportional Sizing:** Computes `scale = (FLOAT) place.width / (orig_w > src_w ? src_w : orig_w)`. Calculates subtitle viewport width and height `vp_w = (FLOAT) r->fmt.i_visible_width * scale` and `vp_h = (FLOAT) r->fmt.i_visible_height * scale`, preserving glyph proportions with the exact same scale factor horizontally and vertically.
+  2. **Placement from Scaled Bounds:** Anchors bottom-aligned cues using the resulting scaled height `vp_h` and dynamic bottom margin `max(10.0f, place.height * 0.055f)`: `top_y = place.y + place.height - vp_h - bottom_margin`.
+  3. **Multiline & Clipping Safety:** Multiline cues expand upward by `vp_h` naturally from the bottom anchor without clipping below the crop boundary. Subtitles originally authored into black-bar space are safely fitted into the active visible area.
+  4. **Uncropped Content Untouched:** If uncropped (`vd->source.i_y_offset == 0 && vd->source.i_x_offset == 0`), stock VLC coordinate handling is preserved identically.
+- Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `11cc763d3639e86683a1ff3d318abc9e707e3da55150f450e0d417daf7fb2c79`.
+- Updated all lockfiles and verified 61 unit tests pass.
+- Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
