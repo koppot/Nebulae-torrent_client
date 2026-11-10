@@ -48,9 +48,7 @@ if ! have libdeflate.0.dylib; then
       >"$WORK/libdeflate.cmake.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libdeflate.make.log" 2>&1 \
       && make install >>"$WORK/libdeflate.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libdeflate.0.dylib" "$OUT_DIR/libdeflate.0.dylib"
-    ln -sf "../libdeflate.0.dylib" "$OUT_DIR/lib/libdeflate.0.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libdeflate.0.dylib" "$OUT_DIR/libdeflate.0.dylib"
 fi
 
 # --- libevent 2.1.13 (used by transmission) ---------------------------------
@@ -65,9 +63,7 @@ if ! have libevent-2.1.7.dylib; then
                      >>"$WORK/libevent.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libevent.make.log" 2>&1 \
       && make install >>"$WORK/libevent.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libevent-2.1.7.dylib" "$OUT_DIR/libevent-2.1.7.dylib"
-    ln -sf "../libevent-2.1.7.dylib" "$OUT_DIR/lib/libevent-2.1.7.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libevent-2.1.7.dylib" "$OUT_DIR/libevent-2.1.7.dylib"
 fi
 
 # --- libiconv 1.17 (dependency of libpsl and libintl) -------------------------
@@ -81,8 +77,7 @@ if ! have libiconv.2.dylib; then
                      >>"$WORK/libiconv.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libiconv.make.log" 2>&1 \
       && make install >>"$WORK/libiconv.install.log" 2>&1 )
-    cp "$OUT_DIR/lib/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
     # Fix the install name so other libraries can find libiconv at the
     # top-level location (the file was moved out of lib/).
     install_name_tool -id "$OUT_DIR/libiconv.2.dylib" "$OUT_DIR/libiconv.2.dylib"
@@ -115,9 +110,7 @@ if ! have libintl.8.dylib; then
                      >>"$WORK/gettext.configure.log" 2>&1 \
       && make -C gettext-runtime -j"$(sysctl -n hw.ncpu)" >>"$WORK/gettext.make.log" 2>&1 \
       && make -C gettext-runtime install >>"$WORK/gettext.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libintl.8.dylib" "$OUT_DIR/libintl.8.dylib"
-    ln -sf "../libintl.8.dylib" "$OUT_DIR/lib/libintl.8.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libintl.8.dylib" "$OUT_DIR/libintl.8.dylib"
 fi
 
 # --- libminiupnpc 2.3.3 (used by transmission) -------------------------------
@@ -134,9 +127,7 @@ if ! have libminiupnpc.21.dylib; then
                >>"$WORK/miniupnpc.cmake.log" 2>&1 \
       && cmake --build build -j"$(sysctl -n hw.ncpu)" >>"$WORK/miniupnpc.make.log" 2>&1 \
       && cmake --install build >>"$WORK/miniupnpc.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libminiupnpc.21.dylib" "$OUT_DIR/libminiupnpc.21.dylib"
-    ln -sf "../libminiupnpc.21.dylib" "$OUT_DIR/lib/libminiupnpc.21.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libminiupnpc.21.dylib" "$OUT_DIR/libminiupnpc.21.dylib"
 fi
 
 # --- libpsl 0.23.3 (used by transmission; needs libiconv) --------------------
@@ -152,9 +143,7 @@ if ! have libpsl.5.dylib; then
                      >>"$WORK/libpsl.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libpsl.make.log" 2>&1 \
       && make install >>"$WORK/libpsl.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libpsl.5.dylib" "$OUT_DIR/libpsl.5.dylib"
-    ln -sf "../libpsl.5.dylib" "$OUT_DIR/lib/libpsl.5.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libpsl.5.dylib" "$OUT_DIR/libpsl.5.dylib"
 fi
 
 # --- libpng 1.6.59 (used by VLC) ---------------------------------------------
@@ -168,9 +157,7 @@ if ! have libpng16.16.dylib; then
                      >>"$WORK/libpng.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/libpng.make.log" 2>&1 \
       && make install >>"$WORK/libpng.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libpng16.16.dylib" "$OUT_DIR/libpng16.16.dylib"
-    ln -sf "../libpng16.16.dylib" "$OUT_DIR/lib/libpng16.16.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libpng16.16.dylib" "$OUT_DIR/libpng16.16.dylib"
 fi
 
 # --- libfreetype 2.14.3 (used by VLC; no harfbuzz/brotli to avoid 26.0 deps) --
@@ -187,9 +174,7 @@ if ! have libfreetype.6.dylib; then
                      >>"$WORK/freetype.configure.log" 2>&1 \
       && make -j"$(sysctl -n hw.ncpu)" >>"$WORK/freetype.make.log" 2>&1 \
       && make install >>"$WORK/freetype.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libfreetype.6.dylib" "$OUT_DIR/libfreetype.6.dylib"
-    ln -sf "../libfreetype.6.dylib" "$OUT_DIR/lib/libfreetype.6.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libfreetype.6.dylib" "$OUT_DIR/libfreetype.6.dylib"
 fi
 
 # --- libfontconfig 2.15.0 (used by VLC) --------------------------------------
@@ -206,9 +191,7 @@ if ! have libfontconfig.1.dylib; then
            >>"$WORK/fontconfig.meson.log" 2>&1 \
       && ninja -C build -j"$(sysctl -n hw.ncpu)" >>"$WORK/fontconfig.ninja.log" 2>&1 \
       && meson install -C build >>"$WORK/fontconfig.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libfontconfig.1.dylib" "$OUT_DIR/libfontconfig.1.dylib"
-    ln -sf "../libfontconfig.1.dylib" "$OUT_DIR/lib/libfontconfig.1.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libfontconfig.1.dylib" "$OUT_DIR/libfontconfig.1.dylib"
 fi
 
 # --- libudfread 1.2.0 (used by VLC) ------------------------------------------
@@ -224,13 +207,12 @@ if ! have libudfread.3.dylib; then
            >>"$WORK/udfread.meson.log" 2>&1 \
       && ninja -C build -j"$(sysctl -n hw.ncpu)" >>"$WORK/udfread.ninja.log" 2>&1 \
       && meson install -C build >>"$WORK/udfread.install.log" 2>&1 )
-    mv "$OUT_DIR/lib/libudfread.3.dylib" "$OUT_DIR/libudfread.3.dylib"
-    ln -sf "../libudfread.3.dylib" "$OUT_DIR/lib/libudfread.3.dylib" 2>/dev/null || true
-    rmdir "$OUT_DIR/lib" 2>/dev/null || true
+    cp -pL "$OUT_DIR/lib/libudfread.3.dylib" "$OUT_DIR/libudfread.3.dylib"
 fi
 
 echo "==> All macOS 11.0 dependencies staged in $OUT_DIR:"
-ls -1 "$OUT_DIR"/*.dylib | while read -r f; do
-    minos="$(otool -l "$f" 2>/dev/null | awk '/minos/{print $2; exit}')"
-    echo "    $(basename "$f")  minos=$minos"
+for f in "$OUT_DIR"/*.dylib; do
+    [ -f "$f" ] || continue
+    minos="$(otool -l "$f" 2>/dev/null | awk '/minos/{print $2; exit}' || true)"
+    echo "    $(basename "$f")  minos=${minos:-unknown}"
 done
