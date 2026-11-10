@@ -192,7 +192,7 @@ SKIPPED=""
 for f in "$OFFICIAL/plugins/"*; do
   name="$(basename "$f")"
   case "$name" in
-    plugins.dat|libmacosx_plugin.dylib|libosx_notifications_plugin.dylib)
+    plugins.dat|libmacosx_plugin.dylib|libosx_notifications_plugin.dylib|*.jar)
       SKIPPED="$SKIPPED $name"
       continue
       ;;
