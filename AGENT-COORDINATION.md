@@ -2070,3 +2070,39 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
    - Video surface pinning 1:1 to client rect in `embed_windows.rs` remains active (eliminating DWM sizing frame borders).
    - Surface clipping (`SetWindowRgn`) remains completely eliminated.
 5. **Frozen macOS 0.2.6 Artifacts:** Kept strictly byte-for-byte identical; macOS automatic cropping remains enabled.
+
+
+## 2026-11-09 — Antigravity: Production Release 0.2.6 Publication & Rollout
+
+**Status Update:** Completed final production release of Nebulae v0.2.6 across macOS and Windows.
+
+### Release Summary
+- **Release Version:** `0.2.6`
+- **Release Tag:** `v0.2.6`
+- **Source Commit:** `bf5af19` (`bf5af197c36a44c35e34be017ce99e0340b1067e`) on branch `main`
+- **GitHub Release URL:** `https://github.com/koppot/Nebulae-torrent_client/releases/tag/v0.2.6`
+- **Production Updater Endpoint:** `https://github.com/koppot/Nebulae-torrent_client/releases/latest/download/latest.json`
+
+### Platform Artifacts & Verified Checksums
+
+#### macOS Apple Silicon (aarch64-apple-darwin)
+- **User-Facing Disk Image (DMG):**
+  - `Nebulae_0.2.6_aarch64_complete.dmg` / `Nebulae-macOS-arm64.dmg` (151,031,481 bytes)
+  - SHA-256: `dcfbfc683e2c107d9d88082334b58cd2eb6dcfb7aef39b1915440da219ef2974`
+  - macOS 11.0 Big Sur deployment target verified across all 401 Mach-O images.
+- **Silent Auto-Update Payload:**
+  - `Nebulae-macOS-0.2.6-aarch64.tar.gz` / `Nebulae.app.tar.gz` / `Nebulae-macOS-arm64.dmg-app.tar.gz` (138,565,617 bytes)
+  - SHA-256: `d05715e612dc28efb85aa614fe22edf8525e78e88aa197f7c543c5f97ec32de8`
+  - Minisign Signature: Key ID `452CAA8BBBBC6F41`, VALID Ed25519 payload signature.
+
+#### Windows x64 (x86_64-pc-windows-msvc)
+- **User-Facing Installer & Updater Setup:**
+  - `Nebulae_0.2.6_x64-setup.exe` / `Nebulae-Setup-x64.exe` (339,811,534 bytes)
+  - SHA-256: `49517a956666a413f95682cc8da9022d10203b7652d90a412a4115a6703b69f8`
+  - Minisign Signature: Key ID `452CAA8BBBBC6F41`, VALID Ed25519 payload signature.
+- **Windows Behavior Invariants:**
+  - Automatic black-bar cropping is disabled and deferred; uncropped playback and stock subtitle positioning are restored.
+  - Fuuka disc menu fixes (`ded1b77`, `--no-direct3d11-hw-blending`, client rect surface pinning) are fully preserved.
+
+#### Linux Status Review
+- Final source diff between `v0.2.5` and `0.2.6` reviewed: only interface stubs in `embed_linux.rs` (`forward_mouse_move`, `forward_mouse_click`, `set_active_crop`) were added for cross-platform compilation. No functional Linux changes are included, and Linux is not part of the established 0.2.6 release configuration (following v0.2.5).
