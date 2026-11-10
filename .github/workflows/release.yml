@@ -206,7 +206,7 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install cmake meson ninja pkgconf bison \
+          brew install cmake meson ninja pkgconf bison autoconf automake libtool \
             libevent libdeflate libpsl miniupnpc gettext \
             libudfread fontconfig freetype
 
