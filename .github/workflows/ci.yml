@@ -74,6 +74,7 @@ jobs:
 
       - name: Windows unit tests
         run: cargo test --lib
+        working-directory: ./src-tauri
 
       - name: D3D11 HDR-to-SDR plugin regression check
         run: |
