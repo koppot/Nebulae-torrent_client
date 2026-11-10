@@ -81,7 +81,6 @@ jobs:
           python3 scripts/windows/regression-check-d3d11.py
           python3 -m unittest discover -s scripts/windows/tests
         shell: bash
-        working-directory: ./src-tauri
 
   # macOS compile + test gate: compiles and tests macOS-specific code paths
   # (objc2 AppKit/Foundation/QuartzCore, macOS status bar, keyrings, paths).
