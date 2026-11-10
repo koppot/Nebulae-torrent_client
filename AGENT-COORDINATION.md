@@ -2002,3 +2002,29 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
    - Fuuka disc menu fixes (`ded1b77`) and `--no-direct3d11-hw-blending` remain active and untouched.
    - 4:3 content remains excluded from automatic black-bar cropping.
    - Frozen macOS 0.2.6 release artifacts remain untouched and publication remains on hold pending Windows acceptance.
+
+
+## 2026-11-09 — Antigravity: Windows 0.2.6 Candidate 3bea275 Delivery (Subpicture Coordinate Space Correction)
+
+**Status Update:** Windows 0.2.6 release candidate packaged from commit `3bea275`, signed with updater secret key `452CAA8BBBBC6F41`, verified via `verify-payload-signature`, and delivered to `supermicro.local`.
+
+### Delivered Artifacts on supermicro.local
+- **Installer Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe`
+- **Signature Path:** `C:\Users\administrator\Downloads\Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe.sig`
+- **Revision:** `3bea275` (`3bea2754659427b3ca96700e1cf6fca2e7ea519f`)
+- **File Size:** 339,784,563 bytes
+- **SHA-256 Checksum:** `525c8983ad9ac1a1fbbd2f49b1416dfa9400c11fda45cbc795877eb9c3632b52`
+- **Cryptographic Minisign Verification:** 100% SUCCESSFUL
+  - Key ID: `452CAA8BBBBC6F41`
+  - Ed25519 Payload Signature: VALID
+  - Minisign Global Signature: VALID
+  - Trusted Comment: `timestamp:1794271165	file:Nebulae_0.2.6-candidate-3bea275-subtitle-placement-fix_x64-setup.exe	version:0.2.6`
+
+### Specific Correction Included in 3bea275
+- In `modules/video_output/win32/direct3d11.c` (`patches/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch`):
+  Distinguished subpicture canvas coordinate models:
+  - For text/ASS subtitles (`subpicture->i_original_picture_height == vd->source.i_visible_height`), `r->i_x` and `r->i_y` are already relative to the cropped video dimensions. Offset subtraction (`vd->source.i_y_offset`) is eliminated, preventing upward subtitle displacement to the center of the frame and restoring author-intended bottom placement.
+  - For fixed uncropped bitmap canvases (PGS / DVD where `subpicture->i_original_picture_height > vd->source.i_visible_height`), coordinates are offset by `vd->source` crop offsets and clamped with a 4px margin so cues in the black-bar area remain visible within the active picture.
+- Re-cross-compiled `libdirect3d11_plugin.dll` with pinned SHA-256: `b825a0f6dbef7d3f8a223bd934091b764f7b1574cd5654d2685256b5512f6725`.
+- Updated all lockfiles and verified 61 unit tests pass.
+- Preserved Fuuka menu fixes, `--no-direct3d11-hw-blending`, 4:3 crop exclusion, and frozen macOS 0.2.6 artifacts unchanged.
