@@ -218,10 +218,12 @@
                                    ID3D11RenderTargetView *output[D3D11_MAX_SHADER_VIEW]);
 --- a/modules/video_output/win32/direct3d11.c
 +++ b/modules/video_output/win32/direct3d11.c
-@@ -1216,6 +1216,15 @@
+@@ -1214,6 +1214,15 @@
+         Direct3D11DeleteRegions(sys->d3dregion_count, sys->d3dregions);
+         sys->d3dregion_count = subpicture_region_count;
          sys->d3dregions      = subpicture_regions;
-     }
- 
++    }
++
 +    if (picture->format.lighting.MaxCLL || picture->format.mastering.max_luminance)
 +    {
 +        /* the per-picture format does not always repeat the transfer function */
@@ -229,12 +231,10 @@
 +                                    .mastering.max_luminance = picture->format.mastering.max_luminance,
 +                                    .lighting.MaxCLL = picture->format.lighting.MaxCLL };
 +        D3D11_UpdateQuadSourcePeak(vd, &sys->d3d_dev, &sys->picQuad, GetFormatSourcePeak(&peak_fmt));
-+    }
-+
+     }
+ 
      if (picture->format.mastering.max_luminance)
-     {
-         D3D11_UpdateQuadLuminanceScale(vd, &sys->d3d_dev, &sys->picQuad, (float)sys->display.luminance_peak / GetFormatLuminance(VLC_OBJECT(vd), &picture->format));
-@@ -2440,12 +2449,45 @@
+@@ -2440,12 +2449,69 @@
          vout_display_place_t place;
          vout_display_PlacePicture(&place, &vd->source, &place_cfg, false);
  
@@ -247,31 +247,55 @@
 +
 +        FLOAT vp_w, vp_h, top_x, top_y;
 +
-+        /* If subpicture coordinate space matches the cropped source (e.g. libass, SRT),
-+         * r->i_x and r->i_y are already in [0..src_w] x [0..src_h] space (no offset subtraction).
-+         * If subpicture coordinates are authored against the uncropped canvas (e.g. PGS bitmaps,
-+         * orig_h > src_h), translate by vd->source crop offsets. */
-+        if (orig_h > src_h) {
-+            vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / src_w;
-+            vp_h = (FLOAT) r->fmt.i_visible_height * place.height / src_h;
-+            top_x = place.x + (FLOAT)((int)r->i_x - (int)vd->source.i_x_offset) * place.width  / src_w;
-+            top_y = place.y + (FLOAT)((int)r->i_y - (int)vd->source.i_y_offset) * place.height / src_h;
-+        } else {
++        if (vd->source.i_y_offset == 0 && vd->source.i_x_offset == 0) {
++            /* Uncropped video / 4:3 content: preserve stock VLC positioning */
 +            vp_w = (FLOAT) r->fmt.i_visible_width  * place.width  / orig_w;
 +            vp_h = (FLOAT) r->fmt.i_visible_height * place.height / orig_h;
 +            top_x = place.x + (FLOAT) r->i_x * place.width  / orig_w;
 +            top_y = place.y + (FLOAT) r->i_y * place.height / orig_h;
-+        }
++        } else {
++            /* Cropped presentation:
++             * 1. Calculate intended subtitle size for cropped presentation,
++             *    preserving glyph proportions with the exact same scale factor horizontally and vertically. */
++            FLOAT scale = (FLOAT) place.width / (orig_w > src_w ? src_w : orig_w);
++            vp_w = (FLOAT) r->fmt.i_visible_width  * scale;
++            vp_h = (FLOAT) r->fmt.i_visible_height * scale;
 +
-+        /* Subtitles originally placed in the removed black-bar area or extending
-+         * beyond the active picture: clamp into the visible presentation area
-+         * with padding so they remain fully visible and unclipped. */
-+        FLOAT bottom_limit = (FLOAT)place.y + (FLOAT)place.height - 4.0f;
-+        if (top_y + vp_h > bottom_limit)
-+            top_y = bottom_limit - vp_h;
-+        FLOAT top_limit = (FLOAT)place.y + 4.0f;
-+        if (top_y < top_limit)
-+            top_y = top_limit;
++            /* 2. Calculate horizontal placement */
++            if (orig_w > src_w)
++                top_x = place.x + ((FLOAT) r->i_x - (FLOAT) vd->source.i_x_offset) * scale;
++            else
++                top_x = place.x + (FLOAT) r->i_x * scale;
++
++            FLOAT left_limit  = (FLOAT) place.x + 8.0f;
++            FLOAT right_limit = (FLOAT) place.x + (FLOAT) place.width - 8.0f;
++            if (top_x < left_limit)
++                top_x = left_limit;
++            if (top_x + vp_w > right_limit)
++                top_x = right_limit - vp_w;
++            if (top_x < left_limit)
++                top_x = left_limit;
++
++            /* 3. Use resulting scaled subtitle bounds to calculate placement and bottom margin.
++             *    Anchors bottom-aligned cues to a stable presentation margin above the bottom boundary,
++             *    keeping complete cues (including multiline) visible without clipping below the crop boundary. */
++            unsigned mid_y = (orig_h > src_h) ? (vd->source.i_y_offset + src_h / 2) : (orig_h / 2);
++            if ((unsigned) r->i_y >= mid_y) {
++                FLOAT bottom_margin = (FLOAT) place.height * 0.055f;
++                if (bottom_margin < 10.0f)
++                    bottom_margin = 10.0f;
++                top_y = (FLOAT) place.y + (FLOAT) place.height - vp_h - bottom_margin;
++                if (top_y < (FLOAT) place.y + 8.0f)
++                    top_y = (FLOAT) place.y + 8.0f;
++            } else {
++                FLOAT top_margin = (FLOAT) place.height * 0.055f;
++                if (top_margin < 10.0f)
++                    top_margin = 10.0f;
++                top_y = (FLOAT) place.y + top_margin;
++                if (top_y + vp_h > (FLOAT) place.y + (FLOAT) place.height - 8.0f)
++                    top_y = (FLOAT) place.y + (FLOAT) place.height - 8.0f - vp_h;
++            }
++        }
 +
 +        quad->cropViewport.Width  = vp_w;
 +        quad->cropViewport.Height = vp_h;

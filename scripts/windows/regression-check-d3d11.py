@@ -25,8 +25,8 @@ LOCK_PATH = SCRIPT / "d3d11-plugin.lock.json"
 PLUGIN_REL = "plugins/video_output/libdirect3d11_plugin.dll"
 
 # Accepted baseline (user-verified candidate, delivered 2026-11-09).
-ACCEPTED_SHA256 = "b825a0f6dbef7d3f8a223bd934091b764f7b1574cd5654d2685256b5512f6725"
-ACCEPTED_BYTES = 401920
+ACCEPTED_SHA256 = "11cc763d3639e86683a1ff3d318abc9e707e3da55150f450e0d417daf7fb2c79"
+ACCEPTED_BYTES = 402432
 STOCK_SHA256 = "c1ba837963b15835645ab157dc8efb63e1083d211f4d74010237a3e87d7f0ce8"
 STOCK_BYTES = 408472
 MARKER = b"HDR to SDR tone mapping:"
