@@ -53,7 +53,7 @@ pub(crate) mod embed_macos;
 pub(crate) mod embed_windows;
 
 #[cfg(target_os = "linux")]
-mod embed_linux;
+pub(crate) mod embed_linux;
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;

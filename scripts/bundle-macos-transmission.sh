@@ -170,6 +170,7 @@ chmod 755 "$TARGET_DIR/transmission-daemon"
 # Build the macOS 11.0 dependency replacements from source so the shipped app
 # does not silently raise its effective minimum above the declared 11.0.
 DEPS_DIR="$REPO_ROOT/src-tauri/macos-deps-11"
+mkdir -p "$DEPS_DIR"
 "$SCRIPT_DIR/build-macos-deps-11.sh" --out-dir "$DEPS_DIR" >"$DEPS_DIR/build-deps.log" 2>&1
 
 ARCH="$(uname -m)"

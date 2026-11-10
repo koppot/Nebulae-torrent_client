@@ -26,6 +26,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
         run: |
+          if [[ "$TAG" == "v0.2.7" ]]; then
+            echo "FATAL: Tag v0.2.7 is frozen and immutable in production. Workflow cannot overwrite published 0.2.7 assets." >&2
+            exit 1
+          fi
           cat > release-body.md <<'BODY'
           ## Nebulae — Torrent Client by Asian DVD Club (@TAG@)
 
@@ -916,6 +920,12 @@ jobs:
                   "signature": sig_win,
                   "url": f"{base_url}/Nebulae-Setup-x64.exe"
               }
+
+          # Guard: Ensure manifest is complete and does not publish partial platforms
+          required_platforms = ["darwin-aarch64", "windows-x86_64"]
+          missing = [p for p in required_platforms if p not in manifest["platforms"]]
+          if missing:
+              raise SystemExit(f"FATAL: Incomplete updater manifest! Missing required platforms: {missing}. Refusing to publish incomplete latest.json.")
 
           with open("latest.json", "w", encoding="utf-8") as f:
               json.dump(manifest, f, indent=2)
