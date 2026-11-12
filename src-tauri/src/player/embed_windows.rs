@@ -588,10 +588,20 @@ unsafe extern "system" fn overlay_wndproc(
                 let dy = (((lparam.0 >> 16) as i16) as i32)
                     - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
                 if dx.abs() <= 6 && dy.abs() <= 6 {
-                    // Single click on video -> toggle play/pause
-                    if let Some(app) = overlay_app_handle() {
-                        use tauri::Emitter;
-                        let _ = app.emit("player-native-key", " ");
+                    // During an interactive disc menu, clicks are handled by VLC
+                    // (via CallWindowProcW below) and by the frontend overlay.
+                    // Suppress the play/pause toggle so a menu button click
+                    // does not also pause playback.
+                    let at_menu = overlay_app_handle()
+                        .and_then(|app| app.try_state::<crate::player::PlayerState>())
+                        .map(|s| s.at_menu.load(Ordering::SeqCst))
+                        .unwrap_or(false);
+                    if !at_menu {
+                        // Single click on video -> toggle play/pause
+                        if let Some(app) = overlay_app_handle() {
+                            use tauri::Emitter;
+                            let _ = app.emit("player-native-key", " ");
+                        }
                     }
                 }
             }
