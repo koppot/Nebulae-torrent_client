@@ -1,7 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Settings, ChevronDown, ChevronUp, ChevronsUpDown, Loader2, AlertCircle, RotateCw } from 'lucide-react';
-import { PeerTelemetry, PeeringSettings, PeeringMode, LocalityTier } from '../../types';
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-shell';
+import {
+  PeerTelemetry, PeeringSettings, PeeringMode, LocalityTier,
+  SwarmMember, SwarmMembersResult, TorrentTrackerItem,
+} from '../../types';
 import { formatSpeed } from '../../lib/formatters';
+import { getCachedMembers, setCachedMembers } from '../../utils/swarmMembersCache';
 
 // ── Locality chip ────────────────────────────────────────────────────────────
 
@@ -295,6 +301,93 @@ const PeeringSettingsPanel: React.FC<{
   );
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(2)} TiB`;
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GiB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MiB`;
+  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(0)} KiB`;
+  return `${bytes} B`;
+}
+
+// ── ADC member hover card ─────────────────────────────────────────────────────
+
+const AdcMemberCell: React.FC<{ member: SwarmMember }> = ({ member }) => {
+  const [open_, setOpen_] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open_) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen_(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open_]);
+
+  const handleUsernameClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try { await open(member.profile_url); } catch { /* degrade silently */ }
+  };
+
+  return (
+    <div ref={ref} className="relative inline-flex items-center">
+      <button
+        type="button"
+        onMouseEnter={() => setOpen_(true)}
+        onMouseLeave={() => setOpen_(false)}
+        onClick={handleUsernameClick}
+        className="text-[#e50914] hover:underline font-sans text-[11px] leading-none truncate max-w-[100px]"
+        title={`ADC: ${member.username} — click to open profile`}
+      >
+        {member.username}
+      </button>
+
+      {/* Hover card */}
+      {open_ && (
+        <div
+          className="absolute z-50 bottom-full left-0 mb-1 w-52 rounded border border-[#333333] bg-[#141414] shadow-xl p-2.5 text-[11px] font-sans"
+          onMouseEnter={() => setOpen_(true)}
+          onMouseLeave={() => setOpen_(false)}
+        >
+          <p className="text-white font-semibold mb-1.5 truncate">{member.username}</p>
+          <div className="space-y-1 text-[#a3a3a3]">
+            <div className="flex justify-between">
+              <span>Ratio</span>
+              <span className={`font-mono ${member.ratio >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {member.ratio.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span>Upload</span>
+              <span className="font-mono text-white">{formatBytes(member.uploaded_bytes)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Download</span>
+              <span className="font-mono text-white">{formatBytes(member.downloaded_bytes)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>BP</span>
+              <span className="font-mono text-cyan-400">{member.bonus_points.toFixed(0)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** True when the tracker URL is an ADC tracker. */
+function isAdcTracker(url: string): boolean {
+  try {
+    return new URL(url).hostname.endsWith('asiandvdclub.org');
+  } catch {
+    return false;
+  }
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface PeersTabPanelProps {
@@ -307,6 +400,10 @@ interface PeersTabPanelProps {
   fetchSettings: () => Promise<void>;
   saveSettings: (s: PeeringSettings) => Promise<void>;
   isTransmission: boolean;
+  /** 40-char lowercase hex. Required for ADC peer lookup. */
+  infoHash?: string | null;
+  /** Tracker list of the selected torrent, used to detect ADC membership. */
+  trackers?: TorrentTrackerItem[];
 }
 
 export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
@@ -319,10 +416,70 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   fetchSettings,
   saveSettings,
   isTransmission,
+  infoHash,
+  trackers = [],
 }) => {
   const [sortKey, setSortKey] = useState<SortKey>('sustained_dl_bps');
   const [sortAsc, setSortAsc] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  // ── ADC member state ───────────────────────────────────────────────────────
+  // Map<"ip:port", SwarmMember> for fast per-row lookup.
+  const [adcMap, setAdcMap] = useState<Map<string, SwarmMember>>(new Map());
+  // null = unknown (not yet tried), false = not supported / degraded, true = supported
+  const [adcSupported, setAdcSupported] = useState<boolean | null>(null);
+  // Track which info_hash the current adcMap was fetched for.
+  const lastFetchedHash = useRef<string | null>(null);
+
+  const hasAdcTracker = useCallback(
+    () => trackers.some((tr) => isAdcTracker(tr.url)),
+    [trackers],
+  );
+
+  useEffect(() => {
+    // Skip if: no info_hash, no ADC tracker, or same hash already fetched.
+    if (!infoHash || !hasAdcTracker() || peers.length === 0) return;
+    if (lastFetchedHash.current === infoHash) return;
+
+    // Check cache first.
+    const cached = getCachedMembers(infoHash);
+    if (cached) {
+      lastFetchedHash.current = infoHash;
+      setAdcSupported(cached.supported);
+      const m = new Map<string, SwarmMember>();
+      for (const member of cached.matches) m.set(`${member.ip}:${member.port}`, member);
+      setAdcMap(m);
+      return;
+    }
+
+    // Build peer list from current peers.
+    const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
+
+    lastFetchedHash.current = infoHash;
+
+    invoke<SwarmMembersResult>('adc_swarm_members', {
+      info_hash: infoHash,
+      peers: peerAddrs,
+    })
+      .then((result) => {
+        setCachedMembers(infoHash, result);
+        setAdcSupported(result.supported);
+        const m = new Map<string, SwarmMember>();
+        for (const member of result.matches) m.set(`${member.ip}:${member.port}`, member);
+        setAdcMap(m);
+      })
+      .catch(() => {
+        // Network / IPC failure — degrade silently.
+        setAdcSupported(false);
+      });
+  }, [infoHash, peers, hasAdcTracker]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset ADC state when the torrent changes.
+  useEffect(() => {
+    setAdcMap(new Map());
+    setAdcSupported(null);
+    lastFetchedHash.current = null;
+  }, [infoHash]);
 
   // Load settings once on mount if not yet loaded
   useEffect(() => {
@@ -341,6 +498,12 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   };
 
   const sorted = useMemo(() => sortPeers(peers, sortKey, sortAsc), [peers, sortKey, sortAsc]);
+
+  // Show ADC column only when: torrent has an ADC tracker AND lookup was at
+  // least attempted (adcSupported !== null) OR peers are present and ADC tracker found.
+  const showAdcCol = hasAdcTracker() && (adcSupported !== false || adcMap.size > 0);
+  // colSpan must account for the extra ADC column when shown.
+  const colCount = showAdcCol ? 10 : 9;
 
   return (
     <div className="flex flex-col gap-2 h-full">
@@ -385,6 +548,9 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
               <ColHeader label="IP / Port" sortKey="ip" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="Locality" sortKey="locality_tier" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="CC" sortKey="country_code" current={sortKey} asc={sortAsc} onSort={handleSort} />
+              {showAdcCol && (
+                <th className="py-1.5 px-2 text-[10px] uppercase font-mono text-[#a3a3a3]">ADC</th>
+              )}
               <ColHeader label="RTT" sortKey="rtt_ms" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="Down" sortKey="sustained_dl_bps" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="Up" sortKey="sustained_ul_bps" current={sortKey} asc={sortAsc} onSort={handleSort} />
@@ -394,7 +560,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
           <tbody className="divide-y divide-[#262626] font-mono text-[11px]">
             {isLoading && sorted.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
+                <td colSpan={colCount} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <Loader2 className="w-5 h-5 animate-spin text-[#e50914]" />
                     <span>Loading connected peers...</span>
@@ -403,7 +569,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-[#e50914] font-sans text-xs">
+                <td colSpan={colCount} className="py-8 text-center text-[#e50914] font-sans text-xs">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <div className="flex items-center gap-1.5 text-red-400">
                       <AlertCircle className="w-4 h-4" />
@@ -424,7 +590,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
               </tr>
             ) : sorted.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
+                <td colSpan={colCount} className="py-8 text-center text-[#a3a3a3] font-sans text-xs">
                   {torrentStatus === 'Seeding'
                     ? 'Seeding to swarm — no active downloaders currently connected'
                     : torrentStatus === 'Paused'
@@ -435,80 +601,94 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
                 </td>
               </tr>
             ) : (
-              sorted.map((p) => (
-                <tr key={`${p.ip}:${p.port}`} className="hover:bg-[#1f1f1f] transition-colors">
-                  {/* Protocol flags */}
-                  <td className="py-1.5 px-2">
-                    <div className="flex items-center gap-0.5">
-                      <Flag label="µTP" active={p.utp} />
-                      <Flag label="Enc" active={p.encryption} />
-                      <Flag label="v6" active={p.ipv6} />
-                      <Flag label="DHT" active={p.dht} />
-                      <Flag label="PEX" active={p.pex} />
-                    </div>
-                  </td>
+              sorted.map((p) => {
+                const adcKey = `${p.ip}:${p.port}`;
+                const member = adcMap.get(adcKey);
+                return (
+                  <tr key={adcKey} className="hover:bg-[#1f1f1f] transition-colors">
+                    {/* Protocol flags */}
+                    <td className="py-1.5 px-2">
+                      <div className="flex items-center gap-0.5">
+                        <Flag label="µTP" active={p.utp} />
+                        <Flag label="Enc" active={p.encryption} />
+                        <Flag label="v6" active={p.ipv6} />
+                        <Flag label="DHT" active={p.dht} />
+                        <Flag label="PEX" active={p.pex} />
+                      </div>
+                    </td>
 
-                  {/* Client name */}
-                  <td className="py-1.5 px-2 text-white font-sans max-w-[120px] truncate" title={p.client_name}>
-                    {p.client_name || <span className="text-[#555]">Unknown</span>}
-                  </td>
+                    {/* Client name */}
+                    <td className="py-1.5 px-2 text-white font-sans max-w-[120px] truncate" title={p.client_name}>
+                      {p.client_name || <span className="text-[#555]">Unknown</span>}
+                    </td>
 
-                  {/* IP:port */}
-                  <td className="py-1.5 px-2 text-[#a3a3a3] whitespace-nowrap">
-                    {p.ip}
-                    <span className="text-[#555]">:{p.port}</span>
-                  </td>
+                    {/* IP:port — always visible */}
+                    <td className="py-1.5 px-2 text-[#a3a3a3] whitespace-nowrap">
+                      {p.ip}
+                      <span className="text-[#555]">:{p.port}</span>
+                    </td>
 
-                  {/* Locality */}
-                  <td className="py-1.5 px-2">
-                    <LocalityChip tier={p.locality_tier} />
-                  </td>
+                    {/* Locality */}
+                    <td className="py-1.5 px-2">
+                      <LocalityChip tier={p.locality_tier} />
+                    </td>
 
-                  {/* Country code */}
-                  <td className="py-1.5 px-2 text-[#a3a3a3] w-10">
-                    {p.country_code ? (
-                      <span className="text-white font-semibold">{p.country_code}</span>
-                    ) : (
-                      <span className="text-[#444]">—</span>
+                    {/* Country code — always visible */}
+                    <td className="py-1.5 px-2 text-[#a3a3a3] w-10">
+                      {p.country_code ? (
+                        <span className="text-white font-semibold">{p.country_code}</span>
+                      ) : (
+                        <span className="text-[#444]">—</span>
+                      )}
+                    </td>
+
+                    {/* ADC member — only when ADC column is shown */}
+                    {showAdcCol && (
+                      <td className="py-1.5 px-2 max-w-[110px]">
+                        {member ? (
+                          <AdcMemberCell member={member} />
+                        ) : (
+                          <span className="text-[#444]">—</span>
+                        )}
+                      </td>
                     )}
-                  </td>
 
-                  {/* RTT */}
-                  <td className="py-1.5 px-2 whitespace-nowrap">
-                    {p.rtt_ms > 0 ? (
-                      <span
-                        className={
-                          p.rtt_ms < 30
-                            ? 'text-emerald-400'
-                            : p.rtt_ms < 100
-                            ? 'text-amber-400'
-                            : 'text-[#e50914]'
-                        }
-                      >
-                        {p.rtt_ms}ms
-                      </span>
-                    ) : (
-                      <span className="text-[#444]">—</span>
-                    )}
-                  </td>
+                    {/* RTT */}
+                    <td className="py-1.5 px-2 whitespace-nowrap">
+                      {p.rtt_ms > 0 ? (
+                        <span
+                          className={
+                            p.rtt_ms < 30
+                              ? 'text-emerald-400'
+                              : p.rtt_ms < 100
+                              ? 'text-amber-400'
+                              : 'text-[#e50914]'
+                          }
+                        >
+                          {p.rtt_ms}ms
+                        </span>
+                      ) : (
+                        <span className="text-[#444]">—</span>
+                      )}
+                    </td>
 
-                  {/* Down speed. sustained_*_bps are BITS per second (the backend
-                      converts Transmission's bytes/s); formatSpeed expects bytes/s. */}
-                  <td className="py-1.5 px-2 text-white whitespace-nowrap">
-                    {formatSpeed(p.sustained_dl_bps / 8)}
-                  </td>
+                    {/* Down speed */}
+                    <td className="py-1.5 px-2 text-white whitespace-nowrap">
+                      {formatSpeed(p.sustained_dl_bps / 8)}
+                    </td>
 
-                  {/* Up speed (bits/s to bytes/s, as above) */}
-                  <td className="py-1.5 px-2 text-[#a3a3a3] whitespace-nowrap">
-                    {formatSpeed(p.sustained_ul_bps / 8)}
-                  </td>
+                    {/* Up speed */}
+                    <td className="py-1.5 px-2 text-[#a3a3a3] whitespace-nowrap">
+                      {formatSpeed(p.sustained_ul_bps / 8)}
+                    </td>
 
-                  {/* Quality bar */}
-                  <td className="py-1.5 px-2">
-                    <QualityBar score={p.stability_score} />
-                  </td>
-                </tr>
-              ))
+                    {/* Quality bar */}
+                    <td className="py-1.5 px-2">
+                      <QualityBar score={p.stability_score} />
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

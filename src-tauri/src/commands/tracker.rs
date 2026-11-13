@@ -524,3 +524,202 @@ pub async fn import_adc_passkey(
     .await
     .map_err(|e| format!("Internal task error: {e}"))?
 }
+
+// ── ADC swarm member lookup ──────────────────────────────────────────────────
+
+/// One matched ADC member from the swarm_members endpoint.
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct SwarmMember {
+    pub ip: String,
+    pub port: u16,
+    pub username: String,
+    pub user_id: u64,
+    pub profile_url: String,
+    pub ratio: f64,
+    pub uploaded_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub bonus_points: f64,
+}
+
+/// Per-peer address sent in the lookup request.
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct PeerAddr {
+    pub ip: String,
+    pub port: u16,
+}
+
+/// Result returned to the front-end.
+#[derive(Debug, serde::Serialize)]
+pub struct SwarmMembersResult {
+    /// true  = endpoint exists and responded (even if matches is empty).
+    /// false = endpoint absent (404), user not in swarm (404 body), or ADC unreachable.
+    pub supported: bool,
+    pub matches: Vec<SwarmMember>,
+    /// Human-readable degradation reason when supported=false.
+    pub error: Option<String>,
+}
+
+/// Calls POST /api/nebulae/swarm_members on the ADC tracker.
+///
+/// The passkey is read from the OS keychain / DB inside the Rust layer and
+/// never crosses the IPC boundary into the WebView.
+///
+/// Cache note: caching is done on the TypeScript side (SwarmMembersCache)
+/// because Tauri commands are stateless; the front-end controls TTL and
+/// prevents redundant calls within the rate-limit window.
+#[tauri::command]
+pub async fn adc_swarm_members(
+    info_hash: String,
+    peers: Vec<PeerAddr>,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<SwarmMembersResult, String> {
+    let db_arc = std::sync::Arc::clone(&db);
+
+    tokio::task::spawn_blocking(move || {
+        // 1. Feature-gate: only proceed if ADC is linked.
+        let is_linked = db_arc
+            .get_setting("adc_linked")
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        if !is_linked {
+            return Ok(SwarmMembersResult {
+                supported: false,
+                matches: vec![],
+                error: Some("adc_not_linked".into()),
+            });
+        }
+
+        // 2. Read passkey (never sent to front-end).
+        #[cfg(target_os = "macos")]
+        let passkey_opt =
+            crate::utils::keyring::get_secret(&crate::utils::keyring::passkey_secret_target()).ok();
+
+        #[cfg(not(target_os = "macos"))]
+        let passkey_opt =
+            crate::utils::keyring::get_secret(&crate::utils::keyring::passkey_secret_target())
+                .ok()
+                .or_else(|| {
+                    db_arc
+                        .get_setting("adc_passkey")
+                        .unwrap_or(None)
+                        .filter(|v| !v.is_empty())
+                });
+
+        let passkey = match passkey_opt {
+            Some(pk) if !pk.trim().is_empty() => pk,
+            _ => {
+                return Ok(SwarmMembersResult {
+                    supported: false,
+                    matches: vec![],
+                    error: Some("passkey_unavailable".into()),
+                })
+            }
+        };
+
+        // 3. Validate info_hash (40 hex chars).
+        let hash = info_hash.trim().to_lowercase();
+        if hash.len() != 40 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(SwarmMembersResult {
+                supported: false,
+                matches: vec![],
+                error: Some("invalid_info_hash".into()),
+            });
+        }
+
+        // 4. Build the POST body — passkey in body, NOT in URL.
+        let body = serde_json::json!({
+            "passkey":   passkey.trim(),
+            "info_hash": hash,
+            "peers":     peers,
+        });
+
+        // 5. Send the request.
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .user_agent("Nebulae/0.2.7")
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(SwarmMembersResult {
+                    supported: false,
+                    matches: vec![],
+                    error: Some(format!("http_client_build: {e}")),
+                })
+            }
+        };
+
+        let resp = match client
+            .post("https://asiandvdclub.org/api/nebulae/swarm_members")
+            .json(&body)
+            .send()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("[swarm-members] request failed: {e}");
+                return Ok(SwarmMembersResult {
+                    supported: false,
+                    matches: vec![],
+                    error: Some("network_error".into()),
+                });
+            }
+        };
+
+        let status = resp.status();
+
+        // 404 = endpoint absent (older server) or requester not in swarm.
+        // Both degrade quietly — supported=false, empty matches.
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(SwarmMembersResult {
+                supported: false,
+                matches: vec![],
+                error: Some("not_found".into()),
+            });
+        }
+
+        // 429 — rate limited; caller should back off.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Ok(SwarmMembersResult {
+                supported: true,
+                matches: vec![],
+                error: Some("rate_limited".into()),
+            });
+        }
+
+        if !status.is_success() {
+            tracing::warn!("[swarm-members] unexpected status {status}");
+            return Ok(SwarmMembersResult {
+                supported: false,
+                matches: vec![],
+                error: Some(format!("http_{status}")),
+            });
+        }
+
+        // 6. Parse response.
+        #[derive(serde::Deserialize)]
+        struct ApiResponse {
+            #[serde(default)]
+            matches: Vec<SwarmMember>,
+        }
+
+        match resp.json::<ApiResponse>() {
+            Ok(parsed) => Ok(SwarmMembersResult {
+                supported: true,
+                matches: parsed.matches,
+                error: None,
+            }),
+            Err(e) => {
+                tracing::warn!("[swarm-members] parse error: {e}");
+                Ok(SwarmMembersResult {
+                    supported: false,
+                    matches: vec![],
+                    error: Some("parse_error".into()),
+                })
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking: {e}"))?
+}

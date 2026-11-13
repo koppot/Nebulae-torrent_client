@@ -491,3 +491,32 @@ export interface QbitProcessCheck {
   message: string;
 }
 
+
+// ── ADC swarm-members lookup (D) ─────────────────────────────────────────────
+
+/** One matched ADC member from the swarm_members endpoint. */
+export interface SwarmMember {
+  ip: string;
+  port: number;
+  username: string;
+  user_id: number;
+  profile_url: string;
+  ratio: number;
+  uploaded_bytes: number;
+  downloaded_bytes: number;
+  bonus_points: number;
+}
+
+/** Per-peer address sent to the Rust command. */
+export interface PeerAddr {
+  ip: string;
+  port: number;
+}
+
+/** Result returned by the adc_swarm_members Tauri command. */
+export interface SwarmMembersResult {
+  /** true = endpoint responded (even with zero matches). false = degraded. */
+  supported: boolean;
+  matches: SwarmMember[];
+  error?: string | null;
+}

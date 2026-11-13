@@ -1877,6 +1877,8 @@ export const TorrentManagerView: React.FC = () => {
                   fetchSettings={fetchSettings}
                   saveSettings={saveSettings}
                   isTransmission={isTransmission}
+                  infoHash={selectedTorrent?.info_hash ?? null}
+                  trackers={selectedTorrent?.trackers ?? []}
                 />
               ) : (
                 /* Speed Graph Tab */
