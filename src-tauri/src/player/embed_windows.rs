@@ -28,8 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -721,6 +721,19 @@ unsafe extern "system" fn main_wndproc(
                 let _ = set_window_corner_radius(app, 10.0);
             }
             let _ = app.emit("player://screen-changed", true);
+        }
+    } else if msg == WM_SIZE {
+        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, SIZE_RESTORED};
+        // When the window is restored from the taskbar (taskbar button click or
+        // SC_RESTORE), Win32 delivers WM_SIZE(SIZE_RESTORED) but does NOT set
+        // foreground focus on a decorations(false)+transparent(true) window.
+        // Without focus, the WebView2 compositor treats the window as inactive
+        // and suppresses mouse hit-testing, leaving the custom Close and Minimize
+        // buttons unresponsive.  Calling SetForegroundWindow here restores the
+        // normal click-to-activate behaviour without interfering with minimize or
+        // display-change paths.
+        if wparam.0 as u32 == SIZE_RESTORED {
+            let _ = SetForegroundWindow(hwnd);
         }
     }
     if let Some(orig) = MAIN_WNDPROC.get() {
