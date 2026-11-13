@@ -184,14 +184,6 @@ export const SettingsModal: React.FC = () => {
     }
   }, [showSettings, activeTab]);
 
-  // If the Server tab is active but remote mode was just disabled, fall back
-  // to the Behavior tab so the user isn't stranded on a hidden tab.
-  useEffect(() => {
-    if (activeTab === 'rtorrent' && !isRemoteServer) {
-      setActiveTab('behavior');
-    }
-  }, [isRemoteServer, activeTab, setActiveTab]);
-
   if (!showSettings) return null;
 
   const showStatus = (msg: string) => {
@@ -334,10 +326,7 @@ export const SettingsModal: React.FC = () => {
               { id: 'bittorrent', label: 'BitTorrent', icon: Radio },
               { id: 'rss', label: 'RSS', icon: Rss },
               { id: 'webui', label: 'Web UI', icon: Globe },
-              // Server tab: only visible when a remote server connection is
-              // configured or active so it doesn't clutter the list for local
-              // engine users.
-              ...(isRemoteServer ? [{ id: 'rtorrent', label: 'Server', icon: Server }] : []),
+              { id: 'rtorrent', label: 'Server', icon: Server },
               { id: 'media', label: 'Media', icon: Film },
               { id: 'advanced', label: 'Advanced', icon: Cpu },
             ].map((tab) => {
