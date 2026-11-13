@@ -14,6 +14,7 @@ import { StatusBar } from './components/layout/StatusBar';
 import { TorrentManagerView } from './components/manager/TorrentManagerView';
 import { SimpleMediaView } from './components/media/SimpleMediaView';
 import { CompactBarView } from './components/compact/CompactBarView';
+import { RemoteServerView } from './components/server/RemoteServerView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { HelpModal } from './components/modals/HelpModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
@@ -29,10 +30,38 @@ import PlayerOverlay from './components/player/PlayerOverlay';
 import { FileUp, Film, GripHorizontal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useRemoteServerStore } from './stores/remoteServerStore';
 
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
+  const remoteSettings = useSettingsStore((s) => ({
+    enabled: s.settings.rtorrent_server_enabled,
+    url: s.settings.rtorrent_server_url,
+    token: s.settings.rtorrent_server_token,
+  }));
+  const { configure: configureRemote, stopPolling: stopRemotePolling } = useRemoteServerStore();
+
+  // Start or stop remote server polling whenever the connection settings change.
+  useEffect(() => {
+    if (remoteSettings.enabled && remoteSettings.url?.trim()) {
+      configureRemote();
+    } else {
+      stopRemotePolling();
+    }
+  }, [remoteSettings.enabled, remoteSettings.url, remoteSettings.token, configureRemote, stopRemotePolling]);
+
+  // Handle nebulae:open-settings events dispatched by child components (e.g. RemoteServerView).
+  const { setShowSettings: openSettingsModal, setSettingsTab: openSettingsTab } = useUiStore();
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ tab?: string }>).detail;
+      if (detail?.tab) openSettingsTab(detail.tab as Parameters<typeof openSettingsTab>[0]);
+      openSettingsModal(true);
+    };
+    window.addEventListener('nebulae:open-settings', handler);
+    return () => window.removeEventListener('nebulae:open-settings', handler);
+  }, [openSettingsModal, openSettingsTab]);
 
   // The webview itself must go transparent while the player is up — the
   // native video view sits BELOW it (see embed_macos.rs).
@@ -542,6 +571,7 @@ export const App: React.FC = () => {
         {viewMode === 'media' && <SimpleMediaView />}
         {viewMode === 'compact' && <CompactBarView />}
         {viewMode === 'manager' && <TorrentManagerView />}
+        {viewMode === 'server' && <RemoteServerView />}
       </main>
 
       {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}

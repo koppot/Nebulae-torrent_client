@@ -1,4 +1,4 @@
-export type ViewMode = 'media' | 'manager' | 'compact';
+export type ViewMode = 'media' | 'manager' | 'compact' | 'server';
 
 // Drag-dropped File objects carry the absolute native path in a non-standard
 // `path` property provided by the webview (Tauri), absent from the DOM type.

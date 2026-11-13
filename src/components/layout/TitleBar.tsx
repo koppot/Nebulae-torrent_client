@@ -30,7 +30,9 @@ import {
   Folder,
   Disc,
   FolderInput,
+  Server as ServerIcon,
 } from 'lucide-react';
+import { useRemoteServerStore } from '../../stores/remoteServerStore';
 
 export const TitleBar: React.FC = () => {
   const {
@@ -115,12 +117,23 @@ export const TitleBar: React.FC = () => {
   };
 
   const { settings } = useSettingsStore();
+  // Show the Server tab when a remote server URL is configured and enabled.
+  const remoteConfigured =
+    settings.rtorrent_server_enabled && Boolean(settings.rtorrent_server_url?.trim());
+  const remoteConnState = useRemoteServerStore((s) => s.connState);
 
   useEffect(() => {
     if (settings.media_mode_enabled === false && viewMode === 'media') {
       setViewMode('manager');
     }
   }, [settings.media_mode_enabled, viewMode, setViewMode]);
+
+  // If the user is on the Server tab and remote becomes unconfigured, switch to Manager.
+  useEffect(() => {
+    if (viewMode === 'server' && !remoteConfigured) {
+      setViewMode('manager');
+    }
+  }, [viewMode, remoteConfigured, setViewMode]);
 
   // Window controls go through NATIVE backend commands (owner: the JS
   // window API is unreliable on the undecorated Windows window).
@@ -213,6 +226,29 @@ export const TitleBar: React.FC = () => {
             <LayoutGrid className="w-4 h-4" />
             <span>Manager</span>
           </button>
+          {/* Server tab: only visible when a remote server connection is configured */}
+          {remoteConfigured && (
+            <button
+              type="button"
+              onClick={() => setViewMode('server')}
+              className={`flex items-center justify-center gap-2 w-28 my-1 rounded-lg text-sm font-semibold transition shadow-sm relative ${
+                viewMode === 'server'
+                  ? 'bg-[#e50914] hover:bg-[#f40612] text-white'
+                  : 'bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-[#e5c527] hover:text-[#f7dc5c]'
+              }`}
+              title="Remote Server — manage the connected nebulae-server"
+            >
+              <ServerIcon className="w-4 h-4" />
+              <span>Server</span>
+              {/* Connection state dot */}
+              {remoteConnState === 'connected' && viewMode !== 'server' && (
+                <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              )}
+              {(remoteConnState === 'error' || remoteConnState === 'auth_error') && viewMode !== 'server' && (
+                <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-red-500" />
+              )}
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {/* Nebula icon (owner): visible on BOTH views; opens the

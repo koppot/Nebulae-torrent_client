@@ -711,6 +711,18 @@ pub fn run() {
             commands::settings::get_engine_mode,
             commands::settings::test_rtorrent_server_connection,
             commands::settings::get_engine_identity_info,
+            // Remote server proxy (token stays in Rust, never sent to WebView)
+            commands::remote_server::remote_server_status,
+            commands::remote_server::remote_list_torrents,
+            commands::remote_server::remote_pause_torrent,
+            commands::remote_server::remote_resume_torrent,
+            commands::remote_server::remote_pause_all,
+            commands::remote_server::remote_resume_all,
+            commands::remote_server::remote_remove_torrent,
+            commands::remote_server::remote_set_kill_switch,
+            commands::remote_server::remote_reannounce_torrent,
+            commands::remote_server::remote_recheck_torrent,
+            commands::remote_server::remote_set_torrent_limits,
             // Torrent & Engine
             commands::torrent::list_torrents,
             commands::torrent::get_torrent_details,

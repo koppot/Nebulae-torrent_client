@@ -7,6 +7,7 @@ pub mod media;
 pub mod peering;
 pub mod posters;
 pub mod qbit_import;
+pub mod remote_server;
 pub mod settings;
 pub mod tailscale;
 pub mod torrent;
