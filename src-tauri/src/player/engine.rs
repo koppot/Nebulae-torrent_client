@@ -1106,10 +1106,6 @@ impl VlcSession {
             // Suppress on-screen snapshot thumbnail popup
             CString::new("--no-snapshot-preview").unwrap(),
             CString::new("--bluray-menu").unwrap(),
-            // Nebulae's UI overlay handles all mouse clicks and keyboard shortcuts:
-            // libVLC must never intercept mouse or keyboard events on the video window.
-            CString::new("--no-mouse-events").unwrap(),
-            CString::new("--no-keyboard-events").unwrap(),
             // VLC internal log is routed via the NEBULAE_VLC_LOG shim dylib
             // (libvlc_log_set C callback). The --file-logging / --logfile args
             // are VLC application flags and are silently ignored by libvlc_new.
@@ -1120,6 +1116,18 @@ impl VlcSession {
             CString::new("--disc-caching=1000").unwrap(),
             CString::new("--live-caching=3000").unwrap(),
         ];
+        // Windows must leave mouse-events enabled: VLC's Win32 event thread
+        // otherwise drops WM_MOUSEMOVE/button messages, and disables its child
+        // window when both mouse and keyboard events are disabled. Keyboard
+        // shortcuts remain frontend-owned. Preserve the previous input policy
+        // on macOS/Linux, whose native overlay paths handle menu input.
+        #[cfg(target_os = "windows")]
+        args.push(CString::new("--no-keyboard-events").unwrap());
+        #[cfg(not(target_os = "windows"))]
+        args.extend([
+            CString::new("--no-mouse-events").unwrap(),
+            CString::new("--no-keyboard-events").unwrap(),
+        ]);
         // HDR tone-mapping for UHD Blu-ray (BT.2020 PQ / ST2084 ->
         // SDR): handled by the vout's OpenGL tone-mapping shader
         // pipeline (VLC 3.0.x has no libplacebo; it lives in the

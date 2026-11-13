@@ -139,6 +139,12 @@ function fmt(ms: number): string {
  */
 export default function PlayerOverlay() {
   const player = usePlayerStore();
+  const isWindowsWebView =
+    typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
+  const nativeMenuPoint = (x: number, y: number) => {
+    const scale = isWindowsWebView ? window.devicePixelRatio || 1 : 1;
+    return { x: x * scale, y: y * scale };
+  };
   const holderRef = useRef<HTMLDivElement>(null);
   const [poll, setPoll] = useState<Poll>({
     time_ms: 0,
@@ -170,6 +176,8 @@ export default function PlayerOverlay() {
   const lastChapterProbeRef = useRef('');
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
+  const clickSequenceRef = useRef(0);
+  const menuClickInFlightRef = useRef(false);
   const lastMenuMoveRef = useRef<number>(0);
   const lastMenuClickRef = useRef<number>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -408,10 +416,12 @@ export default function PlayerOverlay() {
         const el = holderRef.current;
         if (el) {
           const r = el.getBoundingClientRect();
-          invoke('player_menu_mouse_move', { x: r.width * 0.45, y: r.height * 0.42 }).catch(() => {});
+          const point = nativeMenuPoint(r.width * 0.45, r.height * 0.42);
+          invoke('player_menu_mouse_move', point).catch(() => {});
         }
       }
       if (wasAtMenuRef.current && !p.at_menu) {
+        lastMenuClickRef.current = 0;
         justLeftMenuRef.current = true;
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
@@ -1239,29 +1249,70 @@ export default function PlayerOverlay() {
     const now = Date.now();
     if (now - lastMenuMoveRef.current < 40) return; // ~25 fps throttle
     lastMenuMoveRef.current = now;
-    invoke('player_menu_mouse_move', { x: e.clientX, y: e.clientY }).catch(() => {});
+    const rect = e.currentTarget.getBoundingClientRect();
+    const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
+    invoke('player_menu_mouse_move', point).catch(() => {});
   };
 
-  const onVideoClick = (e: React.MouseEvent) => {
-    // Authored disc menu: act on the click at once. The pause-vs-double-click
-    // delay below would postpone it by 250 ms, and a double click would cancel
-    // it altogether (and toggle fullscreen). One physical click must produce
-    // exactly one activation; the pointer position was already forwarded by
-    // the mouse-move handler, so only the activate is sent (forwarding a click
-    // as well would activate twice on menus that do deliver pointer events).
-    if (player.isDisc && pollRef.current.at_menu) {
-      const now = Date.now();
-      if (now - lastMenuClickRef.current < 350) return;
-      lastMenuClickRef.current = now;
-      invoke('player_menu_mouse_move', { x: e.clientX, y: e.clientY }).catch(() => {});
-      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
-      return;
-    }
-    if (clickTimerRef.current !== null) return;
+  const scheduleVideoPause = (sequence: number) => {
+    if (sequence !== clickSequenceRef.current || clickTimerRef.current !== null) return;
     clickTimerRef.current = window.setTimeout(() => {
       clickTimerRef.current = null;
       togglePause();
     }, 250);
+  };
+
+  const onVideoClick = (e: React.MouseEvent) => {
+    const now = Date.now();
+
+    // A WebView double-click is one selection, not a second activation.
+    // Windows forwards menu pointer input through this checked IPC path only.
+    if (
+      player.isDisc &&
+      isWindowsWebView &&
+      pollRef.current.at_menu &&
+      e.detail > 1
+    ) {
+      return;
+    }
+
+    // Preserve the existing macOS/Linux menu path. Windows uses the native
+    // mouse-message command, which checks the live Rust at_menu state.
+    if (player.isDisc && !isWindowsWebView && pollRef.current.at_menu) {
+      if (now - lastMenuClickRef.current < 350) return;
+      lastMenuClickRef.current = now;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
+      invoke('player_menu_mouse_move', point).catch(() => {});
+      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+      return;
+    }
+
+    const sequence = ++clickSequenceRef.current;
+    if (player.isDisc && isWindowsWebView && pollRef.current.at_menu) {
+      menuClickInFlightRef.current = true;
+      // Rust checks the current at_menu flag rather than trusting this
+      // component's polled snapshot. This is the sole Windows menu-click
+      // delivery path, so repeated legitimate clicks are not time-deduplicated.
+      const rect = e.currentTarget.getBoundingClientRect();
+      const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
+      invoke<boolean>('player_menu_mouse_click', point)
+        .then((handled) => {
+          menuClickInFlightRef.current = false;
+          if (handled) lastMenuClickRef.current = Date.now();
+          if (sequence !== clickSequenceRef.current) return;
+          if (handled) {
+            return;
+          }
+          scheduleVideoPause(sequence);
+        })
+        .catch(() => {
+          menuClickInFlightRef.current = false;
+          scheduleVideoPause(sequence);
+        });
+      return;
+    }
+    scheduleVideoPause(sequence);
   };
   // Mouse wheel during a disc menu: up = previous selection, down = next
   // selection. Uses the same dvdnav/libbluray navigation modes as the arrow
@@ -1278,7 +1329,16 @@ export default function PlayerOverlay() {
     }, 300);
   };
   const onVideoDoubleClick = () => {
-    if (player.isDisc && pollRef.current.at_menu) return;
+    if (
+      player.isDisc &&
+      (pollRef.current.at_menu ||
+        menuClickInFlightRef.current ||
+        Date.now() - lastMenuClickRef.current < 350)
+    ) {
+      clickSequenceRef.current += 1;
+      return;
+    }
+    clickSequenceRef.current += 1;
     if (clickTimerRef.current !== null) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;

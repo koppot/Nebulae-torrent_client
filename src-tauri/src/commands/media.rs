@@ -3067,7 +3067,17 @@ pub fn player_menu_navigate(
 
 /// Forward mouse move coordinates to the native video view during interactive disc menus.
 #[tauri::command]
-pub fn player_menu_mouse_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub fn player_menu_mouse_move(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::player::PlayerState>,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    // The frontend's menu state is polled. Recheck the authoritative native
+    // state here so a delayed WebView event cannot move a closed menu.
+    if !state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
     {
         crate::player::embed_macos::forward_mouse_move(&app, x, y)?;
@@ -3083,9 +3093,19 @@ pub fn player_menu_mouse_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(
     Ok(())
 }
 
-/// Forward mouse click coordinates to the native video view during interactive disc menus.
+/// Activate a menu item at the pointer only while the player is still in a menu.
+/// Returns false if the menu closed between the frontend poll and this command.
 #[tauri::command]
-pub fn player_menu_mouse_click(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub fn player_menu_mouse_click(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::player::PlayerState>,
+    x: f64,
+    y: f64,
+) -> Result<bool, String> {
+    if !state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(false);
+    }
+
     #[cfg(target_os = "macos")]
     {
         crate::player::embed_macos::forward_mouse_click(&app, x, y)?;
@@ -3098,7 +3118,7 @@ pub fn player_menu_mouse_click(app: tauri::AppHandle, x: f64, y: f64) -> Result<
     {
         crate::player::embed_linux::forward_mouse_click(&app, x, y)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Jump to a CHAPTER of the current title (0-based; the overlay renders
