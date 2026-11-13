@@ -403,12 +403,25 @@ mod windows_impl {
             draw_fallback_n_icon(mem_dc, icon_x, icon_y, icon_sz);
         }
 
-        // 2. Draw Stacked Transfer Rates immediately beside the icon
+        // 2. Draw stacked transfer rates to the right of the icon.
+        //
+        // Each line is rendered as a single fixed-width string produced by
+        // `format_stacked_line`, which always emits exactly 12 characters:
+        //   <indicator> <5-char-value> <4-char-unit>
+        // e.g. "▲  1.5 KB/s" or "▼ 78.9 MB/s"
+        //
+        // Using a single fixed-width string per line (rather than splitting
+        // arrow + number into two separate TextOutW calls) keeps the text
+        // column at a constant `text_x` regardless of the magnitude of the
+        // rate, so the layout never shifts and the icon never overlaps the
+        // numbers.  The icon is always at `icon_x`; the text block starts at
+        // `text_x` (= icon_x + icon_size + 8 dp gap), detached from the icon.
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
 
-        let up_str = crate::speed_format::format_adaptive_rate(up);
-        let down_str = crate::speed_format::format_adaptive_rate(down);
+        // format_stacked_line produces exactly 12 Unicode characters per line.
+        let up_line = crate::speed_format::format_stacked_line('\u{25b2}', up); // ▲
+        let down_line = crate::speed_format::format_stacked_line('\u{25bc}', down); // ▼
 
         let font = CreateFontW(
             layout.font_px,
@@ -430,25 +443,16 @@ mod windows_impl {
         let _ = SetBkMode(mem_dc, TRANSPARENT);
 
         let text_x = layout.text_x;
-        let arrow_w = (14.0 * (height as f32 / 40.0)).round() as i32;
 
-        // Upper line: Upload rate (▲ in ADC orange, text in crisp white)
-        let _ = SetTextColor(mem_dc, COLORREF(0x000F8BF7)); // Orange BGR
-        let up_arrow_wide: Vec<u16> = "▲ ".encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x, layout.up_y, &up_arrow_wide);
+        // Upper line: Upload rate — full fixed-width string in ADC orange.
+        let _ = SetTextColor(mem_dc, COLORREF(0x000F8BF7)); // Orange BGR (▲ + rate)
+        let up_wide: Vec<u16> = up_line.encode_utf16().collect();
+        let _ = TextOutW(mem_dc, text_x, layout.up_y, &up_wide);
 
-        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // White
-        let up_text_wide: Vec<u16> = up_str.encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x + arrow_w, layout.up_y, &up_text_wide);
-
-        // Lower line: Download rate (▼ in cyan/green, text in crisp white)
-        let _ = SetTextColor(mem_dc, COLORREF(0x00D0B000)); // Cyan BGR
-        let down_arrow_wide: Vec<u16> = "▼ ".encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x, layout.down_y, &down_arrow_wide);
-
-        let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF)); // White
-        let down_text_wide: Vec<u16> = down_str.encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x + arrow_w, layout.down_y, &down_text_wide);
+        // Lower line: Download rate — full fixed-width string in cyan/green.
+        let _ = SetTextColor(mem_dc, COLORREF(0x00D0B000)); // Cyan BGR (▼ + rate)
+        let down_wide: Vec<u16> = down_line.encode_utf16().collect();
+        let _ = TextOutW(mem_dc, text_x, layout.down_y, &down_wide);
 
         let _ = GdiFlush();
 
