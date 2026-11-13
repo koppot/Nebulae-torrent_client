@@ -858,6 +858,7 @@ pub fn run() {
             commands::tracker::get_seed_time_records,
             commands::tracker::calculate_ratio_projection,
             commands::tracker::sync_adc_stats,
+            commands::tracker::adc_swarm_members,
             // Feature 6: editable listing names
             commands::library::set_user_display_title,
             commands::library::reset_user_display_title,
