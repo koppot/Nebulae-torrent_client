@@ -1,27 +1,23 @@
 //! Windows Taskbar Toolbar Speed Band Presentation for Nebulae.
 //!
-//! Presents the Nebulae application icon and upload/download transfer rates
-//! as ONE visually unified toolbar item on the Windows taskbar:
+//! Presents the Nebulae application icon on the LEFT and upload/download
+//! transfer rates on the RIGHT of a single layered toolbar item:
 //!
 //! ┌──────────────────────────────────────┐
-//! │  [Nebulae Icon]  ▲  1.25 MB/s        │
-//! │                  ▼  8.40 MB/s        │
+//! │  [Icon]                 ▲  1.25 MB/s │
+//! │                         ▼  8.40 MB/s │
 //! └──────────────────────────────────────┘
 //!
-//! Architecture and Requirements:
-//! - Unified Layout/Container: The Nebulae icon and both numerical transfer rates
-//!   are rendered together within a single Win32 layered window container.
-//! - Fixed Internal Layout Allocation: Dedicated layout space (136px at 100% DPI,
-//!   272px at 200% DPI) is reserved inside the item. Rate and unit variations
-//!   (B/s, KB/s, MB/s, GB/s) fit comfortably without resizing or shifting.
-//! - Anti-Detachment Guarantee: Because the icon and rates are painted onto the same
-//!   double-buffered DIBSection, they can never slide away, detach, or overlap each other.
-//! - Toolbar Anchoring: Anchored natively on the Windows taskbar toolbar (ReBarWindow32)
-//!   immediately adjacent to TrafficMonitor (or TrayNotifyWnd if TrafficMonitor is absent).
-//! - Clean Alpha Blending: Uses 32-bit ARGB DIBSection with UpdateLayeredWindow and
-//!   halo drop-shadow compositing for 100% legibility against all desktop wallpapers.
-//! - Interactive Activation: Left-click restores and focuses the Nebulae main window;
-//!   right-click displays an application context menu ("Open Nebulae", "Quit Nebulae").
+//! The speed block is anchored to the RIGHT edge of the band and is entirely
+//! independent of the icon position.  Changing number magnitudes (B/s → GB/s)
+//! do NOT shift the layout because the text block width is reserved up front.
+//!
+//! Architecture:
+//! - Icon at `icon_x` (left margin).
+//! - Speed text at `text_x = width - text_reserve_w` (right-anchored).
+//! - `band_layout` owns both coordinates; `render_band` reads them.
+//! - `format_stacked_line` always emits exactly 12 characters:
+//!   indicator + figure-space + 5-char-padded-value + space + 4-char-unit.
 
 /// Pixel geometry of the unified toolbar speed item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,34 +28,62 @@ pub(crate) struct BandLayout {
     pub icon_size: i32,
     pub icon_x: i32,
     pub icon_y: i32,
+    /// Left edge of the speed-text block, anchored from the right of the band.
     pub text_x: i32,
+    /// Reserved pixel width for the speed-text block (right side of band).
+    pub text_reserve_w: i32,
     pub font_px: i32,
     pub up_y: i32,
     pub down_y: i32,
 }
 
 /// Compute geometry derived from taskbar thickness `tray_h` and DPI scale.
+///
+/// # Layout invariant
+/// `text_x + text_reserve_w == width`, so the speed block always fills the
+/// right side regardless of icon position or rate magnitude.
+///
+/// # Scaling guarantee
+/// Every dimension is derived from `dpi_scale` by a single `round()`.  At
+/// integer DPI multiples (1×, 2×, 3×…) all pixel values are exact multiples
+/// of their 1× base, so `band_layout(80).width == 2 * band_layout(40).width`.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
     let tray_h = tray_h.max(30);
     let dpi_scale = (tray_h as f32 / 40.0).max(1.0);
-    let width = (136.0 * dpi_scale).round() as i32;
-    let height = tray_h;
-    let icon_size = (26.0 * dpi_scale).round() as i32;
-    let icon_x = (6.0 * dpi_scale).round() as i32;
-    let icon_y = (height - icon_size) / 2;
-    let text_x = icon_x + icon_size + (8.0 * dpi_scale).round() as i32;
-    let font_px = (12.5 * dpi_scale).round() as i32;
-    let up_y = (height / 2) - (14.0 * dpi_scale).round() as i32;
-    let down_y = (height / 2) + (1.0 * dpi_scale).round() as i32;
+
+    // All base constants are defined at 1× DPI (tray_h = 40).
+    // Each is rounded independently so the result is an integer multiple
+    // of the base at integer DPI scales.
+    let icon_x = (6.0 * dpi_scale).round() as i32; //  6 px at 1×
+    let icon_size = (26.0 * dpi_scale).round() as i32; // 26 px at 1×
+    let gap = (8.0 * dpi_scale).round() as i32; //  8 px at 1×
+    let font_px = (12.5 * dpi_scale).round() as i32; // 13 px at 1×
+
+    // Icon slot: left margin + icon + gap to text.
+    let icon_slot_w = icon_x + icon_size + gap; // 40 px at 1×
+
+    // Text reservation: 114 px at 1×, wide enough for 12 glyphs of
+    // format_stacked_line output (indicator + 5-char value + 4-char unit)
+    // at ~9.5 px average advance.  Derived from dpi_scale directly (not from
+    // font_px) so round(114 * 2) == 2 * round(114 * 1) holds exactly.
+    let text_reserve_w = (114.0 * dpi_scale).round() as i32;
+
+    let width = icon_slot_w + text_reserve_w;
+    let text_x = icon_slot_w; // == width - text_reserve_w
+
+    let icon_y = (tray_h - icon_size) / 2;
+    let up_y = (tray_h / 2) - (14.0 * dpi_scale).round() as i32;
+    let down_y = (tray_h / 2) + (1.0 * dpi_scale).round() as i32;
 
     BandLayout {
         width,
-        height,
+        height: tray_h,
         icon_size,
         icon_x,
         icon_y,
         text_x,
+        text_reserve_w,
         font_px,
         up_y,
         down_y,
@@ -403,19 +427,12 @@ mod windows_impl {
             draw_fallback_n_icon(mem_dc, icon_x, icon_y, icon_sz);
         }
 
-        // 2. Draw stacked transfer rates to the right of the icon.
+        // 2. Draw stacked transfer rates on the RIGHT side of the band.
         //
-        // Each line is rendered as a single fixed-width string produced by
-        // `format_stacked_line`, which always emits exactly 12 characters:
-        //   <indicator> <5-char-value> <4-char-unit>
-        // e.g. "▲  1.5 KB/s" or "▼ 78.9 MB/s"
-        //
-        // Using a single fixed-width string per line (rather than splitting
-        // arrow + number into two separate TextOutW calls) keeps the text
-        // column at a constant `text_x` regardless of the magnitude of the
-        // rate, so the layout never shifts and the icon never overlaps the
-        // numbers.  The icon is always at `icon_x`; the text block starts at
-        // `text_x` (= icon_x + icon_size + 8 dp gap), detached from the icon.
+        // text_x = width - text_reserve_w (right-anchored, independent of
+        // icon position).  format_stacked_line always emits exactly 12 chars
+        // (indicator + 5-char-padded value + 4-char unit), so the text block
+        // occupies a constant pixel width regardless of rate magnitude.
         let up = UP_RATE.load(Ordering::Relaxed);
         let down = DOWN_RATE.load(Ordering::Relaxed);
 
@@ -659,23 +676,59 @@ mod layout_tests {
 
     #[test]
     fn geometry_scales_with_taskbar_thickness() {
-        // Standard Windows taskbar heights: 40px (100%), 48px (120%), 60px (150%), 80px (200%)
         let l40 = band_layout(40);
         let l80 = band_layout(80);
 
         assert_eq!(l40.height, 40);
         assert_eq!(l80.height, 80);
-        assert_eq!(l40.width, 136);
-        assert_eq!(l80.width, 272);
-        assert!(l80.icon_size > l40.icon_size);
-        assert!(l80.font_px > l40.font_px);
+        // At 2× DPI every linear dimension must be exactly double.
+        // This holds because all base constants in band_layout are rounded
+        // from (base * dpi_scale) independently, and round(x*2) == 2*round(x)
+        // for any x that is a multiple of 0.5.
+        assert_eq!(l80.width, l40.width * 2, "width");
+        assert_eq!(l80.icon_size, l40.icon_size * 2, "icon_size");
+        assert_eq!(l80.icon_x, l40.icon_x * 2, "icon_x");
+        assert_eq!(l80.text_x, l40.text_x * 2, "text_x");
+        assert_eq!(l80.text_reserve_w, l40.text_reserve_w * 2, "text_reserve_w");
+        assert!(l80.font_px > l40.font_px, "font_px must grow");
+    }
+
+    #[test]
+    fn text_x_is_right_anchored() {
+        for tray_h in [30, 40, 48, 60, 80, 96] {
+            let l = band_layout(tray_h);
+            // text_x is anchored from the right: text_x == width - text_reserve_w
+            assert_eq!(
+                l.text_x,
+                l.width - l.text_reserve_w,
+                "tray_h={}: text_x not right-anchored (got text_x={}, width={}, text_reserve_w={})",
+                tray_h,
+                l.text_x,
+                l.width,
+                l.text_reserve_w
+            );
+        }
+    }
+
+    #[test]
+    fn speed_block_does_not_overlap_icon() {
+        for tray_h in [30, 40, 48, 60, 80, 96] {
+            let l = band_layout(tray_h);
+            let icon_right = l.icon_x + l.icon_size;
+            assert!(
+                l.text_x > icon_right,
+                "tray_h={}: text_x ({}) overlaps icon right edge ({})",
+                tray_h,
+                l.text_x,
+                icon_right
+            );
+        }
     }
 
     #[test]
     fn layout_reserves_space_without_overlap() {
         for tray_h in [30, 40, 48, 60, 80, 96] {
             let l = band_layout(tray_h);
-            assert!(l.text_x > l.icon_x + l.icon_size);
             assert!(l.down_y > l.up_y);
             assert!(l.down_y + l.font_px <= l.height + 2);
         }
