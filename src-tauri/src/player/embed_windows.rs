@@ -28,8 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -355,6 +355,8 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         if hidden {
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
+                // Reset cached VLC video output HWND so it is re-discovered on next play.
+                VLC_VIDEO_OUT_HWND.store(0, Ordering::SeqCst);
                 // When player is closed, restore rounded corners on the application window
                 let round: u32 = DWMWCP_ROUND.0 as u32;
                 let _ = DwmSetWindowAttribute(
@@ -509,6 +511,46 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     Ok(())
 }
 
+/// Cached HWND of the innermost "VLC video output" grandchild of NebulaeVideoSurface.
+/// Set lazily on the first successful lookup; reset to 0 when the player closes.
+static VLC_VIDEO_OUT_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Walk the entire child-window tree under `parent`, returning the first window whose
+/// class name begins with "VLC video output". The search is depth-first via GetWindow.
+unsafe fn find_vlc_video_output(parent: HWND) -> Option<HWND> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
+    let mut stack = vec![parent];
+    while let Some(node) = stack.pop() {
+        let mut child = GetWindow(node, GW_CHILD).unwrap_or_default();
+        while !child.is_invalid() {
+            let mut buf = [0u16; 128];
+            let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(child, &mut buf);
+            if len > 0 {
+                let name = String::from_utf16_lossy(&buf[..len as usize]);
+                if name.starts_with("VLC video output") {
+                    return Some(child);
+                }
+                // Enqueue children of this node for further search.
+                stack.push(child);
+            }
+            child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+        }
+    }
+    None
+}
+
+/// Return the VLC video output HWND, using the cached value when available.
+/// Falls back to a live search under `surface` if the cache is stale (0).
+unsafe fn vlc_video_out(surface: HWND) -> Option<HWND> {
+    let cached = VLC_VIDEO_OUT_HWND.load(Ordering::SeqCst);
+    if cached != 0 {
+        return Some(HWND(cached as _));
+    }
+    let found = find_vlc_video_output(surface)?;
+    VLC_VIDEO_OUT_HWND.store(found.0 as isize, Ordering::SeqCst);
+    Some(found)
+}
+
 /// Stored original window procedure for the overlay HWND subclass.
 static OVERLAY_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
 
@@ -534,6 +576,13 @@ unsafe extern "system" fn overlay_wndproc(
             let _ = FillRect(hdc, &rc, black_brush);
             return LRESULT(1);
         }
+        WM_MOUSEACTIVATE => {
+            // Prevent Win32 from bringing NebulaeVideoSurface to the foreground when
+            // the user clicks on the video area.  Without this, DefWindowProcW returns
+            // MA_ACTIVATE, which reorders the Z-stack and buries main_hwnd (the
+            // transparent WebView2 window that hosts all player controls).
+            return LRESULT(3); // MA_NOACTIVATE
+        }
         WM_KEYDOWN => {
             let vk = wparam.0 as u32;
             let key = windows_key_name(vk, lparam);
@@ -554,6 +603,18 @@ unsafe extern "system" fn overlay_wndproc(
                 if let Some(app) = overlay_app_handle() {
                     use tauri::Emitter;
                     let _ = app.emit("player://mouse-move", true);
+                }
+            }
+            // Forward WM_MOUSEMOVE to the VLC video output child when a disc menu is
+            // active so that VLC can highlight the hovered menu button.
+            let at_menu = overlay_app_handle()
+                .and_then(|app| app.try_state::<crate::player::PlayerState>())
+                .map(|s| s.at_menu.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if at_menu {
+                if let Some(vlc_out) = vlc_video_out(hwnd) {
+                    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+                    let _ = PostMessageW(Some(vlc_out), WM_MOUSEMOVE, wparam, lparam);
                 }
             }
             // If dragging with left mouse button held down, trigger native caption drag
@@ -588,15 +649,26 @@ unsafe extern "system" fn overlay_wndproc(
                 let dy = (((lparam.0 >> 16) as i16) as i32)
                     - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
                 if dx.abs() <= 6 && dy.abs() <= 6 {
-                    // During an interactive disc menu, clicks are handled by VLC
-                    // (via CallWindowProcW below) and by the frontend overlay.
-                    // Suppress the play/pause toggle so a menu button click
-                    // does not also pause playback.
+                    // During an interactive disc menu, forward the click to the VLC
+                    // video output child so VLC activates the focused menu button.
+                    // Suppress the play/pause toggle unconditionally in this branch.
                     let at_menu = overlay_app_handle()
                         .and_then(|app| app.try_state::<crate::player::PlayerState>())
                         .map(|s| s.at_menu.load(Ordering::SeqCst))
                         .unwrap_or(false);
-                    if !at_menu {
+                    if at_menu {
+                        if let Some(vlc_out) = vlc_video_out(hwnd) {
+                            use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+                            const MK_LBUTTON: usize = 0x0001;
+                            let _ = PostMessageW(
+                                Some(vlc_out),
+                                WM_LBUTTONDOWN,
+                                WPARAM(MK_LBUTTON),
+                                lparam,
+                            );
+                            let _ = PostMessageW(Some(vlc_out), WM_LBUTTONUP, WPARAM(0), lparam);
+                        }
+                    } else {
                         // Single click on video -> toggle play/pause
                         if let Some(app) = overlay_app_handle() {
                             use tauri::Emitter;
@@ -886,9 +958,12 @@ pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String>
     }
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
+    let surface = HWND(hwnd_val as _);
+    // Prefer the VLC video output grandchild; fall back to surface if not found.
+    let target = unsafe { vlc_video_out(surface) }.unwrap_or(surface);
     let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
     unsafe {
-        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_MOUSEMOVE, WPARAM(0), lparam);
+        let _ = PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), lparam);
     }
     Ok(())
 }
@@ -903,17 +978,15 @@ pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String
     }
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
+    let surface = HWND(hwnd_val as _);
+    // Prefer the VLC video output grandchild; fall back to surface if not found.
+    let target = unsafe { vlc_video_out(surface) }.unwrap_or(surface);
     // MK_LBUTTON lives in Win32_System_SystemServices, which this crate does not enable.
     const MK_LBUTTON: usize = 0x0001;
     let lparam = LPARAM(((x as i32 & 0xffff) | ((y as i32 & 0xffff) << 16)) as isize);
     unsafe {
-        let _ = PostMessageW(
-            Some(HWND(hwnd_val as _)),
-            WM_LBUTTONDOWN,
-            WPARAM(MK_LBUTTON),
-            lparam,
-        );
-        let _ = PostMessageW(Some(HWND(hwnd_val as _)), WM_LBUTTONUP, WPARAM(0), lparam);
+        let _ = PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(MK_LBUTTON), lparam);
+        let _ = PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), lparam);
     }
     Ok(())
 }
