@@ -8,7 +8,7 @@
 //! reach the frontend webview first. All work happens on Tauri's main
 //! thread; the frontend drives position/size with `player_sync_viewport`.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager};
@@ -70,6 +70,10 @@ static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Saved pre-player window rect for restoring window size on close.
 static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
+
+/// Set by the main-window WndProc so a non-minimize SIZE_RESTORED message
+/// (startup, resize, or player layout change) does not force foreground focus.
+static MAIN_WINDOW_WAS_MINIMIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
 
@@ -731,6 +735,18 @@ unsafe extern "system" fn overlay_wndproc(
 /// Stored original window procedure for the main window subclass.
 static MAIN_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new();
 
+fn should_activate_after_restore(size_type: u32, was_minimized: &AtomicBool) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SIZE_MINIMIZED, SIZE_RESTORED};
+    if size_type == SIZE_MINIMIZED {
+        was_minimized.store(true, Ordering::SeqCst);
+        false
+    } else if size_type == SIZE_RESTORED {
+        was_minimized.swap(false, Ordering::SeqCst)
+    } else {
+        false
+    }
+}
+
 /// Subclass the main window procedure to intercept `WM_DISPLAYCHANGE`
 /// and re-apply EDR/tone-mapping and window corner radius when the window
 /// moves between displays with different HDR capabilities.
@@ -764,7 +780,7 @@ unsafe extern "system" fn main_wndproc(
             let _ = app.emit("player://screen-changed", true);
         }
     } else if msg == WM_SIZE {
-        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, SIZE_RESTORED};
+        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
         // When the window is restored from the taskbar (taskbar button click or
         // SC_RESTORE), Win32 delivers WM_SIZE(SIZE_RESTORED) but does NOT set
         // foreground focus on a decorations(false)+transparent(true) window.
@@ -773,7 +789,7 @@ unsafe extern "system" fn main_wndproc(
         // buttons unresponsive.  Calling SetForegroundWindow here restores the
         // normal click-to-activate behaviour without interfering with minimize or
         // display-change paths.
-        if wparam.0 as u32 == SIZE_RESTORED {
+        if should_activate_after_restore(wparam.0 as u32, &MAIN_WINDOW_WAS_MINIMIZED) {
             let _ = SetForegroundWindow(hwnd);
         }
     }
@@ -1046,6 +1062,31 @@ mod tests {
     fn vlc_input_window_class_is_the_direct_main_window() {
         assert!(is_vlc_input_window_class("VLC video main 000001234567"));
         assert!(!is_vlc_input_window_class("VLC video output 000001234567"));
+    }
+
+    #[test]
+    fn foreground_activation_requires_a_minimized_to_restored_transition() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+        };
+        let was_minimized = AtomicBool::new(false);
+        assert!(!should_activate_after_restore(
+            SIZE_RESTORED,
+            &was_minimized
+        ));
+        assert!(!should_activate_after_restore(
+            SIZE_MINIMIZED,
+            &was_minimized
+        ));
+        assert!(should_activate_after_restore(SIZE_RESTORED, &was_minimized));
+        assert!(!should_activate_after_restore(
+            SIZE_RESTORED,
+            &was_minimized
+        ));
+        assert!(!should_activate_after_restore(
+            SIZE_MAXIMIZED,
+            &was_minimized
+        ));
     }
 
     #[test]
