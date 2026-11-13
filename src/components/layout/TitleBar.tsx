@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import AppInfoModal from './AppInfoModal';
 import brandLogo from '../../assets/brand-logo.png';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { formatSpeed } from '../../lib/formatters';
 import {
   Plus,
   Play,
@@ -51,6 +52,17 @@ export const TitleBar: React.FC = () => {
 
   const { selectedId, torrents, resumeTorrent, pauseTorrent } = useTorrentStore();
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
+
+  // Aggregate client-wide instantaneous rates for the toolbar speed readout.
+  const { totalDown, totalUp } = useMemo(() => {
+    let down = 0;
+    let up = 0;
+    for (const t of torrents) {
+      down += (t.download_rate ?? 0);
+      up += (t.upload_rate ?? 0);
+    }
+    return { totalDown: down, totalUp: up };
+  }, [torrents]);
 
   const [isMaximized, setIsMaximized] = useState(false);
   const [showAppInfo, setShowAppInfo] = useState(false);
@@ -323,6 +335,19 @@ export const TitleBar: React.FC = () => {
           </button>
 
           <div className="flex items-center ml-1 border-l border-[#262626] pl-1 h-10 -mr-3">
+            {/* Speed readout (owner): aggregate down/up rates on the right
+                side of the toolbar, detached from the brand icon.
+                Displayed only when at least one direction is non-zero; hidden
+                when all torrents are idle so the bar stays clean. */}
+            {(totalDown > 0 || totalUp > 0) && (
+              <div
+                className="hidden sm:flex flex-col items-end justify-center px-2 h-full text-[10px] leading-tight tabular-nums select-none pointer-events-none"
+                title={`Download: ${formatSpeed(totalDown)}  Upload: ${formatSpeed(totalUp)}`}
+              >
+                <span className="text-[#4ade80] font-medium">▼ {formatSpeed(totalDown)}</span>
+                <span className="text-[#f97316] font-medium">▲ {formatSpeed(totalUp)}</span>
+              </div>
+            )}
             {/* Minimize */}
             <button
               type="button"
