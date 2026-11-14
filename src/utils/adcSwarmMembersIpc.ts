@@ -44,9 +44,61 @@ export function shouldCacheSwarmMembers(status: string): boolean {
   return ['matched', 'no_matching_peers', 'endpoint_unsupported'].includes(status);
 }
 
+/**
+ * Normalizes an ADC profile URL to canonical /profile/<id>.
+ * If the input URL uses /user/<id>, converts it to /profile/<id>.
+ * Validates HTTPS and Asian DVD Club hostname.
+ */
+export function normalizeProfileUrl(rawUrl?: string | null, userId?: number): string {
+  const fallback = userId ? `https://asiandvdclub.org/profile/${userId}` : 'https://asiandvdclub.org';
+  if (!rawUrl || typeof rawUrl !== 'string') return fallback;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return fallback;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:' && parsed.hostname.endsWith('asiandvdclub.org')) {
+      const match = parsed.pathname.match(/^\/(?:user|profile)\/(\d+)/);
+      if (match) {
+        return `https://${parsed.host}/profile/${match[1]}`;
+      }
+      if (userId) {
+        return `https://${parsed.host}/profile/${userId}`;
+      }
+      return `https://${parsed.host}${parsed.pathname}`;
+    }
+  } catch {
+    // Malformed URL, use fallback
+  }
+
+  return fallback;
+}
+
+/**
+ * Validates that an ADC profile URL is HTTPS and belongs to asiandvdclub.org.
+ */
+export function isValidAdcProfileUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === 'https:' &&
+      parsed.hostname.endsWith('asiandvdclub.org') &&
+      /^\/profile\/\d+/.test(parsed.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function toSwarmMemberMap(matches: SwarmMember[]): Map<string, SwarmMember> {
   const members = new Map<string, SwarmMember>();
-  for (const member of matches) members.set(`${member.ip}:${member.port}`, member);
+  for (const member of matches) {
+    const normalized: SwarmMember = {
+      ...member,
+      profile_url: normalizeProfileUrl(member.profile_url, member.user_id),
+    };
+    members.set(`${normalized.ip}:${normalized.port}`, normalized);
+  }
   return members;
 }
 
@@ -67,7 +119,9 @@ export function getAdcSwarmNotice(status: string): string | null {
     case 'endpoint_unsupported':
       return 'The ADC peer-information endpoint is unavailable.';
     case 'rate_limited':
-      return 'ADC is rate limiting peer lookups. Retry later.';
+      return 'ADC is rate limiting peer lookups. Refreshing automatically once cooldown clears.';
+    case 'cooling_down':
+      return 'Waiting for ADC cooldown period before refreshing new peers.';
     case 'ipc_error':
       return 'Internal error communicating with the peer-information service.';
     case 'network_error':

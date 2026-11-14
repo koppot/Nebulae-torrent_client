@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Settings, ChevronDown, ChevronUp, ChevronsUpDown, Loader2, AlertCircle, RotateCw } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-shell';
 import {
@@ -6,14 +7,17 @@ import {
   SwarmMember, TorrentTrackerItem,
 } from '../../types';
 import { formatSpeed } from '../../lib/formatters';
-import { getCachedMembers, setCachedMembers } from '../../utils/swarmMembersCache';
+import {
+  getResolvedSwarm,
+  storeSwarmResults,
+  getCooldownRemaining,
+  registerCooldownListener,
+} from '../../utils/swarmMembersCache';
 import {
   getAdcSwarmNotice,
-  getSwarmMembersCacheKey,
-  getSwarmMembersFetchKey,
+  isValidAdcProfileUrl,
   lookupSwarmMembers,
-  shouldCacheSwarmMembers,
-  toSwarmMemberMap,
+  normalizeProfileUrl,
 } from '../../utils/adcSwarmMembersIpc';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { useUiStore } from '../../stores/uiStore';
@@ -324,40 +328,92 @@ function formatBytes(bytes: number): string {
 
 const AdcMemberCell: React.FC<{ member: SwarmMember }> = ({ member }) => {
   const [open_, setOpen_] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
 
-  // Close on outside click.
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const cardWidth = 224; // w-56 is 14rem = 224px
+    const cardHeight = 135;
+
+    let top: number;
+    if (rect.top >= cardHeight + 12) {
+      top = rect.top - cardHeight - 6;
+    } else {
+      top = rect.bottom + 6;
+    }
+
+    let left = rect.left;
+    if (left + cardWidth > window.innerWidth - 12) {
+      left = window.innerWidth - cardWidth - 12;
+    }
+    if (left < 12) {
+      left = 12;
+    }
+
+    setCoords({ top, left });
+  }, []);
+
   useEffect(() => {
     if (!open_) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen_(false);
+    updatePosition();
+
+    const handleReposition = () => {
+      updatePosition();
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open_]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen_(false);
+    };
+
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open_, updatePosition]);
 
   const handleUsernameClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    try { await open(member.profile_url); } catch { /* degrade silently */ }
+    const targetUrl = normalizeProfileUrl(member.profile_url, member.user_id);
+    if (isValidAdcProfileUrl(targetUrl)) {
+      try {
+        await open(targetUrl);
+      } catch {
+        /* degrade silently */
+      }
+    }
   };
 
   return (
-    <div ref={ref} className="relative inline-flex items-center">
+    <div className="relative inline-flex items-center">
       <button
+        ref={buttonRef}
         type="button"
         onMouseEnter={() => setOpen_(true)}
         onMouseLeave={() => setOpen_(false)}
+        onFocus={() => setOpen_(true)}
+        onBlur={() => setOpen_(false)}
         onClick={handleUsernameClick}
-        className="text-[#e50914] hover:underline font-sans text-[11px] leading-none truncate max-w-[100px]"
-        title={`ADC: ${member.username} — click to open profile`}
+        className="text-[#e50914] hover:underline font-sans text-[11px] leading-none truncate max-w-[110px]"
+        title={`ADC user: ${member.username} — click to open profile`}
       >
         {member.username}
       </button>
 
-      {/* Hover card */}
-      {open_ && (
+      {/* Hover card portal escaping table overflow clipping */}
+      {open_ && coords && typeof document !== 'undefined' && createPortal(
         <div
-          className="absolute z-50 bottom-full left-0 mb-1 w-52 rounded border border-[#333333] bg-[#141414] shadow-xl p-2.5 text-[11px] font-sans"
+          style={{
+            position: 'fixed',
+            top: `${coords.top}px`,
+            left: `${coords.left}px`,
+          }}
+          className="z-[9999] w-56 rounded border border-[#333333] bg-[#141414] shadow-2xl p-2.5 text-[11px] font-sans pointer-events-auto"
           onMouseEnter={() => setOpen_(true)}
           onMouseLeave={() => setOpen_(false)}
         >
@@ -382,7 +438,8 @@ const AdcMemberCell: React.FC<{ member: SwarmMember }> = ({ member }) => {
               <span className="font-mono text-cyan-400">{member.bonus_points.toFixed(0)}</span>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -436,13 +493,20 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   const credentialRevision = useTrackerStore((s) => s.credentialRevision);
   const setShowTrackerDashboard = useUiStore((s) => s.setShowTrackerDashboard);
 
-  // ── ADC member state ───────────────────────────────────────────────────────
   // Map<"ip:port", SwarmMember> for fast per-row lookup.
   const [adcMap, setAdcMap] = useState<Map<string, SwarmMember>>(new Map());
-  // Track which info_hash the current adcMap was fetched for.
-  const lastFetchedKey = useRef<string | null>(null);
+  const adcMapRef = useRef(adcMap);
+  adcMapRef.current = adcMap;
+  const [cooldownTrigger, setCooldownTrigger] = useState(0);
   const lastIdentity = useRef<string | null>(null);
   const requestId = useRef(0);
+
+  // Subscribe to automatic cooldown expiry so background refresh fires seamlessly across torrents
+  useEffect(() => {
+    return registerCooldownListener(() => {
+      setCooldownTrigger((v) => v + 1);
+    });
+  }, []);
 
   const hasAdcTracker = useCallback(
     () => trackers.some((tr) => isAdcTracker(tr.url)),
@@ -451,66 +515,116 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
 
   useEffect(() => {
     const identity = `${infoHash ?? ''}:${credentialRevision}`;
-    if (lastIdentity.current !== identity) {
+    const identityChanged = lastIdentity.current !== identity;
+    if (identityChanged) {
       lastIdentity.current = identity;
-      setAdcMap(new Map());
-      setAdcStatus('idle');
-      lastFetchedKey.current = null;
       requestId.current += 1;
     }
 
     if (!infoHash || !hasAdcTracker()) {
       setAdcStatus('idle');
       setAdcMap(new Map());
-      lastFetchedKey.current = null;
-      requestId.current += 1;
       return;
     }
     if (peers.length === 0) {
       setAdcStatus('waiting_for_peers');
-      lastFetchedKey.current = null;
-      requestId.current += 1;
       return;
     }
 
     const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
-    const cacheKey = getSwarmMembersCacheKey(infoHash, credentialRevision, peerAddrs);
-    const fetchKey = getSwarmMembersFetchKey(cacheKey, adcRetry);
-    if (lastFetchedKey.current === fetchKey) return;
 
-    // Check cache first.
-    const cached = getCachedMembers(cacheKey);
-    if (cached) {
-      lastFetchedKey.current = fetchKey;
-      setAdcStatus(cached.status);
-      const m = new Map<string, SwarmMember>();
-      for (const member of cached.matches) m.set(`${member.ip}:${member.port}`, member);
-      setAdcMap(m);
+    // 1. Resolve immediately from cache for continuous display
+    const { cachedMap, unresolvedPeers } = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
+
+    // If torrent or identity changed, start from cachedMap (or empty map)
+    if (identityChanged) {
+      setAdcMap(cachedMap);
+      if (cachedMap.size > 0) {
+        setAdcStatus('matched');
+      } else {
+        setAdcStatus('idle');
+      }
+    } else if (cachedMap.size > 0) {
+      // Merge cachedMap into adcMap so existing members remain visible
+      setAdcMap((prev) => {
+        let changed = false;
+        const merged = new Map(prev);
+        for (const [k, v] of cachedMap.entries()) {
+          if (!merged.has(k) || merged.get(k) !== v) {
+            merged.set(k, v);
+            changed = true;
+          }
+        }
+        return changed ? merged : prev;
+      });
+      setAdcStatus('matched');
+    }
+
+    // 2. If all peers are already resolved (or negative-cached within TTL), we're done
+    if (unresolvedPeers.length === 0) {
+      if (cachedMap.size === 0) {
+        setAdcStatus('no_matching_peers');
+      }
       return;
     }
 
-    lastFetchedKey.current = fetchKey;
-    setAdcStatus('loading');
-    const request = ++requestId.current;
+    // 3. Check account-wide rate limit cooldown
+    const cooldown = getCooldownRemaining();
+    if (cooldown > 0) {
+      if (cachedMap.size === 0 && adcMapRef.current.size === 0) {
+        setAdcStatus('rate_limited');
+      }
+      return;
+    }
 
-    void lookupSwarmMembers(infoHash, peerAddrs)
+    // 4. Batch query unresolved peers (up to 100 peers)
+    if (cachedMap.size === 0 && adcMapRef.current.size === 0) {
+      setAdcStatus('loading');
+    }
+
+    const request = ++requestId.current;
+    const batchToFetch = unresolvedPeers.slice(0, 100);
+
+    void lookupSwarmMembers(infoHash, batchToFetch)
       .then((lookup) => {
         if (request !== requestId.current) return;
         if (lookup.kind === 'ipc_error') {
-          setAdcStatus('ipc_error');
+          setAdcMap((curr) => {
+            if (curr.size === 0) setAdcStatus('ipc_error');
+            return curr;
+          });
           return;
         }
 
         const result = lookup.result;
-        if (shouldCacheSwarmMembers(result.status)) setCachedMembers(cacheKey, result);
-        setAdcStatus(result.status);
-        setAdcMap(toSwarmMemberMap(result.matches));
+        storeSwarmResults(infoHash, credentialRevision, batchToFetch, result);
+
+        if (result.status === 'matched' || result.status === 'no_matching_peers') {
+          const fresh = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
+          setAdcMap(fresh.cachedMap);
+          setAdcStatus(fresh.cachedMap.size > 0 ? 'matched' : result.status);
+        } else if (result.status === 'rate_limited') {
+          setAdcMap((curr) => {
+            if (curr.size === 0) setAdcStatus('rate_limited');
+            return curr;
+          });
+        } else {
+          setAdcMap((curr) => {
+            if (curr.size === 0 || ['credential_required', 'not_linked', 'credential_access_denied', 'authentication_failed'].includes(result.status)) {
+              setAdcStatus(result.status);
+            }
+            return curr;
+          });
+        }
       })
       .catch(() => {
         if (request !== requestId.current) return;
-        setAdcStatus('ipc_error');
+        setAdcMap((curr) => {
+          if (curr.size === 0) setAdcStatus('ipc_error');
+          return curr;
+        });
       });
-  }, [infoHash, peers, hasAdcTracker, credentialRevision, adcRetry]);
+  }, [infoHash, peers, hasAdcTracker, credentialRevision, adcRetry, cooldownTrigger]);
 
   // Load settings once on mount if not yet loaded
   useEffect(() => {
@@ -570,7 +684,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
         </div>
       )}
 
-      {showAdcCol && adcNotice && adcStatus !== 'loading' && (
+      {showAdcCol && adcNotice && adcStatus !== 'loading' && (adcMap.size === 0 || ['credential_required', 'not_linked', 'credential_access_denied', 'credential_storage_unavailable', 'credential_storage_error', 'authentication_failed'].includes(adcStatus)) && (
         <div className="flex items-center justify-between gap-3 px-2.5 py-1.5 rounded border border-[#333333] bg-[#1a1a1a] text-[11px] text-[#a3a3a3]">
           <span>{adcNotice}</span>
           {['credential_required', 'not_linked', 'credential_access_denied', 'credential_storage_unavailable', 'credential_storage_error', 'authentication_failed'].includes(adcStatus) ? (
@@ -606,7 +720,13 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
               <ColHeader label="Locality" sortKey="locality_tier" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="CC" sortKey="country_code" current={sortKey} asc={sortAsc} onSort={handleSort} />
               {showAdcCol && (
-                <th className="py-1.5 px-2 text-[10px] uppercase font-mono text-[#a3a3a3]">ADC</th>
+                <th
+                  scope="col"
+                  aria-label="ADC user"
+                  className="py-1.5 px-2 text-[10px] uppercase font-mono text-[#a3a3a3] min-w-[90px] whitespace-nowrap"
+                >
+                  ADC user
+                </th>
               )}
               <ColHeader label="RTT" sortKey="rtt_ms" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="Down" sortKey="sustained_dl_bps" current={sortKey} asc={sortAsc} onSort={handleSort} />
@@ -701,7 +821,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
 
                     {/* ADC member — only when ADC column is shown */}
                     {showAdcCol && (
-                      <td className="py-1.5 px-2 max-w-[110px]">
+                      <td className="py-1.5 px-2 min-w-[90px] max-w-[130px] whitespace-nowrap">
                         {member ? (
                           <AdcMemberCell member={member} />
                         ) : (
