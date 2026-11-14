@@ -105,3 +105,6 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 x11-dl = "2.21"
 raw-window-handle = "0.6"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

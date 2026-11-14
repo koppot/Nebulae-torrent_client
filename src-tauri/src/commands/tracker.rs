@@ -612,6 +612,114 @@ impl SwarmMembersResult {
     }
 }
 
+pub(crate) fn is_valid_info_hash(info_hash: &str) -> bool {
+    let hash = info_hash.trim();
+    hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+const ADC_SWARM_MEMBERS_ENDPOINT: &str = "https://asiandvdclub.org/api/nebulae/swarm_members";
+
+fn request_error_class(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else {
+        "other"
+    }
+}
+
+/// Sends the authenticated HTTP request and classifies the endpoint response.
+///
+/// The HTTP body deliberately uses the endpoint's `info_hash` field. This is
+/// separate from Tauri IPC, where the default camelCase mapping accepts
+/// frontend `infoHash` for the Rust `info_hash` command parameter.
+fn request_swarm_members(
+    info_hash: &str,
+    peers: &[PeerAddr],
+    passkey: &str,
+    endpoint: &str,
+) -> SwarmMembersResult {
+    let body = serde_json::json!({
+        "passkey": passkey.trim(),
+        "info_hash": info_hash,
+        "peers": peers,
+    });
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Nebulae/0.2.7")
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            tracing::warn!("[swarm-members] HTTP client initialization failed");
+            return SwarmMembersResult::state("network_error", false);
+        }
+    };
+
+    let response = match client.post(endpoint).json(&body).send() {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(
+                error_kind = request_error_class(&error),
+                "[swarm-members] request failed"
+            );
+            return SwarmMembersResult::state("network_error", false);
+        }
+    };
+
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        // Without a verified response contract, classify every 404 as an
+        // unsupported route. A successful JSON response with no matches is
+        // handled separately below.
+        return SwarmMembersResult::state("endpoint_unsupported", false);
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return SwarmMembersResult::state("authentication_failed", true);
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return SwarmMembersResult::state("rate_limited", true);
+    }
+    if !status.is_success() {
+        tracing::warn!(
+            http_status = status.as_u16(),
+            "[swarm-members] unexpected HTTP status"
+        );
+        return SwarmMembersResult::state("http_error", false);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ApiResponse {
+        #[serde(default)]
+        matches: Vec<SwarmMember>,
+    }
+
+    match response.json::<ApiResponse>() {
+        Ok(parsed) => SwarmMembersResult {
+            status: if parsed.matches.is_empty() {
+                "no_matching_peers".to_string()
+            } else {
+                "matched".to_string()
+            },
+            supported: true,
+            matches: parsed.matches,
+            error: None,
+        },
+        Err(_) => {
+            // Do not log reqwest's error value: it can contain URL or response
+            // details. The response body may contain authenticated data.
+            tracing::warn!("[swarm-members] endpoint returned invalid JSON");
+            SwarmMembersResult::state("parse_error", true)
+        }
+    }
+}
+
 /// Calls POST /api/nebulae/swarm_members on the ADC tracker.
 ///
 /// The passkey is read only from platform secure storage inside the Rust layer
@@ -620,6 +728,10 @@ impl SwarmMembersResult {
 /// Cache note: caching is done on the TypeScript side (SwarmMembersCache)
 /// because Tauri commands are stateless; the front-end controls TTL and
 /// prevents redundant calls within the rate-limit window.
+///
+/// IPC contract: with Tauri's default command naming, the frontend sends
+/// `infoHash`, which maps to this Rust `info_hash` parameter. The HTTP body
+/// below has its own endpoint-defined snake_case contract.
 #[tauri::command]
 pub async fn adc_swarm_members(
     info_hash: String,
@@ -648,87 +760,17 @@ pub async fn adc_swarm_members(
         };
 
         // 3. Validate info_hash (40 hex chars).
-        let hash = info_hash.trim().to_lowercase();
-        if hash.len() != 40 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        if !is_valid_info_hash(&info_hash) {
             return Ok(SwarmMembersResult::state("invalid_info_hash", false));
         }
+        let hash = info_hash.trim().to_lowercase();
 
-        // 4. Build the POST body — passkey in body, NOT in URL.
-        let body = serde_json::json!({
-            "passkey":   passkey.trim(),
-            "info_hash": hash,
-            "peers":     peers,
-        });
-
-        // 5. Send the request.
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .user_agent("Nebulae/0.2.7")
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("[swarm-members] HTTP client initialization failed: {e}");
-                return Ok(SwarmMembersResult::state("network_error", false));
-            }
-        };
-
-        let resp = match client
-            .post("https://asiandvdclub.org/api/nebulae/swarm_members")
-            .json(&body)
-            .send()
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("[swarm-members] request failed: {e}");
-                return Ok(SwarmMembersResult::state("network_error", false));
-            }
-        };
-
-        let status = resp.status();
-
-        if status == reqwest::StatusCode::NOT_FOUND {
-            // Without a verified response contract, classify every 404 as an
-            // unsupported route. Empty successful responses mean no matches.
-            return Ok(SwarmMembersResult::state("endpoint_unsupported", false));
-        }
-
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            return Ok(SwarmMembersResult::state("authentication_failed", true));
-        }
-
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Ok(SwarmMembersResult::state("rate_limited", true));
-        }
-
-        if !status.is_success() {
-            tracing::warn!("[swarm-members] unexpected status {status}");
-            return Ok(SwarmMembersResult::state("http_error", false));
-        }
-
-        // 6. Parse response.
-        #[derive(serde::Deserialize)]
-        struct ApiResponse {
-            #[serde(default)]
-            matches: Vec<SwarmMember>,
-        }
-
-        match resp.json::<ApiResponse>() {
-            Ok(parsed) => Ok(SwarmMembersResult {
-                status: if parsed.matches.is_empty() {
-                    "no_matching_peers".to_string()
-                } else {
-                    "matched".to_string()
-                },
-                supported: true,
-                matches: parsed.matches,
-                error: None,
-            }),
-            Err(e) => {
-                tracing::warn!("[swarm-members] parse error: {e}");
-                Ok(SwarmMembersResult::state("parse_error", true))
-            }
-        }
+        Ok(request_swarm_members(
+            &hash,
+            &peers,
+            &passkey,
+            ADC_SWARM_MEMBERS_ENDPOINT,
+        ))
     })
     .await
     .map_err(|e| format!("spawn_blocking: {e}"))?
@@ -737,10 +779,69 @@ pub async fn adc_swarm_members(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
 
     const SYNTHETIC_LEGACY_PASSKEY: &str = "synthetic-legacy-adc-passkey";
+    const SYNTHETIC_SWARM_PASSKEY: &str = "synthetic-swarm-test-passkey";
+    const SYNTHETIC_INFO_HASH: &str = "340313449696d11fbfec8982c5055f90459c3ece";
+
+    /// A local-only HTTP server for mocked endpoint-processing tests.
+    /// It captures the synthetic request body and never contacts ADC.
+    fn start_mock_swarm_endpoint(
+        response_json: String,
+    ) -> (String, thread::JoinHandle<serde_json::Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local mock endpoint");
+        let address = listener.local_addr().expect("read local endpoint address");
+        let task = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone test socket"));
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+            assert_eq!(
+                request_line.trim_end(),
+                "POST /api/nebulae/swarm_members HTTP/1.1"
+            );
+
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read request headers");
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().expect("valid content length");
+                    }
+                }
+            }
+
+            let mut request_body = vec![0; content_length];
+            reader
+                .read_exact(&mut request_body)
+                .expect("read request body");
+            let request_body =
+                serde_json::from_slice(&request_body).expect("parse synthetic request JSON");
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_json.len(),
+                response_json
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write local mock response");
+            request_body
+        });
+
+        (format!("http://{address}/api/nebulae/swarm_members"), task)
+    }
 
     // Test-only model of an explicitly approved migration. Runtime startup and
     // ordinary account commands must never call this against the user's DB.
@@ -838,5 +939,154 @@ mod tests {
         assert!(!credential.supported);
         assert!(!unsupported.supported);
         assert!(no_matches.supported);
+    }
+
+    #[test]
+    fn info_hash_validation_accepts_valid_40_hex_and_rejects_malformed() {
+        assert!(is_valid_info_hash(
+            "340313449696d11fbfec8982c5055f90459c3ece"
+        ));
+        assert!(is_valid_info_hash(
+            "340313449696D11FBFEC8982C5055F90459C3ECE"
+        ));
+        assert!(is_valid_info_hash(
+            "  340313449696d11fbfec8982c5055f90459c3ece  "
+        ));
+        // 39 chars
+        assert!(!is_valid_info_hash(
+            "340313449696d11fbfec8982c5055f90459c3ec"
+        ));
+        // 41 chars
+        assert!(!is_valid_info_hash(
+            "340313449696d11fbfec8982c5055f90459c3ece1"
+        ));
+        // Non-hex characters
+        assert!(!is_valid_info_hash(
+            "340313449696d11fbfec8982c5055f90459c3ecg"
+        ));
+        // Empty
+        assert!(!is_valid_info_hash(""));
+    }
+
+    #[test]
+    fn actual_tauri_dispatch_accepts_camel_case_info_hash_and_reaches_handler() {
+        // Actual Tauri MockRuntime dispatch, controlled with an in-memory DB.
+        // adc_linked is absent, so the handler returns before keychain or HTTP access.
+        let app = tauri::test::mock_builder()
+            .manage(Arc::new(memory_db()))
+            .invoke_handler(tauri::generate_handler![adc_swarm_members])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build mock Tauri app");
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("build mock Tauri window");
+
+        let request = |body| tauri::webview::InvokeRequest {
+            cmd: "adc_swarm_members".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .expect("parse mock Tauri URL"),
+            body: tauri::ipc::InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        };
+
+        tauri::test::assert_ipc_response(
+            &window,
+            request(serde_json::json!({
+                "infoHash": SYNTHETIC_INFO_HASH,
+                "peers": [],
+            })),
+            Ok(SwarmMembersResult::state("not_linked", false)),
+        );
+
+        let legacy_snake_case = tauri::test::get_ipc_response(
+            &window,
+            request(serde_json::json!({
+                "info_hash": SYNTHETIC_INFO_HASH,
+                "peers": [],
+            })),
+        );
+        assert!(
+            legacy_snake_case.is_err(),
+            "default Tauri naming requires the frontend `infoHash` argument"
+        );
+    }
+
+    #[test]
+    fn mocked_endpoint_parses_matches_and_keeps_http_body_snake_case() {
+        // Mocked local HTTP integration: a synthetic passkey and peer are sent
+        // to loopback, and a synthetic match is parsed by the production helper.
+        let response = serde_json::json!({
+            "matches": [{
+                "ip": "203.0.113.17",
+                "port": 51413,
+                "username": "synthetic-member",
+                "user_id": 7,
+                "profile_url": "https://example.invalid/profile/7",
+                "ratio": 1.5,
+                "uploaded_bytes": 1000,
+                "downloaded_bytes": 500,
+                "bonus_points": 2.0
+            }]
+        })
+        .to_string();
+        let (endpoint, request_task) = start_mock_swarm_endpoint(response);
+        let peers = vec![PeerAddr {
+            ip: "203.0.113.17".to_string(),
+            port: 51413,
+        }];
+
+        let result = request_swarm_members(
+            SYNTHETIC_INFO_HASH,
+            &peers,
+            SYNTHETIC_SWARM_PASSKEY,
+            &endpoint,
+        );
+
+        assert_eq!(result.status, "matched");
+        assert!(result.supported);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].username, "synthetic-member");
+        let sent_body = request_task.join().expect("mock server completed");
+        assert_eq!(sent_body["passkey"], SYNTHETIC_SWARM_PASSKEY);
+        assert_eq!(sent_body["info_hash"], SYNTHETIC_INFO_HASH);
+        assert!(sent_body.get("infoHash").is_none());
+        assert_eq!(sent_body["peers"][0]["ip"], "203.0.113.17");
+    }
+
+    #[test]
+    fn mocked_successful_empty_response_is_not_a_transport_failure() {
+        // Mocked local HTTP integration: valid JSON with no matches is a
+        // successful supported response, distinct from transport failure.
+        let (endpoint, request_task) = start_mock_swarm_endpoint(r#"{"matches":[]}"#.to_string());
+        let result =
+            request_swarm_members(SYNTHETIC_INFO_HASH, &[], SYNTHETIC_SWARM_PASSKEY, &endpoint);
+
+        assert_eq!(result.status, "no_matching_peers");
+        assert!(result.supported);
+        assert!(result.matches.is_empty());
+        assert_eq!(result.error, None);
+        let _ = request_task.join().expect("mock server completed");
+    }
+
+    #[test]
+    fn request_transport_failure_is_classified_without_error_details() {
+        let result = request_swarm_members(
+            SYNTHETIC_INFO_HASH,
+            &[],
+            SYNTHETIC_SWARM_PASSKEY,
+            "http://127.0.0.1:0/api/nebulae/swarm_members",
+        );
+
+        assert_eq!(result.status, "network_error");
+        assert!(!result.supported);
+        assert_eq!(result.error.as_deref(), Some("network_error"));
     }
 }

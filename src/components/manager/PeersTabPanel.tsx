@@ -1,13 +1,20 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Settings, ChevronDown, ChevronUp, ChevronsUpDown, Loader2, AlertCircle, RotateCw } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
 import {
   PeerTelemetry, PeeringSettings, PeeringMode, LocalityTier,
-  SwarmMember, SwarmMembersResult, TorrentTrackerItem,
+  SwarmMember, TorrentTrackerItem,
 } from '../../types';
 import { formatSpeed } from '../../lib/formatters';
 import { getCachedMembers, setCachedMembers } from '../../utils/swarmMembersCache';
+import {
+  getAdcSwarmNotice,
+  getSwarmMembersCacheKey,
+  getSwarmMembersFetchKey,
+  lookupSwarmMembers,
+  shouldCacheSwarmMembers,
+  toSwarmMemberMap,
+} from '../../utils/adcSwarmMembersIpc';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { useUiStore } from '../../stores/uiStore';
 
@@ -467,9 +474,8 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
     }
 
     const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
-    const peerKey = peerAddrs.map((p) => `${p.ip}:${p.port}`).sort().join(',');
-    const cacheKey = `${infoHash}:${credentialRevision}:${peerKey}`;
-    const fetchKey = `${cacheKey}:${adcRetry}`;
+    const cacheKey = getSwarmMembersCacheKey(infoHash, credentialRevision, peerAddrs);
+    const fetchKey = getSwarmMembersFetchKey(cacheKey, adcRetry);
     if (lastFetchedKey.current === fetchKey) return;
 
     // Check cache first.
@@ -487,19 +493,18 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
     setAdcStatus('loading');
     const request = ++requestId.current;
 
-    invoke<SwarmMembersResult>('adc_swarm_members', {
-      info_hash: infoHash,
-      peers: peerAddrs,
-    })
-      .then((result) => {
+    void lookupSwarmMembers(infoHash, peerAddrs)
+      .then((lookup) => {
         if (request !== requestId.current) return;
-        if (['matched', 'no_matching_peers', 'endpoint_unsupported'].includes(result.status)) {
-          setCachedMembers(cacheKey, result);
+        if (lookup.kind === 'ipc_error') {
+          setAdcStatus('ipc_error');
+          return;
         }
+
+        const result = lookup.result;
+        if (shouldCacheSwarmMembers(result.status)) setCachedMembers(cacheKey, result);
         setAdcStatus(result.status);
-        const m = new Map<string, SwarmMember>();
-        for (const member of result.matches) m.set(`${member.ip}:${member.port}`, member);
-        setAdcMap(m);
+        setAdcMap(toSwarmMemberMap(result.matches));
       })
       .catch(() => {
         if (request !== requestId.current) return;
@@ -530,36 +535,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   const showAdcCol = hasAdcTracker();
   // colSpan must account for the extra ADC column when shown.
   const colCount = showAdcCol ? 10 : 9;
-  const adcNotice = (() => {
-    switch (adcStatus) {
-      case 'credential_required':
-      case 'not_linked':
-        return 'ADC credentials are required to identify swarm members.';
-      case 'credential_access_denied':
-        return 'Keychain access needs authorization. Unlock or relink your ADC account.';
-      case 'credential_storage_unavailable':
-      case 'credential_storage_error':
-        return 'The secure credential store is unavailable.';
-      case 'authentication_failed':
-        return 'ADC rejected the stored credential. Relink your account.';
-      case 'no_matching_peers':
-        return 'No connected peers matched an ADC member.';
-      case 'endpoint_unsupported':
-        return 'The ADC peer-information endpoint is unavailable.';
-      case 'rate_limited':
-        return 'ADC is rate limiting peer lookups. Retry later.';
-      case 'network_error':
-      case 'ipc_error':
-        return 'Could not reach the ADC peer-information service.';
-      case 'parse_error':
-      case 'http_error':
-        return 'ADC returned an unexpected peer-information response.';
-      case 'invalid_info_hash':
-        return 'The selected torrent has an invalid info hash.';
-      default:
-        return null;
-    }
-  })();
+  const adcNotice = getAdcSwarmNotice(adcStatus);
 
   return (
     <div className="flex flex-col gap-2 h-full">
