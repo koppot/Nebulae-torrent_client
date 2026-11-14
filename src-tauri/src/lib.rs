@@ -313,11 +313,12 @@ pub fn run() {
     let initial_payloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     for arg in std::env::args().skip(1) {
         let trimmed = arg.trim();
-        if trimmed.starts_with("magnet:")
-            || trimmed.starts_with("adc:")
-            || trimmed.ends_with(".torrent")
-            || trimmed.ends_with(".adc")
-            || std::path::Path::new(trimmed).is_file()
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("magnet:")
+            || lower.starts_with("adc:")
+            || lower.ends_with(".torrent")
+            || lower.ends_with(".adc")
+            || (!trimmed.starts_with('-') && std::path::Path::new(trimmed).exists())
         {
             if let Ok(mut lock) = initial_payloads.lock() {
                 lock.push(trimmed.to_string());
@@ -338,6 +339,8 @@ pub fn run() {
     let engine_for_killswitch = Arc::clone(&engine);
     let db_for_killswitch = Arc::clone(&db);
     let engine_for_telemetry = Arc::clone(&engine);
+    let engine_for_peer_history = Arc::clone(&engine);
+    let db_for_peer_history = Arc::clone(&db);
     let engine_for_watcher = Arc::clone(&engine);
     let db_for_watcher = Arc::clone(&db);
     let engine_for_rss = Arc::clone(&engine);
@@ -362,8 +365,18 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             for arg in argv.iter().skip(1) {
-                let lower = arg.to_lowercase();
-                if lower.ends_with(".torrent") || lower.starts_with("magnet:") {
+                let lower = arg.to_ascii_lowercase();
+                if lower.ends_with(".torrent")
+                    || lower.ends_with(".adc")
+                    || lower.starts_with("magnet:")
+                    || lower.starts_with("adc:")
+                    || (!arg.starts_with('-') && std::path::Path::new(arg).exists())
+                {
+                    if let Some(pending) = app.try_state::<commands::association::PendingOpenPayloads>() {
+                        if let Ok(mut queue) = pending.0.lock() {
+                            queue.push(arg.clone());
+                        }
+                    }
                     let _ = app.emit("nebulae://open-uri", arg.clone());
                 }
             }
@@ -463,6 +476,10 @@ pub fn run() {
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
             engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
+            engine::telemetry::spawn_peer_history_loop(
+                engine_for_peer_history,
+                db_for_peer_history,
+            );
             engine::watcher::spawn_watched_folder_loop(engine_for_watcher, db_for_watcher);
             engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
             commands::tracker::spawn_stats_poller(db_for_stats_poller);
@@ -680,19 +697,12 @@ pub fn run() {
             }
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
                 use tauri::Emitter;
-                for path in paths {
-                    // Only .torrent and .adc metainfo files are accepted; anything
-                    // else is ignored instead of being treated as a torrent.
-                    let allowed = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.eq_ignore_ascii_case("torrent") || e.eq_ignore_ascii_case("adc"))
-                        .unwrap_or(false);
-                    if !allowed {
-                        continue;
-                    }
-                    let path_str = path.to_string_lossy().to_string();
-                    let _ = window.emit("nebulae://file-dropped", path_str);
+                let dropped_paths: Vec<String> = paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect();
+                if !dropped_paths.is_empty() {
+                    let _ = window.emit("nebulae://paths-dropped", dropped_paths);
                 }
             }
             _ => {}
@@ -778,6 +788,12 @@ pub fn run() {
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,
             commands::peering::get_peer_telemetry,
+            commands::peering::get_peer_history,
+            commands::peering::clear_peer_history,
+            commands::peering::get_peer_block_capability,
+            commands::peering::list_blocked_peer_ips,
+            commands::peering::block_peer_ip,
+            commands::peering::unblock_peer_ip,
             // Connectivity Doctor
             commands::connectivity::run_connectivity_doctor_test,
             commands::connectivity::get_port_negotiation_result,
@@ -841,6 +857,7 @@ pub fn run() {
             commands::media::player_sync_viewport,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,
+            commands::media::classify_dropped_media_path,
             commands::media::detect_disc_set,
             commands::media::scan_disc_artwork,
             commands::media::parse_media_title,

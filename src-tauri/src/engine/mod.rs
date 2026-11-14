@@ -2,6 +2,7 @@ pub mod enforcement;
 pub mod failed;
 pub mod identity;
 pub mod killswitch;
+pub mod manual_peer_blocks;
 pub mod metainfo;
 pub mod mock;
 pub mod quality_eviction;

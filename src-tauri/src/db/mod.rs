@@ -2,9 +2,30 @@ pub mod schema;
 
 use crate::models::tracker::SeedTimeRecord;
 use crate::models::vpn::{VpnProfile, VpnProtocol};
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
+use std::collections::HashSet;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Mutex;
+
+const PEER_HISTORY_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+const MAX_PEER_HISTORY_ROWS: i64 = 100_000;
+
+fn prune_peer_history_rows(conn: &Connection, cutoff: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM peer_history WHERE last_seen_epoch_ms < ?1",
+        params![cutoff],
+    )?;
+    conn.execute(
+        "DELETE FROM peer_history
+         WHERE rowid NOT IN (
+             SELECT rowid FROM peer_history
+             ORDER BY last_seen_epoch_ms DESC LIMIT ?1
+         )",
+        params![MAX_PEER_HISTORY_ROWS],
+    )?;
+    Ok(())
+}
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -29,6 +50,8 @@ impl Database {
         conn.execute(schema::CREATE_VPN_PROFILES_TABLE, [])?;
         conn.execute(schema::CREATE_SEED_TIME_TABLE, [])?;
         conn.execute(schema::CREATE_SNATCHED_RECORDS_TABLE, [])?;
+        conn.execute(schema::CREATE_MANUAL_PEER_BLOCKS_TABLE, [])?;
+        conn.execute_batch(schema::CREATE_PEER_HISTORY_TABLE)?;
 
         // Backward compatibility migration for torrent_metadata
         let extra_cols = [
@@ -142,6 +165,225 @@ impl Database {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn block_peer_ip(&self, ip: &str, blocked_at_epoch_ms: u64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO manual_peer_blocks (ip, blocked_at_epoch_ms) VALUES (?1, ?2)",
+            params![ip, blocked_at_epoch_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn unblock_peer_ip(&self, ip: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM manual_peer_blocks WHERE ip = ?1", params![ip])?;
+        Ok(())
+    }
+
+    pub fn list_blocked_peer_ips(&self) -> Result<Vec<crate::models::peering::BlockedPeerIp>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ip, blocked_at_epoch_ms FROM manual_peer_blocks ORDER BY blocked_at_epoch_ms DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::models::peering::BlockedPeerIp {
+                ip: row.get(0)?,
+                blocked_at_epoch_ms: row.get::<_, i64>(1)?.max(0) as u64,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Merge one telemetry sample into the local per-torrent peer history.
+    /// Counter decreases are treated as reconnect/reset boundaries; the new
+    /// counter value is added as fresh traffic instead of producing negatives.
+    pub fn record_peer_history(
+        &self,
+        torrent_hash: &str,
+        peers: &[crate::models::peering::PeerTelemetry],
+        now_epoch_ms: u64,
+    ) -> Result<()> {
+        if !matches!(torrent_hash.len(), 40 | 64)
+            || !torrent_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "torrent hash must be a 40- or 64-character hex string".into(),
+            ));
+        }
+        let torrent_hash = torrent_hash.to_ascii_lowercase();
+        let now = i64::try_from(now_epoch_ms).unwrap_or(i64::MAX);
+        let cutoff = now.saturating_sub(PEER_HISTORY_RETENTION_MS);
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let blocked_ips: HashSet<String> = {
+            let mut statement = tx.prepare("SELECT ip FROM manual_peer_blocks")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<HashSet<_>>>()?
+        };
+        let mut observed = HashSet::new();
+
+        for peer in peers {
+            let Ok(parsed_ip) = peer.ip.parse::<IpAddr>() else {
+                continue;
+            };
+            if peer.port == 0 {
+                continue;
+            }
+            let ip = parsed_ip.to_string();
+            let peer_key = SocketAddr::new(parsed_ip, peer.port).to_string();
+            if !observed.insert(peer_key.clone()) {
+                continue;
+            }
+            let raw_download = i64::try_from(peer.total_downloaded_bytes).unwrap_or(i64::MAX);
+            let raw_upload = i64::try_from(peer.total_uploaded_bytes).unwrap_or(i64::MAX);
+            let blocked = blocked_ips.contains(&ip);
+
+            let previous = tx
+                .query_row(
+                    "SELECT last_seen_epoch_ms, last_peer_download_bytes, last_peer_upload_bytes,
+                            downloaded_delta_bytes, uploaded_delta_bytes,
+                            counter_resets, was_blocked
+                     FROM peer_history WHERE torrent_hash = ?1 AND peer_key = ?2",
+                    params![torrent_hash, peer_key],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                            row.get::<_, i64>(6)? != 0,
+                        ))
+                    },
+                )
+                .optional()?;
+
+            if let Some((
+                previous_seen,
+                previous_download,
+                previous_upload,
+                total_download,
+                total_upload,
+                counter_resets,
+                was_blocked,
+            )) = previous
+            {
+                // Telemetry RPCs can overlap. Ignore an older observation that
+                // finishes after a newer sample instead of mistaking its lower
+                // counters for a daemon reset.
+                if now < previous_seen {
+                    continue;
+                }
+                let download_reset = raw_download < previous_download;
+                let upload_reset = raw_upload < previous_upload;
+                let download_delta = if download_reset {
+                    raw_download
+                } else {
+                    raw_download - previous_download
+                };
+                let upload_delta = if upload_reset {
+                    raw_upload
+                } else {
+                    raw_upload - previous_upload
+                };
+                tx.execute(
+                    "UPDATE peer_history
+                     SET ip = ?3, port = ?4, last_seen_epoch_ms = MAX(last_seen_epoch_ms, ?5),
+                         last_peer_download_bytes = ?6, last_peer_upload_bytes = ?7,
+                         downloaded_delta_bytes = ?8, uploaded_delta_bytes = ?9,
+                        counter_resets = ?10, was_blocked = ?11
+                     WHERE torrent_hash = ?1 AND peer_key = ?2",
+                    params![
+                        torrent_hash,
+                        peer_key,
+                        ip,
+                        peer.port,
+                        now,
+                        raw_download,
+                        raw_upload,
+                        total_download.saturating_add(download_delta),
+                        total_upload.saturating_add(upload_delta),
+                        counter_resets.saturating_add(if download_reset || upload_reset {
+                            1
+                        } else {
+                            0
+                        }),
+                        if was_blocked || blocked { 1 } else { 0 },
+                    ],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO peer_history
+                     (torrent_hash, peer_key, ip, port, first_seen_epoch_ms, last_seen_epoch_ms,
+                      last_peer_download_bytes, last_peer_upload_bytes, downloaded_delta_bytes,
+                      uploaded_delta_bytes, counter_resets, was_blocked)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, 0, 0, ?8)",
+                    params![
+                        torrent_hash,
+                        peer_key,
+                        ip,
+                        peer.port,
+                        now,
+                        raw_download,
+                        raw_upload,
+                        if blocked { 1 } else { 0 },
+                    ],
+                )?;
+            }
+        }
+
+        prune_peer_history_rows(&tx, cutoff)?;
+        tx.commit()
+    }
+
+    pub fn prune_peer_history(&self, now_epoch_ms: u64) -> Result<()> {
+        let now = i64::try_from(now_epoch_ms).unwrap_or(i64::MAX);
+        let cutoff = now.saturating_sub(PEER_HISTORY_RETENTION_MS);
+        let conn = self.conn.lock().unwrap();
+        prune_peer_history_rows(&conn, cutoff)
+    }
+
+    pub fn get_peer_history(
+        &self,
+        torrent_hash: &str,
+    ) -> Result<Vec<crate::models::peering::PeerHistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            "SELECT h.peer_key, h.ip, h.port, h.first_seen_epoch_ms, h.last_seen_epoch_ms,
+                    h.downloaded_delta_bytes, h.uploaded_delta_bytes, h.counter_resets,
+                    h.was_blocked,
+                    EXISTS(SELECT 1 FROM manual_peer_blocks b WHERE b.ip = h.ip)
+             FROM peer_history h
+             WHERE h.torrent_hash = ?1
+             ORDER BY h.last_seen_epoch_ms DESC
+             LIMIT 500",
+        )?;
+        let rows = statement.query_map(params![torrent_hash.to_ascii_lowercase()], |row| {
+            Ok(crate::models::peering::PeerHistoryEntry {
+                peer_key: row.get(0)?,
+                ip: row.get(1)?,
+                port: row.get::<_, i64>(2)?.clamp(0, u16::MAX as i64) as u16,
+                first_seen_epoch_ms: row.get::<_, i64>(3)?.max(0) as u64,
+                last_seen_epoch_ms: row.get::<_, i64>(4)?.max(0) as u64,
+                downloaded_delta_bytes: row.get::<_, i64>(5)?.max(0) as u64,
+                uploaded_delta_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                counter_resets: row.get::<_, i64>(7)?.max(0) as u64,
+                was_blocked: row.get::<_, i64>(8)? != 0,
+                currently_blocked: row.get::<_, i64>(9)? != 0,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn clear_peer_history(&self, torrent_hash: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM peer_history WHERE torrent_hash = ?1",
+            params![torrent_hash.to_ascii_lowercase()],
+        )
     }
 
     pub fn reset_all_settings(&self) -> Result<()> {
@@ -967,9 +1209,120 @@ mod tests {
     use super::*;
 
     const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
+    const OTHER_HASH: &str = "abcdef0123456789abcdef0123456789abcdef01";
 
     fn memory_db() -> Database {
         Database::new(Path::new(":memory:")).expect("in-memory database")
+    }
+
+    fn peer(
+        ip: &str,
+        port: u16,
+        downloaded: u64,
+        uploaded: u64,
+    ) -> crate::models::peering::PeerTelemetry {
+        crate::models::peering::PeerTelemetry {
+            peer_id: String::new(),
+            ip: ip.to_string(),
+            port,
+            rtt_ms: 0,
+            req_resp_latency_ms: 0,
+            sustained_dl_bps: 0,
+            sustained_ul_bps: 0,
+            upload_reciprocity: 0.0,
+            stability_score: 0.0,
+            disconnect_count: 0,
+            timeout_count: 0,
+            choke_events: 0,
+            client_name: String::new(),
+            locality_tier: crate::models::peering::LocalityTier::Global,
+            country_code: None,
+            asn: None,
+            utp: false,
+            encryption: false,
+            ipv6: ip.contains(':'),
+            dht: false,
+            pex: false,
+            connection_age_seconds: 0,
+            total_downloaded_bytes: downloaded,
+            total_uploaded_bytes: uploaded,
+        }
+    }
+
+    #[test]
+    fn peer_history_accumulates_directional_deltas_across_counter_resets() {
+        let db = memory_db();
+        db.record_peer_history(HASH, &[peer("203.0.113.17", 51413, 100, 50)], 1_000)
+            .unwrap();
+        db.block_peer_ip("203.0.113.17", 2_000).unwrap();
+        db.record_peer_history(HASH, &[peer("203.0.113.17", 51413, 150, 70)], 3_000)
+            .unwrap();
+
+        let row = db.get_peer_history(HASH).unwrap().remove(0);
+        assert_eq!(row.first_seen_epoch_ms, 1_000);
+        assert_eq!(row.last_seen_epoch_ms, 3_000);
+        assert_eq!(row.downloaded_delta_bytes, 50);
+        assert_eq!(row.uploaded_delta_bytes, 20);
+        assert_eq!(row.counter_resets, 0);
+        assert!(row.was_blocked);
+        assert!(row.currently_blocked);
+
+        db.record_peer_history(HASH, &[peer("203.0.113.17", 51413, 10, 5)], 4_000)
+            .unwrap();
+        let row = db.get_peer_history(HASH).unwrap().remove(0);
+        assert_eq!(row.downloaded_delta_bytes, 60);
+        assert_eq!(row.uploaded_delta_bytes, 25);
+        assert_eq!(row.counter_resets, 1);
+        db.unblock_peer_ip("203.0.113.17").unwrap();
+        let row = db.get_peer_history(HASH).unwrap().remove(0);
+        assert!(row.was_blocked);
+        assert!(!row.currently_blocked);
+
+        db.record_peer_history(HASH, &[peer("203.0.113.17", 51413, 500, 400)], 3_500)
+            .unwrap();
+        let row = db.get_peer_history(HASH).unwrap().remove(0);
+        assert_eq!(row.last_seen_epoch_ms, 4_000);
+        assert_eq!(row.downloaded_delta_bytes, 60);
+        assert_eq!(row.uploaded_delta_bytes, 25);
+        assert_eq!(row.counter_resets, 1);
+    }
+
+    #[test]
+    fn peer_history_is_torrent_scoped_clearable_and_expires_old_rows() {
+        let db = memory_db();
+        db.record_peer_history(HASH, &[peer("198.51.100.1", 1000, 10, 20)], 1)
+            .unwrap();
+        db.record_peer_history(
+            OTHER_HASH,
+            &[peer("198.51.100.2", 1001, 30, 40)],
+            100 * 86_400_000,
+        )
+        .unwrap();
+
+        assert!(db.get_peer_history(HASH).unwrap().is_empty());
+        assert_eq!(db.get_peer_history(OTHER_HASH).unwrap().len(), 1);
+        assert_eq!(db.clear_peer_history(OTHER_HASH).unwrap(), 1);
+        assert!(db.get_peer_history(OTHER_HASH).unwrap().is_empty());
+    }
+
+    #[test]
+    fn manual_peer_blocks_round_trip_and_unblock_by_global_ip() {
+        let db = memory_db();
+        db.block_peer_ip("192.0.2.10", 100).unwrap();
+        db.block_peer_ip("192.0.2.10", 200).unwrap();
+        db.block_peer_ip("2001:db8::1", 150).unwrap();
+
+        let blocks = db.list_blocked_peer_ips().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].ip, "2001:db8::1");
+        assert_eq!(blocks[0].blocked_at_epoch_ms, 150);
+        assert_eq!(blocks[1].ip, "192.0.2.10");
+        assert_eq!(blocks[1].blocked_at_epoch_ms, 100);
+
+        db.unblock_peer_ip("192.0.2.10").unwrap();
+        let blocks = db.list_blocked_peer_ips().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].ip, "2001:db8::1");
     }
 
     #[test]

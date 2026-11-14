@@ -49,6 +49,34 @@ pub struct PeerTelemetry {
     pub total_uploaded_bytes: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum PeerBlockCapability {
+    Unsupported,
+    RepeatedDisconnect,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BlockedPeerIp {
+    pub ip: String,
+    pub blocked_at_epoch_ms: u64,
+}
+
+/// Local observation history for one peer endpoint on one torrent. This intentionally
+/// excludes client names, geo/ASN data, ADC membership, and profile information.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PeerHistoryEntry {
+    pub peer_key: String,
+    pub ip: String,
+    pub port: u16,
+    pub first_seen_epoch_ms: u64,
+    pub last_seen_epoch_ms: u64,
+    pub downloaded_delta_bytes: u64,
+    pub uploaded_delta_bytes: u64,
+    pub counter_resets: u64,
+    pub was_blocked: bool,
+    pub currently_blocked: bool,
+}
+
 /// Per-peer exponential moving average state persisted across `get_peer_telemetry` calls.
 ///
 /// The EMA smoothing factor α = 0.3 means each new sample contributes 30% and
@@ -113,6 +141,7 @@ impl PeerTelemetry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct PeeringSettings {
     pub mode: PeeringMode,
     pub locality_enabled: bool,
@@ -120,9 +149,7 @@ pub struct PeeringSettings {
     pub max_global_peers: u32,
     pub prefer_utp: bool,
     pub require_encryption: bool,
-    /// Opt-in TCP RTT probing. Disabled by default because it makes outbound
-    /// TCP connections to every connected peer's port (privacy consideration).
-    #[serde(default)]
+    /// TCP RTT probing uses bounded outbound TCP connects; false is an explicit opt-out.
     pub probe_rtt_enabled: bool,
 }
 
@@ -135,7 +162,7 @@ impl Default for PeeringSettings {
             max_global_peers: 500,
             prefer_utp: true,
             require_encryption: true,
-            probe_rtt_enabled: false,
+            probe_rtt_enabled: true,
         }
     }
 }
@@ -143,6 +170,41 @@ impl Default for PeeringSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rtt_probe_setting_defaults_on_but_preserves_explicit_opt_out() {
+        let legacy: PeeringSettings = serde_json::from_str("{}").unwrap();
+        let opted_out: PeeringSettings =
+            serde_json::from_str(r#"{"probe_rtt_enabled":false}"#).unwrap();
+        assert!(legacy.probe_rtt_enabled);
+        assert!(!opted_out.probe_rtt_enabled);
+    }
+
+    #[test]
+    fn peer_history_payload_contains_no_client_geo_or_adc_identity_fields() {
+        let history = PeerHistoryEntry {
+            peer_key: "203.0.113.17:51413".into(),
+            ip: "203.0.113.17".into(),
+            port: 51413,
+            first_seen_epoch_ms: 1,
+            last_seen_epoch_ms: 2,
+            downloaded_delta_bytes: 3,
+            uploaded_delta_bytes: 4,
+            counter_resets: 0,
+            was_blocked: false,
+            currently_blocked: false,
+        };
+        let payload = serde_json::to_value(history).unwrap();
+        for forbidden in [
+            "client_name",
+            "country_code",
+            "asn",
+            "adc_member",
+            "profile_url",
+        ] {
+            assert!(payload.get(forbidden).is_none(), "unexpected {forbidden}");
+        }
+    }
 
     #[test]
     fn test_peer_quality_scoring() {

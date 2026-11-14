@@ -4,6 +4,7 @@ import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { InspectTorrentResult, TorrentContentMatch, FileWithPath } from '../../types';
 import { errorMessage as toErrorMessage } from '../../utils/errors';
+import { readTorrentFileAsDataUrl } from '../../utils/openPath';
 import {
   X,
   Plus,
@@ -18,12 +19,18 @@ import {
   AlertCircle,
   Link as LinkIcon,
 } from 'lucide-react';
-import { listen } from '@tauri-apps/api/event';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 export const AddTorrentModal: React.FC = () => {
-  const { showAddTorrent, setShowAddTorrent, initialAddTorrentSource, setInitialAddTorrentSource, addTorrentRejection, setAddTorrentRejection } =
-    useUiStore();
+  const {
+    showAddTorrent,
+    setShowAddTorrent,
+    initialAddTorrentSource,
+    setInitialAddTorrentSource,
+    queuedAddTorrentSources,
+    completeAddTorrentSource,
+    addTorrentRejection,
+    setAddTorrentRejection,
+  } = useUiStore();
   const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
 
@@ -61,94 +68,44 @@ export const AddTorrentModal: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!showAddTorrent) return;
-
-    const unlistenList: Array<() => void> = [];
-
-    // Surface rejections raised outside the modal (global drop, Finder open).
-    if (addTorrentRejection) {
-      setErrorMessage(addTorrentRejection);
-      setAddTorrentRejection(null);
-    }
-
-    listen<{ paths?: string[] }>('tauri://drag-drop', (event) => {
-      const paths = event.payload?.paths;
-      if (paths && paths.length > 0) {
-        const filePath = paths[0];
-        const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
-        if (!isAllowedMetainfoName(name)) {
-          setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
-          setSelectedFileName(null);
-          setSelectedFileSize(null);
-          setSelectedFileBytes(null);
-          setInspectPreview(null);
-          setTorrentSource('');
-          return;
-        }
-        setErrorMessage(null);
-        setSelectedFileName(name);
-        setSelectedFileSize(null);
-        setSelectedFileBytes(null);
-        setTorrentSource(filePath);
-        setInspectLoading(true);
-        inspectTorrent(filePath)
-          .then(applyInspectPreview)
-          .catch(() => setInspectPreview(null))
-          .finally(() => setInspectLoading(false));
-      }
-    })
-      .then((un) => unlistenList.push(un))
-      .catch(() => {});
-
-    listen<string>('nebulae://file-dropped', (event) => {
-      if (event.payload) {
-        const filePath = event.payload;
-        const name = filePath.split('/').pop()?.split('\\').pop() || filePath;
-        if (!isAllowedMetainfoName(name)) {
-          setErrorMessage(`only .torrent or .adc files are accepted ('${name}' was ignored).`);
-          setSelectedFileName(null);
-          setSelectedFileSize(null);
-          setSelectedFileBytes(null);
-          setInspectPreview(null);
-          setTorrentSource('');
-          return;
-        }
-        setErrorMessage(null);
-        setSelectedFileName(name);
-        setSelectedFileSize(null);
-        setSelectedFileBytes(null);
-        setTorrentSource(filePath);
-        setInspectLoading(true);
-        inspectTorrent(filePath)
-          .then(applyInspectPreview)
-          .catch(() => setInspectPreview(null))
-          .finally(() => setInspectLoading(false));
-      }
-    })
-      .then((un) => unlistenList.push(un))
-      .catch(() => {});
-
-    return () => {
-      for (const un of unlistenList) un();
-    };
-  }, [showAddTorrent, inspectTorrent, addTorrentRejection, setAddTorrentRejection]);
+    if (!showAddTorrent || !addTorrentRejection) return;
+    setErrorMessage(addTorrentRejection);
+    setAddTorrentRejection(null);
+  }, [showAddTorrent, addTorrentRejection, setAddTorrentRejection]);
 
   useEffect(() => {
     if (initialAddTorrentSource) {
+      const isEmbeddedMetainfo = /^(base64|data):/i.test(initialAddTorrentSource);
+      const isUrlSource = /^(magnet|adc|https?):/i.test(initialAddTorrentSource);
+      setErrorMessage(null);
+      setSelectedFileSize(null);
+      setSelectedFileBytes(null);
+      setInspectPreview(null);
       setTorrentSource(initialAddTorrentSource);
-      if (
-        initialAddTorrentSource.startsWith('magnet:') ||
-        initialAddTorrentSource.startsWith('http://') ||
-        initialAddTorrentSource.startsWith('https://')
-      ) {
+      if (isUrlSource && !isEmbeddedMetainfo) {
         setInputMode('magnet');
       } else {
         setInputMode('file');
       }
       const name =
         initialAddTorrentSource.split('/').pop()?.split('\\').pop() || initialAddTorrentSource;
-      setSelectedFileName(name);
+      const embeddedName = /^data:[^,]*;name=([^;,]*)/i.exec(initialAddTorrentSource)?.[1];
+      let decodedEmbeddedName = 'Embedded torrent metainfo';
+      if (embeddedName) {
+        try {
+          decodedEmbeddedName = decodeURIComponent(embeddedName);
+        } catch {
+          // Keep a neutral label if a hand-written data URL has a bad name.
+        }
+      }
+      setSelectedFileName(
+        isEmbeddedMetainfo ? decodedEmbeddedName : isUrlSource ? null : name,
+      );
       setInitialAddTorrentSource(null);
+      if (isUrlSource && !isEmbeddedMetainfo) {
+        setInspectLoading(false);
+        return;
+      }
       setInspectLoading(true);
       inspectTorrent(initialAddTorrentSource)
         .then(applyInspectPreview)
@@ -189,7 +146,7 @@ export const AddTorrentModal: React.FC = () => {
       setInspectPreview(null);
       setContentMatch(null);
       setRenameInputs({});
-      setShowAddTorrent(false);
+      completeAddTorrentSource();
     } catch (err: unknown) {
       setErrorMessage(toErrorMessage(err, 'Failed to add torrent'));
     } finally {
@@ -239,69 +196,6 @@ export const AddTorrentModal: React.FC = () => {
     setContentMatch(null);
     setRenameInputs({});
   }, [torrentSource, downloadDir]);
-
-  // Native drag-and-drop with REAL absolute paths. The webview strips
-  // File.path from HTML5 drop events, so drops handled only by the inline
-  // onDrop produced a bare filename — "Find My Files" (Rename Existing
-  // Content to Seed) then received a cwd-relative path and could never
-  // match anything, which presented as a dead button. Tauri's webview-level
-  // drag-drop event carries the actual paths.
-  // Dedupe guard: the HTML5 drop fallback may also fire for the same drop.
-  const lastNativeDropRef = useRef(0);
-  useEffect(() => {
-    if (!showAddTorrent) return;
-    let alive = true;
-    let unlisten: (() => void) | null = null;
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type !== 'drop' || !alive) return;
-        const now = Date.now();
-        if (now - lastNativeDropRef.current < 800) return;
-        const paths = (event.payload as { type: string; paths?: string[] }).paths || [];
-        const path = paths.find((p) => isAllowedMetainfoName(p.split('/').pop() || p));
-        if (!path) {
-          if (paths.length > 0) {
-            const rejectedName = paths[0].split('/').pop()?.split('\\').pop() || paths[0];
-            setErrorMessage(`only .torrent or .adc files are accepted ('${rejectedName}' was ignored).`);
-            setSelectedFileName(null);
-            setSelectedFileSize(null);
-            setSelectedFileBytes(null);
-            setInspectPreview(null);
-            setTorrentSource('');
-          }
-          return;
-        }
-        lastNativeDropRef.current = now;
-        setErrorMessage(null);
-        const name = path.split('/').pop()?.split('\\').pop() || path;
-        setSelectedFileName(name);
-        setSelectedFileSize(null);
-        setSelectedFileBytes(null);
-        setInspectPreview(null);
-        setTorrentSource(path);
-        setInspectLoading(true);
-        inspectTorrent(path)
-          .then((preview) => {
-            if (alive) applyInspectPreview(preview);
-          })
-          .catch(() => {
-            if (alive) setInspectPreview(null);
-          })
-          .finally(() => {
-            if (alive) setInspectLoading(false);
-          });
-      })
-      .then((un) => {
-        if (!alive) un();
-        else unlisten = un;
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-      if (unlisten) unlisten();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showAddTorrent]);
 
   if (!showAddTorrent) return null;
 
@@ -386,50 +280,30 @@ export const AddTorrentModal: React.FC = () => {
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
+    const files = Array.from(e.dataTransfer.files ?? []);
+    const results = await Promise.all(files.map(async (file) => {
+      const nativePath = (file as FileWithPath).path;
+      if (nativePath) return { source: nativePath, failed: null };
       if (!isAllowedMetainfoName(file.name)) {
-        setErrorMessage(
-          `only .torrent or .adc files are accepted ('${file.name}' was ignored).`
-        );
-        setSelectedFileName(null);
-        setSelectedFileSize(null);
-        setSelectedFileBytes(null);
-        setInspectPreview(null);
-        setTorrentSource('');
-        return;
+        return { source: file.name, failed: null };
       }
-      setErrorMessage(null);
-      // The webview strips File.path on drops; the native drag-drop event
-      // (handled in the effect below) supplies the real absolute path. This
-      // inline handler stays as a fallback with the bare name only.
-      const source = (file as FileWithPath).path || file.name;
-      setSelectedFileName(file.name);
-      setSelectedFileSize(file.size);
-      setSelectedFileBytes(null);
-      setInspectPreview(null);
-      setTorrentSource(source);
-
-      const reader = new FileReader();
-      reader.onload = async () => {
-        if (reader.result instanceof ArrayBuffer) {
-          const bytes = Array.from(new Uint8Array(reader.result));
-          setSelectedFileBytes(bytes);
-          setInspectLoading(true);
-          try {
-            const preview = await inspectTorrent(undefined, bytes);
-            applyInspectPreview(preview);
-          } catch {
-            setInspectPreview(null);
-          } finally {
-            setInspectLoading(false);
-          }
-        }
-      };
-      reader.readAsArrayBuffer(file);
+      try {
+        return { source: await readTorrentFileAsDataUrl(file), failed: null };
+      } catch {
+        return { source: null, failed: file.name };
+      }
+    }));
+    const sources = results.flatMap((result) => (result.source ? [result.source] : []));
+    const failedNames = results.flatMap((result) => (result.failed ? [result.failed] : []));
+    if (sources.length > 0) {
+      window.dispatchEvent(new CustomEvent<string[]>('nebulae:open-paths', { detail: sources }));
+    }
+    if (failedNames.length > 0) {
+      setErrorMessage(`Could not read dropped torrent file${failedNames.length === 1 ? '' : 's'}: ${failedNames.join(', ')}`);
     }
   };
 
@@ -527,6 +401,11 @@ export const AddTorrentModal: React.FC = () => {
             <X className="w-4 h-4" />
           </button>
         </div>
+        {queuedAddTorrentSources.length > 0 && (
+          <div className="px-5 py-2 text-[11px] text-[#d4c4a8] bg-[#29251f] border-b border-[#463e31]">
+            {queuedAddTorrentSources.length} more source{queuedAddTorrentSources.length === 1 ? '' : 's'} queued. The next opens after this one is added.
+          </div>
+        )}
 
         {/* Hidden File & Folder Inputs */}
         <input
@@ -651,7 +530,7 @@ export const AddTorrentModal: React.FC = () => {
                     setSelectedFileName(null);
                     setSelectedFileSize(null);
                     setSelectedFileBytes(null);
-                    if (val.trim().startsWith('magnet:') || val.trim().startsWith('http')) {
+                    if (/^(magnet|https?|base64|data):/i.test(val.trim())) {
                       setInspectLoading(true);
                       inspectTorrent(val.trim())
                         .then(applyInspectPreview)

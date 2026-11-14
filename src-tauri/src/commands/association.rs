@@ -7,16 +7,16 @@ pub struct PendingOpenPayloads(pub Arc<Mutex<Vec<String>>>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssociationStatus {
-    pub torrent_files: bool,
-    pub adc_files: bool,
-    pub magnet_protocol: bool,
-    pub adc_protocol: bool,
+    pub torrent_files: Option<bool>,
+    pub adc_files: Option<bool>,
+    pub magnet_protocol: Option<bool>,
+    pub adc_protocol: Option<bool>,
     pub platform: String,
     pub message: String,
 }
 
 #[allow(dead_code)]
-fn status(platform: &str, flags: [bool; 4], message: &str) -> AssociationStatus {
+fn status(platform: &str, flags: [Option<bool>; 4], message: &str) -> AssociationStatus {
     AssociationStatus {
         torrent_files: flags[0],
         adc_files: flags[1],
@@ -51,21 +51,31 @@ if ($env:NEBULAE_ASSOC_REGISTER -eq '1') {
         try { $key.SetValue($name, $value, [Microsoft.Win32.RegistryValueKind]::String) }
         finally { $key.Dispose() }
     }
+    function PutUser([string]$path, [string]$name, [string]$value) {
+        $key = $root.CreateSubKey($path)
+        try { $key.SetValue($name, $value, [Microsoft.Win32.RegistryValueKind]::String) }
+        finally { $key.Dispose() }
+    }
     $command = '"' + $exe + '" "%1"'
     $icon = '"' + $exe + '",0'
     foreach ($extension in @('torrent', 'adc')) {
         $id = 'Nebulae.' + $extension
-        Put ('.' + $extension) '' $id
+        Put ('.' + $extension + '\OpenWithProgids') $id ''
         Put $id '' ('Nebulae ' + $extension + ' file')
         Put ($id + '\DefaultIcon') '' $icon
         Put ($id + '\shell\open\command') '' $command
+        PutUser 'Software\Nebulae\Capabilities\FileAssociations' ('.' + $extension) $id
     }
     foreach ($scheme in @('magnet', 'adc')) {
         Put $scheme '' ('URL:Nebulae ' + $scheme)
         Put $scheme 'URL Protocol' ''
         Put ($scheme + '\DefaultIcon') '' $icon
         Put ($scheme + '\shell\open\command') '' $command
+        PutUser 'Software\Nebulae\Capabilities\URLAssociations' $scheme $scheme
     }
+    PutUser 'Software\Nebulae\Capabilities' 'ApplicationName' 'Nebulae'
+    PutUser 'Software\Nebulae\Capabilities' 'ApplicationDescription' 'BitTorrent client'
+    PutUser 'Software\RegisteredApplications' 'Nebulae' 'Software\Nebulae\Capabilities'
 }
 Add-Type -TypeDefinition @'
 using System;
@@ -96,7 +106,7 @@ function Owned([string]$association, [uint32]$flags) {
     magnet_protocol = (Owned 'magnet' 0x1000)
     adc_protocol = (Owned 'adc' 0x1000)
     platform = 'Windows'
-    message = 'Effective handlers queried from Windows. False means another handler is selected or no executable handler was found. Registration does not override protected user defaults; select Nebulae in Windows Default Apps when necessary.'
+    message = 'Effective handlers queried from Windows. Registration adds Nebulae to available handlers but does not override protected user defaults. Select Nebulae in Windows Default Apps if needed.'
 } | ConvertTo-Json -Compress
 "#;
     let output = crate::utils::process::create_hidden_command("powershell.exe")
@@ -173,9 +183,9 @@ fn desktop_exec(path: &str) -> Result<String, String> {
 
 #[cfg(target_os = "linux")]
 fn linux_status() -> Result<AssociationStatus, String> {
-    let mut flags = [false; 4];
+    let mut flags = [None; 4];
     for (index, mime) in MIME_TYPES.iter().enumerate() {
-        flags[index] = xdg(&["query", "default", mime])? == DESKTOP_ID;
+        flags[index] = Some(xdg(&["query", "default", mime])? == DESKTOP_ID);
     }
     Ok(status("Linux", flags, "Queried XDG desktop defaults. False means this Nebulae desktop entry is not the selected default."))
 }
@@ -192,7 +202,7 @@ pub fn check_associations_status() -> Result<AssociationStatus, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(status("macOS", [true; 4], "Handlers are declared by the application bundle; this does not verify that Nebulae is the selected default."))
+        Ok(status("macOS", [None; 4], "Handlers are declared by the application bundle. macOS controls the selected default, which this app cannot verify."))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
@@ -280,11 +290,15 @@ mod tests {
     use super::*;
     #[test]
     fn status_preserves_missing_handlers() {
-        let s = status("test", [false, true, false, true], "checked");
-        assert!(!s.torrent_files);
-        assert!(s.adc_files);
-        assert!(!s.magnet_protocol);
-        assert!(s.adc_protocol);
+        let s = status(
+            "test",
+            [Some(false), Some(true), None, Some(true)],
+            "checked",
+        );
+        assert_eq!(s.torrent_files, Some(false));
+        assert_eq!(s.adc_files, Some(true));
+        assert_eq!(s.magnet_protocol, None);
+        assert_eq!(s.adc_protocol, Some(true));
     }
     #[test]
     fn queue_drains_once() {

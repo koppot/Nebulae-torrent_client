@@ -2365,3 +2365,115 @@ All previous Windows-startup, macOS-playback, connectivity, security, and ADC
 validation findings remain open as recorded above until Antigravity or the
 owner completes the stated platform acceptance. This ownership claim does not
 close or replace those findings.
+
+## 2026-11-14 — Droid source-only feature wave handoff
+
+**Ownership/status:** Source edits and regression-test authoring are complete
+for this pass; execution, builds, packaged/runtime checks, and installer
+delivery remain Antigravity-owned. The current branch is
+`fix/review-0.2.7` at `219b7bf`; this wave's working-tree edits are uncommitted.
+Droid ran no tests, builds, or runtime checks. Do not treat this handoff as a
+release or acceptance claim.
+
+### Source scope and corrections
+
+- The branch already contains `ed05f93` for the selectable ADC-beige theme,
+  Cargo-version creator identity, and conservative incoming-port diagnostics.
+  The in-progress tree adds persistent global IP blocks, per-torrent local
+  peer history, bounded default-on RTT probes, Windows disc-menu pointer and
+  wheel forwarding, media/torrent path classification and opening, optional
+  external-media import, and OS association status/registration.
+- Peer history uses normalized IP:port endpoints within the torrent info-hash,
+  records directional counter deltas/resets and block state, and retains at
+  most 100,000 rows for 90 days. The 30-second sampler runs synchronous engine
+  and SQLite work on `spawn_blocking` and skips missed ticks rather than
+  bursting. Initial byte totals establish a baseline and are not reported as
+  deltas; clearing history does not stop new observations while Nebulae runs.
+- Peer blocks are global IP entries enforced by repeated Transmission
+  `peer-remove` attempts, not firewall rules. Engines that report the
+  capability as unsupported cannot offer active enforcement.
+- RTT probing defaults on for missing legacy settings while preserving an
+  explicit `false`; it uses at most five concurrent direct TCP connects, one
+  per IP:port per 60 seconds, a two-second timeout, and skips local/private,
+  shared-space, and selected special-use ranges. It is disabled when the
+  configured proxy, VPN mode, or kill switch cannot be honored. This remains
+  observable direct network traffic and needs explicit privacy review.
+- HTML drops without native filesystem paths now encode every dropped
+  `.torrent`/`.adc` file as a data URL for the shared queue instead of
+  silently handling only the first file or treating a bare filename as a
+  filesystem path. Native paths still use the common classifier/dispatcher.
+- Windows association registration now adds extension handlers through
+  `OpenWithProgids` and application capabilities without writing the
+  extension's default ProgID. Confirm on Windows that existing user defaults
+  remain selected and Nebulae is offered in Default Apps.
+- Restored the existing disc-menu D-pad controls while keeping Windows HWND
+  mouse routing distinct from the frontend WebView path. No ADC member/cache
+  contracts, rows, cards, headings, or links were changed; the shared
+  `PeersTabPanel.tsx` edits are limited to RTT control copy.
+
+### Unresolved source/runtime questions
+
+- **Incoming-port RPC:** Verify the bundled Transmission 4.1.3
+  `port-test` response field/protocol (`port-is-open` or its actual bundled
+  equivalent). Missing or ambiguous results must remain Unknown; fail closed
+  if the RPC contract differs.
+- **ADC URI:** `.adc` metainfo files are treated as torrent metainfo, but the
+  `adc:` URI scheme has no canonical resolver contract in this client.
+  Transmission currently rejects it as not a direct torrent source. The OS
+  handler can route such a URI to the app, but this does not constitute
+  functional ADC URI ingestion; keep the limitation explicit until the URI
+  format/resolver is specified.
+- **Peer blocking:** Verify `peer-remove` support, IPv4 and bracketed IPv6
+  address syntax, daemon capability transitions, reconnect enforcement,
+  restart persistence, unblock behavior, and unsupported/remote engine UI.
+- **Peer history:** The sampler calls telemetry serially per torrent whose
+  displayed peer count is nonzero; Transmission's displayed count can include
+  tracker counts, so some samples may return no live peers. Check RPC/SQLite
+  load with a large library. Endpoint changes of port create a new identity;
+  initial counters are baseline-only; a clear can repopulate at the next
+  sample. Verify retention/cap, restart persistence, directional deltas,
+  reset handling, and that no ADC/member/client/geo fields enter history.
+- **RTT:** Confirm default-on consent UX and explicit opt-out, skipped routes
+  under proxy/VPN/kill switch, all special/private ranges, and probe caps from
+  a fresh process. No public peer should be contacted during validation
+  without explicit authorization.
+- **Windows disc menu:** Verify native HWND targeting, cursor movement,
+  click/double-click and wheel behavior at real DPI/scaling settings; confirm
+  keyboard, D-pad, Play, and Menu controls remain functional and that
+  macOS/Linux input paths are unchanged.
+- **Open/drop/import:** Validate multiple mixed selections, pathless HTML
+  torrent drops, file URLs/UNC paths, startup and second-instance opens,
+  duplicate native/custom drop delivery, unsupported-path feedback, player
+  close queueing, and import/decline/error/cancel behavior. `.ts` files remain
+  ordinary videos unless an actual disc folder structure is found.
+- **OS associations:** Verify declarations in each package and effective
+  handler reporting on Windows/Linux/macOS. Respect Windows/macOS user-choice
+  controls; do not claim the `adc:` scheme is a usable torrent source.
+- No production credentials, live ADC swarms, production hosts, or user
+  machines were used or modified.
+
+### Antigravity validation matrix
+
+Source-level commands (not run by Droid):
+
+```text
+node --experimental-strip-types --test tests/dropOpenRoutingSource.test.ts tests/openPath.test.ts tests/peerHistorySource.test.ts
+```
+
+From `src-tauri/`, run targeted Rust tests for `peer_history`,
+`test_rtt_prober`, `commands::association::tests`,
+`commands::peering::peer_block_tests`, and
+`dropped_media_classifier_requires_real_disc_markers`, followed by
+`cargo fmt --all -- --check` and `cargo clippy --lib -- -D warnings`.
+From the repository root, run the project's frontend lint/type/build gates.
+All source tests added in this wave are currently **unexecuted**.
+
+Packaged acceptance must use disposable test hosts/profiles and the supported
+platforms. Correlate artifacts to source before running the matrix. Keep the
+pre-existing unrelated untracked items listed in the prior handoff untouched;
+the new source files in this wave are `src-tauri/src/engine/manual_peer_blocks.rs`,
+`src/components/manager/PeerHistoryPanel.tsx`, `src/utils/openPath.ts`,
+`tests/dropOpenRoutingSource.test.ts`, `tests/openPath.test.ts`, and
+`tests/peerHistorySource.test.ts`. Do not commit, push, release, retag, change
+updater configuration, build installers, or modify production data as part
+of this source-only handoff.

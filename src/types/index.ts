@@ -374,10 +374,10 @@ export interface DiagnosticSummary {
 }
 
 export interface AssociationStatus {
-  torrent_files: boolean;
-  adc_files: boolean;
-  magnet_protocol: boolean;
-  adc_protocol: boolean;
+  torrent_files: boolean | null;
+  adc_files: boolean | null;
+  magnet_protocol: boolean | null;
+  adc_protocol: boolean | null;
   platform: string;
   message: string;
 }

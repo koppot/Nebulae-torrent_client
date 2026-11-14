@@ -888,6 +888,17 @@ impl TransmissionRpcClient {
         self.request("peer-remove", Some(args))?;
         Ok(())
     }
+
+    /// Fetch only the peer arrays for all torrents, avoiding the large file
+    /// and tracker fields included by `torrent_get(None)`.
+    pub fn torrent_peers_all(&self) -> Result<Vec<Value>, String> {
+        let res = self.request("torrent-get", Some(json!({ "fields": ["id", "peers"] })))?;
+        Ok(res
+            .get("torrents")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
 }
 
 /// Transmission Sidecar Torrent Engine.
@@ -1831,6 +1842,11 @@ impl TransmissionTorrentEngine {
         //    poller and the quality-eviction task so both go idle together if the
         //    bundled daemon doesn't support the RPC.
         let peer_remove_unsupported = Arc::new(AtomicBool::new(false));
+        crate::engine::manual_peer_blocks::spawn(
+            Arc::clone(&db),
+            Arc::clone(&rpc_client),
+            Arc::clone(&peer_remove_unsupported),
+        );
         let peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
@@ -2869,15 +2885,23 @@ impl TorrentEngine for TransmissionTorrentEngine {
         }
 
         let trimmed = source.trim();
+        let lower = trimmed.to_ascii_lowercase();
+
+        if lower.starts_with("adc:") {
+            return Err(
+                "ADC protocol links are not direct torrent sources. Open a .adc metainfo file or use a magnet/HTTP(S) link."
+                    .to_string(),
+            );
+        }
 
         // 1. Check if source is base64 encoded
-        let b64_candidate = if trimmed.starts_with("data:") {
-            trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
-        } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
-            Some(stripped)
-        } else if !trimmed.starts_with("magnet:")
-            && !trimmed.starts_with("http://")
-            && !trimmed.starts_with("https://")
+        let b64_candidate = if lower.starts_with("data:") {
+            lower.find(";base64,").map(|idx| &trimmed[idx + 8..])
+        } else if lower.starts_with("base64:") {
+            Some(&trimmed["base64:".len()..])
+        } else if !lower.starts_with("magnet:")
+            && !lower.starts_with("http://")
+            && !lower.starts_with("https://")
             && !trimmed.contains('/')
             && !trimmed.contains('\\')
             && trimmed.len() > 100
@@ -2894,9 +2918,9 @@ impl TorrentEngine for TransmissionTorrentEngine {
         }
 
         // 2. Check if source is a local file path
-        if !trimmed.starts_with("magnet:")
-            && !trimmed.starts_with("http://")
-            && !trimmed.starts_with("https://")
+        if !lower.starts_with("magnet:")
+            && !lower.starts_with("http://")
+            && !lower.starts_with("https://")
         {
             let norm_path = crate::utils::paths::normalize_source_path(trimmed);
             if norm_path.is_file() {
@@ -3082,7 +3106,8 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 | EngineHook::PrivateTorrentRestrictions
                 | EngineHook::SocketInterfaceBinding
                 | EngineHook::PauseResumeKillSwitch
-        )
+        ) || (hook == EngineHook::ConnectionEviction
+            && !self.peer_remove_unsupported.load(Ordering::Relaxed))
     }
 
     fn force_recheck(&self, id: &str) -> Result<(), String> {
@@ -3503,6 +3528,40 @@ impl TorrentEngine for TransmissionTorrentEngine {
             .map(|a| a.iter().collect())
             .unwrap_or_default();
 
+        let probe_enabled = self
+            .db
+            .get_setting("peering_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|json| {
+                serde_json::from_str::<crate::models::peering::PeeringSettings>(&json).ok()
+            })
+            .unwrap_or_default()
+            .probe_rtt_enabled;
+        let peer_proxy_configured = match self.db.get_setting("user_settings_json") {
+            Ok(Some(json)) => {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&json)
+                    .map(|settings| {
+                        settings.proxy_peer_connections
+                            && !settings.proxy_type.eq_ignore_ascii_case("None")
+                    })
+                    .unwrap_or(true)
+            }
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        let vpn_route_configured = match self.db.get_setting("vpn_mode") {
+            Ok(Some(mode)) => !mode.eq_ignore_ascii_case("NoVpn"),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        // The prober uses a direct Tokio TCP socket and cannot apply the
+        // engine's peer proxy, configured VPN binding, or loopback killswitch.
+        // Skip rather than leak a probe outside those selected routes.
+        let can_honor_peer_route = !peer_proxy_configured
+            && !vpn_route_configured
+            && !self.kill_switch_active.load(Ordering::SeqCst);
+
         let mut result = Vec::new();
 
         if let Some(peers) = torrent.get("peers").and_then(|v| v.as_array()) {
@@ -3639,19 +3698,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 // The result is available on the *next* call once the probe
                 // completes. First call for a new peer returns rtt_ms=0.
                 let rtt_ms = self.rtt_prober.get_rtt(&address, port).unwrap_or(0);
-                // Read probe_rtt_enabled from DB at call time (cheap: single
-                // SQLite read, cached behind the DB mutex).
-                let probe_enabled = self
-                    .db
-                    .get_setting("peering_settings_json")
-                    .ok()
-                    .flatten()
-                    .and_then(|j| {
-                        serde_json::from_str::<crate::models::peering::PeeringSettings>(&j).ok()
-                    })
-                    .map(|s| s.probe_rtt_enabled)
-                    .unwrap_or(false);
-                if probe_enabled {
+                if probe_enabled && can_honor_peer_route {
                     self.rtt_prober.probe(&address, port);
                 }
 
@@ -3689,6 +3736,54 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
     fn check_port_open(&self) -> Option<bool> {
         self.rpc_client.port_test().ok().flatten()
+    }
+
+    fn peer_block_capability(&self) -> crate::models::peering::PeerBlockCapability {
+        if self.peer_remove_unsupported.load(Ordering::Relaxed) {
+            crate::models::peering::PeerBlockCapability::Unsupported
+        } else {
+            crate::models::peering::PeerBlockCapability::RepeatedDisconnect
+        }
+    }
+
+    fn disconnect_peer_for_block(
+        &self,
+        torrent_id: &str,
+        ip: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        use std::net::{IpAddr, SocketAddr};
+
+        if self.peer_remove_unsupported.load(Ordering::Relaxed) {
+            return Err(
+                "Transmission peer-remove is unavailable; manual blocking is disabled".into(),
+            );
+        }
+        let ip_addr: IpAddr = ip
+            .parse()
+            .map_err(|_| "Invalid peer IP address".to_string())?;
+        let mut torrents = self
+            .rpc_client
+            .torrent_get(Some(vec![rpc_id(torrent_id)]))?;
+        if torrents.is_empty() {
+            return Err(format!(
+                "Torrent '{torrent_id}' is not available in Transmission"
+            ));
+        }
+        let numeric_id = torrents
+            .remove(0)
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| "Transmission did not return a numeric torrent id".to_string())?;
+        let peer_address = SocketAddr::new(ip_addr, port).to_string();
+        match self.rpc_client.peer_remove(numeric_id, &peer_address) {
+            Ok(()) => Ok(()),
+            Err(error) if error.contains("peer-remove") => {
+                self.peer_remove_unsupported.store(true, Ordering::Relaxed);
+                Err("Transmission peer-remove is unavailable; manual blocking is disabled".into())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn apply_peering_settings(

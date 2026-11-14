@@ -3,10 +3,10 @@
 //! A plain black child window (STATIC class) is created beneath the
 //! webview sibling; libVLC renders into it via `libvlc_media_player_set_hwnd`.
 //! Because the overlay sits BELOW the transparent webview in Z-order,
-//! all mouse events (clicks on player buttons, volume/seek tracks,
-//! popovers, video pause/double-click fullscreen) and keyboard shortcuts
-//! reach the frontend webview first. All work happens on Tauri's main
-//! thread; the frontend drives position/size with `player_sync_viewport`.
+//! player controls receive input through the frontend. When a native
+//! disc-menu surface owns input, this window forwards menu mouse input to
+//! VLC and keyboard input to the frontend. The frontend drives position/size
+//! with `player_sync_viewport`.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc;
@@ -28,8 +28,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
     WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
+    WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -612,8 +613,14 @@ static OVERLAY_WNDPROC: std::sync::OnceLock<WNDPROC> = std::sync::OnceLock::new(
 
 /// Tracks mouse button down position for click vs drag disambiguation.
 static CLICK_DOWN_POS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Distinguishes a real click at client coordinate (0, 0) from no button down.
+static CLICK_DOWN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Throttles mouse movement notifications sent to the frontend.
 static LAST_MOUSE_MOVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Throttles native mouse moves forwarded to VLC while an authored menu is open.
+static LAST_MENU_MOUSE_MOVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Throttles native wheel navigation while an authored menu is open.
+static LAST_MENU_MOUSE_WHEEL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Subclass the overlay window procedure to forward native keyboard and mouse input
 /// from the video overlay to the frontend.
@@ -654,6 +661,17 @@ unsafe extern "system" fn overlay_wndproc(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
+            let at_menu = overlay_app_handle()
+                .and_then(|app| app.try_state::<crate::player::PlayerState>())
+                .map(|s| s.at_menu.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if at_menu && now.saturating_sub(LAST_MENU_MOUSE_MOVE.load(Ordering::Relaxed)) >= 40 {
+                LAST_MENU_MOUSE_MOVE.store(now, Ordering::Relaxed);
+                // The native video surface owns mouse input on Windows, so the
+                // WebView does not reliably receive pointer coordinates. Forward
+                // the native client point directly to VLC's video child.
+                let _ = post_vlc_mouse_move(hwnd, WPARAM(0), lparam);
+            }
             if now.saturating_sub(LAST_MOUSE_MOVE.load(Ordering::Relaxed)) > 150 {
                 LAST_MOUSE_MOVE.store(now, Ordering::Relaxed);
                 if let Some(app) = overlay_app_handle() {
@@ -663,20 +681,46 @@ unsafe extern "system" fn overlay_wndproc(
             }
             // If dragging with left mouse button held down, trigger native caption drag
             let down_pos = CLICK_DOWN_POS.load(Ordering::Relaxed);
-            if down_pos != 0 {
+            if CLICK_DOWN_ACTIVE.load(Ordering::Relaxed) {
                 let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
                 let dy = (((lparam.0 >> 16) as i16) as i32)
                     - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
                 if dx.abs() > 6 || dy.abs() > 6 {
                     CLICK_DOWN_POS.store(0, Ordering::Relaxed);
+                    CLICK_DOWN_ACTIVE.store(false, Ordering::Relaxed);
                     if let Some(app) = overlay_app_handle() {
                         let _ = begin_window_drag(app);
                     }
                 }
             }
         }
+        WM_MOUSEWHEEL => {
+            let at_menu = overlay_app_handle()
+                .and_then(|app| app.try_state::<crate::player::PlayerState>())
+                .map(|s| s.at_menu.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if at_menu {
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
+                if delta != 0 {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    if now.saturating_sub(LAST_MENU_MOUSE_WHEEL.load(Ordering::Relaxed)) >= 300 {
+                        LAST_MENU_MOUSE_WHEEL.store(now, Ordering::Relaxed);
+                        if let Some(app) = overlay_app_handle() {
+                            use tauri::Emitter;
+                            let key = if delta > 0 { "ArrowUp" } else { "ArrowDown" };
+                            let _ = app.emit("player-native-key", key);
+                        }
+                    }
+                }
+                return LRESULT(0);
+            }
+        }
         WM_LBUTTONDBLCLK => {
             CLICK_DOWN_POS.store(0, Ordering::Relaxed);
+            CLICK_DOWN_ACTIVE.store(false, Ordering::Relaxed);
             let at_menu = overlay_app_handle()
                 .and_then(|app| app.try_state::<crate::player::PlayerState>())
                 .map(|s| s.at_menu.load(Ordering::SeqCst))
@@ -694,10 +738,11 @@ unsafe extern "system" fn overlay_wndproc(
         }
         WM_LBUTTONDOWN => {
             CLICK_DOWN_POS.store(lparam.0 as u32, Ordering::SeqCst);
+            CLICK_DOWN_ACTIVE.store(true, Ordering::SeqCst);
         }
         WM_LBUTTONUP => {
             let down_pos = CLICK_DOWN_POS.swap(0, Ordering::SeqCst);
-            if down_pos != 0 {
+            if CLICK_DOWN_ACTIVE.swap(false, Ordering::SeqCst) {
                 let dx = ((lparam.0 as i16) as i32) - (((down_pos & 0xFFFF) as i16) as i32);
                 let dy = (((lparam.0 >> 16) as i16) as i32)
                     - ((((down_pos >> 16) & 0xFFFF) as i16) as i32);
@@ -710,9 +755,10 @@ unsafe extern "system" fn overlay_wndproc(
                         .map(|s| s.at_menu.load(Ordering::SeqCst))
                         .unwrap_or(false);
                     if at_menu {
-                        // The WebView handles menu pointer input and sends one
-                        // checked IPC event. Do not also forward this native
-                        // event, which could activate the selection twice.
+                        // The WebView may not receive this click because the
+                        // native video surface owns hit-testing. Forward this
+                        // native client point exactly once to VLC's video child.
+                        let _ = post_vlc_mouse_click(hwnd, lparam);
                     } else {
                         // Single click on video -> toggle play/pause
                         if let Some(app) = overlay_app_handle() {

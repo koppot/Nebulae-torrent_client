@@ -9,6 +9,7 @@ import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/form
 import { TorrentFileItem, TorrentItem } from '../../types';
 import PosterHoverPopup, { PosterPopupTarget } from './PosterHoverPopup';
 import { PeersTabPanel } from './PeersTabPanel';
+import { PeerHistoryPanel } from './PeerHistoryPanel';
 import {
   Play,
   Pause,
@@ -578,7 +579,8 @@ export const TorrentManagerView: React.FC = () => {
   // Periodic peer query targeting active selected torrent
   useEffect(() => {
     const targetId = selectedTorrent?.id;
-    if (activeManagerTab === 'peers' && targetId) {
+    const targetHash = selectedTorrent?.info_hash;
+    if ((activeManagerTab === 'peers' || activeManagerTab === 'peer-history') && targetId && targetHash) {
       fetchPeers(targetId);
       const interval = setInterval(() => {
         fetchPeers(targetId);
@@ -587,7 +589,7 @@ export const TorrentManagerView: React.FC = () => {
     } else if (!targetId) {
       clearPeers();
     }
-  }, [selectedTorrent?.id, activeManagerTab, fetchPeers, clearPeers]);
+  }, [selectedTorrent?.id, selectedTorrent?.info_hash, activeManagerTab, fetchPeers, clearPeers]);
 
   // Announce/scrape status for the General tab: prefer a tracker that is not
   // working (its failure message is what the user needs to see), otherwise
@@ -1310,6 +1312,7 @@ export const TorrentManagerView: React.FC = () => {
               { id: 'files', label: 'Files / Content', icon: FileText },
               { id: 'trackers', label: 'Trackers', icon: Layers },
               { id: 'peers', label: 'Peers', icon: Users },
+              { id: 'peer-history', label: 'Peer History', icon: ShieldCheck },
               { id: 'speed', label: 'Speed Graph', icon: LineChart },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -1879,6 +1882,13 @@ export const TorrentManagerView: React.FC = () => {
                   isTransmission={isTransmission}
                   infoHash={selectedTorrent?.info_hash ?? null}
                   trackers={selectedTorrent?.trackers ?? []}
+                />
+              ) : activeManagerTab === 'peer-history' ? (
+                <PeerHistoryPanel
+                  torrentId={selectedTorrent.id}
+                  torrentHash={selectedTorrent.info_hash}
+                  peers={peers}
+                  isLoading={isPeersLoading}
                 />
               ) : (
                 /* Speed Graph Tab */

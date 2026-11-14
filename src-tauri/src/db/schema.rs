@@ -79,3 +79,30 @@ CREATE TABLE IF NOT EXISTS seed_time_records (
     is_shield_satisfied INTEGER DEFAULT 0
 );
 "#;
+
+pub const CREATE_MANUAL_PEER_BLOCKS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS manual_peer_blocks (
+    ip TEXT PRIMARY KEY,
+    blocked_at_epoch_ms INTEGER NOT NULL
+);
+"#;
+
+pub const CREATE_PEER_HISTORY_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS peer_history (
+    torrent_hash TEXT NOT NULL,
+    peer_key TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    first_seen_epoch_ms INTEGER NOT NULL,
+    last_seen_epoch_ms INTEGER NOT NULL,
+    last_peer_download_bytes INTEGER NOT NULL DEFAULT 0,
+    last_peer_upload_bytes INTEGER NOT NULL DEFAULT 0,
+    downloaded_delta_bytes INTEGER NOT NULL DEFAULT 0,
+    uploaded_delta_bytes INTEGER NOT NULL DEFAULT 0,
+    counter_resets INTEGER NOT NULL DEFAULT 0,
+    was_blocked INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (torrent_hash, peer_key)
+);
+CREATE INDEX IF NOT EXISTS idx_peer_history_last_seen
+    ON peer_history(last_seen_epoch_ms DESC);
+"#;

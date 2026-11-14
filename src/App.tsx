@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
-import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, type PlayerOpenInfo } from './lib/playerStore';
+import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, openInPlayer, type PlayerOpenInfo } from './lib/playerStore';
 import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore } from './stores/torrentStore';
@@ -8,6 +8,7 @@ import { useConnectivityStore } from './stores/connectivityStore';
 import { useVpnStore } from './stores/vpnStore';
 import { useTrackerStore } from './stores/trackerStore';
 import { useLibraryStore } from './stores/libraryStore';
+import { normalizeOpenPath, openPathKey, readTorrentFileAsDataUrl } from './utils/openPath';
 import { SplashScreen } from './components/splash/SplashScreen';
 import { TitleBar } from './components/layout/TitleBar';
 import { StatusBar } from './components/layout/StatusBar';
@@ -33,7 +34,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useRemoteServerStore } from './stores/remoteServerStore';
 
 export const App: React.FC = () => {
-  const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
+  const { splashDismissed, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
   const theme = useSettingsStore((s) => s.settings.theme);
   const remoteServerEnabled = useSettingsStore((s) => s.settings.rtorrent_server_enabled);
@@ -197,6 +198,18 @@ export const App: React.FC = () => {
   const { fetchStatus: fetchVpnStatus } = useVpnStore();
   const { fetchProfile: fetchTrackerProfile } = useTrackerStore();
   const [isDragging, setIsDragging] = useState(false);
+  const [pendingMediaPaths, setPendingMediaPaths] = useState<string[]>([]);
+  const [mediaImportPrompt, setMediaImportPrompt] = useState<{
+    path: string;
+    title: string;
+    error?: string;
+  } | null>(null);
+  const [isImportingMedia, setIsImportingMedia] = useState(false);
+  const [openPathErrors, setOpenPathErrors] = useState<string[]>([]);
+  const pendingMediaKeysRef = useRef(new Set<string>());
+  const activeMediaKeyRef = useRef<string | null>(null);
+  const openingDroppedMediaRef = useRef(false);
+  const recentPathDispatchRef = useRef(new Map<string, number>());
   const [engineInitError, setEngineInitError] = useState<string | null>(null);
   const [showFirstRunMediaModal, setShowFirstRunMediaModal] = useState(false);
   const [savingMediaMode, setSavingMediaMode] = useState(false);
@@ -217,6 +230,117 @@ export const App: React.FC = () => {
     initialOffsetX: 0,
     initialOffsetY: 0,
   });
+
+  const dispatchOpenPaths = useCallback(async (paths: string[]) => {
+    const torrentSources: string[] = [];
+    const unsupported: string[] = [];
+    const now = Date.now();
+
+    for (const rawPath of paths) {
+      const source = normalizeOpenPath(rawPath.trim());
+      if (!source) continue;
+      const sourceName = source.split(/[?#]/, 1)[0].split(/[\\/]/).pop() || source;
+      if (
+        /^(magnet|adc|https?|base64|data):/i.test(source) ||
+        /\.(torrent|adc)$/i.test(sourceName)
+      ) {
+        torrentSources.push(source);
+        continue;
+      }
+
+      const key = openPathKey(source);
+      const lastDispatch = recentPathDispatchRef.current.get(key) ?? 0;
+      if (now - lastDispatch < 1000) continue;
+      recentPathDispatchRef.current.set(key, now);
+
+      try {
+        const kind = await invoke<'disc' | 'video' | 'unsupported'>(
+          'classify_dropped_media_path',
+          { filePath: source },
+        );
+        if (kind === 'disc' || kind === 'video') {
+          if (!pendingMediaKeysRef.current.has(key)) {
+            pendingMediaKeysRef.current.add(key);
+            setPendingMediaPaths((queued) => [...queued, source]);
+          }
+        } else {
+          unsupported.push(sourceName);
+        }
+      } catch {
+        unsupported.push(sourceName);
+        recentPathDispatchRef.current.delete(key);
+      }
+    }
+
+    for (const [path, timestamp] of recentPathDispatchRef.current) {
+      if (now - timestamp >= 5000) recentPathDispatchRef.current.delete(path);
+    }
+    if (torrentSources.length > 0) {
+      useUiStore.getState().openAddTorrentWithSources(torrentSources);
+    }
+    if (unsupported.length > 0) {
+      setOpenPathErrors((current) => [...current, ...unsupported].slice(-10));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!playerOpen && activeMediaKeyRef.current) {
+      pendingMediaKeysRef.current.delete(activeMediaKeyRef.current);
+      activeMediaKeyRef.current = null;
+    }
+  }, [playerOpen]);
+
+  useEffect(() => {
+    if (playerOpen || mediaImportPrompt || openingDroppedMediaRef.current) return;
+    const path = pendingMediaPaths[0];
+    if (!path) return;
+
+    const key = openPathKey(path);
+    openingDroppedMediaRef.current = true;
+    activeMediaKeyRef.current = key;
+    setPendingMediaPaths((queued) => queued.slice(1));
+    void openInPlayer(path, { deferLibraryImport: true })
+      .then((info) => {
+        if (info.external || !playerStore.get().open) {
+          pendingMediaKeysRef.current.delete(key);
+          if (activeMediaKeyRef.current === key) activeMediaKeyRef.current = null;
+        }
+        setMediaImportPrompt({
+          path,
+          title: info.title || path.split(/[\\/]/).pop() || 'External media',
+        });
+      })
+      .catch((error: unknown) => {
+        pendingMediaKeysRef.current.delete(key);
+        activeMediaKeyRef.current = null;
+        setOpenPathErrors((current) => [
+          ...current,
+          `${path.split(/[\\/]/).pop() || path}: ${String(error)}`,
+        ].slice(-10));
+      })
+      .finally(() => {
+        openingDroppedMediaRef.current = false;
+        // A failed open leaves the player closed, so retrigger the queue for
+        // the next item. Successful opens remain paused until playback closes.
+        setPendingMediaPaths((queued) => [...queued]);
+      });
+  }, [mediaImportPrompt, pendingMediaPaths, playerOpen]);
+
+  const importPromptMedia = async () => {
+    if (!mediaImportPrompt || isImportingMedia) return;
+    setIsImportingMedia(true);
+    try {
+      await invoke('add_external_media', {
+        path: mediaImportPrompt.path,
+        title: mediaImportPrompt.title,
+      });
+      setMediaImportPrompt(null);
+    } catch (error: unknown) {
+      setMediaImportPrompt({ ...mediaImportPrompt, error: String(error) });
+    } finally {
+      setIsImportingMedia(false);
+    }
+  };
 
   useEffect(() => {
     if (settingsLoaded) {
@@ -339,21 +463,21 @@ export const App: React.FC = () => {
       fetchTorrents();
     }, 5000);
 
-    // Check for pending launch payload (file or protocol URI)
-    invoke<string[]>('get_pending_open_payloads')
-      .then((payloads) => {
-        if (payloads && payloads.length > 0) {
-          openAddTorrentWithSource(payloads[0]);
-        }
-      })
-      .catch(() => {});
-
     listen<string>('nebulae://open-uri', (event) => {
       if (event.payload) {
-        openAddTorrentWithSource(event.payload);
+        void dispatchOpenPaths([event.payload]);
       }
     })
-      .then((unlisten) => unlistenFns.push(unlisten))
+      .then((unlisten) => {
+        unlistenFns.push(unlisten);
+        // Drain only after the live listener is ready, so a second-instance or
+        // LaunchServices event cannot land in the gap before subscription.
+        invoke<string[]>('get_pending_open_payloads')
+          .then((payloads) => {
+            if (payloads?.length) void dispatchOpenPaths(payloads);
+          })
+          .catch(() => {});
+      })
       .catch(() => {});
 
     // Tray menu actions that open specific windows
@@ -448,22 +572,26 @@ export const App: React.FC = () => {
       .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
+    const onOpenPaths = (event: Event) => {
+      const paths = (event as CustomEvent<string[]>).detail;
+      if (paths?.length) void dispatchOpenPaths(paths);
+    };
+    window.addEventListener('nebulae:open-paths', onOpenPaths);
+
     listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
       setIsDragging(false);
       const paths = event.payload?.paths;
       if (paths && paths.length > 0) {
-        for (const filePath of paths) {
-          openAddTorrentWithSource(filePath);
-        }
+        void dispatchOpenPaths(paths);
       }
     })
       .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
-    listen<string>('nebulae://file-dropped', (event) => {
+    listen<string[]>('nebulae://paths-dropped', (event) => {
       setIsDragging(false);
-      if (event.payload) {
-        openAddTorrentWithSource(event.payload);
+      if (event.payload?.length) {
+        void dispatchOpenPaths(event.payload);
       }
     })
       .then((unlisten) => unlistenFns.push(unlisten))
@@ -526,9 +654,10 @@ export const App: React.FC = () => {
     return () => {
       clearInterval(torrentPollInterval);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('nebulae:open-paths', onOpenPaths);
       for (const un of unlistenFns) un();
     };
-  }, [loadSettings, fetchEngineMode, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, openAddTorrentWithSource]);
+  }, [loadSettings, fetchEngineMode, fetchTorrents, runDoctorTest, fetchVpnStatus, fetchTrackerProfile, dispatchOpenPaths]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -543,10 +672,27 @@ export const App: React.FC = () => {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      const source = (file as FileWithPath).path || file.name;
-      openAddTorrentWithSource(source);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    const results = await Promise.all(files.map(async (file) => {
+      const nativePath = (file as FileWithPath).path;
+      if (nativePath) return { source: nativePath, failed: null };
+      if (!/\.(torrent|adc)$/i.test(file.name)) {
+        return { source: file.name, failed: null };
+      }
+      try {
+        return { source: await readTorrentFileAsDataUrl(file), failed: null };
+      } catch {
+        return { source: null, failed: file.name };
+      }
+    }));
+    const sources = results.flatMap((result) => (result.source ? [result.source] : []));
+    const failedNames = results.flatMap((result) => (result.failed ? [result.failed] : []));
+    void dispatchOpenPaths(sources);
+    if (failedNames.length > 0) {
+      setOpenPathErrors((current) => [
+        ...current,
+        ...failedNames.map((name) => `Could not read dropped torrent file: ${name}`),
+      ].slice(-10));
     }
   };
 
@@ -593,8 +739,8 @@ export const App: React.FC = () => {
           <div className="p-4 rounded-full bg-[#e50914]/20 text-[#e50914] mb-3 animate-bounce">
             <FileUp className="w-12 h-12" />
           </div>
-          <h3 className="text-lg font-bold text-white mb-1">Drop Torrent to Add</h3>
-          <p className="text-xs text-[#a3a3a3] font-mono">.torrent or .adc file</p>
+          <h3 className="text-lg font-bold text-white mb-1">Drop Files to Open or Add</h3>
+          <p className="text-xs text-[#a3a3a3] font-mono">Media opens in the player; torrent files and magnet links enter the add queue.</p>
         </div>
       )}
 
@@ -669,6 +815,62 @@ export const App: React.FC = () => {
                 className="px-4 py-2 rounded-lg bg-[#e50914] hover:bg-[#f40612] text-xs text-white font-semibold shadow-sm transition ring-1 ring-white/20 disabled:opacity-50"
               >
                 {savingMediaMode ? 'Saving…' : 'Yes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaImportPrompt && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#463e31] bg-[#211f1c] p-5 shadow-2xl text-white">
+            <h3 className="text-sm font-bold">Add this media to your library?</h3>
+            <p className="mt-2 text-xs text-[#d4c4a8] break-words">{mediaImportPrompt.title}</p>
+            <p className="mt-2 text-[11px] text-[#a3a3a3] leading-relaxed">
+              Playback has started. Adding creates a local library entry only, it does not move or copy the media.
+              {pendingMediaPaths.length > 0 && ` ${pendingMediaPaths.length} more item${pendingMediaPaths.length === 1 ? '' : 's'} will open after this player closes.`}
+            </p>
+            {mediaImportPrompt.error && (
+              <p className="mt-3 text-xs text-red-300 break-words">{mediaImportPrompt.error}</p>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setMediaImportPrompt(null)}
+                disabled={isImportingMedia}
+                className="px-3 py-2 rounded-lg bg-[#303030] hover:bg-[#3b3b3b] text-xs text-white disabled:opacity-50"
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                onClick={() => void importPromptMedia()}
+                disabled={isImportingMedia}
+                className="px-3 py-2 rounded-lg bg-[#a68b5b] hover:bg-[#b99d6b] text-xs font-semibold text-black disabled:opacity-50"
+              >
+                {isImportingMedia ? 'Adding…' : 'Add to Library'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {openPathErrors.length > 0 && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#463e31] bg-[#211f1c] p-5 shadow-2xl text-white">
+            <h3 className="text-sm font-bold">Some dropped items could not be opened</h3>
+            <ul className="mt-3 space-y-1.5 text-xs text-[#d4c4a8]">
+              {openPathErrors.map((item, index) => (
+                <li key={`${item}-${index}`} className="break-words">{item}</li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setOpenPathErrors([])}
+                className="px-3 py-2 rounded-lg bg-[#a68b5b] hover:bg-[#b99d6b] text-xs font-semibold text-black"
+              >
+                Dismiss
               </button>
             </div>
           </div>

@@ -250,7 +250,7 @@ const PeeringSettingsPanel: React.FC<{
             { key: 'locality_enabled', label: 'Locality scoring' },
             { key: 'prefer_utp', label: 'Prefer µTP' },
             { key: 'require_encryption', label: 'Require encryption' },
-            { key: 'probe_rtt_enabled', label: 'RTT probing (opt-in)' },
+            { key: 'probe_rtt_enabled', label: 'RTT probing' },
           ] as { key: keyof PeeringSettings & string; label: string }[]
         ).map(({ key, label }) => {
           const val = draft[key as keyof PeeringSettings] as boolean;
@@ -282,7 +282,7 @@ const PeeringSettingsPanel: React.FC<{
       {/* RTT probe notice */}
       {draft.probe_rtt_enabled && (
         <p className="text-[10px] text-amber-400/80 font-sans">
-          RTT probing is enabled — the engine will make outbound TCP connections to every connected peer to measure latency. Disable this if you are concerned about privacy.
+          RTT probes make bounded outbound TCP connects to connected peers: at most 5 at once, once per peer per minute, with a 2-second timeout. Local peers are skipped, and probing pauses whenever an app-configured peer proxy, VPN mode, or kill switch cannot be honored. Turn this off to opt out.
         </p>
       )}
 

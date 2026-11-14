@@ -191,6 +191,12 @@ export const SettingsModal: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 3500);
   };
 
+  const associationLabel = (selected?: boolean | null) => {
+    if (!associationStatus) return 'Checking';
+    if (selected == null) return 'Default unknown';
+    return selected ? 'Nebulae selected' : 'Other / none selected';
+  };
+
   const handleTestServerConnection = async () => {
     setIsTestingServer(true);
     setServerTestResult(null);
@@ -569,7 +575,7 @@ export const SettingsModal: React.FC = () => {
                       className="px-2.5 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium transition flex items-center gap-1.5"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5 text-[#e50914]" />
-                      <span>{isRegistering ? 'Registering...' : 'Claim OS Defaults'}</span>
+                      <span>{isRegistering ? 'Registering...' : 'Register OS Handlers'}</span>
                     </button>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs font-mono">
@@ -579,7 +585,7 @@ export const SettingsModal: React.FC = () => {
                         <span className="text-white">.torrent</span>
                       </div>
                       <span className="text-[10px] text-[#a3a3a3]">
-                        {associationStatus?.torrent_files ? 'Registered' : 'Available'}
+                        {associationLabel(associationStatus?.torrent_files)}
                       </span>
                     </div>
                     <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
@@ -588,7 +594,7 @@ export const SettingsModal: React.FC = () => {
                         <span className="text-white">.adc</span>
                       </div>
                       <span className="text-[10px] text-[#a3a3a3]">
-                        {associationStatus?.adc_files ? 'Registered' : 'Available'}
+                        {associationLabel(associationStatus?.adc_files)}
                       </span>
                     </div>
                     <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
@@ -597,7 +603,7 @@ export const SettingsModal: React.FC = () => {
                         <span className="text-white">magnet:</span>
                       </div>
                       <span className="text-[10px] text-[#a3a3a3]">
-                        {associationStatus?.magnet_protocol ? 'Active' : 'Available'}
+                        {associationLabel(associationStatus?.magnet_protocol)}
                       </span>
                     </div>
                     <div className="p-2 rounded bg-[#1f1f1f] border border-[#333333] flex items-center justify-between">
@@ -606,10 +612,15 @@ export const SettingsModal: React.FC = () => {
                         <span className="text-white">adc:</span>
                       </div>
                       <span className="text-[10px] text-[#a3a3a3]">
-                        {associationStatus?.adc_protocol ? 'Active' : 'Available'}
+                        {associationLabel(associationStatus?.adc_protocol)}
                       </span>
                     </div>
                   </div>
+                  {associationStatus && (
+                    <p className="mt-2 text-[10px] text-[#737373] leading-relaxed">
+                      {associationStatus.message}
+                    </p>
+                  )}
                 </div>
               </div>
             )}

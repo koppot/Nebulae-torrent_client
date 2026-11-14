@@ -152,6 +152,112 @@ pub fn detect_disc_format(file_path: String) -> Result<Option<DiscStructureInfo>
     Ok(DiscDetector::inspect(path))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DroppedMediaKind {
+    Disc,
+    Video,
+    Unsupported,
+}
+
+fn child_path_case_insensitive(directory: &Path, name: &str) -> Option<PathBuf> {
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(name)
+            {
+                return Some(entry.path());
+            }
+        }
+    }
+    None
+}
+
+fn has_file_with_extension(directory: &Path, extension: &str) -> bool {
+    std::fs::read_dir(directory).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.path().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+        })
+    })
+}
+
+fn has_disc_layout(root: &Path) -> bool {
+    let bdmv = child_path_case_insensitive(root, "BDMV");
+    if let Some(bdmv) = bdmv {
+        let has_index =
+            child_path_case_insensitive(&bdmv, "index.bdmv").is_some_and(|path| path.is_file());
+        let has_playlist_and_stream = child_path_case_insensitive(&bdmv, "PLAYLIST")
+            .is_some_and(|path| path.is_dir() && has_file_with_extension(&path, "mpls"))
+            && child_path_case_insensitive(&bdmv, "STREAM")
+                .is_some_and(|path| path.is_dir() && has_file_with_extension(&path, "m2ts"));
+        if has_index || has_playlist_and_stream {
+            return true;
+        }
+    }
+    child_path_case_insensitive(root, "VIDEO_TS").is_some_and(|video_ts| {
+        child_path_case_insensitive(&video_ts, "VIDEO_TS.IFO").is_some_and(|path| path.is_file())
+    })
+}
+
+/// Classify a dropped/opened filesystem path without recursively scanning
+/// arbitrary folders. A loose `.ts` stream remains ordinary video; DVD and
+/// Blu-ray classification requires recognizable folder markers.
+#[tauri::command]
+pub fn classify_dropped_media_path(file_path: String) -> Result<DroppedMediaKind, String> {
+    let path = Path::new(&file_path);
+    if !path.exists() {
+        return Err(diagnose_media_path(&file_path).message);
+    }
+    if path.is_file() {
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        return Ok(match extension.as_str() {
+            "iso" | "img" => DroppedMediaKind::Disc,
+            "mkv" | "mp4" | "avi" | "ts" | "m2ts" | "mov" | "wmv" | "vob" | "mpg" | "mpeg"
+            | "webm" | "m4v" => DroppedMediaKind::Video,
+            _ => DroppedMediaKind::Unsupported,
+        });
+    }
+    if !path.is_dir() {
+        return Ok(DroppedMediaKind::Unsupported);
+    }
+
+    if has_disc_layout(path) {
+        return Ok(DroppedMediaKind::Disc);
+    }
+    let basename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if (basename.eq_ignore_ascii_case("BDMV") || basename.eq_ignore_ascii_case("VIDEO_TS"))
+        && path.parent().is_some_and(has_disc_layout)
+    {
+        return Ok(DroppedMediaKind::Disc);
+    }
+
+    // Support dropping a release root that contains one or more disc folders,
+    // while avoiding a recursive walk through arbitrary media directories.
+    if let Ok(entries) = std::fs::read_dir(path) {
+        if entries
+            .flatten()
+            .any(|entry| entry.path().is_dir() && has_disc_layout(&entry.path()))
+        {
+            return Ok(DroppedMediaKind::Disc);
+        }
+    }
+    Ok(DroppedMediaKind::Unsupported)
+}
+
 /// Every disc inside the release (multi-ISO torrents return one entry per
 /// disc, each classified by its own size) — powers the aggregated badge.
 #[tauri::command]
@@ -4131,6 +4237,51 @@ mod tests {
             ),
             r"C:\Users\administrator\Downloads\Banner of the Stars III OVA (2005) R2J"
         );
+    }
+
+    #[test]
+    fn dropped_media_classifier_requires_real_disc_markers() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "neb-drop-classifier-{}-{unique}",
+            std::process::id()
+        ));
+        let dvd = base.join("DVD").join("video_ts");
+        let bdmv = base.join("Blu-ray").join("BDMV");
+        let fake_bdmv = base.join("Empty BDMV").join("BDMV");
+        std::fs::create_dir_all(&dvd).unwrap();
+        std::fs::create_dir_all(bdmv.join("PLAYLIST")).unwrap();
+        std::fs::create_dir_all(bdmv.join("STREAM")).unwrap();
+        std::fs::create_dir_all(fake_bdmv.join("PLAYLIST")).unwrap();
+        std::fs::create_dir_all(fake_bdmv.join("STREAM")).unwrap();
+        let loose_ts = base.join("transport.ts");
+        std::fs::write(dvd.join("video_ts.ifo"), b"ifo").unwrap();
+        std::fs::write(bdmv.join("PLAYLIST").join("00001.mpls"), b"playlist").unwrap();
+        std::fs::write(bdmv.join("STREAM").join("00001.m2ts"), b"stream").unwrap();
+        std::fs::write(&loose_ts, b"stream").unwrap();
+
+        assert_eq!(
+            classify_dropped_media_path(base.join("DVD").to_string_lossy().into_owned()).unwrap(),
+            DroppedMediaKind::Disc
+        );
+        assert_eq!(
+            classify_dropped_media_path(base.join("Blu-ray").to_string_lossy().into_owned())
+                .unwrap(),
+            DroppedMediaKind::Disc
+        );
+        assert_eq!(
+            classify_dropped_media_path(base.join("Empty BDMV").to_string_lossy().into_owned())
+                .unwrap(),
+            DroppedMediaKind::Unsupported
+        );
+        assert_eq!(
+            classify_dropped_media_path(loose_ts.to_string_lossy().into_owned()).unwrap(),
+            DroppedMediaKind::Video
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

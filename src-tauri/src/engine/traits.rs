@@ -102,6 +102,21 @@ pub trait TorrentEngine: Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<crate::models::peering::PeerTelemetry>, String>;
+    /// Manual peer blocks are global IP blocks. Engines that cannot enforce
+    /// them must leave the capability unsupported rather than silently
+    /// persisting a UI-only preference.
+    fn peer_block_capability(&self) -> crate::models::peering::PeerBlockCapability {
+        crate::models::peering::PeerBlockCapability::Unsupported
+    }
+    /// Disconnect the selected peer before a global IP block is persisted.
+    fn disconnect_peer_for_block(
+        &self,
+        _torrent_id: &str,
+        _ip: &str,
+        _port: u16,
+    ) -> Result<(), String> {
+        Err("Manual peer blocking is not supported by this engine".to_string())
+    }
     fn check_port_open(&self) -> Option<bool> {
         None
     }

@@ -177,7 +177,6 @@ export default function PlayerOverlay() {
   // Single-click vs double-click disambiguation on the video surface.
   const clickTimerRef = useRef<number | null>(null);
   const clickSequenceRef = useRef(0);
-  const menuClickInFlightRef = useRef(false);
   const lastMenuMoveRef = useRef<number>(0);
   const lastMenuClickRef = useRef<number>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -549,8 +548,7 @@ export default function PlayerOverlay() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player.open]);
 
-  // Unified keyboard control. Mouse AND keyboard events over the video are
-  // captured by the native overlay NSView, which forwards key presses as
+  // Unified keyboard control. Native overlays forward input as
   // "player-native-key" events; when the webview itself has focus the same
   // handling runs from the window keydown listener. One handler covers
   // both: disc-menu navigation while the menu domain is active (poll.at_menu),
@@ -1116,7 +1114,7 @@ export default function PlayerOverlay() {
       // At the disc menu the button is PLAY: activate the highlighted menu
       // entry. Position restore (if a saved position exists) is handled by
       // the poll-based wasAtMenuRef/pendingResumeRef mechanism which fires
-      // for every input path — mouse, Enter, D-pad, and this overlay button.
+      // for every input path — mouse, keyboard, and this overlay button.
       invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
       return;
     }
@@ -1246,6 +1244,9 @@ export default function PlayerOverlay() {
   // click activates the currently highlighted menu entry instead.
   const onVideoMouseMove = (e: React.MouseEvent) => {
     if (!player.isDisc || !pollRef.current.at_menu) return;
+    // Windows receives native coordinates in embed_windows' HWND procedure;
+    // forwarding the WebView event as well would duplicate pointer movement.
+    if (isWindowsWebView) return;
     const now = Date.now();
     if (now - lastMenuMoveRef.current < 40) return; // ~25 fps throttle
     lastMenuMoveRef.current = now;
@@ -1266,7 +1267,6 @@ export default function PlayerOverlay() {
     const now = Date.now();
 
     // A WebView double-click is one selection, not a second activation.
-    // Windows forwards menu pointer input through this checked IPC path only.
     if (
       player.isDisc &&
       isWindowsWebView &&
@@ -1276,8 +1276,8 @@ export default function PlayerOverlay() {
       return;
     }
 
-    // Preserve the existing macOS/Linux menu path. Windows uses the native
-    // mouse-message command, which checks the live Rust at_menu state.
+    // Preserve the existing macOS/Linux menu path. Windows mouse input is
+    // forwarded directly from its native overlay window procedure.
     if (player.isDisc && !isWindowsWebView && pollRef.current.at_menu) {
       if (now - lastMenuClickRef.current < 350) return;
       lastMenuClickRef.current = now;
@@ -1288,30 +1288,11 @@ export default function PlayerOverlay() {
       return;
     }
 
-    const sequence = ++clickSequenceRef.current;
     if (player.isDisc && isWindowsWebView && pollRef.current.at_menu) {
-      menuClickInFlightRef.current = true;
-      // Rust checks the current at_menu flag rather than trusting this
-      // component's polled snapshot. This is the sole Windows menu-click
-      // delivery path, so repeated legitimate clicks are not time-deduplicated.
-      const rect = e.currentTarget.getBoundingClientRect();
-      const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
-      invoke<boolean>('player_menu_mouse_click', point)
-        .then((handled) => {
-          menuClickInFlightRef.current = false;
-          if (handled) lastMenuClickRef.current = Date.now();
-          if (sequence !== clickSequenceRef.current) return;
-          if (handled) {
-            return;
-          }
-          scheduleVideoPause(sequence);
-        })
-        .catch(() => {
-          menuClickInFlightRef.current = false;
-          scheduleVideoPause(sequence);
-        });
+      // The Windows HWND procedure forwarded the corresponding native click.
       return;
     }
+    const sequence = ++clickSequenceRef.current;
     scheduleVideoPause(sequence);
   };
   // Mouse wheel during a disc menu: up = previous selection, down = next
@@ -1331,9 +1312,7 @@ export default function PlayerOverlay() {
   const onVideoDoubleClick = () => {
     if (
       player.isDisc &&
-      (pollRef.current.at_menu ||
-        menuClickInFlightRef.current ||
-        Date.now() - lastMenuClickRef.current < 350)
+      (pollRef.current.at_menu || Date.now() - lastMenuClickRef.current < 350)
     ) {
       clickSequenceRef.current += 1;
       return;
@@ -1468,12 +1447,12 @@ export default function PlayerOverlay() {
             </button>
           )}
 
-          {/* Disc-menu D-pad. Mouse clicks on the menu itself are not
-              delivered to dvdnav in the embedded vout, so while the menu
-              domain is active these buttons (and the keyboard) navigate it.
-              Enter activates the highlighted entry on the first press. */}
+          {/* Keep explicit navigation controls available alongside mouse and keyboard input. */}
           {player.isDisc && poll.at_menu && (
-            <div className="shrink-0 flex items-center gap-0.5" title="Disc menu navigation — arrow keys work too, Enter selects">
+            <div
+              className="shrink-0 flex items-center gap-0.5"
+              title="Disc menu navigation — arrow keys work too, Enter selects"
+            >
               {([
                 ['◀', 3, 'Menu: left'],
                 ['▲', 1, 'Menu: up'],
@@ -1498,9 +1477,6 @@ export default function PlayerOverlay() {
               >
                 Select
               </button>
-              {/* (The old "Play All" pill was removed per owner: the regular
-                  Play button below starts the feature straight from the
-                  menu.) */}
             </div>
           )}
 

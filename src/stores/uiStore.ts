@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { ViewMode } from '../types';
+import { openPathKey } from '../utils/openPath';
 
-export type ManagerTab = 'general' | 'files' | 'trackers' | 'peers' | 'speed' | 'log';
+export type ManagerTab = 'general' | 'files' | 'trackers' | 'peers' | 'peer-history' | 'speed' | 'log';
 
 export type SettingsTab =
   | 'behavior'
@@ -32,6 +33,8 @@ interface UiState {
   managerTrackerFilter: string | null;
   searchQuery: string;
   initialAddTorrentSource: string | null;
+  activeAddTorrentSource: string | null;
+  queuedAddTorrentSources: string[];
   deleteModalTarget: { id: string; name: string } | null;
 
   setViewMode: (mode: ViewMode) => void;
@@ -54,8 +57,10 @@ interface UiState {
   setManagerTrackerFilter: (tracker: string | null) => void;
   setSearchQuery: (query: string) => void;
   setInitialAddTorrentSource: (source: string | null) => void;
+  completeAddTorrentSource: () => void;
   setDeleteModalTarget: (target: { id: string; name: string } | null) => void;
   openAddTorrentWithSource: (source: string) => void;
+  openAddTorrentWithSources: (sources: string[]) => void;
   addTorrentRejection: string | null;
   setAddTorrentRejection: (message: string | null) => void;
 }
@@ -70,7 +75,9 @@ const getSavedViewMode = (): ViewMode => {
   return 'manager';
 };
 
-export const useUiStore = create<UiState>((set) => ({
+const recentlyOpenedSources = new Map<string, number>();
+
+export const useUiStore = create<UiState>((set, get) => ({
   viewMode: getSavedViewMode(),
   theme: 'dark',
   showSettings: false,
@@ -88,6 +95,8 @@ export const useUiStore = create<UiState>((set) => ({
   managerTrackerFilter: null,
   searchQuery: '',
   initialAddTorrentSource: null,
+  activeAddTorrentSource: null,
+  queuedAddTorrentSources: [],
   deleteModalTarget: null,
   addTorrentRejection: null,
 
@@ -111,7 +120,28 @@ export const useUiStore = create<UiState>((set) => ({
   setSettingsTab: (settingsTab) => set({ settingsTab }),
   openSettings: (tab) => set({ showSettings: true, ...(tab ? { settingsTab: tab } : {}) }),
   setShowHelp: (showHelp) => set({ showHelp }),
-  setShowAddTorrent: (showAddTorrent) => set({ showAddTorrent }),
+  setShowAddTorrent: (showAddTorrent) =>
+    set((state) => {
+      if (!showAddTorrent) {
+        return {
+          showAddTorrent: false,
+          activeAddTorrentSource: null,
+          initialAddTorrentSource: null,
+          queuedAddTorrentSources: [],
+          addTorrentRejection: null,
+        };
+      }
+      if (!state.activeAddTorrentSource && state.queuedAddTorrentSources.length > 0) {
+        const [next, ...remaining] = state.queuedAddTorrentSources;
+        return {
+          showAddTorrent: true,
+          activeAddTorrentSource: next,
+          initialAddTorrentSource: next,
+          queuedAddTorrentSources: remaining,
+        };
+      }
+      return { showAddTorrent: true };
+    }),
   setShowCreateTorrent: (showCreateTorrent) => set({ showCreateTorrent }),
   setShowConnectivityDoctor: (showConnectivityDoctor) => set({ showConnectivityDoctor }),
   setShowVpnManager: (showVpnManager) => set({ showVpnManager }),
@@ -123,31 +153,85 @@ export const useUiStore = create<UiState>((set) => ({
   setManagerTrackerFilter: (managerTrackerFilter) => set({ managerTrackerFilter }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setInitialAddTorrentSource: (initialAddTorrentSource) => set({ initialAddTorrentSource }),
+  completeAddTorrentSource: () =>
+    set((state) => {
+      const [next, ...remaining] = state.queuedAddTorrentSources;
+      if (next) {
+        return {
+          showAddTorrent: true,
+          activeAddTorrentSource: next,
+          initialAddTorrentSource: next,
+          queuedAddTorrentSources: remaining,
+        };
+      }
+      return {
+        showAddTorrent: false,
+        activeAddTorrentSource: null,
+        initialAddTorrentSource: null,
+      };
+    }),
   setDeleteModalTarget: (deleteModalTarget) => set({ deleteModalTarget }),
   setAddTorrentRejection: (addTorrentRejection) => set({ addTorrentRejection }),
   // Single choke point for every "open this as a torrent" path (Finder open,
   // drag & drop, deep links). Only .torrent / .adc files and URL sources are
   // accepted; anything else opens the Add window with a clear rejection.
-  openAddTorrentWithSource: (source: string) => {
-    const trimmed = source.trim();
-    const isUrlSource =
-      trimmed.startsWith('magnet:') ||
-      trimmed.startsWith('http://') ||
-      trimmed.startsWith('https://') ||
-      trimmed.startsWith('base64:') ||
-      trimmed.startsWith('data:');
-    const fileName = trimmed.split('/').pop()?.split('\\').pop() || trimmed;
-    if (!isUrlSource && !/\.(torrent|adc)$/i.test(fileName)) {
-      set({
-        addTorrentRejection: `only .torrent or .adc files are accepted ('${fileName}' was ignored).`,
-        showAddTorrent: true,
-      });
-      return;
+  openAddTorrentWithSource: (source) => get().openAddTorrentWithSources([source]),
+  openAddTorrentWithSources: (sources) => {
+    const accepted: string[] = [];
+    const rejected: string[] = [];
+    const now = Date.now();
+    const queued = get().queuedAddTorrentSources;
+    const alreadyQueued = new Set([
+      ...(get().activeAddTorrentSource ? [openPathKey(get().activeAddTorrentSource!)] : []),
+      ...queued.map((item) => openPathKey(item)),
+    ]);
+
+    for (const source of sources) {
+      const trimmed = source.trim();
+      if (!trimmed) continue;
+      const isUrlSource = /^(magnet|adc|https?|base64|data):/i.test(trimmed);
+      const fileName = trimmed.split('/').pop()?.split('\\').pop() || trimmed;
+      if (!isUrlSource && !/\.(torrent|adc)$/i.test(fileName)) {
+        rejected.push(fileName);
+        continue;
+      }
+      const sourceKey = isUrlSource ? trimmed : openPathKey(trimmed);
+      if (alreadyQueued.has(sourceKey)) continue;
+      const lastOpened = recentlyOpenedSources.get(sourceKey) ?? 0;
+      if (now - lastOpened < 1000) continue;
+      alreadyQueued.add(sourceKey);
+      recentlyOpenedSources.set(sourceKey, now);
+      accepted.push(trimmed);
     }
-    set({
-      addTorrentRejection: null,
-      initialAddTorrentSource: trimmed,
-      showAddTorrent: true,
+
+    for (const [sourceKey, timestamp] of recentlyOpenedSources) {
+      if (now - timestamp >= 5000) recentlyOpenedSources.delete(sourceKey);
+    }
+
+    set((state) => {
+      let nextQueue = [...state.queuedAddTorrentSources, ...accepted];
+      let activeAddTorrentSource = state.activeAddTorrentSource;
+      let initialAddTorrentSource = state.initialAddTorrentSource;
+      let showAddTorrent = state.showAddTorrent;
+      if (!activeAddTorrentSource && nextQueue.length > 0) {
+        activeAddTorrentSource = nextQueue[0];
+        initialAddTorrentSource = activeAddTorrentSource;
+        nextQueue = nextQueue.slice(1);
+        showAddTorrent = true;
+      } else if (rejected.length > 0) {
+        showAddTorrent = true;
+      }
+      return {
+        showAddTorrent,
+        activeAddTorrentSource,
+        initialAddTorrentSource,
+        queuedAddTorrentSources: nextQueue,
+        addTorrentRejection: rejected.length
+          ? `Unsupported drop item${rejected.length === 1 ? '' : 's'}: ${rejected.join(', ')}. Only .torrent/.adc files and magnet or HTTP(S) links can be added here.`
+          : accepted.length > 0
+            ? null
+            : state.addTorrentRejection,
+      };
     });
   },
 }));

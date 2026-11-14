@@ -173,13 +173,14 @@ pub fn inspect_torrent_file(
     // 2. If source string is passed
     if let Some(src) = source {
         let trimmed = src.trim();
+        let lower = trimmed.to_ascii_lowercase();
 
         // Base64 encoded torrent?
-        let b64_candidate = if trimmed.starts_with("data:") {
-            trimmed.find(";base64,").map(|idx| &trimmed[idx + 8..])
-        } else if let Some(stripped) = trimmed.strip_prefix("base64:") {
-            Some(stripped)
-        } else if !trimmed.starts_with("magnet:")
+        let b64_candidate = if lower.starts_with("data:") {
+            lower.find(";base64,").map(|idx| &trimmed[idx + 8..])
+        } else if lower.starts_with("base64:") {
+            Some(&trimmed["base64:".len()..])
+        } else if !lower.starts_with("magnet:")
             && !trimmed.contains('/')
             && !trimmed.contains('\\')
             && trimmed.len() > 100
@@ -210,7 +211,7 @@ pub fn inspect_torrent_file(
         }
 
         // Magnet link?
-        if trimmed.starts_with("magnet:") {
+        if lower.starts_with("magnet:") {
             let parsed_name = trimmed
                 .split("&dn=")
                 .nth(1)
@@ -1683,6 +1684,17 @@ mod tests {
         assert_eq!(res.total_bytes, 1048576);
         assert!(res.is_private);
         assert_eq!(res.metainfo_bytes, Some(bencode_bytes));
+    }
+
+    #[test]
+    fn inspect_magnet_scheme_is_case_insensitive() {
+        let result = inspect_torrent_file(
+            Some("MAGNET:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Sample".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.info_hash, "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(result.name, "Sample");
     }
 }
 

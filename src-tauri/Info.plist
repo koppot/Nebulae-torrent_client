@@ -18,8 +18,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>org.bittorrent.torrent</string>
-				<string>com.bittorrent.torrent</string>
-				<string>public.data</string>
 			</array>
 		</dict>
 		<dict>
@@ -36,7 +34,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>org.asiandvdclub.adc</string>
-				<string>public.data</string>
 			</array>
 		</dict>
 	</array>
@@ -61,6 +58,29 @@
 			<array>
 				<string>adc</string>
 			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.item</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>BitTorrent Metainfo File</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.bittorrent.torrent</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>torrent</string>
+				</array>
+				<key>public.mime-type</key>
+				<string>application/x-bittorrent</string>
+			</dict>
 		</dict>
 	</array>
 	<key>UTExportedTypeDeclarations</key>

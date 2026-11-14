@@ -125,7 +125,13 @@ let isOpening = false;
  */
 export async function openInPlayer(
   filePath: string,
-  opts?: { resume?: boolean; seekTo?: number; displayTitle?: string; year?: number | string | null },
+  opts?: {
+    resume?: boolean;
+    seekTo?: number;
+    displayTitle?: string;
+    year?: number | string | null;
+    deferLibraryImport?: boolean;
+  },
 ): Promise<PlayerOpenInfo> {
   if (isOpening) {
     console.warn('[playerStore] openInPlayer ignored: already opening');
@@ -200,7 +206,7 @@ export async function openInPlayer(
           }
           return false;
         });
-      if (!inDownload && !opts?.displayTitle) {
+      if (!inDownload && !opts?.displayTitle && !opts?.deferLibraryImport) {
         invoke('add_external_media', {
           path: info.resolved_path,
           title: info.title,

@@ -31,6 +31,20 @@ export interface PeerTelemetry {
   total_uploaded_bytes: number;
 }
 
+/** Local per-torrent endpoint history, intentionally separate from ADC member data. */
+export interface PeerHistoryEntry {
+  peer_key: string;
+  ip: string;
+  port: number;
+  first_seen_epoch_ms: number;
+  last_seen_epoch_ms: number;
+  downloaded_delta_bytes: number;
+  uploaded_delta_bytes: number;
+  counter_resets: number;
+  was_blocked: boolean;
+  currently_blocked: boolean;
+}
+
 export interface PeeringSettings {
   mode: PeeringMode;
   /** Mirrors Rust PeeringSettings::locality_enabled */
@@ -43,10 +57,7 @@ export interface PeeringSettings {
   prefer_utp: boolean;
   /** Mirrors Rust PeeringSettings::require_encryption */
   require_encryption: boolean;
-  /**
-   * Opt-in TCP RTT probing. Default false — enabling makes outbound TCP
-   * connections to every connected peer (privacy consideration).
-   */
+  /** Bounded outbound TCP RTT probes; false preserves an explicit opt-out. */
   probe_rtt_enabled: boolean;
 }
 
