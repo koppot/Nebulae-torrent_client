@@ -2,8 +2,8 @@
  * Client-side cache for adc_swarm_members results.
  *
  * TTL: 65 seconds (just over the 60-second server-side rate limit).
- * Capacity: 50 entries; oldest evicted when exceeded.
- * Key: torrent info_hash (40-char hex, lowercase).
+ * Capacity: 50 entries; first inserted is evicted when exceeded.
+ * Key: caller-supplied lookup identity (torrent, peers, and credential revision).
  */
 
 import type { SwarmMembersResult } from '../types';
@@ -16,7 +16,7 @@ interface CacheEntry {
   result: SwarmMembersResult;
 }
 
-// Map preserves insertion order for simple LRU-style eviction.
+// Map preserves insertion order for bounded FIFO eviction.
 const cache = new Map<string, CacheEntry>();
 
 export function getCachedMembers(infoHash: string): SwarmMembersResult | null {

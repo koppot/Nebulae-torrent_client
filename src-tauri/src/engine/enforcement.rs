@@ -92,7 +92,7 @@ async fn run_poller(
         encrypted_passkey
     );
 
-    info!("[enforcement] poller started — feed: {}", feed_url);
+    info!("[enforcement] poller started");
 
     let mut is_initial = true;
     loop {
@@ -112,8 +112,10 @@ async fn run_poller(
 
         // ── 1. Fetch blocked IP list from tracker ────────────────────────────
         let blocked_ips: HashSet<String> = match http.get(&feed_url).send().await {
-            Err(e) => {
-                warn!("[enforcement] tracker fetch error (skipping cycle): {e}");
+            Err(_) => {
+                // The request path contains the tracker passkey; do not log
+                // reqwest errors, which may include the full URL.
+                warn!("[enforcement] tracker fetch error (skipping cycle)");
                 continue;
             }
             Ok(resp) => {
@@ -135,8 +137,8 @@ async fn run_poller(
                         );
                         ips
                     }
-                    Err(e) => {
-                        warn!("[enforcement] failed to parse tracker response: {e}");
+                    Err(_) => {
+                        warn!("[enforcement] failed to parse tracker response");
                         continue;
                     }
                 }

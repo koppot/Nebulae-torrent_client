@@ -1,6 +1,14 @@
 export interface AdcTrackerProfile {
   username: string;
   masked_passkey: string;
+  account_configured: boolean;
+  credential_status:
+    | 'not_linked'
+    | 'available'
+    | 'credential_required'
+    | 'credential_access_denied'
+    | 'credential_storage_unavailable'
+    | 'credential_storage_error';
   is_linked: boolean;
   last_announce_time?: number;
   next_announce_countdown_sec?: number;

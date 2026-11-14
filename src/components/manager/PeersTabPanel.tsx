@@ -8,6 +8,8 @@ import {
 } from '../../types';
 import { formatSpeed } from '../../lib/formatters';
 import { getCachedMembers, setCachedMembers } from '../../utils/swarmMembersCache';
+import { useTrackerStore } from '../../stores/trackerStore';
+import { useUiStore } from '../../stores/uiStore';
 
 // ── Locality chip ────────────────────────────────────────────────────────────
 
@@ -422,14 +424,18 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   const [sortKey, setSortKey] = useState<SortKey>('sustained_dl_bps');
   const [sortAsc, setSortAsc] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [adcStatus, setAdcStatus] = useState<string>('idle');
+  const [adcRetry, setAdcRetry] = useState(0);
+  const credentialRevision = useTrackerStore((s) => s.credentialRevision);
+  const setShowTrackerDashboard = useUiStore((s) => s.setShowTrackerDashboard);
 
   // ── ADC member state ───────────────────────────────────────────────────────
   // Map<"ip:port", SwarmMember> for fast per-row lookup.
   const [adcMap, setAdcMap] = useState<Map<string, SwarmMember>>(new Map());
-  // null = unknown (not yet tried), false = not supported / degraded, true = supported
-  const [adcSupported, setAdcSupported] = useState<boolean | null>(null);
   // Track which info_hash the current adcMap was fetched for.
-  const lastFetchedHash = useRef<string | null>(null);
+  const lastFetchedKey = useRef<string | null>(null);
+  const lastIdentity = useRef<string | null>(null);
+  const requestId = useRef(0);
 
   const hasAdcTracker = useCallback(
     () => trackers.some((tr) => isAdcTracker(tr.url)),
@@ -437,49 +443,69 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   );
 
   useEffect(() => {
-    // Skip if: no info_hash, no ADC tracker, or same hash already fetched.
-    if (!infoHash || !hasAdcTracker() || peers.length === 0) return;
-    if (lastFetchedHash.current === infoHash) return;
+    const identity = `${infoHash ?? ''}:${credentialRevision}`;
+    if (lastIdentity.current !== identity) {
+      lastIdentity.current = identity;
+      setAdcMap(new Map());
+      setAdcStatus('idle');
+      lastFetchedKey.current = null;
+      requestId.current += 1;
+    }
+
+    if (!infoHash || !hasAdcTracker()) {
+      setAdcStatus('idle');
+      setAdcMap(new Map());
+      lastFetchedKey.current = null;
+      requestId.current += 1;
+      return;
+    }
+    if (peers.length === 0) {
+      setAdcStatus('waiting_for_peers');
+      lastFetchedKey.current = null;
+      requestId.current += 1;
+      return;
+    }
+
+    const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
+    const peerKey = peerAddrs.map((p) => `${p.ip}:${p.port}`).sort().join(',');
+    const cacheKey = `${infoHash}:${credentialRevision}:${peerKey}`;
+    const fetchKey = `${cacheKey}:${adcRetry}`;
+    if (lastFetchedKey.current === fetchKey) return;
 
     // Check cache first.
-    const cached = getCachedMembers(infoHash);
+    const cached = getCachedMembers(cacheKey);
     if (cached) {
-      lastFetchedHash.current = infoHash;
-      setAdcSupported(cached.supported);
+      lastFetchedKey.current = fetchKey;
+      setAdcStatus(cached.status);
       const m = new Map<string, SwarmMember>();
       for (const member of cached.matches) m.set(`${member.ip}:${member.port}`, member);
       setAdcMap(m);
       return;
     }
 
-    // Build peer list from current peers.
-    const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
-
-    lastFetchedHash.current = infoHash;
+    lastFetchedKey.current = fetchKey;
+    setAdcStatus('loading');
+    const request = ++requestId.current;
 
     invoke<SwarmMembersResult>('adc_swarm_members', {
       info_hash: infoHash,
       peers: peerAddrs,
     })
       .then((result) => {
-        setCachedMembers(infoHash, result);
-        setAdcSupported(result.supported);
+        if (request !== requestId.current) return;
+        if (['matched', 'no_matching_peers', 'endpoint_unsupported'].includes(result.status)) {
+          setCachedMembers(cacheKey, result);
+        }
+        setAdcStatus(result.status);
         const m = new Map<string, SwarmMember>();
         for (const member of result.matches) m.set(`${member.ip}:${member.port}`, member);
         setAdcMap(m);
       })
       .catch(() => {
-        // Network / IPC failure — degrade silently.
-        setAdcSupported(false);
+        if (request !== requestId.current) return;
+        setAdcStatus('ipc_error');
       });
-  }, [infoHash, peers, hasAdcTracker]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Reset ADC state when the torrent changes.
-  useEffect(() => {
-    setAdcMap(new Map());
-    setAdcSupported(null);
-    lastFetchedHash.current = null;
-  }, [infoHash]);
+  }, [infoHash, peers, hasAdcTracker, credentialRevision, adcRetry]);
 
   // Load settings once on mount if not yet loaded
   useEffect(() => {
@@ -499,11 +525,41 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
 
   const sorted = useMemo(() => sortPeers(peers, sortKey, sortAsc), [peers, sortKey, sortAsc]);
 
-  // Show ADC column only when: torrent has an ADC tracker AND lookup was at
-  // least attempted (adcSupported !== null) OR peers are present and ADC tracker found.
-  const showAdcCol = hasAdcTracker() && (adcSupported !== false || adcMap.size > 0);
+  // Keep the column visible for ADC torrents even when credentials need
+  // attention, so a failed lookup never silently removes the feature.
+  const showAdcCol = hasAdcTracker();
   // colSpan must account for the extra ADC column when shown.
   const colCount = showAdcCol ? 10 : 9;
+  const adcNotice = (() => {
+    switch (adcStatus) {
+      case 'credential_required':
+      case 'not_linked':
+        return 'ADC credentials are required to identify swarm members.';
+      case 'credential_access_denied':
+        return 'Keychain access needs authorization. Unlock or relink your ADC account.';
+      case 'credential_storage_unavailable':
+      case 'credential_storage_error':
+        return 'The secure credential store is unavailable.';
+      case 'authentication_failed':
+        return 'ADC rejected the stored credential. Relink your account.';
+      case 'no_matching_peers':
+        return 'No connected peers matched an ADC member.';
+      case 'endpoint_unsupported':
+        return 'The ADC peer-information endpoint is unavailable.';
+      case 'rate_limited':
+        return 'ADC is rate limiting peer lookups. Retry later.';
+      case 'network_error':
+      case 'ipc_error':
+        return 'Could not reach the ADC peer-information service.';
+      case 'parse_error':
+      case 'http_error':
+        return 'ADC returned an unexpected peer-information response.';
+      case 'invalid_info_hash':
+        return 'The selected torrent has an invalid info hash.';
+      default:
+        return null;
+    }
+  })();
 
   return (
     <div className="flex flex-col gap-2 h-full">
@@ -535,6 +591,31 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
       {showSettings && settings && (
         <div className="p-3 rounded bg-[#1a1a1a] border border-[#2a2a2a]">
           <PeeringSettingsPanel settings={settings} onSave={saveSettings} />
+        </div>
+      )}
+
+      {showAdcCol && adcNotice && adcStatus !== 'loading' && (
+        <div className="flex items-center justify-between gap-3 px-2.5 py-1.5 rounded border border-[#333333] bg-[#1a1a1a] text-[11px] text-[#a3a3a3]">
+          <span>{adcNotice}</span>
+          {['credential_required', 'not_linked', 'credential_access_denied', 'credential_storage_unavailable', 'credential_storage_error', 'authentication_failed'].includes(adcStatus) ? (
+            <button
+              type="button"
+              onClick={() => setShowTrackerDashboard(true)}
+              className="shrink-0 text-[#e50914] hover:underline"
+            >
+              Open Tracker settings
+            </button>
+          ) : (
+            ['network_error', 'ipc_error', 'rate_limited'].includes(adcStatus) && (
+              <button
+                type="button"
+                onClick={() => setAdcRetry((value) => value + 1)}
+                className="shrink-0 text-[#e50914] hover:underline"
+              >
+                Retry
+              </button>
+            )
+          )}
         </div>
       )}
 

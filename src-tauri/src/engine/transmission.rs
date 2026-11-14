@@ -1820,44 +1820,57 @@ impl TransmissionTorrentEngine {
         let peer_ema_cache: Arc<Mutex<HashMap<String, crate::models::peering::PeerEmaState>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let is_linked = db
-            .get_setting("adc_linked")
-            .unwrap_or(None)
-            .map(|v| v == "true")
-            .unwrap_or(false);
+        // Credential reads can block in OS security APIs even when interaction
+        // is disabled. Never make engine startup wait for the Keychain.
+        let enforcement_db = Arc::clone(&db);
+        let enforcement_rpc = Arc::clone(&rpc_client);
+        if let Err(error) = std::thread::Builder::new()
+            .name("adc-enforcement-credential".to_string())
+            .spawn(move || {
+                let is_linked = enforcement_db
+                    .get_setting("adc_linked")
+                    .unwrap_or(None)
+                    .map(|v| v == "true")
+                    .unwrap_or(false);
 
-        if is_linked {
-            #[cfg(target_os = "macos")]
-            let passkey_opt = get_secret(&passkey_secret_target())
-                .ok()
-                .filter(|p| !p.trim().is_empty());
-
-            #[cfg(not(target_os = "macos"))]
-            let passkey_opt = get_secret(&passkey_secret_target())
-                .ok()
-                .filter(|p| !p.trim().is_empty())
-                .or_else(|| {
-                    db.get_setting("adc_passkey")
-                        .ok()
-                        .flatten()
-                        .filter(|p| !p.trim().is_empty())
-                });
-
-            match passkey_opt {
-                Some(passkey) => {
-                    crate::engine::enforcement::spawn(
-                        "https://asiandvdclub.org".to_string(),
-                        passkey,
-                        Arc::clone(&rpc_client),
-                    );
-                    info!("[enforcement] tracker enforcement poller spawned");
+                if !is_linked {
+                    info!("[enforcement] ADC account not linked — enforcement poller not started");
+                    return;
                 }
-                None => {
-                    info!("[enforcement] passkey empty — enforcement poller not started (link your ADC account)");
+
+                #[cfg(target_os = "macos")]
+                let passkey_opt = get_secret(&passkey_secret_target())
+                    .ok()
+                    .filter(|p| !p.trim().is_empty());
+
+                #[cfg(not(target_os = "macos"))]
+                let passkey_opt = get_secret(&passkey_secret_target())
+                    .ok()
+                    .filter(|p| !p.trim().is_empty())
+                    .or_else(|| {
+                        enforcement_db
+                            .get_setting("adc_passkey")
+                            .ok()
+                            .flatten()
+                            .filter(|p| !p.trim().is_empty())
+                    });
+
+                match passkey_opt {
+                    Some(passkey) => {
+                        crate::engine::enforcement::spawn(
+                            "https://asiandvdclub.org".to_string(),
+                            passkey,
+                            enforcement_rpc,
+                        );
+                        info!("[enforcement] tracker enforcement poller spawned");
+                    }
+                    None => {
+                        info!("[enforcement] passkey unavailable — enforcement poller not started (link or unlock your ADC account)");
+                    }
                 }
-            }
-        } else {
-            info!("[enforcement] ADC account not linked — enforcement poller not started");
+            })
+        {
+            warn!("[enforcement] could not start credential lookup: {error}");
         }
 
         // 10. Load GeoLite2 resolver first so it can be passed to the eviction

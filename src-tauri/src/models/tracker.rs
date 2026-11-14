@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 pub struct AdcTrackerProfile {
     pub username: String,
     pub masked_passkey: String,
+    /// Whether `adc_linked` is configured in application settings.
+    pub account_configured: bool,
+    /// `is_linked` is true only when the configured credential is available.
     pub is_linked: bool,
+    pub credential_status: String,
     pub last_announce_time: Option<i64>,
     pub next_announce_countdown_sec: Option<u32>,
     pub announce_status: String,

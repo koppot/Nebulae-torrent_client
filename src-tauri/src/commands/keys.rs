@@ -9,13 +9,13 @@ pub struct StoreTraktClientIdRequest {
 
 #[tauri::command]
 pub fn store_trakt_client_id(client_id: String) -> Result<(), String> {
-    store_secret(&trakt_client_id_target(), &client_id)
+    store_secret(&trakt_client_id_target(), &client_id).map_err(|error| error.to_string())
 }
 
 /// Retrieve the Trakt client ID from the OS keychain
 #[tauri::command]
 pub fn get_trakt_client_id() -> Result<Option<String>, String> {
-    get_secret(&trakt_client_id_target()).map(Some).or(Ok(None))
+    Ok(get_secret(&trakt_client_id_target()).ok())
 }
 
 /// Test Trakt API connection with the stored Client ID

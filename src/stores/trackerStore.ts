@@ -7,10 +7,13 @@ interface TrackerState {
   seedTimeRecords: SeedTimeRecord[];
   isLoading: boolean;
   isSyncing: boolean;
+  credentialRevision: number;
   fetchProfile: () => Promise<void>;
   fetchSeedTimeRecords: () => Promise<void>;
   linkAccount: (username: string, passkey: string) => Promise<AdcTrackerProfile>;
+  unlockCredential: () => Promise<AdcTrackerProfile>;
   unlinkAccount: () => Promise<void>;
+  markCredentialChanged: () => void;
   syncStats: () => Promise<void>;
   calculateProjection: (uploaded: number, downloaded: number, additionalDownload: number) => Promise<number>;
 }
@@ -20,6 +23,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
   seedTimeRecords: [],
   isLoading: false,
   isSyncing: false,
+  credentialRevision: 0,
 
   fetchProfile: async () => {
     try {
@@ -30,7 +34,9 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
         profile: {
           username: '',
           masked_passkey: '',
+          account_configured: false,
           is_linked: false,
+          credential_status: 'not_linked',
           announce_status: 'Unable to reach client database',
           ratio: 1.0,
           uploaded_bytes: 0,
@@ -56,7 +62,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
 
   linkAccount: async (username: string, passkey: string) => {
     const res = await invoke<AdcTrackerProfile>('link_adc_account', { username, passkey });
-    set({ profile: res });
+    set((state) => ({ profile: res, credentialRevision: state.credentialRevision + 1 }));
     await get().fetchSeedTimeRecords();
     // Trigger a live stats fetch shortly after linking so the panel shows real
     // numbers without waiting for the background 30-minute poll cycle.
@@ -64,10 +70,20 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
     return res;
   },
 
+  unlockCredential: async () => {
+    const res = await invoke<AdcTrackerProfile>('unlock_adc_credential');
+    set((state) => ({ profile: res, credentialRevision: state.credentialRevision + 1 }));
+    return res;
+  },
+
   unlinkAccount: async () => {
     await invoke('unlink_adc_account');
     await get().fetchProfile();
+    get().markCredentialChanged();
   },
+
+  markCredentialChanged: () =>
+    set((state) => ({ credentialRevision: state.credentialRevision + 1 })),
 
   syncStats: async () => {
     set({ isSyncing: true });

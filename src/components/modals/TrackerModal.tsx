@@ -7,6 +7,11 @@ import {
   CheckCircle2, X, RefreshCw, Eye, EyeOff, Download,
 } from 'lucide-react';
 import { formatBytes } from '../../lib/formatters';
+import {
+  canUnlockTrackerCredential,
+  getTrackerCredentialMessage,
+  getTrackerCredentialView,
+} from '../../lib/adcCredentialState';
 
 /** Which sub-form is active when the account is not yet linked. */
 type LinkMode = 'import' | 'manual';
@@ -20,8 +25,10 @@ export const TrackerModal: React.FC = () => {
     fetchProfile,
     fetchSeedTimeRecords,
     linkAccount,
+    unlockCredential,
     unlinkAccount,
     syncStats,
+    markCredentialChanged,
   } = useTrackerStore();
 
   const [linkMode, setLinkMode]       = useState<LinkMode>('import');
@@ -29,6 +36,9 @@ export const TrackerModal: React.FC = () => {
   const [passwordInput, setPasswordInput] = useState('');
   const [passkeyInput, setPasskeyInput]   = useState('');
   const [isLinking, setIsLinking]         = useState(false);
+  const [isUnlocking, setIsUnlocking]     = useState(false);
+  const [isUnlinking, setIsUnlinking]     = useState(false);
+  const [isRelinking, setIsRelinking]     = useState(false);
   const [linkError, setLinkError]         = useState<string | null>(null);
   const [passkeyRevealed, setPasskeyRevealed] = useState(false);
 
@@ -47,6 +57,7 @@ export const TrackerModal: React.FC = () => {
       setPasswordInput('');
       setPasskeyInput('');
       setLinkMode('import');
+      setIsRelinking(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTrackerDashboard]);
@@ -67,8 +78,10 @@ export const TrackerModal: React.FC = () => {
         username: usernameInput.trim(),
         password: passwordInput,
       });
+      markCredentialChanged();
       // Re-fetch the profile so the store reflects the newly-linked state.
       await fetchProfile();
+      setIsRelinking(false);
       setUsernameInput('');
       setPasswordInput('');
     } catch (err: unknown) {
@@ -87,6 +100,7 @@ export const TrackerModal: React.FC = () => {
     setLinkError(null);
     try {
       await linkAccount(usernameInput, passkeyInput);
+      setIsRelinking(false);
       setUsernameInput('');
       setPasskeyInput('');
     } catch (err: unknown) {
@@ -95,6 +109,35 @@ export const TrackerModal: React.FC = () => {
       setIsLinking(false);
     }
   };
+
+  const handleUnlock = async () => {
+    setIsUnlocking(true);
+    setLinkError(null);
+    try {
+      await unlockCredential();
+    } catch (err: unknown) {
+      setLinkError(typeof err === 'string' ? err : 'Keychain access could not be restored.');
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
+
+  const handleUnlink = async () => {
+    setIsUnlinking(true);
+    setLinkError(null);
+    try {
+      await unlinkAccount();
+    } catch (err: unknown) {
+      setLinkError(typeof err === 'string' ? err : 'Could not unlink the ADC account.');
+    } finally {
+      setIsUnlinking(false);
+    }
+  };
+
+  const trackerView = getTrackerCredentialView(profile, isRelinking);
+  const credentialMessage = getTrackerCredentialMessage(
+    profile?.credential_status ?? 'not_linked',
+  );
 
   const passkeyDisplay = profile?.masked_passkey ?? '—';
 
@@ -117,7 +160,7 @@ export const TrackerModal: React.FC = () => {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-          {!profile?.is_linked ? (
+          {trackerView === 'link' ? (
             /* Unlinked: two-tab form — Import from ADC (default) or manual passkey entry */
             <div className="p-5 rounded-lg border border-[#333333] bg-[#1f1f1f] space-y-4">
               <div className="text-center max-w-sm mx-auto space-y-1">
@@ -160,6 +203,16 @@ export const TrackerModal: React.FC = () => {
                 <div className="max-w-sm mx-auto px-3 py-2 rounded border border-[#e50914]/50 bg-[#e50914]/10 text-[11px] text-[#ff6b6b]">
                   {linkError}
                 </div>
+              )}
+              {isRelinking && (
+                <button
+                  type="button"
+                  onClick={() => { setIsRelinking(false); setLinkError(null); }}
+                  disabled={isLinking}
+                  className="block mx-auto text-[11px] text-[#a3a3a3] hover:text-white"
+                >
+                  Cancel relinking
+                </button>
               )}
 
               {linkMode === 'import' ? (
@@ -244,7 +297,37 @@ export const TrackerModal: React.FC = () => {
                 </form>
               )}
             </div>
-          ) : (
+          ) : trackerView === 'recovery' && profile ? (
+            <div className="p-5 rounded-lg border border-amber-500/40 bg-amber-500/5 space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">ADC credential needs attention</h3>
+                <p className="mt-1 text-xs text-[#a3a3a3]">{credentialMessage}</p>
+                <p className="mt-1 text-[11px] text-[#a3a3a3]">
+                  Account: <span className="text-white">{profile.username}</span>
+                </p>
+              </div>
+              {canUnlockTrackerCredential(profile.credential_status) && (
+                <button
+                  type="button"
+                  onClick={handleUnlock}
+                  disabled={isUnlocking}
+                  className="px-3 py-1.5 rounded bg-[#e50914] text-white font-semibold disabled:opacity-50"
+                >
+                  {isUnlocking ? 'Waiting for Keychain…' : 'Unlock Keychain'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setIsRelinking(true); setLinkError(null); }}
+                className="ml-2 px-3 py-1.5 rounded border border-[#444] text-white hover:border-[#777]"
+              >
+                Relink account
+              </button>
+              {linkError && (
+                <p className="text-[11px] text-[#ff6b6b]" role="alert">{linkError}</p>
+              )}
+            </div>
+          ) : profile ? (
             /* Linked Dashboard */
             <>
               {/* Profile Card */}
@@ -288,14 +371,29 @@ export const TrackerModal: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => unlinkAccount()}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-[#e50914] transition"
+                    onClick={() => { setIsRelinking(true); setLinkError(null); }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-white transition"
+                    title="Replace the stored ADC passkey"
+                  >
+                    <Link2 className="w-3 h-3" />
+                    <span>Update credential</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleUnlink}
+                    disabled={isUnlinking}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] bg-[#141414] text-[#a3a3a3] hover:text-[#e50914] transition disabled:opacity-50"
                   >
                     <Unlink className="w-3 h-3" />
-                    <span>Unlink</span>
+                    <span>{isUnlinking ? 'Unlinking…' : 'Unlink'}</span>
                   </button>
                 </div>
               </div>
+
+              {linkError && (
+                <p className="text-[11px] text-[#ff6b6b]" role="alert">{linkError}</p>
+              )}
 
               {/* Stats Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono">
@@ -376,7 +474,7 @@ export const TrackerModal: React.FC = () => {
                 </div>
               </div>
             </>
-          )}
+          ) : null}
         </div>
 
         {/* Footer */}

@@ -515,7 +515,22 @@ export interface PeerAddr {
 
 /** Result returned by the adc_swarm_members Tauri command. */
 export interface SwarmMembersResult {
-  /** true = endpoint responded (even with zero matches). false = degraded. */
+  status:
+    | 'matched'
+    | 'no_matching_peers'
+    | 'not_linked'
+    | 'credential_required'
+    | 'credential_access_denied'
+    | 'credential_storage_unavailable'
+    | 'credential_storage_error'
+    | 'invalid_info_hash'
+    | 'endpoint_unsupported'
+    | 'authentication_failed'
+    | 'rate_limited'
+    | 'network_error'
+    | 'http_error'
+    | 'parse_error';
+  /** true = the endpoint is known to exist, including empty match sets. */
   supported: boolean;
   matches: SwarmMember[];
   error?: string | null;

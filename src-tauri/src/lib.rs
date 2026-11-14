@@ -124,6 +124,10 @@ pub fn run() {
     // the file leg is what makes player-stage diagnostics and webview
     // breadcrumbs visible in the log we ship (they used to vanish).
     SafeLogger::init_tracing_with_file(Some(&paths.logs_dir));
+    tracing::info!(
+        build_id = env!("NEBULAE_BUILD_ID"),
+        "Embedded source build provenance"
+    );
 
     // 2. Initialize internal SQLite persistence
     let db = match Database::new(&paths.db_file) {
@@ -852,6 +856,7 @@ pub fn run() {
             commands::media::tmdb_configured,
             // AsianDVDClub Tracker Integration
             commands::tracker::get_adc_tracker_profile,
+            commands::tracker::unlock_adc_credential,
             commands::tracker::link_adc_account,
             commands::tracker::unlink_adc_account,
             commands::tracker::import_adc_passkey,
