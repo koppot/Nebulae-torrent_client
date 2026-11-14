@@ -2477,3 +2477,74 @@ the new source files in this wave are `src-tauri/src/engine/manual_peer_blocks.r
 `tests/peerHistorySource.test.ts`. Do not commit, push, release, retag, change
 updater configuration, build installers, or modify production data as part
 of this source-only handoff.
+
+## 2026-11-14 — Droid reassignment: macOS playback and Peer History/ADC
+
+The owner reassigned six unresolved issues to Droid for diagnosis,
+implementation, tests, and validation: macOS playback crash, repeated ADC
+match lookups, showing current peers in Peer History, retaining ADC usernames
+in history, full country names, and removing the yellow Peer History banner.
+Antigravity stopped editing these delegated paths. This later assignment
+supersedes the earlier ADC shared-file and no-identity-persistence boundaries
+only for these six issues; it does not change ownership or acceptance status
+for other work.
+
+### Source changes
+
+- **macOS crash:** The 2026-11-14 `nebulae-2026-11-14-093615.ips` report
+  shows `EXC_CRASH/SIGABRT` from an invalid free through libxml2's
+  `xmlCleanupParser`, called by bundled libbluray `meta_parse`. The pinned
+  libbluray 1.5.0 source patch removes that process-global cleanup call and
+  retains per-document and libbluray-owned frees. The pinned source archive
+  SHA-256 is
+  `f676408e91a5d321abf8b8d4dfdae36205c297dab5c54c3ec519639025f474a2`.
+- **ADC lookups:** Successful matches are persisted in SQLite by account
+  revision, torrent hash, and normalized endpoint. Reads treat matches older
+  than 30 minutes as stale; physical retention is bounded to 30 days and
+  10,000 rows. Frontend lookup deduplication, cooldowns, transient-failure
+  retry, and explicit retry preserve already resolved matches. Credentials
+  remain in secure storage and do not cross the IPC boundary.
+- **Peer History:** Current telemetry is merged with saved endpoints.
+  History records client, country code, and the minimum ADC identity needed
+  to show a username/profile link. Saved identities are labeled as not
+  re-verified; credentials, passkeys, and full profile data are not stored.
+- **Country/banner:** Peer views display full English country names using
+  local resolution with an offline fallback. The yellow banner is removed;
+  the global block-scope note remains beside the blocked-IP controls.
+
+### Validation and limits
+
+- `node --experimental-strip-types --test tests/adcSwarmMembersIpc.test.ts tests/countryNames.test.ts tests/peerHistorySource.test.ts` —
+  25 passed, 0 failed.
+- TypeScript `tsc --noEmit`, ESLint on changed frontend files,
+  `cargo fmt --all -- --check`, and
+  `cargo clippy --lib --tests -- -D warnings` passed.
+- `cargo test --lib` — 394 passed, 0 failed, 2 ignored.
+- `git diff --check` passed. The libbluray patch applied in a dry run against
+  a temporary extraction of the checksum-verified pinned archive.
+- **Source-only evidence:** no VLC runtime rebuild, package build, crash
+  reproduction, original-media playback test, installer verification,
+  signing, or installed-app launch was performed. The crash diagnosis is
+  supported by the report stack, but the patched runtime remains unverified.
+  No production ADC credentials, live swarms, or production hosts were used.
+
+The six repairs are recorded as focused local commits on
+`fix/review-0.2.7` (base `eaf1553daef6b399f27cd4c32c8247b2a2a6c8ba`):
+crash fix `b6f268a`, ADC cache backend `fcf677c`, frontend lookup
+coordination `f2056ad`, Peer History merge `29ed071`, country names and
+banner removal `5f016a4`, plus this handoff note. The staged macOS VLC
+runtime in `src-tauri/resources/vlc` already contains the patched
+libbluray (no `_xmlCleanupParser` reference; the crashing installed build
+has one), passes `scripts/verify-vlc-runtime.sh` (343 arm64 images,
+minimum macOS 11.0, no external dependencies, valid signatures, load
+check both orders), and matches `build-manifest.json`
+(`sha256_bundled` `c01e0d1dfed603f87a283b9858ae120687eeb61bc9ca49a679e2bd625642556f`).
+The modified `src-tauri/src/taskbar_speed.rs` is Antigravity's separate
+Windows taskbar change; it is byte-identical on this checkout and the
+Windows host (SHA-256
+`1326aa47fee3876f22973e82268ff7cd678d4d94257571d5d7194845fa48aa67`),
+remains uncommitted under Antigravity's ownership, and is not attributed
+to these six issues. Pre-existing untracked diagnostic/backup artifacts
+are preserved. No package or release is claimed. Coordinate before
+packaging; if approved, record the exact source revision, artifact
+SHA-256, signing status, and actual runtime evidence.
