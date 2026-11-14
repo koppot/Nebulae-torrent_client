@@ -18,11 +18,13 @@ import {
   toSwarmMemberMap,
 } from '../src/utils/adcSwarmMembersIpc.ts';
 import {
+  clearSwarmRetryState,
   clearAllSwarmCache,
   getCooldownRemaining,
   getResolvedSwarm,
   invalidateOnRevisionChange,
   registerCooldownListener,
+  markSwarmLookupFailed,
   setAccountCooldown,
   storeSwarmResults,
 } from '../src/utils/swarmMembersCache.ts';
@@ -115,6 +117,37 @@ describe('Mocked frontend ADC swarm-members IPC path', () => {
     assert.deepEqual(calls[0], calls[1]);
   });
 
+  test('coalesces concurrent identical IPC lookups', async () => {
+    let resolveLookup!: (value: typeof noMatches) => void;
+    const response = new Promise<typeof noMatches>((resolve) => {
+      resolveLookup = resolve;
+    });
+    let calls = 0;
+    const invoke = async () => {
+      calls += 1;
+      return response;
+    };
+
+    const first = lookupSwarmMembers(INFO_HASH, PEERS, invoke);
+    const second = lookupSwarmMembers(INFO_HASH, PEERS, invoke);
+    assert.equal(calls, 1);
+    resolveLookup(noMatches);
+    assert.deepEqual(await first, { kind: 'result', result: noMatches });
+    assert.deepEqual(await second, { kind: 'result', result: noMatches });
+  });
+
+  test('does not coalesce concurrent lookups across account scopes', async () => {
+    let calls = 0;
+    const invoke = async () => {
+      calls += 1;
+      return noMatches;
+    };
+    const first = lookupSwarmMembers(INFO_HASH, PEERS, invoke, 'account-1');
+    const second = lookupSwarmMembers(INFO_HASH, PEERS, invoke, 'account-2');
+    await Promise.all([first, second]);
+    assert.equal(calls, 2);
+  });
+
   test('matched results populate the peer-address lookup and normalize profile URL', async () => {
     const member = {
       ip: '203.0.113.17',
@@ -170,6 +203,14 @@ describe('ADC Profile URL Normalization and Security Validation', () => {
       normalizeProfileUrl('https://evil.example.com/user/12', 12),
       'https://asiandvdclub.org/profile/12',
     );
+    assert.equal(
+      normalizeProfileUrl('https://asiandvdclub.org.attacker.example/user/12', 12),
+      'https://asiandvdclub.org/profile/12',
+    );
+    assert.equal(
+      normalizeProfileUrl('https://evilasiandvdclub.org/user/12', 12),
+      'https://asiandvdclub.org/profile/12',
+    );
   });
 
   test('validates strict HTTPS and asiandvdclub.org host for profile opening', () => {
@@ -216,6 +257,42 @@ describe('ADC Swarm Continuous Display and Rate-Limit Resilience', () => {
     assert.equal(unresolvedPeers.length, 0);
   });
 
+  test('persistent cache hits preserve their original match time and do not cool down ADC', () => {
+    clearAllSwarmCache();
+    const peer = { ip: '198.51.100.4', port: 6881 };
+    const member = {
+      ip: peer.ip,
+      port: peer.port,
+      username: 'CachedMember',
+      user_id: 104,
+      profile_url: 'https://asiandvdclub.org/profile/104',
+      ratio: 1.2,
+      uploaded_bytes: 400,
+      downloaded_bytes: 300,
+      bonus_points: 1,
+      matched_at_epoch_ms: Date.now() - 31 * 60 * 1000,
+    };
+    storeSwarmResults(INFO_HASH, 4, [peer], {
+      status: 'matched',
+      supported: true,
+      matches: [member],
+      error: null,
+      from_cache_only: true,
+    });
+
+    const resolved = getResolvedSwarm(INFO_HASH, 4, [peer]);
+    assert.equal(resolved.cachedMap.get(`${peer.ip}:${peer.port}`)?.username, 'CachedMember');
+    assert.equal(resolved.unresolvedPeers.length, 1);
+    assert.equal(getCooldownRemaining(), 0);
+
+    storeSwarmResults(INFO_HASH, 4, [peer], networkFailure);
+    const backedOff = getResolvedSwarm(INFO_HASH, 4, [peer]);
+    assert.equal(backedOff.cachedMap.get(`${peer.ip}:${peer.port}`)?.username, 'CachedMember');
+    assert.equal(backedOff.unresolvedPeers.length, 0);
+    assert.equal(backedOff.hasRecentFailure, true);
+    clearAllSwarmCache();
+  });
+
   test('rate-limited response does NOT clear previously resolved members', () => {
     clearAllSwarmCache();
     const peer1 = { ip: '198.51.100.10', port: 5000 };
@@ -254,6 +331,47 @@ describe('ADC Swarm Continuous Display and Rate-Limit Resilience', () => {
     const { cachedMap } = getResolvedSwarm(INFO_HASH, 1, [peer1]);
     assert.equal(cachedMap.size, 1);
     assert.equal(cachedMap.get('198.51.100.10:5000')?.username, 'Bob');
+  });
+
+  test('failed lookups back off and explicit retry clears only transient state', () => {
+    clearAllSwarmCache();
+    const peer = { ip: '198.51.100.30', port: 51413 };
+    storeSwarmResults(INFO_HASH, 8, [peer], networkFailure);
+    const backedOff = getResolvedSwarm(INFO_HASH, 8, [peer]);
+    assert.equal(backedOff.unresolvedPeers.length, 0);
+    assert.equal(backedOff.hasRecentFailure, true);
+
+    clearSwarmRetryState(INFO_HASH, 8, [peer]);
+    const retried = getResolvedSwarm(INFO_HASH, 8, [peer]);
+    assert.equal(retried.unresolvedPeers.length, 1);
+    clearAllSwarmCache();
+  });
+
+  test('IPC rejection is also cooled down without replacing successful members', () => {
+    clearAllSwarmCache();
+    const peer = { ip: '198.51.100.31', port: 51413 };
+    const member = {
+      ip: peer.ip,
+      port: peer.port,
+      username: 'PersistentAlice',
+      user_id: 404,
+      profile_url: 'https://asiandvdclub.org/profile/404',
+      ratio: 1.4,
+      uploaded_bytes: 1200,
+      downloaded_bytes: 900,
+      bonus_points: 7,
+    };
+    storeSwarmResults(INFO_HASH, 9, [peer], {
+      status: 'matched',
+      supported: true,
+      matches: [member],
+      error: null,
+    });
+    markSwarmLookupFailed(INFO_HASH, 9, [peer]);
+    const afterFailure = getResolvedSwarm(INFO_HASH, 9, [peer]);
+    assert.equal(afterFailure.cachedMap.get(`${peer.ip}:${peer.port}`)?.username, 'PersistentAlice');
+    assert.equal(afterFailure.unresolvedPeers.length, 0);
+    clearAllSwarmCache();
   });
 
   test('credential revision change invalidates prior cached identities', () => {

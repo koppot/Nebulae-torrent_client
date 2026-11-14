@@ -13,6 +13,7 @@ import type { PeerAddr, SwarmMember, SwarmMembersResult } from '../types';
 
 const MEMBER_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const UNMATCHED_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const LOOKUP_FAILURE_RETRY_MS = 30 * 1000;
 const DEFAULT_COOLDOWN_MS = 60 * 1000; // 60s account-wide rate limit
 const MAX_ENTRIES = 500;
 
@@ -29,7 +30,11 @@ export function normalizeProfileUrl(rawUrl?: string | null, userId?: number): st
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol === 'https:' && parsed.hostname.endsWith('asiandvdclub.org')) {
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      parsed.protocol === 'https:' &&
+      (hostname === 'asiandvdclub.org' || hostname.endsWith('.asiandvdclub.org'))
+    ) {
       const match = parsed.pathname.match(/^\/(?:user|profile)\/(\d+)/);
       if (match) {
         return `https://${parsed.host}/profile/${match[1]}`;
@@ -54,7 +59,8 @@ export function isValidAdcProfileUrl(url: string): boolean {
     const parsed = new URL(url);
     return (
       parsed.protocol === 'https:' &&
-      parsed.hostname.endsWith('asiandvdclub.org') &&
+      (parsed.hostname.toLowerCase() === 'asiandvdclub.org' ||
+        parsed.hostname.toLowerCase().endsWith('.asiandvdclub.org')) &&
       /^\/profile\/\d+/.test(parsed.pathname)
     );
   } catch {
@@ -63,9 +69,11 @@ export function isValidAdcProfileUrl(url: string): boolean {
 }
 
 interface PeerCacheRecord {
-  kind: 'matched' | 'unmatched';
+  kind: 'matched' | 'unmatched' | 'failed';
   member?: SwarmMember;
   timestamp: number;
+  retryAfterMs?: number;
+  failedAt?: number;
 }
 
 // Scoped key: `${credentialRevision}:${infoHash}:${ip}:${port}`
@@ -75,6 +83,8 @@ const peerCache = new Map<string, PeerCacheRecord>();
 let cooldownUntil = 0;
 let lastKnownRevision = 0;
 let activeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let transientRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let transientRetryAt = 0;
 const retryListeners = new Set<() => void>();
 
 export function getCooldownRemaining(): number {
@@ -121,6 +131,28 @@ function notifyCooldownListeners(delayMs: number): void {
   }, delayMs);
 }
 
+function notifyRetryListeners(): void {
+  for (const listener of retryListeners) {
+    try {
+      listener();
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+function scheduleTransientRetry(delayMs: number): void {
+  const retryAt = Date.now() + delayMs;
+  if (transientRetryTimer && transientRetryAt <= retryAt) return;
+  if (transientRetryTimer) clearTimeout(transientRetryTimer);
+  transientRetryAt = retryAt;
+  transientRetryTimer = setTimeout(() => {
+    transientRetryTimer = null;
+    transientRetryAt = 0;
+    notifyRetryListeners();
+  }, delayMs);
+}
+
 export function registerCooldownListener(listener: () => void): () => void {
   retryListeners.add(listener);
   return () => {
@@ -143,11 +175,15 @@ export function getResolvedSwarm(
 ): {
   cachedMap: Map<string, SwarmMember>;
   unresolvedPeers: PeerAddr[];
+  hasRecentFailure: boolean;
+  hasRecentNoMatch: boolean;
 } {
   invalidateOnRevisionChange(credentialRevision);
 
   const cachedMap = new Map<string, SwarmMember>();
   const unresolvedPeers: PeerAddr[] = [];
+  let hasRecentFailure = false;
+  let hasRecentNoMatch = false;
   const now = Date.now();
 
   for (const peer of peers) {
@@ -163,12 +199,26 @@ export function getResolvedSwarm(
           profile_url: normalizeProfileUrl(record.member.profile_url, record.member.user_id),
         };
         cachedMap.set(`${peer.ip}:${peer.port}`, normalized);
-        if (now - record.timestamp > MEMBER_TTL_MS) {
+        if (
+          now - record.timestamp > MEMBER_TTL_MS &&
+          !(record.failedAt && now - record.failedAt < (record.retryAfterMs ?? LOOKUP_FAILURE_RETRY_MS))
+        ) {
           unresolvedPeers.push(peer);
+        } else if (record.failedAt && now - record.failedAt < (record.retryAfterMs ?? LOOKUP_FAILURE_RETRY_MS)) {
+          hasRecentFailure = true;
         }
       } else if (record.kind === 'unmatched') {
         if (now - record.timestamp > UNMATCHED_TTL_MS) {
           unresolvedPeers.push(peer);
+        } else {
+          hasRecentNoMatch = true;
+        }
+      } else if (record.kind === 'failed') {
+        const retryAfterMs = record.retryAfterMs ?? LOOKUP_FAILURE_RETRY_MS;
+        if (now - record.timestamp >= retryAfterMs) {
+          unresolvedPeers.push(peer);
+        } else {
+          hasRecentFailure = true;
         }
       }
     } else {
@@ -176,7 +226,7 @@ export function getResolvedSwarm(
     }
   }
 
-  return { cachedMap, unresolvedPeers };
+  return { cachedMap, unresolvedPeers, hasRecentFailure, hasRecentNoMatch };
 }
 
 /**
@@ -195,11 +245,11 @@ export function storeSwarmResults(
   if (result.status === 'rate_limited') {
     const retrySecs = (result as { retry_after_seconds?: number }).retry_after_seconds ?? 60;
     setAccountCooldown(retrySecs * 1000);
-    return;
-  }
-
-  // Set cooldown on normal successful response as well (server rate limits to 60s per account)
-  if (result.status === 'matched' || result.status === 'no_matching_peers') {
+  } else if (
+    // Set cooldown on normal successful response as well (server rate limits to 60s per account)
+    (result.status === 'matched' || result.status === 'no_matching_peers') &&
+    !result.from_cache_only
+  ) {
     setAccountCooldown(DEFAULT_COOLDOWN_MS);
   }
 
@@ -221,7 +271,7 @@ export function storeSwarmResults(
     peerCache.set(key, {
       kind: 'matched',
       member: normalized,
-      timestamp: now,
+      timestamp: normalized.matched_at_epoch_ms ?? now,
     });
   }
 
@@ -240,6 +290,71 @@ export function storeSwarmResults(
         });
       }
     }
+  } else if (result.status !== 'rate_limited') {
+    const retryAfterMs =
+      result.status === 'endpoint_unsupported'
+        ? 10 * 60 * 1000
+        : ['credential_required', 'not_linked', 'credential_access_denied',
+            'credential_storage_unavailable', 'credential_storage_error',
+            'authentication_failed'].includes(result.status)
+          ? 60 * 1000
+          : LOOKUP_FAILURE_RETRY_MS;
+    scheduleTransientRetry(retryAfterMs);
+    for (const peer of requestedPeers) {
+      const key = getPeerKey(credentialRevision, infoHash, peer.ip, peer.port);
+      const existing = peerCache.get(key);
+      if (existing?.kind === 'matched') {
+        peerCache.set(key, { ...existing, failedAt: now, retryAfterMs });
+        continue;
+      }
+      peerCache.set(key, { kind: 'failed', timestamp: now, retryAfterMs });
+    }
+  }
+}
+
+/** Marks IPC rejections as transient failures without replacing a cached match. */
+export function markSwarmLookupFailed(
+  infoHash: string,
+  credentialRevision: number,
+  peers: PeerAddr[],
+): void {
+  invalidateOnRevisionChange(credentialRevision);
+  const now = Date.now();
+  scheduleTransientRetry(LOOKUP_FAILURE_RETRY_MS);
+  for (const peer of peers) {
+    const key = getPeerKey(credentialRevision, infoHash, peer.ip, peer.port);
+    const existing = peerCache.get(key);
+    if (existing?.kind === 'matched') {
+      peerCache.set(key, {
+        ...existing,
+        failedAt: now,
+        retryAfterMs: LOOKUP_FAILURE_RETRY_MS,
+      });
+      continue;
+    }
+    peerCache.set(key, {
+      kind: 'failed',
+      timestamp: now,
+      retryAfterMs: LOOKUP_FAILURE_RETRY_MS,
+    });
+  }
+}
+
+/** Explicit user retry bypasses only transient failures, not success/no-match TTLs. */
+export function clearSwarmRetryState(
+  infoHash: string,
+  credentialRevision: number,
+  peers: PeerAddr[],
+): void {
+  invalidateOnRevisionChange(credentialRevision);
+  for (const peer of peers) {
+    const key = getPeerKey(credentialRevision, infoHash, peer.ip, peer.port);
+    const existing = peerCache.get(key);
+    if (existing?.kind === 'failed') {
+      peerCache.delete(key);
+    } else if (existing?.kind === 'matched' && existing.failedAt) {
+      peerCache.set(key, { ...existing, failedAt: undefined, retryAfterMs: undefined });
+    }
   }
 }
 
@@ -250,6 +365,9 @@ export function invalidateOnRevisionChange(currentRevision: number): void {
   if (lastKnownRevision !== currentRevision) {
     peerCache.clear();
     clearAccountCooldown();
+    if (transientRetryTimer) clearTimeout(transientRetryTimer);
+    transientRetryTimer = null;
+    transientRetryAt = 0;
     lastKnownRevision = currentRevision;
   }
 }
@@ -257,6 +375,10 @@ export function invalidateOnRevisionChange(currentRevision: number): void {
 export function clearAllSwarmCache(): void {
   peerCache.clear();
   clearAccountCooldown();
+  if (transientRetryTimer) clearTimeout(transientRetryTimer);
+  transientRetryTimer = null;
+  transientRetryAt = 0;
+  lastKnownRevision = 0;
 }
 
 // ── Legacy API compatibility ──────────────────────────────────────────────────

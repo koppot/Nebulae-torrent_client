@@ -5,9 +5,20 @@ export const ADC_SWARM_MEMBERS_COMMAND = 'adc_swarm_members';
 
 type InvokeCommand = (command: string, args: Record<string, unknown>) => Promise<unknown>;
 
+export function isAdcTracker(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === 'asiandvdclub.org' || hostname.endsWith('.asiandvdclub.org');
+  } catch {
+    return false;
+  }
+}
+
 export type SwarmMembersLookup =
   | { kind: 'result'; result: SwarmMembersResult }
   | { kind: 'ipc_error' };
+
+const inFlightLookups = new Map<string, Promise<SwarmMembersLookup>>();
 
 /**
  * Tauri's default command naming maps frontend `infoHash` to Rust `info_hash`.
@@ -17,14 +28,30 @@ export async function lookupSwarmMembers(
   infoHash: string,
   peers: PeerAddr[],
   invokeCommand: InvokeCommand = invoke,
+  dedupeScope = '',
 ): Promise<SwarmMembersLookup> {
-  try {
-    const result = await invokeCommand(ADC_SWARM_MEMBERS_COMMAND, { infoHash, peers });
-    return { kind: 'result', result: result as SwarmMembersResult };
-  } catch {
-    // Do not log arbitrary IPC error objects. They may contain request details.
-    return { kind: 'ipc_error' };
-  }
+  const addresses = peers
+    .map((peer) => `${peer.ip.toLowerCase()}|${peer.port}`)
+    .sort()
+    .join(',');
+  const key = `${dedupeScope}:${infoHash.toLowerCase()}:${addresses}`;
+  const existing = inFlightLookups.get(key);
+  if (existing) return existing;
+
+  const lookup = (async (): Promise<SwarmMembersLookup> => {
+    try {
+      const result = await invokeCommand(ADC_SWARM_MEMBERS_COMMAND, { infoHash, peers });
+      return { kind: 'result', result: result as SwarmMembersResult };
+    } catch {
+      // Do not log arbitrary IPC error objects. They may contain request details.
+      return { kind: 'ipc_error' };
+    }
+  })();
+  inFlightLookups.set(key, lookup);
+  void lookup.finally(() => {
+    if (inFlightLookups.get(key) === lookup) inFlightLookups.delete(key);
+  });
+  return lookup;
 }
 
 export function getSwarmMembersCacheKey(
@@ -57,7 +84,11 @@ export function normalizeProfileUrl(rawUrl?: string | null, userId?: number): st
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol === 'https:' && parsed.hostname.endsWith('asiandvdclub.org')) {
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      parsed.protocol === 'https:' &&
+      (hostname === 'asiandvdclub.org' || hostname.endsWith('.asiandvdclub.org'))
+    ) {
       const match = parsed.pathname.match(/^\/(?:user|profile)\/(\d+)/);
       if (match) {
         return `https://${parsed.host}/profile/${match[1]}`;
@@ -82,7 +113,8 @@ export function isValidAdcProfileUrl(url: string): boolean {
     const parsed = new URL(url);
     return (
       parsed.protocol === 'https:' &&
-      parsed.hostname.endsWith('asiandvdclub.org') &&
+      (parsed.hostname.toLowerCase() === 'asiandvdclub.org' ||
+        parsed.hostname.toLowerCase().endsWith('.asiandvdclub.org')) &&
       /^\/profile\/\d+/.test(parsed.pathname)
     );
   } catch {
