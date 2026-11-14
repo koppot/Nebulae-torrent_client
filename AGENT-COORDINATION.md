@@ -2202,6 +2202,14 @@ checks.
   `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01` changes the remote-server
   subscriptions to scalar selectors and avoids redundant `stopPolling`
   updates. It is an ancestor of the current combined source.
+- Windows repair commit `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01` is a
+  separate existing code commit, changing `src/App.tsx` and
+  `src/stores/remoteServerStore.ts`. Regression guard commit
+  `70d56763720676c925405ca7a8caa706a539f993` adds
+  `tests/remoteServerStartupSource.test.ts`. Run it with
+  `node --experimental-strip-types --test tests/remoteServerStartupSource.test.ts`.
+  This source-level guard has **not** been run; it prevents restoring the
+  unstable selector but does not prove React rendering or packaged startup.
 - The earlier macOS blank-window record in this file describes a different
   failure: a hook-order violation when opening `AddTorrentModal`, not a
   startup render loop. Do not conflate it with this Windows symptom. macOS
@@ -2225,6 +2233,10 @@ checks.
 - Focused repair commit:
   `5403fe97f47944df55745a52d8ec59fd9623385e`
   (`fix(adc): use canonical swarm member IPC args`).
+- Files in that repair: `src/components/manager/PeersTabPanel.tsx`,
+  `src/utils/adcSwarmMembersIpc.ts`, `tests/adcSwarmMembersIpc.test.ts`,
+  `src-tauri/src/commands/tracker.rs`, and the Tauri test-only feature in
+  `src-tauri/Cargo.toml`.
 - Tests distinguish mocked frontend IPC from actual Tauri dispatch:
   `tests/adcSwarmMembersIpc.test.ts` mocks `invoke` and covers exact command
   arguments, IPC rejection/internal-error messaging, transport/network-error
@@ -2232,30 +2244,45 @@ checks.
   dispatch test sends only `infoHash` and reaches the registered command with
   an in-memory unlinked DB; the snake_case-only IPC payload is rejected.
   Separate loopback HTTP tests use a synthetic passkey and peer to verify the
-  endpoint POST body and both matched and successful-empty responses.
+  endpoint POST body and both matched and successful-empty responses. Their
+  fixtures use info hash `340313449696d11fbfec8982c5055f90459c3ece`,
+  passkey `synthetic-swarm-test-passkey`, and peer `203.0.113.17:51413`;
+  the HTTP server binds loopback and never contacts ADC.
 - Logs now emit only bounded classifications/status codes. They do not print
   passkeys, request bodies, URLs, raw peer responses, or raw error objects.
-- **Validation run:** 5 mocked frontend tests; 8 focused Rust tracker tests
-  (including actual Tauri MockRuntime dispatch and local HTTP integration);
-  `pnpm exec tsc --noEmit`; focused ESLint; `cargo fmt --all -- --check`;
-  `cargo clippy --lib -- -D warnings`. The commit hook also passed format and
-  Clippy checks.
+- **Historical validation already run by Factory; do not rerun here:**
+  - `node --experimental-strip-types --test tests/adcSwarmMembersIpc.test.ts`
+    — 5 mocked frontend tests passed.
+  - From `src-tauri/`:
+    `cargo test --lib commands::tracker::tests -- --test-threads=1`
+    — 8 tests passed, including actual Tauri MockRuntime dispatch and local
+    HTTP integration with synthetic values.
+  - `pnpm exec tsc --noEmit` — passed.
+  - `pnpm exec eslint src/components/manager/PeersTabPanel.tsx src/utils/adcSwarmMembersIpc.ts`
+    — passed.
+  - From `src-tauri/`: `cargo fmt --all -- --check` and
+    `cargo clippy --lib -- -D warnings` — passed.
+  - Local commit hooks also passed their format and Clippy checks. The new
+    Windows source-level regression guard above remains unrun.
 - **Not verified:** no live authenticated ADC endpoint or packaged-app test
-  was run because no dedicated test credential/swarm was authorized. The
-  synthetic matched member was parsed and mapped for row lookup, but actual
-  matched-member rendering on a suitable swarm remains unverified. No GET
-  405 probe or server-side PHP response-builder test is treated as client
-  integration evidence.
+  was run. Do not request or access production credentials or a live swarm.
+  The synthetic matched member was parsed and mapped for row lookup, but
+  actual matched-member rendering on a suitable swarm remains unverified.
+  No GET 405 probe or server-side PHP response-builder test is treated as
+  client integration evidence.
 - The IPC and command code is shared by Windows and macOS. The repair applies
   to both source builds; packaged runtime validation remains open for both.
 
 ### Combined candidate build handoff
 
-- Build the intended combined Windows and macOS candidates from
-  `5403fe97f47944df55745a52d8ec59fd9623385e` or a later descendant that
-  preserves the full candidate scope. This commit is a descendant of
-  `9164449b348cf11530c3209cd7c910cf502fa121`, which contains Windows repair
-  `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01`. Ancestry was checked locally.
+- Repository: `/Users/dev/GitHub/nebulae-factory-droid`, branch
+  `fix/review-0.2.7`. Source/build tip for the combined candidate:
+  `70d56763720676c925405ca7a8caa706a539f993`; this contains ADC repair
+  `5403fe97f47944df55745a52d8ec59fd9623385e` and Windows source guard
+  `70d56763720676c925405ca7a8caa706a539f993`. Windows code repair
+  `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01` is an ancestor. The source tip
+  is a descendant of `9164449b348cf11530c3209cd7c910cf502fa121`; ancestry was
+  verified locally.
 - Source commit `074b902` predates both the Windows render-loop fix and the
   ADC IPC repair. It is not a valid source revision for the repaired
   candidate; the installer payload's source remains unproven.
@@ -2264,5 +2291,32 @@ checks.
   custom VLC runtime/plugins. Do not clean or reuse the dirty Windows build
   checkout; use an isolated build workspace and leave its unrelated
   untracked data untouched.
+- The only committed source changes for this handoff are the Windows guard
+  test and the ADC command/frontend repair listed above. Existing 0.2.7
+  features and bundle contents were not removed or modified; all unrelated
+  untracked paths listed below were preserved.
+- Windows acceptance for Antigravity: build/install only in a disposable
+  environment, set a fresh `NEBULAE_DATA_DIR`, and enable
+  `NEBULAE_TEST_CDP=1` when collecting WebView diagnostics. Prove installer/
+  executable/build-revision provenance; confirm the initial main window is
+  visible and responsive; navigate Manager, Media, and Server; exercise
+  recoverable unavailable-service/credential states; then Quit and relaunch.
+  Compilation and the source-level guard are not substitutes.
+- ADC acceptance for Antigravity: use the existing mocked frontend, actual
+  Tauri dispatch, and loopback HTTP tests only. If checking the packaged UI
+  with a fresh profile, verify that a missing credential reaches the handler
+  and shows its recoverable credential-required state without contacting
+  ADC. Successful secure-store credential lookup and live endpoint enrichment
+  remain unverified; do not request or use production credentials or a live
+  swarm. A valid empty endpoint response remains `no_matching_peers`
+  (`supported: true`, no error), distinct from `network_error`. The shared
+  IPC/command repair applies to both Windows and macOS; packaged checks remain
+  pending on both.
+- No tracked edits remain after these commits. Preserve these unrelated
+  pre-existing untracked items: `override.json`, `scripts/fuukadump.c`,
+  `scripts/inspect_fuuka_remote.py`, `scripts/test_d3d11_hwnd.py`,
+  `scripts/test_fuuka_menu.py`, `scripts/test_suzume_cues.py`,
+  `src-tauri/macos-deps-11/`, and
+  `src-tauri/resources-clean-backup/`.
 - Do not push, publish, retag, release, change updater configuration, or
   modify production ADC data as part of this handoff.
