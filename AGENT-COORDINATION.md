@@ -2176,3 +2176,93 @@ Next Focus: Outstanding Windows 0.2.6 release gates on `supermicro.local`.
 
 #### Linux Status Review
 - Linux continues to contain only non-functional cross-platform compilation stubs in `embed_linux.rs`. Linux release packages are excluded from the 0.2.7 distribution, matching the established 0.2.5 and 0.2.6 release baseline.
+
+## 2026-11-14 — Droid: Combined 0.2.7 Startup and ADC Peer-Information Handoff
+
+This handoff records two separate repairs. Neither installed app is claimed
+repaired until the corresponding new package has passed its platform runtime
+checks.
+
+### Windows black startup window — source repair found, packaged acceptance open
+
+- The running Windows process logged React minified error `#185` after the
+  Transmission engine had initialized. The window had no usable HWND, while
+  the native process and WebView2 children remained responsive.
+- The installer-labeled artifact is
+  `Nebulae_0.2.7-candidate-074b902-combined_x64-setup.exe` with SHA-256
+  `a328bd909e05f8898a6f755eeb997659d835c06a48a6f05b7432f344558c4d38`.
+  Its adjacent checksum agrees. The installed executable SHA-256 is
+  `025abc50ba528666fa932dc56660636fae51a974c7d7318f1fac5b8c00d60db9`.
+  The installed executable has no embedded build ID, and no installer-to-
+  executable mapping was established; installed binary provenance remains
+  unknown.
+- Source commit `074b902a6cd9f38dd11db6e6f39285220bc2fdae` contains the
+  unstable object selector in `src/App.tsx` that is consistent with the
+  React maximum-update-depth failure. Existing commit
+  `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01` changes the remote-server
+  subscriptions to scalar selectors and avoids redundant `stopPolling`
+  updates. It is an ancestor of the current combined source.
+- The earlier macOS blank-window record in this file describes a different
+  failure: a hook-order violation when opening `AddTorrentModal`, not a
+  startup render loop. Do not conflate it with this Windows symptom. macOS
+  playback and tailnet issues remain separately open.
+- **Not verified:** no isolated packaged Windows startup/interaction test was
+  run. `supermicro.local` is the live production host and the app starts
+  Transmission and Tailscale sidecars. Do not install, launch a duplicate,
+  stop, or replace its app for this acceptance test.
+- **Required acceptance:** use a disposable Windows VM/test host and a fresh
+  `NEBULAE_DATA_DIR`; correlate installer and executable hashes to the build
+  commit; verify visible, responsive initial UI, Manager/Media/Server
+  navigation, recoverable unavailable-service/credential states, and
+  Quit/relaunch. A source compile is not acceptance.
+
+### ADC peer-information IPC — focused repair committed
+
+- The Rust command parameter is `info_hash`; Tauri's default command
+  convention maps frontend `infoHash` to that parameter. The HTTP request
+  body separately uses the endpoint's `info_hash` field. The duplicate
+  frontend `info_hash` alias was removed.
+- Focused repair commit:
+  `5403fe97f47944df55745a52d8ec59fd9623385e`
+  (`fix(adc): use canonical swarm member IPC args`).
+- Tests distinguish mocked frontend IPC from actual Tauri dispatch:
+  `tests/adcSwarmMembersIpc.test.ts` mocks `invoke` and covers exact command
+  arguments, IPC rejection/internal-error messaging, transport/network-error
+  messaging, retry, and peer-address mapping. A Rust `tauri::test::MockRuntime`
+  dispatch test sends only `infoHash` and reaches the registered command with
+  an in-memory unlinked DB; the snake_case-only IPC payload is rejected.
+  Separate loopback HTTP tests use a synthetic passkey and peer to verify the
+  endpoint POST body and both matched and successful-empty responses.
+- Logs now emit only bounded classifications/status codes. They do not print
+  passkeys, request bodies, URLs, raw peer responses, or raw error objects.
+- **Validation run:** 5 mocked frontend tests; 8 focused Rust tracker tests
+  (including actual Tauri MockRuntime dispatch and local HTTP integration);
+  `pnpm exec tsc --noEmit`; focused ESLint; `cargo fmt --all -- --check`;
+  `cargo clippy --lib -- -D warnings`. The commit hook also passed format and
+  Clippy checks.
+- **Not verified:** no live authenticated ADC endpoint or packaged-app test
+  was run because no dedicated test credential/swarm was authorized. The
+  synthetic matched member was parsed and mapped for row lookup, but actual
+  matched-member rendering on a suitable swarm remains unverified. No GET
+  405 probe or server-side PHP response-builder test is treated as client
+  integration evidence.
+- The IPC and command code is shared by Windows and macOS. The repair applies
+  to both source builds; packaged runtime validation remains open for both.
+
+### Combined candidate build handoff
+
+- Build the intended combined Windows and macOS candidates from
+  `5403fe97f47944df55745a52d8ec59fd9623385e` or a later descendant that
+  preserves the full candidate scope. This commit is a descendant of
+  `9164449b348cf11530c3209cd7c910cf502fa121`, which contains Windows repair
+  `2d3e8a572a4b4e8901f0f43ca18ea651f2bccb01`. Ancestry was checked locally.
+- Source commit `074b902` predates both the Windows render-loop fix and the
+  ADC IPC repair. It is not a valid source revision for the repaired
+  candidate; the installer payload's source remains unproven.
+- Preserve all bundled dependencies: patched Transmission daemon and
+  required libraries, Tailscale daemon and CLI, Temurin JRE, and verified
+  custom VLC runtime/plugins. Do not clean or reuse the dirty Windows build
+  checkout; use an isolated build workspace and leave its unrelated
+  untracked data untouched.
+- Do not push, publish, retag, release, change updater configuration, or
+  modify production ADC data as part of this handoff.
