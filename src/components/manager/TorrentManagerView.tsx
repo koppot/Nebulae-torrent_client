@@ -1888,6 +1888,7 @@ export const TorrentManagerView: React.FC = () => {
                   torrentId={selectedTorrent.id}
                   torrentHash={selectedTorrent.info_hash}
                   peers={peers}
+                  trackers={selectedTorrent.trackers ?? []}
                   isLoading={isPeersLoading}
                 />
               ) : (

@@ -31,17 +31,24 @@ export interface PeerTelemetry {
   total_uploaded_bytes: number;
 }
 
-/** Local per-torrent endpoint history, intentionally separate from ADC member data. */
+/** Local endpoint history and the minimal resolved ADC identity used for display/links. */
 export interface PeerHistoryEntry {
   peer_key: string;
   ip: string;
   port: number;
+  client_name: string;
+  country_code?: string | null;
   first_seen_epoch_ms: number;
   last_seen_epoch_ms: number;
   downloaded_delta_bytes: number;
   uploaded_delta_bytes: number;
   counter_resets: number;
   was_blocked: boolean;
+  adc_user_id?: number | null;
+  adc_username?: string | null;
+  adc_profile_url?: string | null;
+  adc_account_revision?: number | null;
+  adc_matched_at_epoch_ms?: number | null;
   currently_blocked: boolean;
 }
 

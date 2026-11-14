@@ -23,6 +23,9 @@ test('peer history commands and background sampler are registered', () => {
   assert.match(telemetry, /db\.record_peer_history\(/);
   assert.match(database, /MAX_PEER_HISTORY_ROWS: i64 = 100_000/);
   assert.match(database, /PEER_HISTORY_RETENTION_MS: i64 = 90 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(database, /ensure_peer_history_columns\(&conn\)/);
+  assert.match(database, /adc_username = \?5/);
+  assert.match(schema, /adc_user_id INTEGER/);
   assert.match(schema, /CREATE TABLE IF NOT EXISTS peer_history/);
 });
 
@@ -33,5 +36,9 @@ test('peer history UI reads and clears only the selected torrent history', () =>
   assert.match(panel, /invoke<number>\('clear_peer_history', \{ infoHash: torrentHash \}\)/);
   assert.match(panel, /clear_peer_history/);
   assert.match(panel, /New observations resume while Nebulae is running/);
-  assert.match(panel, /never stores ADC members\/profiles, client names, or geo\/ASN metadata/);
+  assert.match(panel, /ADC user/);
+  assert.match(panel, /Saved identity · not re-verified/);
+  assert.match(panel, /Global across torrents, not a firewall rule/);
+  assert.match(panel, /getCountryName\(countryCode\)/);
+  assert.doesNotMatch(panel, /bg-amber-500/);
 });

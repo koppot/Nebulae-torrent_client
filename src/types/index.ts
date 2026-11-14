@@ -505,6 +505,8 @@ export interface SwarmMember {
   uploaded_bytes: number;
   downloaded_bytes: number;
   bonus_points: number;
+  /** Time of the authoritative match, or the original time for a cached match. */
+  matched_at_epoch_ms?: number | null;
 }
 
 /** Per-peer address sent to the Rust command. */
@@ -534,4 +536,6 @@ export interface SwarmMembersResult {
   supported: boolean;
   matches: SwarmMember[];
   error?: string | null;
+  /** True when the Rust command served this request only from its persistent cache. */
+  from_cache_only?: boolean;
 }
