@@ -195,6 +195,14 @@ rm -rf "$LB_DIR"
 mkdir -p "$LB_DIR"
 tar -xJf "$DOWNLOADS/libbluray-${LIBBLURAY_VERSION}.tar.xz" -C "$LB_DIR"
 
+if [ -d "$REPO_ROOT/patches/libbluray-${LIBBLURAY_VERSION}" ]; then
+    for p in "$REPO_ROOT/patches/libbluray-${LIBBLURAY_VERSION}"/*.patch; do
+        [ -f "$p" ] || continue
+        echo "==> Applying $(basename "$p") to libbluray"
+        (cd "$LB_SRC" && patch -p1 < "$p")
+    done
+fi
+
 # The options mirror the Homebrew build that Nebulae has shipped (fontconfig,
 # freetype and libxml2 enabled) and add the jars, which the Homebrew bottle
 # leaves out. jdk_home stays unset on purpose: a value would be compiled into

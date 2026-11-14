@@ -1,0 +1,11 @@
+diff -ruN a/src/libbluray/bdnav/meta_parse.c b/src/libbluray/bdnav/meta_parse.c
+--- a/src/libbluray/bdnav/meta_parse.c
++++ b/src/libbluray/bdnav/meta_parse.c
+@@ -273,7 +273,6 @@
+         }
+     }
+ 
+-    xmlCleanupParser();
+     return root;
+ #else
+     (void)disc;
