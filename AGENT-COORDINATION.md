@@ -2320,3 +2320,48 @@ checks.
   `src-tauri/resources-clean-backup/`.
 - Do not push, publish, retag, release, change updater configuration, or
   modify production ADC data as part of this handoff.
+
+## 2026-11-14 — Droid implementation ownership claim (additional feature wave)
+
+Factory/Droid claims source implementation and regression-test authoring for
+the ten feature areas assigned by the repository owner: ADC-beige theme,
+versioned torrent creator identity, conservative incoming-port diagnostics,
+manual peer block/unblock, Windows disc-menu mouse navigation, drop/open
+classification, torrent/magnet OS handling, disc-media opening and optional
+library import, default bounded RTT probing, and local per-torrent peer
+history. Antigravity retains ownership of builds, test execution, packaged
+runtime acceptance, and installer delivery. No tests, builds, or runtime
+checks are being run by this implementation pass.
+
+### ADC shared-file boundary
+
+Antigravity's active ADC tasks remain reserved: continuous/cached member
+display, unclipped hover cards, ADC user heading, and profile links. Droid will
+not change `src/utils/swarmMembersCache.ts`,
+`src/utils/adcSwarmMembersIpc.ts`, or the ADC member-fetch/cache contract.
+`src/components/manager/PeersTabPanel.tsx` is shared: any Droid edit there is
+limited to the existing peering-settings RTT toggle/help text and must not
+touch ADC member rows, card placement/geometry, the user heading, or profile
+links. The beige theme may recolor existing neutrals globally but will not
+change ADC hover-card layout or clipping behavior. New peer-history and block
+controls are planned as a separate manager panel rather than additions to the
+ADC member view.
+
+### Planned implementation ownership by area
+
+| Area | Droid-owned source scope | Coordination boundary |
+|---|---|---|
+| Selectable ADC-beige theme | `src/index.css`, `src/App.tsx`, settings persistence/UI | Global colors only; preserve dark theme and ADC panel geometry |
+| Torrent creator identity | `src-tauri/src/commands/torrent.rs`, focused regression coverage | Derive from authoritative Cargo application version |
+| Incoming-port diagnostics | `src-tauri/src/commands/connectivity.rs`, connectivity model/types/UI, Transmission port-test interpretation | Unknown must remain unknown; no inference from bind attempts or ambiguous peer counts |
+| Peer block/unblock and history | SQLite schema/DB, peering commands/models, Transmission enforcement, new isolated manager panel | Explicit global scope; do not mix ADC member responses into local history |
+| Disc-menu mouse navigation | `src/components/player/PlayerOverlay.tsx`, Windows embed only if source tracing requires it | Preserve the macOS mouse path, keyboard navigation, Play, and Menu controls |
+| Drop classification and OS opening | `src/App.tsx`, `src/stores/uiStore.ts`, `AddTorrentModal`, association/media commands | Route all native paths by type; do not silently drop mixed selections |
+| Torrent/magnet associations | Tauri bundle config, `Info.plist`, association command, startup dispatch, settings UI | Declare handlers in packaging; let Windows/macOS user-default consent remain authoritative |
+| Disc opening/import prompt | media commands, startup/drop dispatcher, isolated prompt UI/settings | Support ISO/BDMV/DVD `VIDEO_TS`; never classify an unrelated `.ts` stream as a DVD folder |
+| RTT probing | peering defaults/UI, Transmission caller, bounded prober | Preserve explicit opt-out; do not bypass configured VPN or peer proxy |
+
+All previous Windows-startup, macOS-playback, connectivity, security, and ADC
+validation findings remain open as recorded above until Antigravity or the
+owner completes the stated platform acceptance. This ownership claim does not
+close or replace those findings.

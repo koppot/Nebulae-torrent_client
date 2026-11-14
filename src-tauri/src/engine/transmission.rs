@@ -563,12 +563,9 @@ impl TransmissionRpcClient {
         self.request("session-stats", None)
     }
 
-    pub fn port_test(&self) -> Result<bool, String> {
+    pub fn port_test(&self) -> Result<Option<bool>, String> {
         let res = self.request("port-test", None)?;
-        Ok(res
-            .get("port-is-open")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false))
+        Ok(parse_port_test_result(&res))
     }
 
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
@@ -1241,23 +1238,38 @@ fn negotiate_reachable_port(
         }
     }
 
+    let mut tested_ports = Vec::new();
+    let mut every_test_was_definitively_closed = true;
+
     for (i, &port) in candidates.iter().enumerate() {
         if i > 0 {
             if let Err(e) = rpc.session_set(json!({ "peer-port": port })) {
                 warn!("[port] candidate {port}: session-set failed: {e}");
+                every_test_was_definitively_closed = false;
                 continue;
             }
             // Give the daemon a moment to rebind before testing.
             std::thread::sleep(Duration::from_secs(2));
         }
         match rpc.port_test() {
-            Ok(true) => {
+            Ok(Some(true)) => {
                 info!("[port] negotiated: peer port {port} is externally reachable");
                 persist_negotiated_port(db, engine_dir, port);
                 return;
             }
-            Ok(false) => info!("[port] candidate {port}: externally closed"),
-            Err(e) => warn!("[port] candidate {port}: test failed: {e}"),
+            Ok(Some(false)) => {
+                tested_ports.push(port);
+                info!("[port] candidate {port}: port test reports closed");
+            }
+            Ok(None) => {
+                tested_ports.push(port);
+                every_test_was_definitively_closed = false;
+                warn!("[port] candidate {port}: port test returned no boolean result");
+            }
+            Err(e) => {
+                every_test_was_definitively_closed = false;
+                warn!("[port] candidate {port}: test failed: {e}");
+            }
         }
     }
 
@@ -1273,15 +1285,17 @@ fn negotiate_reachable_port(
         info!("[port] live session restored to configured port {configured}");
     }
 
-    warn!(
-        "[port] none of the tried ports ({}) is externally reachable; keeping {configured}. \
-         The router refuses programmatic mappings (NAT-PMP/PCP) — a manual port forward is required.",
-        candidates
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    let status = if every_test_was_definitively_closed {
+        warn!(
+            "[port] all tested candidates ({}) were reported closed; keeping {configured}. \
+             The router refuses programmatic mappings (NAT-PMP/PCP) — a manual port forward may be required.",
+            tested_ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+        );
+        "unreachable"
+    } else {
+        warn!("[port] port negotiation was inconclusive; keeping configured port {configured}");
+        "unknown"
+    };
 
     // Owner directive: when no candidate is externally reachable, surface a
     // user-facing explanation instead of failing silently. The verdict is
@@ -1292,9 +1306,9 @@ fn negotiate_reachable_port(
     let _ = db.set_setting(
         "port_negotiation_result",
         json!({
-            "status": "unreachable",
+            "status": status,
             "configured_port": configured,
-            "tried_ports": candidates,
+            "tried_ports": tested_ports,
             "checked_at_epoch_ms": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -3674,7 +3688,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn check_port_open(&self) -> Option<bool> {
-        self.rpc_client.port_test().ok()
+        self.rpc_client.port_test().ok().flatten()
     }
 
     fn apply_peering_settings(
@@ -3986,9 +4000,30 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 }
 
+fn parse_port_test_result(arguments: &Value) -> Option<bool> {
+    arguments.get("port-is-open").and_then(Value::as_bool)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_test_parser_preserves_missing_and_malformed_results_as_unknown() {
+        assert_eq!(
+            parse_port_test_result(&json!({ "port-is-open": true })),
+            Some(true)
+        );
+        assert_eq!(
+            parse_port_test_result(&json!({ "port-is-open": false })),
+            Some(false)
+        );
+        assert_eq!(parse_port_test_result(&json!({})), None);
+        assert_eq!(
+            parse_port_test_result(&json!({ "port-is-open": "false" })),
+            None
+        );
+    }
 
     /// Needs a disposable daemon: NEB_MOVE_TEST_PORT, NEB_MOVE_TEST_TORRENT
     /// (a .torrent whose data sits in NEB_MOVE_TEST_SRC) and an empty

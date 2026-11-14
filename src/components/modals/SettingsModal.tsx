@@ -382,7 +382,7 @@ export const SettingsModal: React.FC = () => {
                         className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:border-[#e50914] focus:outline-none"
                       >
                         <option value="dark">Dark Space / Charcoal</option>
-                        <option value="light">Light Theme</option>
+                        <option value="light">ADC Beige / Light</option>
                       </select>
                     </div>
                   </div>

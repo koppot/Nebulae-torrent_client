@@ -6,6 +6,14 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
+fn port_status_from_engine_test(result: Option<bool>) -> PortStatus {
+    match result {
+        Some(true) => PortStatus::Open,
+        Some(false) => PortStatus::Closed,
+        None => PortStatus::Unknown,
+    }
+}
+
 async fn probe_upnp() -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(1500), async {
         let socket = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
@@ -130,49 +138,9 @@ pub async fn run_connectivity_doctor_test(
     let vpn_bound = status.bound_interface.is_some();
     let vpn_adapter = status.bound_interface.clone();
 
-    // Determine port status: check if local listener is accepting or port in use
-    let local_bind_test = std::net::TcpListener::bind(("0.0.0.0", listening_port));
-    let port_listening = match local_bind_test {
-        Ok(_) => false, // Not bound by active engine
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => true,
-        Err(_) => false,
-    };
-
-    let active_torrents = engine.list_torrents().unwrap_or_default();
-    let total_inbound_peers: u32 = active_torrents.iter().map(|t| t.peers).sum();
-    let total_outbound_peers: u32 = active_torrents.iter().filter_map(|t| t.seeds).sum();
-
     let port_open_from_engine = engine.check_port_open();
-    let port_status = if let Some(open) = port_open_from_engine {
-        if open {
-            PortStatus::Open
-        } else {
-            PortStatus::Closed
-        }
-    } else if port_listening || total_inbound_peers > 0 {
-        PortStatus::Open
-    } else {
-        PortStatus::Closed
-    };
-
-    // Record which signal produced the verdict — the three signals measure
-    // very different things and blending them produced misleading "Open"
-    // reports (see port_open_evidence docs on the report struct).
-    let port_open_evidence = if port_open_from_engine.is_some() {
-        Some("transmission-self-test".to_string())
-    } else if total_inbound_peers > 0 {
-        Some("inbound-peers".to_string())
-    } else if port_listening {
-        Some("local-listener".to_string())
-    } else {
-        None
-    };
-
-    let nat_type = if upnp || nat_pmp {
-        NatType::FullCone
-    } else {
-        NatType::Unknown
-    };
+    let port_status = port_status_from_engine_test(port_open_from_engine);
+    let port_open_evidence = port_open_from_engine.map(|_| "transmission-port-test".to_string());
 
     let certificate_text = ConnectivityReport::generate_certificate(
         listening_port,
@@ -185,35 +153,29 @@ pub async fn run_connectivity_doctor_test(
 
     let mut plain_language_findings = Vec::new();
     if port_status == PortStatus::Open {
-        // Be explicit about WHAT the verdict is based on — a transmission
-        // self-test or connected peers is NOT proof that new external peers
-        // can reach the port right now.
-        match port_open_evidence.as_deref() {
-            Some("transmission-self-test") => plain_language_findings.push(format!(
-                "Port {listening_port}: the engine's self-test passed, but this test connects from your own machine and can pass even when the internet cannot reach the port (no NAT loopback). Treat it as unverified."
-            )),
-            Some("inbound-peers") => plain_language_findings.push(format!(
-                "Port {listening_port}: {total_inbound_peers} peers are connected, but they may have connected earlier or over IPv6; this does not prove new inbound IPv4 connections work."
-            )),
-            Some("local-listener") => plain_language_findings.push(format!(
-                "Port {listening_port} is bound locally, but nothing has verified that the internet can reach it."
-            )),
-            _ => plain_language_findings.push(format!(
-                "Incoming BitTorrent port {listening_port} is open and active."
-            )),
-        }
+        plain_language_findings.push(format!(
+            "Transmission's port test reports incoming port {listening_port} as reachable."
+        ));
+    } else if port_status == PortStatus::Closed {
+        plain_language_findings.push(format!(
+            "Transmission's port test reports incoming port {listening_port} as closed."
+        ));
     } else {
         plain_language_findings.push(format!(
-            "Port {listening_port} is not currently open for incoming connections."
+            "Incoming port {listening_port} reachability is unknown because the engine did not return a definitive port-test result."
         ));
     }
 
     if upnp {
-        plain_language_findings
-            .push("UPnP automatic port mapping is active on your router.".to_string());
+        plain_language_findings.push(
+            "A UPnP gateway responded to discovery; this does not confirm an active port mapping."
+                .to_string(),
+        );
     } else if nat_pmp {
-        plain_language_findings
-            .push("NAT-PMP port mapping is supported on your router.".to_string());
+        plain_language_findings.push(
+            "A NAT-PMP gateway responded; this does not confirm an active port mapping."
+                .to_string(),
+        );
     } else {
         plain_language_findings.push(
             "Automatic port mapping (UPnP/NAT-PMP) was not detected on your gateway.".to_string(),
@@ -237,12 +199,18 @@ pub async fn run_connectivity_doctor_test(
     }
 
     let mut suggested_fixes = Vec::new();
-    if port_status != PortStatus::Open && !upnp && !nat_pmp {
+    if port_status == PortStatus::Closed {
         suggested_fixes.push(format!(
-            "Enable UPnP in your router settings or configure a port forwarding rule for TCP/UDP port {listening_port}."
+            "The engine reports the incoming port closed. Check your router's TCP/UDP forwarding rule for port {listening_port}, the target device address, and any upstream NAT or firewall."
         ));
+    } else if port_status == PortStatus::Unknown {
+        suggested_fixes.push(
+            "The engine could not determine incoming-port reachability. Retry the connectivity test before changing router settings."
+                .to_string(),
+        );
     } else {
-        suggested_fixes.push("Network connectivity is configured correctly.".to_string());
+        suggested_fixes
+            .push("The engine reports the configured peer port as reachable.".to_string());
     }
 
     Ok(ConnectivityReport {
@@ -251,7 +219,8 @@ pub async fn run_connectivity_doctor_test(
         upnp_available: upnp,
         nat_pmp_available: nat_pmp,
         pcp_available: false,
-        nat_type,
+        // Gateway discovery alone does not identify the NAT mapping behavior.
+        nat_type: NatType::Unknown,
         ipv4_healthy: ipv4,
         ipv6_healthy: ipv6,
         dns_health_ms: dns_ms,
@@ -259,8 +228,8 @@ pub async fn run_connectivity_doctor_test(
         vpn_adapter_name: vpn_adapter,
         tracker_reachable: tracker_ok,
         tracker_auth_ok: tracker_ok,
-        inbound_connections: total_inbound_peers,
-        outbound_connections: total_outbound_peers,
+        inbound_connections: None,
+        outbound_connections: None,
         port_open_evidence,
         certificate_text,
         plain_language_findings,
@@ -278,6 +247,15 @@ pub struct PortNegotiationResult {
     pub checked_at_epoch_ms: u64,
 }
 
+const PORT_NEGOTIATION_MAX_AGE_MS: u64 = 10 * 60 * 1000;
+
+fn port_negotiation_result_is_fresh(checked_at_epoch_ms: u64, now_epoch_ms: u64) -> bool {
+    checked_at_epoch_ms > 0
+        && now_epoch_ms
+            .checked_sub(checked_at_epoch_ms)
+            .is_some_and(|age| age <= PORT_NEGOTIATION_MAX_AGE_MS)
+}
+
 #[tauri::command]
 pub fn get_port_negotiation_result(
     db: State<'_, Arc<Database>>,
@@ -285,45 +263,44 @@ pub fn get_port_negotiation_result(
     let raw = db.get_setting("port_negotiation_result").ok().flatten();
     let Some(raw) = raw else { return Ok(None) };
     match serde_json::from_str::<serde_json::Value>(&raw) {
-        Ok(v) => Ok(Some(PortNegotiationResult {
-            status: v
+        Ok(v) => {
+            let checked_at_epoch_ms = v
+                .get("checked_at_epoch_ms")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(0);
+            let now_epoch_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let stored_status = v
                 .get("status")
                 .and_then(|s| s.as_str())
                 .unwrap_or("unknown")
-                .to_string(),
-            configured_port: v
-                .get("configured_port")
-                .and_then(|p| p.as_u64())
-                .unwrap_or(0) as u16,
-            tried_ports: v
-                .get("tried_ports")
-                .and_then(|p| p.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_u64().map(|n| n as u16))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            checked_at_epoch_ms: v
-                .get("checked_at_epoch_ms")
-                .and_then(|t| t.as_u64())
-                .unwrap_or(0),
-        })),
-        Err(_) => Ok(None),
-    }
-}
-
-#[tauri::command]
-pub fn retest_listening_port(port: u16) -> Result<bool, String> {
-    match std::net::TcpListener::bind(("0.0.0.0", port)) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::AddrInUse {
-                Ok(true)
+                .to_string();
+            let status = if port_negotiation_result_is_fresh(checked_at_epoch_ms, now_epoch_ms) {
+                stored_status
             } else {
-                Err(format!("Port test failed: {e}"))
-            }
+                "unknown".to_string()
+            };
+            Ok(Some(PortNegotiationResult {
+                status,
+                configured_port: v
+                    .get("configured_port")
+                    .and_then(|p| p.as_u64())
+                    .unwrap_or(0) as u16,
+                tried_ports: v
+                    .get("tried_ports")
+                    .and_then(|p| p.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u16))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                checked_at_epoch_ms,
+            }))
         }
+        Err(_) => Ok(None),
     }
 }
 
@@ -334,6 +311,32 @@ pub async fn get_connectivity_certificate(
 ) -> Result<String, String> {
     let report = run_connectivity_doctor_test(db, engine).await?;
     Ok(report.certificate_text)
+}
+
+#[cfg(test)]
+mod port_status_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_engine_results_set_a_port_verdict() {
+        assert_eq!(port_status_from_engine_test(Some(true)), PortStatus::Open);
+        assert_eq!(
+            port_status_from_engine_test(Some(false)),
+            PortStatus::Closed
+        );
+        assert_eq!(port_status_from_engine_test(None), PortStatus::Unknown);
+    }
+
+    #[test]
+    fn stale_or_future_negotiation_results_are_not_fresh() {
+        assert!(port_negotiation_result_is_fresh(9_500, 10_000));
+        assert!(!port_negotiation_result_is_fresh(
+            1,
+            10_000 + PORT_NEGOTIATION_MAX_AGE_MS
+        ));
+        assert!(!port_negotiation_result_is_fresh(10_001, 10_000));
+        assert!(!port_negotiation_result_is_fresh(0, 10_000));
+    }
 }
 
 /// Live Tailscale (Secure Network) detection for the status bar: reports the

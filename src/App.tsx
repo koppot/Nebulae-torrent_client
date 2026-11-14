@@ -35,9 +35,20 @@ import { useRemoteServerStore } from './stores/remoteServerStore';
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
+  const theme = useSettingsStore((s) => s.settings.theme);
   const remoteServerEnabled = useSettingsStore((s) => s.settings.rtorrent_server_enabled);
   const remoteServerUrl = useSettingsStore((s) => s.settings.rtorrent_server_url);
   const remoteServerToken = useSettingsStore((s) => s.settings.rtorrent_server_token);
+
+  // Apply the persisted preference at the document root so existing surfaces
+  // can share one palette without changing their layout or behavior.
+  useEffect(() => {
+    const root = document.documentElement;
+    const light = theme === 'light';
+    root.dataset.theme = light ? 'light' : 'dark';
+    root.style.colorScheme = light ? 'light' : 'dark';
+    root.classList.toggle('dark', !light);
+  }, [theme]);
 
   // Start or stop remote server polling whenever the connection settings change.
   useEffect(() => {

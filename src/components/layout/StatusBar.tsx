@@ -143,8 +143,9 @@ export const StatusBar: React.FC = () => {
 
   const reportFresh = !!lastDoctorRun && Date.now() - lastDoctorRun < REPORT_FRESH_MS;
   const port = report?.listening_port || 41413;
-  const portState = reportFresh ? (report?.port_status === 'Open' ? 'Open' : 'Closed') : '—';
+  const portState = reportFresh ? (report?.port_status ?? 'Unknown') : '—';
   const isPortOpen = portState === 'Open';
+  const isPortClosed = portState === 'Closed';
 
   // Connectivity dot: an authoritative fresh doctor report wins; otherwise
   // fall back to live swarm activity so a healthy seeding torrent never
@@ -195,9 +196,11 @@ export const StatusBar: React.FC = () => {
           title={`Inbound Listening Port ${port} — ${
             reportFresh
               ? portState === 'Open'
-                ? 'verified reachable'
-                : 'verified closed — click for port help'
-              : 'not verified yet (doctor runs every 10 min) — click for port help'
+                ? 'engine port test reports reachable'
+                : isPortClosed
+                  ? 'engine port test reports closed — click for port help'
+                  : 'reachability unknown — click for diagnostics'
+              : 'not checked recently — click for diagnostics'
           }`}
         >
           <span
@@ -206,7 +209,9 @@ export const StatusBar: React.FC = () => {
                 ? 'bg-[#333333]'
                 : portState === 'Open'
                   ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
-                  : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+                : isPortClosed
+                  ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
+                  : 'bg-amber-500'
             }`}
           />
           Port: {port}

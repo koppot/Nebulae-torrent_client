@@ -5,10 +5,9 @@ import { Activity, CheckCircle, RefreshCw, Shield, ChevronDown, ChevronRight, Co
 
 export const ConnectivityDoctorModal: React.FC = () => {
   const { showConnectivityDoctor, setShowConnectivityDoctor } = useUiStore();
-  const { report, isRunningTest, isRetestingPort, runDoctorTest, retestPort } = useConnectivityStore();
+  const { report, isRunningTest, runDoctorTest } = useConnectivityStore();
   const [activeAccordion, setActiveAccordion] = useState<string | null>(null);
   const [copiedCert, setCopiedCert] = useState(false);
-  const [portInput, setPortInput] = useState('41413');
 
   useEffect(() => {
     if (showConnectivityDoctor && !report) {
@@ -86,13 +85,13 @@ export const ConnectivityDoctorModal: React.FC = () => {
             </div>
 
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
-              <span className="text-[10px] text-[#a3a3a3] block">NAT Mapping</span>
+              <span className="text-[10px] text-[#a3a3a3] block">Gateway Discovery</span>
               <div className="mt-1 flex items-center justify-between font-mono">
                 <span className="text-sm font-bold text-white">
-                  {report ? (report.upnp_available ? 'UPnP' : report.nat_pmp_available ? 'NAT-PMP' : 'Manual') : (isRunningTest ? 'Probing…' : '—')}
+                  {report ? (report.upnp_available ? 'UPnP' : report.nat_pmp_available ? 'NAT-PMP' : 'No response') : (isRunningTest ? 'Probing…' : '—')}
                 </span>
                 <span className="text-[10px] text-[#a3a3a3]">
-                  {report ? (report.upnp_available || report.nat_pmp_available ? 'Active' : 'Router Only') : (isRunningTest ? 'Probing' : '—')}
+                  {report ? (report.upnp_available || report.nat_pmp_available ? 'Responded' : 'Unknown') : (isRunningTest ? 'Probing' : '—')}
                 </span>
               </div>
             </div>
@@ -146,23 +145,10 @@ export const ConnectivityDoctorModal: React.FC = () => {
 
           {/* Retest Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-[#a3a3a3]">Custom Port:</span>
-              <input
-                type="number"
-                value={portInput}
-                onChange={(e) => setPortInput(e.target.value)}
-                className="w-20 px-2 py-1 text-xs rounded border border-[#333333] bg-[#141414] text-white font-mono focus:border-[#e50914] focus:outline-none"
-              />
-              <button
-                onClick={() => retestPort(parseInt(portInput) || 41413)}
-                disabled={isRetestingPort}
-                className="px-2.5 py-1 text-xs rounded border border-[#333333] bg-[#141414] hover:bg-[#262626] text-white transition"
-              >
-                {isRetestingPort ? 'Testing...' : 'Test Port'}
-              </button>
-            </div>
-
+            <p className="text-[11px] text-[#a3a3a3]">
+              Gateway discovery does not confirm a port mapping. Reachability uses the engine's
+              test for its configured peer port.
+            </p>
             <button
               onClick={() => runDoctorTest()}
               disabled={isRunningTest}

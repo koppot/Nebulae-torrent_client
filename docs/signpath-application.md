@@ -71,9 +71,9 @@ All release binaries are produced by [`.github/workflows/release.yml`](../.githu
 
 ### Connectivity and VPN functionality (accurate, against the actual implementation)
 
-**Connectivity Doctor (current implementation):** reports real connectivity diagnostics for the user's own torrenting setup (`src-tauri/src/commands/connectivity.rs`). Probes run concurrently and non-blockingly:
-- Local socket bind test of the application's own configured listening port (`retest_listening_port`).
-- Router port-mapping availability via local UPnP SSDP multicast discovery (`239.255.255.250:1900`) and NAT-PMP gateway probes (`port 5351`).
+**Connectivity Doctor (current implementation):** reports diagnostics for the user's own torrenting setup (`src-tauri/src/commands/connectivity.rs`). Probes run concurrently and non-blockingly:
+- The torrent engine's explicit `port-is-open` test result for the configured listening port. Missing results and RPC errors remain unknown; local socket binding and peer counts are not used as external reachability evidence.
+- UPnP SSDP multicast and NAT-PMP gateway discovery; these do not confirm that an active port mapping exists.
 - Dual-stack IPv4 / IPv6 socket tests checking whether the host has active IPv6 routing.
 - DNS resolution latency measured against `1.1.1.1:53`.
 - Community tracker reachability against `tracker.asiandvdclub.org`.

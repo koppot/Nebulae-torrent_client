@@ -780,7 +780,6 @@ pub fn run() {
             commands::peering::get_peer_telemetry,
             // Connectivity Doctor
             commands::connectivity::run_connectivity_doctor_test,
-            commands::connectivity::retest_listening_port,
             commands::connectivity::get_port_negotiation_result,
             commands::connectivity::get_connectivity_certificate,
             commands::connectivity::get_tailscale_status,

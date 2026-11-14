@@ -357,7 +357,7 @@ export interface CreateTorrentParams {
   web_seeds: string[];
   is_private: boolean;
   comment: string;
-  created_by: string;
+  created_by?: string;
   start_seeding: boolean;
 }
 

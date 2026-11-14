@@ -1,4 +1,4 @@
-export type PortStatus = 'Open' | 'Closed' | 'Stealth' | 'Checking';
+export type PortStatus = 'Open' | 'Closed' | 'Unknown' | 'Stealth' | 'Testing' | 'Checking';
 
 export type NatType = 'FullCone' | 'RestrictedCone' | 'PortRestricted' | 'Symmetric' | 'Unknown';
 
@@ -16,9 +16,9 @@ export interface ConnectivityReport {
   vpn_adapter_name?: string;
   tracker_reachable: boolean;
   tracker_auth_ok: boolean;
-  inbound_connections: number;
-  outbound_connections: number;
-  /** What produced the port verdict: transmission-self-test, inbound-peers, local-listener, or null. */
+  inbound_connections: number | null;
+  outbound_connections: number | null;
+  /** The engine's explicit port-test result, or null when no verdict was available. */
   port_open_evidence?: string | null;
   certificate_text: string;
   plain_language_findings: string[];

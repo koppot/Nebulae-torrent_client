@@ -122,6 +122,9 @@ pub struct CreateTorrentParams {
     pub web_seeds: Vec<String>,
     pub is_private: bool,
     pub comment: String,
+    /// Accepted for older frontends but ignored by the creator.
+    /// Generated metainfo always uses the authoritative application version.
+    #[serde(default)]
     pub created_by: String,
     pub start_seeding: bool,
 }
@@ -911,7 +914,7 @@ pub async fn create_torrent_file(
             &trackers_for_build,
             true, // private: 1 stays mandatory for created torrents per private-tracker security constraint
             &params_clone.comment,
-            &params_clone.created_by,
+            &torrent_creator_identity(),
         )
     })
     .await
@@ -925,6 +928,10 @@ pub async fn create_torrent_file(
     }
 
     Ok(target_file_str)
+}
+
+fn torrent_creator_identity() -> String {
+    format!("Nebulae/{}", crate::engine::identity::get_app_version())
 }
 
 /// "Save torrent file as...": native save dialog (owner request) then write
@@ -1466,6 +1473,14 @@ pub fn open_torrent_folder(path: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn torrent_creator_identity_uses_authoritative_package_version() {
+        assert_eq!(
+            torrent_creator_identity(),
+            format!("Nebulae/{}", crate::engine::identity::get_app_version())
+        );
+    }
 
     fn expected(entries: &[(&str, u64)]) -> Vec<(u32, String, u64)> {
         entries

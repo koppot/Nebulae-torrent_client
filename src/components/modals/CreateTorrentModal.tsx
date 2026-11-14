@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { InspectTorrentResult } from '../../types';
+import { EngineIdentityInfo, InspectTorrentResult } from '../../types';
 import { X, Sparkles, Folder, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 const LAST_SAVED_TRACKERS_KEY = 'nebulae_last_created_trackers';
@@ -24,12 +24,27 @@ export const CreateTorrentModal: React.FC = () => {
   });
   const [isPrivate, setIsPrivate] = useState(true); // Private by default
   const [comment, setComment] = useState('Created with Nebulae');
-  const [createdBy, setCreatedBy] = useState('Nebulae Client 1.0');
+  const [creatorIdentity, setCreatorIdentity] = useState('Nebulae (version set by app build)');
   const [startSeeding, setStartSeeding] = useState(false); // Opt-in: do not seed unless asked
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
   );
+
+  useEffect(() => {
+    if (!showCreateTorrent) return;
+    let alive = true;
+    invoke<EngineIdentityInfo>('get_engine_identity_info')
+      .then((info) => {
+        if (alive) setCreatorIdentity(`Nebulae/${info.nebulae_version}`);
+      })
+      .catch(() => {
+        if (alive) setCreatorIdentity('Nebulae (version set by app build)');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [showCreateTorrent]);
 
   if (!showCreateTorrent) return null;
 
@@ -112,7 +127,6 @@ export const CreateTorrentModal: React.FC = () => {
         web_seeds: [],
         is_private: isPrivate,
         comment: comment.trim(),
-        created_by: createdBy.trim(),
         start_seeding: startSeeding,
       });
 
@@ -251,13 +265,13 @@ export const CreateTorrentModal: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-[11px] text-[#a3a3a3] mb-1">Created By</label>
-              <input
-                type="text"
-                value={createdBy}
-                onChange={(e) => setCreatedBy(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs focus:outline-none focus:border-[#e50914]"
-              />
+              <label className="block text-[11px] text-[#a3a3a3] mb-1">Created By (application identity)</label>
+              <output
+                className="block w-full px-2.5 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white text-xs font-mono"
+                title="The generated metainfo always uses the authoritative version of this app build."
+              >
+                {creatorIdentity}
+              </output>
             </div>
           </div>
 

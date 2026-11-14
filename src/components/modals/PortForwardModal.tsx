@@ -24,18 +24,25 @@ export function PortForwardModal() {
     () => localStorage.getItem('port_forward_dismissed') || ''
   );
 
-  // Owner: this modal must NEVER open by itself. It shows only when the
-  // user clicks the red (closed) port dot in the status bar, which
-  // dispatches 'nebulae:port-closed-info'. The verdict is re-read after
-  // the doctor modal closes in case the user fixed the forward.
+  // This warning is user-initiated from the status bar only. Inconclusive,
+  // missing, or stale results open the Connectivity Doctor instead.
   useEffect(() => {
     let alive = true;
     const check = async () => {
       try {
         const r = await invoke<PortNegotiationResult | null>('get_port_negotiation_result');
-        if (alive && r && r.status === 'unreachable') setVerdict(r);
+        if (!alive) return;
+        if (r?.status === 'unreachable') {
+          setVerdict(r);
+        } else {
+          setVerdict(null);
+          setShowConnectivityDoctor(true);
+        }
       } catch {
-        // engine not ready yet
+        if (alive) {
+          setVerdict(null);
+          setShowConnectivityDoctor(true);
+        }
       }
     };
     const onOpen = () => check();
@@ -44,7 +51,7 @@ export function PortForwardModal() {
       alive = false;
       window.removeEventListener('nebulae:port-closed-info', onOpen);
     };
-  }, [showConnectivityDoctor]);
+  }, [showConnectivityDoctor, setShowConnectivityDoctor]);
 
   if (!verdict) return null;
   const key = `${verdict.configured_port}:${verdict.checked_at_epoch_ms}`;
@@ -61,10 +68,10 @@ export function PortForwardModal() {
         <div className="flex items-start gap-3 px-5 pt-4 pb-3 border-b border-[#333333] bg-[#1f1f1f] rounded-t-xl">
           <ShieldAlert className="w-5 h-5 text-[#e50914] flex-shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-bold text-white">Torrent port not reachable from the internet</h2>
+            <h2 className="text-sm font-bold text-white">Torrent port test reports closed</h2>
             <p className="text-[11px] text-[#a3a3a3] mt-1">
-              No router port mapping could be established automatically — other members cannot
-              connect to you until a port is opened.
+              The engine's port tests reported these peer ports closed. This may prevent other
+              members from initiating connections to you.
             </p>
           </div>
           <button onClick={dismiss} className="p-1 rounded text-[#a3a3a3] hover:text-white transition">
@@ -78,8 +85,8 @@ export function PortForwardModal() {
             <span className="font-mono text-white">
               {verdict.tried_ports.join(', ') || String(verdict.configured_port)}
             </span>{' '}
-            and every one is closed from the outside. Downloads can still work through outgoing
-            connections, but seeding and many peer exchanges will be slow or fail.
+            and the engine reported each tested port closed. Downloads may still use outgoing peer
+            connections, while fewer peers may be able to initiate connections to this device.
           </p>
           <ol className="list-decimal ml-4 space-y-1.5 text-[#cccccc]">
             <li>
@@ -94,7 +101,7 @@ export function PortForwardModal() {
             <li>
               Create a rule for <span className="text-white font-semibold">TCP &amp; UDP</span> port{' '}
               <span className="font-mono text-white">{verdict.configured_port}</span> pointing at this
-              Mac's local IP address.
+              device's local IP address.
             </li>
             <li>
               If the router offers <span className="text-white font-semibold">UPnP / NAT-PMP</span>,

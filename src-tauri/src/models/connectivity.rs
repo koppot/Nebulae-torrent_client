@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum PortStatus {
     Open,
     Closed,
+    Unknown,
     Stealth,
     Testing,
 }
@@ -32,18 +33,12 @@ pub struct ConnectivityReport {
     pub vpn_adapter_name: Option<String>,
     pub tracker_reachable: bool,
     pub tracker_auth_ok: bool,
-    pub inbound_connections: u32,
-    pub outbound_connections: u32,
-    /// How the port verdict was reached. The old doctor blended three very
-    /// different signals into one "Open"/"Closed" flag, which produced
-    /// contradictory answers ("open" while no external peer could connect).
-    /// Evidence kinds:
-    /// - "transmission-self-test": the daemon connected to its own public IP
-    ///   (needs NAT hairpin — can pass when real inbound is blocked);
-    /// - "inbound-peers": peers are currently connected (they may have
-    ///   connected over IPv6 or earlier, when a path existed);
-    /// - "local-listener": the port is merely bound locally;
-    /// - "no-evidence": nothing indicates reachability.
+    /// Directional connection counts are not exposed by the current engine API.
+    pub inbound_connections: Option<u32>,
+    pub outbound_connections: Option<u32>,
+    /// The current port verdict is based only on Transmission's explicit
+    /// `port-is-open` boolean. Local bind attempts and peer counts do not
+    /// establish external reachability.
     pub port_open_evidence: Option<String>,
     pub certificate_text: String,
     pub plain_language_findings: Vec<String>,
@@ -59,14 +54,15 @@ impl ConnectivityReport {
         vpn_bound: bool,
         vpn_adapter: Option<&str>,
     ) -> String {
-        let connectable_str = if port_status == PortStatus::Open {
-            "Yes"
-        } else {
-            "Limited"
+        let connectable_str = match port_status {
+            PortStatus::Open => "Yes",
+            PortStatus::Closed => "No",
+            PortStatus::Stealth | PortStatus::Testing | PortStatus::Unknown => "Unknown",
         };
         let port_str = match port_status {
             PortStatus::Open => format!("Port {port} Reachable"),
             PortStatus::Closed => format!("Port {port} Closed/Firewalled"),
+            PortStatus::Unknown => format!("Port {port} Reachability Unknown"),
             PortStatus::Stealth => format!("Port {port} Stealth/Blocked"),
             PortStatus::Testing => format!("Port {port} Probing"),
         };
@@ -110,6 +106,23 @@ mod tests {
         assert_eq!(
             cert,
             "ADC Connectable: Yes — Port 41413 Reachable — IPv6 Ready — Tracker Healthy — VPN Bound (utun3)"
+        );
+    }
+
+    #[test]
+    fn unknown_port_status_does_not_claim_connectability() {
+        let cert = ConnectivityReport::generate_certificate(
+            41413,
+            PortStatus::Unknown,
+            false,
+            false,
+            false,
+            None,
+        );
+
+        assert_eq!(
+            cert,
+            "ADC Connectable: Unknown — Port 41413 Reachability Unknown — IPv4 Only — Tracker Blocked — Direct Connection"
         );
     }
 }
