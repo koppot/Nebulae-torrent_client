@@ -8,19 +8,23 @@ import {
 } from '../../types';
 import { formatSpeed } from '../../lib/formatters';
 import {
+  clearSwarmRetryState,
   getResolvedSwarm,
   storeSwarmResults,
   getCooldownRemaining,
+  markSwarmLookupFailed,
   registerCooldownListener,
 } from '../../utils/swarmMembersCache';
 import {
   getAdcSwarmNotice,
+  isAdcTracker,
   isValidAdcProfileUrl,
   lookupSwarmMembers,
   normalizeProfileUrl,
 } from '../../utils/adcSwarmMembersIpc';
 import { useTrackerStore } from '../../stores/trackerStore';
 import { useUiStore } from '../../stores/uiStore';
+import { compareCountryNames, getCountryName } from '../../utils/countryNames';
 
 // ── Locality chip ────────────────────────────────────────────────────────────
 
@@ -107,7 +111,7 @@ function sortPeers(peers: PeerTelemetry[], key: SortKey, asc: boolean): PeerTele
         cmp = LOCALITY_ORDER[a.locality_tier] - LOCALITY_ORDER[b.locality_tier];
         break;
       case 'country_code':
-        cmp = (a.country_code ?? '').localeCompare(b.country_code ?? '');
+        cmp = compareCountryNames(a.country_code, b.country_code);
         break;
       case 'rtt_ms':
         cmp = a.rtt_ms - b.rtt_ms;
@@ -445,15 +449,6 @@ const AdcMemberCell: React.FC<{ member: SwarmMember }> = ({ member }) => {
   );
 };
 
-/** True when the tracker URL is an ADC tracker. */
-function isAdcTracker(url: string): boolean {
-  try {
-    return new URL(url).hostname.endsWith('asiandvdclub.org');
-  } catch {
-    return false;
-  }
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface PeersTabPanelProps {
@@ -514,7 +509,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   );
 
   useEffect(() => {
-    const identity = `${infoHash ?? ''}:${credentialRevision}`;
+    const identity = `${infoHash ?? ''}:${credentialRevision}:${hasAdcTracker()}`;
     const identityChanged = lastIdentity.current !== identity;
     if (identityChanged) {
       lastIdentity.current = identity;
@@ -534,7 +529,11 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
     const peerAddrs = peers.map((p) => ({ ip: p.ip, port: p.port }));
 
     // 1. Resolve immediately from cache for continuous display
-    const { cachedMap, unresolvedPeers } = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
+    const {
+      cachedMap,
+      unresolvedPeers,
+      hasRecentFailure,
+    } = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
 
     // If torrent or identity changed, start from cachedMap (or empty map)
     if (identityChanged) {
@@ -562,7 +561,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
 
     // 2. If all peers are already resolved (or negative-cached within TTL), we're done
     if (unresolvedPeers.length === 0) {
-      if (cachedMap.size === 0) {
+      if (cachedMap.size === 0 && !hasRecentFailure) {
         setAdcStatus('no_matching_peers');
       }
       return;
@@ -582,13 +581,14 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
       setAdcStatus('loading');
     }
 
-    const request = ++requestId.current;
+    const request = requestId.current;
     const batchToFetch = unresolvedPeers.slice(0, 100);
 
-    void lookupSwarmMembers(infoHash, batchToFetch)
+    void lookupSwarmMembers(infoHash, batchToFetch, undefined, String(credentialRevision))
       .then((lookup) => {
         if (request !== requestId.current) return;
         if (lookup.kind === 'ipc_error') {
+          markSwarmLookupFailed(infoHash, credentialRevision, batchToFetch);
           setAdcMap((curr) => {
             if (curr.size === 0) setAdcStatus('ipc_error');
             return curr;
@@ -598,10 +598,12 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
 
         const result = lookup.result;
         storeSwarmResults(infoHash, credentialRevision, batchToFetch, result);
+        const fresh = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
+        if (fresh.cachedMap.size > 0) {
+          setAdcMap((prev) => new Map([...prev, ...fresh.cachedMap]));
+        }
 
         if (result.status === 'matched' || result.status === 'no_matching_peers') {
-          const fresh = getResolvedSwarm(infoHash, credentialRevision, peerAddrs);
-          setAdcMap(fresh.cachedMap);
           setAdcStatus(fresh.cachedMap.size > 0 ? 'matched' : result.status);
         } else if (result.status === 'rate_limited') {
           setAdcMap((curr) => {
@@ -619,12 +621,17 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
       })
       .catch(() => {
         if (request !== requestId.current) return;
+        markSwarmLookupFailed(infoHash, credentialRevision, batchToFetch);
         setAdcMap((curr) => {
           if (curr.size === 0) setAdcStatus('ipc_error');
           return curr;
         });
       });
   }, [infoHash, peers, hasAdcTracker, credentialRevision, adcRetry, cooldownTrigger]);
+
+  useEffect(() => () => {
+    requestId.current += 1;
+  }, []);
 
   // Load settings once on mount if not yet loaded
   useEffect(() => {
@@ -699,7 +706,16 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
             ['network_error', 'ipc_error', 'rate_limited'].includes(adcStatus) && (
               <button
                 type="button"
-                onClick={() => setAdcRetry((value) => value + 1)}
+              onClick={() => {
+                if (infoHash) {
+                  clearSwarmRetryState(
+                    infoHash,
+                    credentialRevision,
+                    peers.map(({ ip, port }) => ({ ip, port })),
+                  );
+                }
+                setAdcRetry((value) => value + 1);
+              }}
                 className="shrink-0 text-[#e50914] hover:underline"
               >
                 Retry
@@ -718,7 +734,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
               <ColHeader label="Client" sortKey="client_name" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="IP / Port" sortKey="ip" current={sortKey} asc={sortAsc} onSort={handleSort} />
               <ColHeader label="Locality" sortKey="locality_tier" current={sortKey} asc={sortAsc} onSort={handleSort} />
-              <ColHeader label="CC" sortKey="country_code" current={sortKey} asc={sortAsc} onSort={handleSort} />
+              <ColHeader label="Country" sortKey="country_code" current={sortKey} asc={sortAsc} onSort={handleSort} />
               {showAdcCol && (
                 <th
                   scope="col"
@@ -810,10 +826,10 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
                       <LocalityChip tier={p.locality_tier} />
                     </td>
 
-                    {/* Country code — always visible */}
-                    <td className="py-1.5 px-2 text-[#a3a3a3] w-10">
+                    {/* Full country name — ISO code remains in telemetry only */}
+                    <td className="py-1.5 px-2 text-[#a3a3a3] min-w-[110px]">
                       {p.country_code ? (
-                        <span className="text-white font-semibold">{p.country_code}</span>
+                        <span className="text-white">{getCountryName(p.country_code)}</span>
                       ) : (
                         <span className="text-[#444]">—</span>
                       )}
