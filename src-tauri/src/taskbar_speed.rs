@@ -95,10 +95,10 @@ mod windows_impl {
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
     };
     use windows::Win32::Graphics::Gdi::{
-        CreateDIBSection, CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
-        GdiFlush, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW, AC_SRC_ALPHA,
-        AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, CLEARTYPE_QUALITY,
-        CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, HDC, OUT_DEFAULT_PRECIS, TRANSPARENT,
+        CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush, GetDC, ReleaseDC,
+        SelectObject, SetBkMode, SetTextColor, TextOutW, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+        DEFAULT_CHARSET, DIB_RGB_COLORS, OUT_DEFAULT_PRECIS, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
@@ -400,95 +400,9 @@ mod windows_impl {
         let old_bmp = SelectObject(mem_dc, dib.into());
         let len = (width * height * 4) as usize;
         let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, len);
-        pixels.fill(0); // Fully transparent background outside pill
+        pixels.fill(0); // Fully transparent background: no solid or dark pill backdrop
 
-        // 1. Draw dark translucent rounded pill background directly into pixels
-        let pill_left = layout.pill_pad_x / 2;
-        let pill_right = width - (layout.pill_pad_x / 2);
-        let pill_top = layout.pill_pad_y;
-        let pill_bottom = height - layout.pill_pad_y;
-        let pill_radius = ((pill_bottom - pill_top) / 3).max(4);
-
-        // Pre-multiplied colors:
-        // Pill background: Dark slate charcoal RGB(18, 20, 24), alpha = 225 (~88% opacity)
-        let bg_a: u32 = 225;
-        let bg_r: u32 = (18 * bg_a) / 255;
-        let bg_g: u32 = (20 * bg_a) / 255;
-        let bg_b: u32 = (24 * bg_a) / 255;
-
-        // Pill border: Subtle lighter edge RGB(70, 75, 85), alpha = 180
-        let border_a: u32 = 180;
-        let border_r: u32 = (70 * border_a) / 255;
-        let border_g: u32 = (75 * border_a) / 255;
-        let border_b: u32 = (85 * border_a) / 255;
-
-        for y in pill_top..pill_bottom {
-            for x in pill_left..pill_right {
-                let is_corner_tl = x < pill_left + pill_radius && y < pill_top + pill_radius;
-                let is_corner_tr = x >= pill_right - pill_radius && y < pill_top + pill_radius;
-                let is_corner_bl = x < pill_left + pill_radius && y >= pill_bottom - pill_radius;
-                let is_corner_br = x >= pill_right - pill_radius && y >= pill_bottom - pill_radius;
-
-                let mut in_pill = true;
-                let mut is_border =
-                    x == pill_left || x == pill_right - 1 || y == pill_top || y == pill_bottom - 1;
-
-                if is_corner_tl {
-                    let dx = (pill_left + pill_radius) - x;
-                    let dy = (pill_top + pill_radius) - y;
-                    let dsq = dx * dx + dy * dy;
-                    if dsq > pill_radius * pill_radius {
-                        in_pill = false;
-                    } else if dsq >= (pill_radius - 1) * (pill_radius - 1) {
-                        is_border = true;
-                    }
-                } else if is_corner_tr {
-                    let dx = x - (pill_right - pill_radius - 1);
-                    let dy = (pill_top + pill_radius) - y;
-                    let dsq = dx * dx + dy * dy;
-                    if dsq > pill_radius * pill_radius {
-                        in_pill = false;
-                    } else if dsq >= (pill_radius - 1) * (pill_radius - 1) {
-                        is_border = true;
-                    }
-                } else if is_corner_bl {
-                    let dx = (pill_left + pill_radius) - x;
-                    let dy = y - (pill_bottom - pill_radius - 1);
-                    let dsq = dx * dx + dy * dy;
-                    if dsq > pill_radius * pill_radius {
-                        in_pill = false;
-                    } else if dsq >= (pill_radius - 1) * (pill_radius - 1) {
-                        is_border = true;
-                    }
-                } else if is_corner_br {
-                    let dx = x - (pill_right - pill_radius - 1);
-                    let dy = y - (pill_bottom - pill_radius - 1);
-                    let dsq = dx * dx + dy * dy;
-                    if dsq > pill_radius * pill_radius {
-                        in_pill = false;
-                    } else if dsq >= (pill_radius - 1) * (pill_radius - 1) {
-                        is_border = true;
-                    }
-                }
-
-                if in_pill {
-                    let idx = ((y * width + x) * 4) as usize;
-                    if is_border {
-                        pixels[idx] = border_b as u8;
-                        pixels[idx + 1] = border_g as u8;
-                        pixels[idx + 2] = border_r as u8;
-                        pixels[idx + 3] = border_a as u8;
-                    } else {
-                        pixels[idx] = bg_b as u8;
-                        pixels[idx + 1] = bg_g as u8;
-                        pixels[idx + 2] = bg_r as u8;
-                        pixels[idx + 3] = bg_a as u8;
-                    }
-                }
-            }
-        }
-
-        // 2. Draw stacked transfer rates inside the pill.
+        // 1. Draw stacked transfer rates directly onto the transparent surface.
         //
         // format_stacked_line emits exactly 12 characters:
         // "<5-char val> <4-char unit> <indicator>" e.g. "    0  B/s ▲"
@@ -531,25 +445,86 @@ mod windows_impl {
 
         let _ = GdiFlush();
 
-        // 3. Alpha post-pass:
-        // In the text rendering region, set alpha to 255 for pixels rendered by GDI
-        // (where RGB was modified from the dark background).
-        let text_x_start = text_x.max(0);
-        let text_x_end = (text_x + layout.text_reserve_w).min(width);
-        let text_y_start = layout.up_y.max(0);
-        let text_y_end = (layout.down_y + layout.font_px + 2).min(height);
-
-        for y in text_y_start..text_y_end {
-            for x in text_x_start..text_x_end {
+        // 2. Build text glyph mask from GDI rendered pixels.
+        // GDI antialiasing writes color channels over the black (0,0,0) buffer.
+        let mut text_mask = vec![false; (width * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
                 let idx = ((y * width + x) * 4) as usize;
-                let b = pixels[idx] as i32;
-                let g = pixels[idx + 1] as i32;
-                let r = pixels[idx + 2] as i32;
-                if (r - bg_r as i32).abs() > 15
-                    || (g - bg_g as i32).abs() > 15
-                    || (b - bg_b as i32).abs() > 15
-                {
+                let b = pixels[idx];
+                let g = pixels[idx + 1];
+                let r = pixels[idx + 2];
+                if r > 18 || g > 18 || b > 18 {
+                    text_mask[(y * width + x) as usize] = true;
+                }
+            }
+        }
+
+        // 3. Post-pass: Apply outline and drop-shadow halo for legibility without any background box.
+        // - Text pixels: Opaque (alpha 255) vibrant color.
+        // - 1px outline/shadow neighbor: Black with alpha ~220 (~86% darkening).
+        // - 2px drop-shadow neighbor: Black with alpha ~120 (~47% soft falloff).
+        // - All other pixels: Alpha 0 (completely transparent).
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                let pos = (y * width + x) as usize;
+
+                if text_mask[pos] {
+                    // Crisp foreground text
                     pixels[idx + 3] = 255;
+                } else {
+                    // Check for nearby text to generate outline/shadow
+                    let mut near_dist1 = false;
+                    let mut near_dist2 = false;
+
+                    // 8-way 1px outline and 1px drop shadow
+                    'outer1: for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = x + dx;
+                            let ny = y + dy;
+                            if nx >= 0 && nx < width && ny >= 0 && ny < height {
+                                if text_mask[(ny * width + nx) as usize] {
+                                    near_dist1 = true;
+                                    break 'outer1;
+                                }
+                            }
+                        }
+                    }
+
+                    if !near_dist1 {
+                        // Directional drop shadow at distance 2 (down and right)
+                        for (dx, dy) in [(0, -2), (-1, -2), (-2, -1), (-2, 0), (-2, -2)] {
+                            let nx = x + dx;
+                            let ny = y + dy;
+                            if nx >= 0 && nx < width && ny >= 0 && ny < height {
+                                if text_mask[(ny * width + nx) as usize] {
+                                    near_dist2 = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if near_dist1 {
+                        pixels[idx] = 0;
+                        pixels[idx + 1] = 0;
+                        pixels[idx + 2] = 0;
+                        pixels[idx + 3] = 220; // High contrast outline
+                    } else if near_dist2 {
+                        pixels[idx] = 0;
+                        pixels[idx + 1] = 0;
+                        pixels[idx + 2] = 0;
+                        pixels[idx + 3] = 120; // Soft shadow fringe
+                    } else {
+                        pixels[idx] = 0;
+                        pixels[idx + 1] = 0;
+                        pixels[idx + 2] = 0;
+                        pixels[idx + 3] = 0; // Fully transparent
+                    }
                 }
             }
         }
