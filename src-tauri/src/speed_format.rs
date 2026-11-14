@@ -122,11 +122,11 @@ pub fn format_rate_components(bytes_per_sec: u64) -> (String, &'static str) {
 }
 
 /// Format a single line of the stacked status bar rate:
-/// `▲ <val> <unit>` or `▼ <val> <unit>`
-/// Result is always exactly 12 characters: 1 indicator + 1 space + 5-char value + 1 space + 4-char unit.
+/// `<val> <unit> ▲` or `<val> <unit> ▼`
+/// Result is always exactly 12 characters: 5-char value + 1 space + 4-char unit + 1 space + 1 indicator.
 pub fn format_stacked_line(indicator: char, bytes_per_sec: u64) -> String {
     let (val, unit) = format_rate_components(bytes_per_sec);
-    format!("{} {} {}", indicator, val, unit)
+    format!("{} {} {}", val, unit, indicator)
 }
 
 /// Format the two-line stacked status bar text with upload on top and download on bottom:
@@ -585,8 +585,8 @@ mod tests {
         let idle = format_stacked_status_bar(0, 0);
         let lines: Vec<&str> = idle.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("▲"));
-        assert!(lines[1].starts_with("▼"));
+        assert!(lines[0].ends_with("▲"));
+        assert!(lines[1].ends_with("▼"));
         assert_eq!(lines[0].chars().count(), 12);
         assert_eq!(lines[1].chars().count(), 12);
 
@@ -597,8 +597,10 @@ mod tests {
         assert_eq!(low_lines[1].chars().count(), 12);
         assert!(low_lines[0].contains("45"));
         assert!(low_lines[0].contains("KB/s"));
+        assert!(low_lines[0].ends_with("▲"));
         assert!(low_lines[1].contains("1.5"));
         assert!(low_lines[1].contains("KB/s"));
+        assert!(low_lines[1].ends_with("▼"));
 
         // High rates
         let high = format_stacked_status_bar(1584 * 1024, 52 * 1024 * 1024);
@@ -607,8 +609,10 @@ mod tests {
         assert_eq!(high_lines[1].chars().count(), 12);
         assert!(high_lines[0].contains("1.5"));
         assert!(high_lines[0].contains("MB/s"));
+        assert!(high_lines[0].ends_with("▲"));
         assert!(high_lines[1].contains("52"));
         assert!(high_lines[1].contains("MB/s"));
+        assert!(high_lines[1].ends_with("▼"));
     }
 
     #[test]

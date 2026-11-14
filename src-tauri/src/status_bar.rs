@@ -80,11 +80,9 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
 
         let up_line = crate::speed_format::format_stacked_line('▲', upload_rate);
         let down_line = crate::speed_format::format_stacked_line('▼', download_rate);
-        let tooltip = format!(
-            "Nebulae — ▲ {}   ▼ {}",
-            up_line.trim_start_matches('▲').trim(),
-            down_line.trim_start_matches('▼').trim()
-        );
+        let up_clean = up_line.replace(['▲', '▼'], "").trim().to_string();
+        let down_clean = down_line.replace(['▲', '▼'], "").trim().to_string();
+        let tooltip = format!("Nebulae — ▲ {}   ▼ {}", up_clean, down_clean);
 
         let handle = app_handle.clone();
         let tray_handle = app_handle.clone();
