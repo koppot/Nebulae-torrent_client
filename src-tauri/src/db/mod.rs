@@ -10,6 +10,9 @@ use std::sync::Mutex;
 
 const PEER_HISTORY_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 const MAX_PEER_HISTORY_ROWS: i64 = 100_000;
+const ADC_PEER_CACHE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const ADC_PEER_CACHE_TTL_MS: i64 = 30 * 60 * 1000;
+const MAX_ADC_PEER_CACHE_ROWS: i64 = 10_000;
 
 fn prune_peer_history_rows(conn: &Connection, cutoff: i64) -> Result<()> {
     conn.execute(
@@ -25,6 +28,48 @@ fn prune_peer_history_rows(conn: &Connection, cutoff: i64) -> Result<()> {
         params![MAX_PEER_HISTORY_ROWS],
     )?;
     Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    let found = {
+        let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+        let mut found = false;
+        for existing in columns {
+            if existing? == column {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if found {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+}
+
+fn ensure_peer_history_columns(conn: &Connection) -> Result<()> {
+    for (column, definition) in [
+        ("client_name", "TEXT NOT NULL DEFAULT ''"),
+        ("country_code", "TEXT"),
+        ("adc_user_id", "INTEGER"),
+        ("adc_username", "TEXT"),
+        ("adc_profile_url", "TEXT"),
+        ("adc_account_revision", "INTEGER"),
+        ("adc_matched_at_epoch_ms", "INTEGER"),
+    ] {
+        ensure_column(conn, "peer_history", column, definition)?;
+    }
+    Ok(())
+}
+
+fn adc_peer_key(ip: &str, port: u16) -> Option<(String, String)> {
+    let parsed = ip.parse::<IpAddr>().ok()?;
+    let ip = parsed.to_string();
+    Some((ip.clone(), format!("{ip}|{port}")))
 }
 
 pub struct Database {
@@ -52,6 +97,8 @@ impl Database {
         conn.execute(schema::CREATE_SNATCHED_RECORDS_TABLE, [])?;
         conn.execute(schema::CREATE_MANUAL_PEER_BLOCKS_TABLE, [])?;
         conn.execute_batch(schema::CREATE_PEER_HISTORY_TABLE)?;
+        conn.execute_batch(schema::CREATE_ADC_PEER_CACHE_TABLE)?;
+        ensure_peer_history_columns(&conn)?;
 
         // Backward compatibility migration for torrent_metadata
         let extra_cols = [
@@ -222,6 +269,15 @@ impl Database {
             let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<HashSet<_>>>()?
         };
+        let adc_account_revision: i64 = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'adc_account_revision'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
         let mut observed = HashSet::new();
 
         for peer in peers {
@@ -294,7 +350,9 @@ impl Database {
                      SET ip = ?3, port = ?4, last_seen_epoch_ms = MAX(last_seen_epoch_ms, ?5),
                          last_peer_download_bytes = ?6, last_peer_upload_bytes = ?7,
                          downloaded_delta_bytes = ?8, uploaded_delta_bytes = ?9,
-                        counter_resets = ?10, was_blocked = ?11
+                        counter_resets = ?10, was_blocked = ?11,
+                        client_name = COALESCE(NULLIF(?12, ''), client_name),
+                        country_code = COALESCE(?13, country_code)
                      WHERE torrent_hash = ?1 AND peer_key = ?2",
                     params![
                         torrent_hash,
@@ -312,26 +370,69 @@ impl Database {
                             0
                         }),
                         if was_blocked || blocked { 1 } else { 0 },
+                        peer.client_name,
+                        peer.country_code,
                     ],
                 )?;
             } else {
                 tx.execute(
                     "INSERT INTO peer_history
-                     (torrent_hash, peer_key, ip, port, first_seen_epoch_ms, last_seen_epoch_ms,
+                     (torrent_hash, peer_key, ip, port, client_name, country_code,
+                      first_seen_epoch_ms, last_seen_epoch_ms,
                       last_peer_download_bytes, last_peer_upload_bytes, downloaded_delta_bytes,
                       uploaded_delta_bytes, counter_resets, was_blocked)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, 0, 0, ?8)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, 0, 0, 0, ?10)",
                     params![
                         torrent_hash,
                         peer_key,
                         ip,
                         peer.port,
+                        peer.client_name,
+                        peer.country_code,
                         now,
                         raw_download,
                         raw_upload,
                         if blocked { 1 } else { 0 },
                     ],
                 )?;
+            }
+
+            if let Some((_, cache_key)) = adc_peer_key(&ip, peer.port) {
+                let fresh_cutoff = now.saturating_sub(ADC_PEER_CACHE_TTL_MS);
+                let cached_identity = tx
+                    .query_row(
+                        "SELECT user_id, username, profile_url, matched_at_epoch_ms
+                         FROM adc_peer_cache
+                         WHERE account_revision = ?1 AND info_hash = ?2 AND peer_key = ?3
+                           AND matched_at_epoch_ms >= ?4",
+                        params![adc_account_revision, torrent_hash, cache_key, fresh_cutoff],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, i64>(3)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                if let Some((user_id, username, profile_url, matched_at)) = cached_identity {
+                    tx.execute(
+                        "UPDATE peer_history
+                         SET adc_user_id = ?3, adc_username = ?4, adc_profile_url = ?5,
+                             adc_account_revision = ?6, adc_matched_at_epoch_ms = ?7
+                         WHERE torrent_hash = ?1 AND peer_key = ?2",
+                        params![
+                            torrent_hash,
+                            peer_key,
+                            user_id,
+                            username,
+                            profile_url,
+                            adc_account_revision,
+                            matched_at,
+                        ],
+                    )?;
+                }
             }
         }
 
@@ -352,9 +453,12 @@ impl Database {
     ) -> Result<Vec<crate::models::peering::PeerHistoryEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut statement = conn.prepare(
-            "SELECT h.peer_key, h.ip, h.port, h.first_seen_epoch_ms, h.last_seen_epoch_ms,
+            "SELECT h.peer_key, h.ip, h.port, h.client_name, h.country_code,
+                    h.first_seen_epoch_ms, h.last_seen_epoch_ms,
                     h.downloaded_delta_bytes, h.uploaded_delta_bytes, h.counter_resets,
                     h.was_blocked,
+                    h.adc_user_id, h.adc_username, h.adc_profile_url, h.adc_account_revision,
+                    h.adc_matched_at_epoch_ms,
                     EXISTS(SELECT 1 FROM manual_peer_blocks b WHERE b.ip = h.ip)
              FROM peer_history h
              WHERE h.torrent_hash = ?1
@@ -366,24 +470,221 @@ impl Database {
                 peer_key: row.get(0)?,
                 ip: row.get(1)?,
                 port: row.get::<_, i64>(2)?.clamp(0, u16::MAX as i64) as u16,
-                first_seen_epoch_ms: row.get::<_, i64>(3)?.max(0) as u64,
-                last_seen_epoch_ms: row.get::<_, i64>(4)?.max(0) as u64,
-                downloaded_delta_bytes: row.get::<_, i64>(5)?.max(0) as u64,
-                uploaded_delta_bytes: row.get::<_, i64>(6)?.max(0) as u64,
-                counter_resets: row.get::<_, i64>(7)?.max(0) as u64,
-                was_blocked: row.get::<_, i64>(8)? != 0,
-                currently_blocked: row.get::<_, i64>(9)? != 0,
+                client_name: row.get(3)?,
+                country_code: row.get(4)?,
+                first_seen_epoch_ms: row.get::<_, i64>(5)?.max(0) as u64,
+                last_seen_epoch_ms: row.get::<_, i64>(6)?.max(0) as u64,
+                downloaded_delta_bytes: row.get::<_, i64>(7)?.max(0) as u64,
+                uploaded_delta_bytes: row.get::<_, i64>(8)?.max(0) as u64,
+                counter_resets: row.get::<_, i64>(9)?.max(0) as u64,
+                was_blocked: row.get::<_, i64>(10)? != 0,
+                adc_user_id: row
+                    .get::<_, Option<i64>>(11)?
+                    .and_then(|id| u64::try_from(id).ok()),
+                adc_username: row.get(12)?,
+                adc_profile_url: row.get(13)?,
+                adc_account_revision: row.get(14)?,
+                adc_matched_at_epoch_ms: row
+                    .get::<_, Option<i64>>(15)?
+                    .and_then(|timestamp| u64::try_from(timestamp).ok()),
+                currently_blocked: row.get::<_, i64>(16)? != 0,
             })
         })?;
         rows.collect()
     }
 
     pub fn clear_peer_history(&self, torrent_hash: &str) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let hash = torrent_hash.to_ascii_lowercase();
+        let tx = conn.transaction()?;
+        let removed = tx.execute(
             "DELETE FROM peer_history WHERE torrent_hash = ?1",
-            params![torrent_hash.to_ascii_lowercase()],
-        )
+            params![hash],
+        )?;
+        tx.execute(
+            "DELETE FROM adc_peer_cache WHERE info_hash = ?1",
+            params![hash],
+        )?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    pub fn save_cached_adc_members(
+        &self,
+        account_revision: i64,
+        info_hash: &str,
+        members: &[crate::commands::tracker::SwarmMember],
+    ) -> Result<()> {
+        let hash = info_hash.trim().to_ascii_lowercase();
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        for member in members {
+            let Some((ip, peer_key)) = adc_peer_key(&member.ip, member.port) else {
+                continue;
+            };
+            let Ok(user_id) = i64::try_from(member.user_id) else {
+                continue;
+            };
+            let uploaded_bytes = i64::try_from(member.uploaded_bytes).unwrap_or(i64::MAX);
+            let downloaded_bytes = i64::try_from(member.downloaded_bytes).unwrap_or(i64::MAX);
+            let matched_at = member
+                .matched_at_epoch_ms
+                .and_then(|timestamp| i64::try_from(timestamp).ok())
+                .unwrap_or(now);
+            tx.execute(
+                "INSERT INTO adc_peer_cache
+                 (account_revision, info_hash, peer_key, ip, port, user_id, username, ratio,
+                  uploaded_bytes, downloaded_bytes, bonus_points, avatar_url, profile_url, matched_at_epoch_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, ?13)
+                 ON CONFLICT(account_revision, info_hash, peer_key) DO UPDATE SET
+                  user_id = excluded.user_id,
+                  username = excluded.username,
+                  ratio = excluded.ratio,
+                  uploaded_bytes = excluded.uploaded_bytes,
+                  downloaded_bytes = excluded.downloaded_bytes,
+                  bonus_points = excluded.bonus_points,
+                  profile_url = excluded.profile_url,
+                  matched_at_epoch_ms = excluded.matched_at_epoch_ms",
+                params![
+                    account_revision,
+                    hash,
+                    peer_key,
+                    ip,
+                    member.port,
+                    user_id,
+                    member.username,
+                    member.ratio,
+                    uploaded_bytes,
+                    downloaded_bytes,
+                    member.bonus_points,
+                    member.profile_url,
+                    matched_at,
+                ],
+            )?;
+        }
+
+        let cutoff = now.saturating_sub(ADC_PEER_CACHE_RETENTION_MS);
+        tx.execute(
+            "DELETE FROM adc_peer_cache WHERE matched_at_epoch_ms < ?1",
+            params![cutoff],
+        )?;
+
+        let count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM adc_peer_cache", [], |row| row.get(0))?;
+        if count > MAX_ADC_PEER_CACHE_ROWS {
+            let excess = count - MAX_ADC_PEER_CACHE_ROWS;
+            tx.execute(
+                "DELETE FROM adc_peer_cache WHERE rowid IN (
+                    SELECT rowid FROM adc_peer_cache ORDER BY matched_at_epoch_ms ASC LIMIT ?1
+                )",
+                params![excess],
+            )?;
+        }
+
+        tx.commit()
+    }
+
+    pub fn get_cached_adc_members(
+        &self,
+        account_revision: i64,
+        info_hash: &str,
+        peers: &[crate::commands::tracker::PeerAddr],
+    ) -> Result<Vec<crate::commands::tracker::SwarmMember>> {
+        let hash = info_hash.trim().to_ascii_lowercase();
+        let conn = self.conn.lock().unwrap();
+        let cutoff = chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_sub(ADC_PEER_CACHE_TTL_MS);
+        let mut stmt = conn.prepare(
+            "SELECT ip, port, user_id, username, ratio, uploaded_bytes, downloaded_bytes,
+                    bonus_points, profile_url, matched_at_epoch_ms
+             FROM adc_peer_cache
+             WHERE account_revision = ?1 AND info_hash = ?2 AND peer_key = ?3
+               AND matched_at_epoch_ms >= ?4",
+        )?;
+        let mut cached = Vec::new();
+        let mut seen = HashSet::new();
+        for peer in peers {
+            let Some((ip, peer_key)) = adc_peer_key(&peer.ip, peer.port) else {
+                continue;
+            };
+            if !seen.insert(peer_key.clone()) {
+                continue;
+            }
+            if let Some(member) = stmt
+                .query_row(params![account_revision, hash, peer_key, cutoff], |row| {
+                    Ok(crate::commands::tracker::SwarmMember {
+                        ip: row.get(0)?,
+                        port: row.get::<_, i64>(1)?.clamp(0, u16::MAX as i64) as u16,
+                        user_id: row.get::<_, i64>(2)?.max(0) as u64,
+                        username: row.get(3)?,
+                        ratio: row.get(4)?,
+                        uploaded_bytes: row.get::<_, i64>(5)?.max(0) as u64,
+                        downloaded_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                        bonus_points: row.get(7)?,
+                        profile_url: row.get(8)?,
+                        matched_at_epoch_ms: row
+                            .get::<_, Option<i64>>(9)?
+                            .and_then(|timestamp| u64::try_from(timestamp).ok()),
+                    })
+                })
+                .optional()?
+            {
+                cached.push(crate::commands::tracker::SwarmMember { ip, ..member });
+            }
+        }
+        Ok(cached)
+    }
+
+    pub fn enrich_peer_history_adc(
+        &self,
+        torrent_hash: &str,
+        account_revision: i64,
+        members: &[crate::commands::tracker::SwarmMember],
+        matched_at_epoch_ms: u64,
+    ) -> Result<()> {
+        let hash = torrent_hash.trim().to_ascii_lowercase();
+        let matched_at = i64::try_from(matched_at_epoch_ms).unwrap_or(i64::MAX);
+        let conn = self.conn.lock().unwrap();
+        for member in members {
+            let Some((ip, _)) = adc_peer_key(&member.ip, member.port) else {
+                continue;
+            };
+            let Ok(user_id) = i64::try_from(member.user_id) else {
+                continue;
+            };
+            conn.execute(
+                "UPDATE peer_history
+                 SET adc_user_id = ?4, adc_username = ?5, adc_profile_url = ?6,
+                     adc_account_revision = ?7, adc_matched_at_epoch_ms = ?8
+                 WHERE torrent_hash = ?1 AND ip = ?2 AND port = ?3",
+                params![
+                    hash,
+                    ip,
+                    member.port,
+                    user_id,
+                    member.username,
+                    member.profile_url,
+                    account_revision,
+                    matched_at,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_cached_adc_members(&self, account_revision: Option<i64>) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(rev) = account_revision {
+            conn.execute(
+                "DELETE FROM adc_peer_cache WHERE account_revision != ?1",
+                params![rev],
+            )
+        } else {
+            conn.execute("DELETE FROM adc_peer_cache", [])
+        }
     }
 
     pub fn reset_all_settings(&self) -> Result<()> {
@@ -1303,6 +1604,108 @@ mod tests {
         assert_eq!(db.get_peer_history(OTHER_HASH).unwrap().len(), 1);
         assert_eq!(db.clear_peer_history(OTHER_HASH).unwrap(), 1);
         assert!(db.get_peer_history(OTHER_HASH).unwrap().is_empty());
+    }
+
+    #[test]
+    fn peer_history_migration_adds_identity_fields_without_losing_legacy_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE peer_history (
+                torrent_hash TEXT NOT NULL,
+                peer_key TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                first_seen_epoch_ms INTEGER NOT NULL,
+                last_seen_epoch_ms INTEGER NOT NULL,
+                last_peer_download_bytes INTEGER NOT NULL DEFAULT 0,
+                last_peer_upload_bytes INTEGER NOT NULL DEFAULT 0,
+                downloaded_delta_bytes INTEGER NOT NULL DEFAULT 0,
+                uploaded_delta_bytes INTEGER NOT NULL DEFAULT 0,
+                counter_resets INTEGER NOT NULL DEFAULT 0,
+                was_blocked INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (torrent_hash, peer_key)
+            );
+            INSERT INTO peer_history
+                (torrent_hash, peer_key, ip, port, first_seen_epoch_ms, last_seen_epoch_ms)
+            VALUES ('0123456789abcdef0123456789abcdef01234567',
+                    '203.0.113.17:51413', '203.0.113.17', 51413, 1, 2);",
+        )
+        .unwrap();
+
+        ensure_peer_history_columns(&conn).unwrap();
+
+        let (count, client_name, country_code): (i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), client_name, country_code FROM peer_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(client_name, "");
+        assert_eq!(country_code, None);
+    }
+
+    #[test]
+    fn adc_match_cache_is_account_torrent_and_endpoint_scoped_and_enriches_history() {
+        let db = memory_db();
+        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        db.set_setting("adc_account_revision", "4").unwrap();
+        let member = crate::commands::tracker::SwarmMember {
+            ip: "203.0.113.17".into(),
+            port: 51413,
+            username: "synthetic-member".into(),
+            user_id: 23,
+            profile_url: "https://asiandvdclub.org/profile/23".into(),
+            ratio: 1.25,
+            uploaded_bytes: 1200,
+            downloaded_bytes: 800,
+            bonus_points: 4.0,
+            matched_at_epoch_ms: Some(now),
+        };
+        db.save_cached_adc_members(4, HASH, std::slice::from_ref(&member))
+            .unwrap();
+
+        let peer_addr = crate::commands::tracker::PeerAddr {
+            ip: "203.0.113.17".into(),
+            port: 51413,
+        };
+        let cached = db
+            .get_cached_adc_members(4, HASH, std::slice::from_ref(&peer_addr))
+            .unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].username, "synthetic-member");
+        assert_eq!(cached[0].matched_at_epoch_ms, Some(now));
+        assert!(db
+            .get_cached_adc_members(5, HASH, std::slice::from_ref(&peer_addr))
+            .unwrap()
+            .is_empty());
+        assert!(db
+            .get_cached_adc_members(4, OTHER_HASH, std::slice::from_ref(&peer_addr))
+            .unwrap()
+            .is_empty());
+
+        let mut telemetry = peer("203.0.113.17", 51413, 50, 30);
+        telemetry.client_name = "Synthetic Client".into();
+        telemetry.country_code = Some("RO".into());
+        db.record_peer_history(HASH, &[telemetry], now).unwrap();
+        let row = db.get_peer_history(HASH).unwrap().remove(0);
+        assert_eq!(row.client_name, "Synthetic Client");
+        assert_eq!(row.country_code.as_deref(), Some("RO"));
+        assert_eq!(row.adc_user_id, Some(23));
+        assert_eq!(row.adc_username.as_deref(), Some("synthetic-member"));
+        assert_eq!(
+            row.adc_profile_url.as_deref(),
+            Some("https://asiandvdclub.org/profile/23")
+        );
+        assert_eq!(row.adc_account_revision, Some(4));
+        assert_eq!(row.adc_matched_at_epoch_ms, Some(now));
+
+        assert_eq!(db.clear_peer_history(HASH).unwrap(), 1);
+        assert!(db
+            .get_cached_adc_members(4, HASH, std::slice::from_ref(&peer_addr))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -314,6 +314,33 @@ pub fn build_profile_from_db(db: &Database) -> Result<AdcTrackerProfile, String>
     })
 }
 
+fn bump_adc_account_revision_if_changed(db: &Database, username: &str) -> Result<(), String> {
+    let previous_username = db
+        .get_setting("adc_username")
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    if previous_username
+        .trim()
+        .eq_ignore_ascii_case(username.trim())
+    {
+        return Ok(());
+    }
+    let current_revision = db
+        .get_setting("adc_account_revision")
+        .map_err(|error| error.to_string())?
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    db.set_setting(
+        "adc_account_revision",
+        &current_revision.saturating_add(1).to_string(),
+    )
+    .map_err(|error| error.to_string())?;
+    if let Err(error) = db.clear_cached_adc_members(Some(current_revision.saturating_add(1))) {
+        tracing::warn!("[swarm-members] could not clear cache after ADC account change: {error}");
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn link_adc_account(
     username: String,
@@ -335,6 +362,7 @@ pub async fn link_adc_account(
             .map_err(|e| format!("Could not store the ADC credential securely: {e}"))?;
 
         let masked = AdcTrackerProfile::mask_passkey(&passkey);
+        bump_adc_account_revision_if_changed(&db_for_link, &username)?;
         db_for_link
             .set_setting("adc_linked", "true")
             .map_err(|e| e.to_string())?;
@@ -517,6 +545,7 @@ pub async fn import_adc_passkey(
         let masked = AdcTrackerProfile::mask_passkey(&passkey);
         store_secret_with_user_authorization(&passkey_secret_target(), &passkey)
             .map_err(|e| format!("Could not store the ADC credential securely: {e}"))?;
+        bump_adc_account_revision_if_changed(&db_arc, &returned_username)?;
         db_arc
             .set_setting("adc_linked", "true")
             .map_err(|e| e.to_string())?;
@@ -579,6 +608,8 @@ pub struct SwarmMember {
     pub uploaded_bytes: u64,
     pub downloaded_bytes: u64,
     pub bonus_points: f64,
+    #[serde(default)]
+    pub matched_at_epoch_ms: Option<u64>,
 }
 
 /// Per-peer address sent in the lookup request.
@@ -599,6 +630,8 @@ pub struct SwarmMembersResult {
     pub matches: Vec<SwarmMember>,
     /// Human-readable degradation reason when supported=false.
     pub error: Option<String>,
+    /// True when all requested peers were served from the persistent cache.
+    pub from_cache_only: bool,
 }
 
 impl SwarmMembersResult {
@@ -608,6 +641,7 @@ impl SwarmMembersResult {
             supported,
             matches: vec![],
             error: Some(status.to_string()),
+            from_cache_only: false,
         }
     }
 }
@@ -631,6 +665,11 @@ fn request_error_class(error: &reqwest::Error) -> &'static str {
     } else {
         "other"
     }
+}
+
+fn normalized_peer_key(ip: &str, port: u16) -> Option<String> {
+    let parsed = ip.parse::<std::net::IpAddr>().ok()?;
+    Some(format!("{}|{port}", parsed))
 }
 
 /// Sends the authenticated HTTP request and classifies the endpoint response.
@@ -710,6 +749,7 @@ fn request_swarm_members(
             supported: true,
             matches: parsed.matches,
             error: None,
+            from_cache_only: false,
         },
         Err(_) => {
             // Do not log reqwest's error value: it can contain URL or response
@@ -725,9 +765,9 @@ fn request_swarm_members(
 /// The passkey is read only from platform secure storage inside the Rust layer
 /// and never crosses the IPC boundary into the WebView.
 ///
-/// Cache note: caching is done on the TypeScript side (SwarmMembersCache)
-/// because Tauri commands are stateless; the front-end controls TTL and
-/// prevents redundant calls within the rate-limit window.
+/// Successful matches are cached in SQLite by ADC account revision, torrent,
+/// and observed peer endpoint. This lets a restart reuse recent matches without
+/// exposing credentials to the WebView.
 ///
 /// IPC contract: with Tauri's default command naming, the frontend sends
 /// `infoHash`, which maps to this Rust `info_hash` parameter. The HTTP body
@@ -741,7 +781,13 @@ pub async fn adc_swarm_members(
     let db_arc = std::sync::Arc::clone(&db);
 
     tokio::task::spawn_blocking(move || {
-        // 1. Feature-gate: only proceed if ADC is linked.
+        // 1. Validate the torrent identity before using either cache or network.
+        if !is_valid_info_hash(&info_hash) {
+            return Ok(SwarmMembersResult::state("invalid_info_hash", false));
+        }
+        let hash = info_hash.trim().to_lowercase();
+
+        // 2. Feature-gate: only proceed if ADC is linked.
         let is_linked = db_arc
             .get_setting("adc_linked")
             .unwrap_or(None)
@@ -752,25 +798,114 @@ pub async fn adc_swarm_members(
             return Ok(SwarmMembersResult::state("not_linked", false));
         }
 
-        // 2. Read only the OS credential store. In particular, never fall
-        // back to the legacy plaintext SQLite setting.
+        let account_revision = db_arc
+            .get_setting("adc_account_revision")
+            .map_err(|error| error.to_string())?
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(0);
+        let cached_matches = match db_arc.get_cached_adc_members(account_revision, &hash, &peers) {
+            Ok(matches) => matches,
+            Err(error) => {
+                tracing::warn!("[swarm-members] persistent cache read failed: {error}");
+                Vec::new()
+            }
+        };
+        let cached_keys: std::collections::HashSet<String> = cached_matches
+            .iter()
+            .filter_map(|member| normalized_peer_key(&member.ip, member.port))
+            .collect();
+        let unresolved: Vec<PeerAddr> = peers
+            .into_iter()
+            .filter(|peer| match normalized_peer_key(&peer.ip, peer.port) {
+                Some(key) => !cached_keys.contains(&key),
+                None => true,
+            })
+            .collect();
+
+        if unresolved.is_empty() {
+            return Ok(SwarmMembersResult {
+                status: if cached_matches.is_empty() {
+                    "no_matching_peers"
+                } else {
+                    "matched"
+                }
+                .to_string(),
+                supported: true,
+                matches: cached_matches,
+                error: None,
+                from_cache_only: true,
+            });
+        }
+
+        // Cached matches remain available even when the secure store is locked.
+        // Never fall back to the legacy plaintext SQLite setting.
         let passkey = match get_secret(&passkey_secret_target()) {
             Ok(pk) => pk,
-            Err(error) => return Ok(SwarmMembersResult::state(error.adc_state(), false)),
+            Err(error) => {
+                let mut result = SwarmMembersResult::state(error.adc_state(), false);
+                result.matches = cached_matches;
+                return Ok(result);
+            }
         };
 
-        // 3. Validate info_hash (40 hex chars).
-        if !is_valid_info_hash(&info_hash) {
-            return Ok(SwarmMembersResult::state("invalid_info_hash", false));
+        let mut result =
+            request_swarm_members(&hash, &unresolved, &passkey, ADC_SWARM_MEMBERS_ENDPOINT);
+        if result.status == "matched" || result.status == "no_matching_peers" {
+            let matched_at = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            let requested_keys: std::collections::HashSet<String> = unresolved
+                .iter()
+                .filter_map(|peer| normalized_peer_key(&peer.ip, peer.port))
+                .collect();
+            result.matches.retain(|member| {
+                normalized_peer_key(&member.ip, member.port)
+                    .is_some_and(|key| requested_keys.contains(&key))
+            });
+            for member in &mut result.matches {
+                member.matched_at_epoch_ms = Some(matched_at);
+            }
+            if let Err(error) =
+                db_arc.save_cached_adc_members(account_revision, &hash, &result.matches)
+            {
+                tracing::warn!("[swarm-members] persistent cache write failed: {error}");
+            }
+            if result.status == "matched" && result.matches.is_empty() {
+                result.status = "no_matching_peers".to_string();
+            }
         }
-        let hash = info_hash.trim().to_lowercase();
 
-        Ok(request_swarm_members(
-            &hash,
-            &peers,
-            &passkey,
-            ADC_SWARM_MEMBERS_ENDPOINT,
-        ))
+        let fresh_matches = result.matches.clone();
+        // An error response may still carry cached matches. The UI keeps those
+        // visible while displaying the new lookup's degradation status.
+        let mut merged = std::collections::HashMap::new();
+        for member in cached_matches.into_iter().chain(result.matches) {
+            if let Some(key) = normalized_peer_key(&member.ip, member.port) {
+                merged.insert(key, member);
+            }
+        }
+        result.matches = merged.into_values().collect();
+        if result.status == "matched" || result.status == "no_matching_peers" {
+            result.status = if result.matches.is_empty() {
+                "no_matching_peers"
+            } else {
+                "matched"
+            }
+            .to_string();
+            if !fresh_matches.is_empty() {
+                if let Err(error) = db_arc.enrich_peer_history_adc(
+                    &hash,
+                    account_revision,
+                    &fresh_matches,
+                    fresh_matches
+                        .iter()
+                        .filter_map(|member| member.matched_at_epoch_ms)
+                        .max()
+                        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis().max(0) as u64),
+                ) {
+                    tracing::warn!("[swarm-members] peer-history enrichment failed: {error}");
+                }
+            }
+        }
+        Ok(result)
     })
     .await
     .map_err(|e| format!("spawn_blocking: {e}"))?
@@ -931,6 +1066,7 @@ mod tests {
             supported: true,
             matches: vec![],
             error: None,
+            from_cache_only: false,
         };
 
         assert_eq!(credential.status, "credential_access_denied");
@@ -1088,5 +1224,24 @@ mod tests {
         assert_eq!(result.status, "network_error");
         assert!(!result.supported);
         assert_eq!(result.error.as_deref(), Some("network_error"));
+    }
+
+    #[test]
+    fn adc_cache_revision_changes_only_when_the_account_changes() {
+        let db = crate::db::Database::new(Path::new(":memory:")).unwrap();
+        db.set_setting("adc_username", "MemberOne").unwrap();
+        db.set_setting("adc_account_revision", "7").unwrap();
+
+        bump_adc_account_revision_if_changed(&db, "memberone").unwrap();
+        assert_eq!(
+            db.get_setting("adc_account_revision").unwrap().as_deref(),
+            Some("7")
+        );
+
+        bump_adc_account_revision_if_changed(&db, "MemberTwo").unwrap();
+        assert_eq!(
+            db.get_setting("adc_account_revision").unwrap().as_deref(),
+            Some("8")
+        );
     }
 }

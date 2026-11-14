@@ -61,19 +61,26 @@ pub struct BlockedPeerIp {
     pub blocked_at_epoch_ms: u64,
 }
 
-/// Local observation history for one peer endpoint on one torrent. This intentionally
-/// excludes client names, geo/ASN data, ADC membership, and profile information.
+/// Local observation history for one peer endpoint on one torrent, including
+/// the minimal locally resolved ADC identity used for display and profile links.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PeerHistoryEntry {
     pub peer_key: String,
     pub ip: String,
     pub port: u16,
+    pub client_name: String,
+    pub country_code: Option<String>,
     pub first_seen_epoch_ms: u64,
     pub last_seen_epoch_ms: u64,
     pub downloaded_delta_bytes: u64,
     pub uploaded_delta_bytes: u64,
     pub counter_resets: u64,
     pub was_blocked: bool,
+    pub adc_user_id: Option<u64>,
+    pub adc_username: Option<String>,
+    pub adc_profile_url: Option<String>,
+    pub adc_account_revision: Option<i64>,
+    pub adc_matched_at_epoch_ms: Option<u64>,
     pub currently_blocked: bool,
 }
 
@@ -181,29 +188,38 @@ mod tests {
     }
 
     #[test]
-    fn peer_history_payload_contains_no_client_geo_or_adc_identity_fields() {
+    fn peer_history_payload_contains_minimal_display_identity_fields() {
         let history = PeerHistoryEntry {
             peer_key: "203.0.113.17:51413".into(),
             ip: "203.0.113.17".into(),
             port: 51413,
+            client_name: "Transmission 4.0".into(),
+            country_code: Some("RO".into()),
             first_seen_epoch_ms: 1,
             last_seen_epoch_ms: 2,
             downloaded_delta_bytes: 3,
             uploaded_delta_bytes: 4,
             counter_resets: 0,
             was_blocked: false,
+            adc_user_id: Some(23),
+            adc_username: Some("synthetic-member".into()),
+            adc_profile_url: Some("https://asiandvdclub.org/profile/23".into()),
+            adc_account_revision: Some(2),
+            adc_matched_at_epoch_ms: Some(2),
             currently_blocked: false,
         };
         let payload = serde_json::to_value(history).unwrap();
-        for forbidden in [
-            "client_name",
-            "country_code",
-            "asn",
-            "adc_member",
-            "profile_url",
-        ] {
-            assert!(payload.get(forbidden).is_none(), "unexpected {forbidden}");
-        }
+        assert_eq!(payload["client_name"], "Transmission 4.0");
+        assert_eq!(payload["country_code"], "RO");
+        assert_eq!(payload["adc_username"], "synthetic-member");
+        assert_eq!(payload["adc_user_id"], 23);
+        assert_eq!(
+            payload["adc_profile_url"],
+            "https://asiandvdclub.org/profile/23"
+        );
+        assert!(payload.get("passkey").is_none());
+        assert!(payload.get("password").is_none());
+        assert!(payload.get("full_profile").is_none());
     }
 
     #[test]

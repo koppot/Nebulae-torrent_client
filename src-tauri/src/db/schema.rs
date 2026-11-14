@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS peer_history (
     peer_key TEXT NOT NULL,
     ip TEXT NOT NULL,
     port INTEGER NOT NULL,
+    client_name TEXT NOT NULL DEFAULT '',
     first_seen_epoch_ms INTEGER NOT NULL,
     last_seen_epoch_ms INTEGER NOT NULL,
     last_peer_download_bytes INTEGER NOT NULL DEFAULT 0,
@@ -101,8 +102,38 @@ CREATE TABLE IF NOT EXISTS peer_history (
     uploaded_delta_bytes INTEGER NOT NULL DEFAULT 0,
     counter_resets INTEGER NOT NULL DEFAULT 0,
     was_blocked INTEGER NOT NULL DEFAULT 0,
+    country_code TEXT,
+    adc_user_id INTEGER,
+    adc_username TEXT,
+    adc_profile_url TEXT,
+    adc_account_revision INTEGER,
+    adc_matched_at_epoch_ms INTEGER,
     PRIMARY KEY (torrent_hash, peer_key)
 );
 CREATE INDEX IF NOT EXISTS idx_peer_history_last_seen
     ON peer_history(last_seen_epoch_ms DESC);
+"#;
+
+pub const CREATE_ADC_PEER_CACHE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS adc_peer_cache (
+    account_revision INTEGER NOT NULL,
+    info_hash TEXT NOT NULL,
+    peer_key TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    ratio REAL NOT NULL,
+    uploaded_bytes INTEGER NOT NULL,
+    downloaded_bytes INTEGER NOT NULL,
+    bonus_points REAL NOT NULL,
+    avatar_url TEXT,
+    profile_url TEXT,
+    matched_at_epoch_ms INTEGER NOT NULL,
+    PRIMARY KEY (account_revision, info_hash, peer_key)
+);
+CREATE INDEX IF NOT EXISTS idx_adc_peer_cache_lookup
+    ON adc_peer_cache(account_revision, info_hash);
+CREATE INDEX IF NOT EXISTS idx_adc_peer_cache_matched_at
+    ON adc_peer_cache(matched_at_epoch_ms DESC);
 "#;
