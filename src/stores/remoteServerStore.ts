@@ -185,6 +185,17 @@ export const useRemoteServerStore = create<RemoteServerState>((set, get) => {
         clearInterval(_pollHandle);
         _pollHandle = null;
       }
+      const s = get();
+      if (
+        !s.isPolling &&
+        s.connState === 'disconnected' &&
+        s.errorMessage === null &&
+        s.serverStatus === null &&
+        s.torrents.length === 0 &&
+        s.selectedId === null
+      ) {
+        return;
+      }
       set({
         isPolling: false,
         connState: 'disconnected',

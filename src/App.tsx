@@ -35,21 +35,18 @@ import { useRemoteServerStore } from './stores/remoteServerStore';
 export const App: React.FC = () => {
   const { splashDismissed, openAddTorrentWithSource, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
-  const remoteSettings = useSettingsStore((s) => ({
-    enabled: s.settings.rtorrent_server_enabled,
-    url: s.settings.rtorrent_server_url,
-    token: s.settings.rtorrent_server_token,
-  }));
-  const { configure: configureRemote, stopPolling: stopRemotePolling } = useRemoteServerStore();
+  const remoteServerEnabled = useSettingsStore((s) => s.settings.rtorrent_server_enabled);
+  const remoteServerUrl = useSettingsStore((s) => s.settings.rtorrent_server_url);
+  const remoteServerToken = useSettingsStore((s) => s.settings.rtorrent_server_token);
 
   // Start or stop remote server polling whenever the connection settings change.
   useEffect(() => {
-    if (remoteSettings.enabled && remoteSettings.url?.trim()) {
-      configureRemote();
+    if (remoteServerEnabled && remoteServerUrl?.trim()) {
+      useRemoteServerStore.getState().configure();
     } else {
-      stopRemotePolling();
+      useRemoteServerStore.getState().stopPolling();
     }
-  }, [remoteSettings.enabled, remoteSettings.url, remoteSettings.token, configureRemote, stopRemotePolling]);
+  }, [remoteServerEnabled, remoteServerUrl, remoteServerToken]);
 
   // Handle nebulae:open-settings events dispatched by child components (e.g. RemoteServerView).
   const { setShowSettings: openSettingsModal, setSettingsTab: openSettingsTab } = useUiStore();
