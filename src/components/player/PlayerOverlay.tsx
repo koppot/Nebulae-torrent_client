@@ -135,7 +135,10 @@ function fmt(ms: number): string {
  * In-app theater: the native video overlay (created by the Rust side) shows
  * through a transparent hole in this layer; everything around it - the
  * backdrop, the control bar - is Nebulae's own UI. DVD/Blu-ray menus are
- * clickable directly on the video (the overlay receives the clicks natively).
+ * handled via WebView pointer events forwarded to VLC's input window through
+ * Tauri IPC (player_menu_mouse_move / player_menu_navigate). On Windows,
+ * NebulaeVideoSurface sits behind WebView2 and does not receive pointer events
+ * directly during disc menus; the WebView path is the only functional one.
  */
 export default function PlayerOverlay() {
   const player = usePlayerStore();
@@ -1244,9 +1247,10 @@ export default function PlayerOverlay() {
   // click activates the currently highlighted menu entry instead.
   const onVideoMouseMove = (e: React.MouseEvent) => {
     if (!player.isDisc || !pollRef.current.at_menu) return;
-    // Windows receives native coordinates in embed_windows' HWND procedure;
-    // forwarding the WebView event as well would duplicate pointer movement.
-    if (isWindowsWebView) return;
+    // On Windows, NebulaeVideoSurface sits behind the WebView2 host window, so
+    // the native overlay_wndproc does not receive WM_MOUSEMOVE during disc menus
+    // (the WebView captures all pointer events). Forward from the WebView instead.
+    // The 40 ms throttle below bounds the IPC rate to ~25 fps on all platforms.
     const now = Date.now();
     if (now - lastMenuMoveRef.current < 40) return; // ~25 fps throttle
     lastMenuMoveRef.current = now;
@@ -1266,30 +1270,24 @@ export default function PlayerOverlay() {
   const onVideoClick = (e: React.MouseEvent) => {
     const now = Date.now();
 
-    // A WebView double-click is one selection, not a second activation.
-    if (
-      player.isDisc &&
-      isWindowsWebView &&
-      pollRef.current.at_menu &&
-      e.detail > 1
-    ) {
+    // A double-click on the video during a disc menu would re-trigger the
+    // activation handler a second time. Suppress it; the first click already
+    // activated the highlighted menu entry.
+    if (player.isDisc && pollRef.current.at_menu && e.detail > 1) {
       return;
     }
 
-    // Preserve the existing macOS/Linux menu path. Windows mouse input is
-    // forwarded directly from its native overlay window procedure.
-    if (player.isDisc && !isWindowsWebView && pollRef.current.at_menu) {
+    // During an authored disc menu, forward the click to VLC on all platforms.
+    // On macOS/Linux the native view hierarchy routes the click to VLC naturally.
+    // On Windows, NebulaeVideoSurface is behind WebView2 and does not receive the
+    // click natively, so the WebView path is the only functional forwarding path.
+    if (player.isDisc && pollRef.current.at_menu) {
       if (now - lastMenuClickRef.current < 350) return;
       lastMenuClickRef.current = now;
       const rect = e.currentTarget.getBoundingClientRect();
       const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
       invoke('player_menu_mouse_move', point).catch(() => {});
       invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
-      return;
-    }
-
-    if (player.isDisc && isWindowsWebView && pollRef.current.at_menu) {
-      // The Windows HWND procedure forwarded the corresponding native click.
       return;
     }
     const sequence = ++clickSequenceRef.current;

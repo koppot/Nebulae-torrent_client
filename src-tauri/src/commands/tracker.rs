@@ -823,6 +823,9 @@ pub async fn adc_swarm_members(
             .iter()
             .filter_map(|member| normalized_peer_key(&member.ip, member.port))
             .collect();
+        // Clone full peer list before consuming it; needed for stale fallback
+        // after a failed live request so we can look up all originally unresolved peers.
+        let all_peers = peers.clone();
         let unresolved: Vec<PeerAddr> = peers
             .into_iter()
             .filter(|peer| match normalized_peer_key(&peer.ip, peer.port) {
@@ -848,11 +851,22 @@ pub async fn adc_swarm_members(
 
         // Cached matches remain available even when the secure store is locked.
         // Never fall back to the legacy plaintext SQLite setting.
+        // When the keychain is unavailable, merge cached_matches with any stale
+        // entries for unresolved peers so previously matched usernames remain visible.
         let passkey = match get_secret(&passkey_secret_target()) {
             Ok(pk) => pk,
             Err(error) => {
+                let stale = db_arc
+                    .get_stale_cached_adc_members(account_revision, &hash, &unresolved)
+                    .unwrap_or_default();
+                let mut merged = std::collections::HashMap::new();
+                for member in cached_matches.into_iter().chain(stale) {
+                    if let Some(key) = normalized_peer_key(&member.ip, member.port) {
+                        merged.entry(key).or_insert(member);
+                    }
+                }
                 let mut result = SwarmMembersResult::state(error.adc_state(), false);
-                result.matches = cached_matches;
+                result.matches = merged.into_values().collect();
                 return Ok(result);
             }
         };
@@ -883,10 +897,57 @@ pub async fn adc_swarm_members(
         }
 
         let fresh_matches = result.matches.clone();
-        // An error response may still carry cached matches. The UI keeps those
-        // visible while displaying the new lookup's degradation status.
+
+        // Build the final merged result. Priority order (highest wins):
+        //   1. Fresh network matches (newly retrieved)
+        //   2. TTL-fresh cached matches (returned by get_cached_adc_members)
+        //   3. Stale cached matches for peers not covered by 1 or 2
+        //      (covers rate-limited, network errors, endpoint unavailable)
+        //
+        // Stale fallback is per-peer: only peers that have no fresh or cached match
+        // are queried, so stale data does not shadow a successfully refreshed entry.
+        // The original matched_at_epoch_ms is preserved; it is not renewed by this read.
+        let resolved_keys: std::collections::HashSet<String> = cached_keys
+            .iter()
+            .cloned()
+            .chain(
+                result
+                    .matches
+                    .iter()
+                    .filter_map(|m| normalized_peer_key(&m.ip, m.port)),
+            )
+            .collect();
+        let stale_peers: Vec<PeerAddr> = all_peers
+            .into_iter()
+            .filter(|peer| {
+                normalized_peer_key(&peer.ip, peer.port)
+                    .map(|k| !resolved_keys.contains(&k))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let stale_matches = if !stale_peers.is_empty()
+            && !matches!(result.status.as_str(), "matched" | "no_matching_peers")
+        {
+            // Only use stale fallback when the live request failed; a successful
+            // "no_matching_peers" means ADC confirmed this peer has no match.
+            match db_arc.get_stale_cached_adc_members(account_revision, &hash, &stale_peers) {
+                Ok(stale) => stale,
+                Err(error) => {
+                    tracing::warn!("[swarm-members] stale cache fallback read failed: {error}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         let mut merged = std::collections::HashMap::new();
-        for member in cached_matches.into_iter().chain(result.matches) {
+        // Insert in ascending priority: stale first, then cached, then fresh.
+        for member in stale_matches
+            .into_iter()
+            .chain(cached_matches)
+            .chain(result.matches)
+        {
             if let Some(key) = normalized_peer_key(&member.ip, member.port) {
                 merged.insert(key, member);
             }

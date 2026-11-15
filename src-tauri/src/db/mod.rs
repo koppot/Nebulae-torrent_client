@@ -11,7 +11,13 @@ use std::sync::Mutex;
 const PEER_HISTORY_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 const MAX_PEER_HISTORY_ROWS: i64 = 100_000;
 const ADC_PEER_CACHE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
-const ADC_PEER_CACHE_TTL_MS: i64 = 30 * 60 * 1000;
+// Fresh-match window: entries matched within this period are returned directly
+// without triggering a new network lookup (stale-while-revalidate). Set to
+// 7 days so a restarted session recovers cached usernames without immediately
+// hammering the ADC endpoint. Beyond 7 days the entry is treated as stale and
+// a fresh lookup is attempted; if that lookup fails (rate-limit, network error)
+// get_stale_cached_adc_members provides the per-peer fallback.
+const ADC_PEER_CACHE_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_ADC_PEER_CACHE_ROWS: i64 = 10_000;
 
 fn prune_peer_history_rows(conn: &Connection, cutoff: i64) -> Result<()> {
@@ -622,6 +628,60 @@ impl Database {
             }
             if let Some(member) = stmt
                 .query_row(params![account_revision, hash, peer_key, cutoff], |row| {
+                    Ok(crate::commands::tracker::SwarmMember {
+                        ip: row.get(0)?,
+                        port: row.get::<_, i64>(1)?.clamp(0, u16::MAX as i64) as u16,
+                        user_id: row.get::<_, i64>(2)?.max(0) as u64,
+                        username: row.get(3)?,
+                        ratio: row.get(4)?,
+                        uploaded_bytes: row.get::<_, i64>(5)?.max(0) as u64,
+                        downloaded_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                        bonus_points: row.get(7)?,
+                        profile_url: row.get(8)?,
+                        matched_at_epoch_ms: row
+                            .get::<_, Option<i64>>(9)?
+                            .and_then(|timestamp| u64::try_from(timestamp).ok()),
+                    })
+                })
+                .optional()?
+            {
+                cached.push(crate::commands::tracker::SwarmMember { ip, ..member });
+            }
+        }
+        Ok(cached)
+    }
+
+    /// Returns cached ADC members for the given peers **without** the TTL filter.
+    /// Used as a per-peer stale fallback when a live lookup is blocked (rate
+    /// limit, network error, keychain unavailable, etc.) so previously matched
+    /// usernames remain visible instead of going blank. Only entries that were
+    /// retained within the 30-day pruning window are returned. The original
+    /// `matched_at_epoch_ms` is preserved — it is not renewed by this read.
+    pub fn get_stale_cached_adc_members(
+        &self,
+        account_revision: i64,
+        info_hash: &str,
+        peers: &[crate::commands::tracker::PeerAddr],
+    ) -> Result<Vec<crate::commands::tracker::SwarmMember>> {
+        let hash = info_hash.trim().to_ascii_lowercase();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ip, port, user_id, username, ratio, uploaded_bytes, downloaded_bytes,
+                    bonus_points, profile_url, matched_at_epoch_ms
+             FROM adc_peer_cache
+             WHERE account_revision = ?1 AND info_hash = ?2 AND peer_key = ?3",
+        )?;
+        let mut cached = Vec::new();
+        let mut seen = HashSet::new();
+        for peer in peers {
+            let Some((ip, peer_key)) = adc_peer_key(&peer.ip, peer.port) else {
+                continue;
+            };
+            if !seen.insert(peer_key.clone()) {
+                continue;
+            }
+            if let Some(member) = stmt
+                .query_row(params![account_revision, hash, peer_key], |row| {
                     Ok(crate::commands::tracker::SwarmMember {
                         ip: row.get(0)?,
                         port: row.get::<_, i64>(1)?.clamp(0, u16::MAX as i64) as u16,
