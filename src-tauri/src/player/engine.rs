@@ -1306,12 +1306,9 @@ impl VlcSession {
         unsafe {
             if self.media_player != 0 {
                 (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
-                for _ in 0..50 {
-                    if (lib.libvlc_media_player_is_playing)(self.media_player as *mut c_void) == 0 {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
+                // libvlc_media_player_stop is synchronous in VLC 3.x — it
+                // blocks until the player reaches Stopped. The polling loop
+                // that followed was redundant and is removed.
                 #[cfg(target_os = "windows")]
                 {
                     (lib.libvlc_media_player_set_hwnd)(
@@ -1329,6 +1326,50 @@ impl VlcSession {
             // races the next session's metadata parsing and aborts the
             // process. Keep it for the app's lifetime.
         }
+    }
+
+    /// Offload VLC stop+release to a background OS thread so the tokio
+    /// executor is not blocked during BD-J/disc teardown (which can take
+    /// 10–20 s on Blu-ray titles).
+    ///
+    /// **Call this only after the caller has already zeroed the corresponding
+    /// pointers in `PlayerState`** so no background helper can reach the live
+    /// pointers while they are being torn down here.
+    ///
+    /// `lib` must be an `Arc` so it stays alive until the thread finishes.
+    pub fn close_in_background(self, lib: std::sync::Arc<VlcLib>) {
+        // Transfer raw pointer values as plain usize so they cross the thread
+        // boundary without triggering Send checks on *mut c_void.
+        let mp = self.media_player;
+        let md = self.media;
+        std::thread::Builder::new()
+            .name("vlc-teardown".into())
+            .spawn(move || {
+                let t = std::time::Instant::now();
+                unsafe {
+                    if mp != 0 {
+                        (lib.libvlc_media_player_stop)(mp as *mut c_void);
+                        #[cfg(target_os = "windows")]
+                        {
+                            (lib.libvlc_media_player_set_hwnd)(
+                                mp as *mut c_void,
+                                std::ptr::null_mut(),
+                            );
+                        }
+                        (lib.libvlc_media_player_release)(mp as *mut c_void);
+                    }
+                    if md != 0 {
+                        (lib.libvlc_media_release)(md as *mut c_void);
+                    }
+                }
+                tracing::info!(
+                    "[perf] vlc-teardown thread: elapsed={}ms",
+                    t.elapsed().as_millis()
+                );
+            })
+            .ok(); // If the thread fails to spawn, the pointers leak but the
+                   // app does not freeze. The old close() path is still
+                   // available for callers that need synchronous teardown.
     }
 }
 

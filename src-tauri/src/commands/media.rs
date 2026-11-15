@@ -794,6 +794,12 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     // mp_guard IS the player-pointer guard for the whole teardown: background
     // helpers (menu watcher) can never call into the player while (or after)
     // it is released.
+    //
+    // On Windows, libvlc_media_player_stop blocks for 9–20 s on Blu-ray
+    // titles (BD-J JVM + segment teardown). We capture the Arc<VlcLib> and
+    // the raw pointers, zero state immediately so the new session can start,
+    // and then offload the actual VLC stop+release to a background thread.
+    // On other platforms the synchronous path is preserved.
     if let Ok(lib_guard) = state.lib.lock() {
         if let Some(lib) = lib_guard.as_ref() {
             let session = VlcSession {
@@ -801,11 +807,48 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
                 media: *poison(&state.media),
                 media_player: mp,
             };
-            // Close the player first (detaching Direct3D/HWND on Windows) before hiding the overlay
-            session.close(lib);
+            // Zero out the state pointers NOW, before the slow VLC teardown.
+            // Background helpers read media_player == 0 to bail out; they must
+            // see 0 as soon as we drop mp_guard below.
+            *poison(&state.instance) = 0;
+            *poison(&state.media) = 0;
+            *poison(&state.media_player) = 0;
+            poison(&state.framing).reset();
+            drop(mp_guard);
+
+            // Hide the overlay on the calling thread (fast Win32 call).
             let _ = player::set_overlay_hidden(app, true);
+
+            #[cfg(target_os = "windows")]
+            {
+                // Offload the slow VLC stop+release to a background OS thread.
+                // The Arc<VlcLib> keeps the library alive until teardown finishes.
+                session.close_in_background(std::sync::Arc::clone(lib));
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                session.close(lib);
+            }
+
+            // State already zeroed above; skip the duplicate zeroing below.
+            // The normal fall-through after the if-let would re-zero to 0,
+            // which is harmless but we return early to make the flow clear.
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            state
+                .edr_applied
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            state
+                .bypass_menu
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+
+            use tauri::Emitter;
+            let _ = app.emit("player://closed", ());
+            let _ = app.emit("player-closed", ());
+            return gen;
         }
     }
+    // Reached only when lib lock failed or lib is None — pointers were not
+    // cleared inside the if-let, so zero them here.
     *poison(&state.instance) = 0;
     *poison(&state.media) = 0;
     *poison(&state.media_player) = 0;
