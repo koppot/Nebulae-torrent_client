@@ -68,7 +68,14 @@ fn ensure_peer_history_columns(conn: &Connection) -> Result<()> {
 
 fn adc_peer_key(ip: &str, port: u16) -> Option<(String, String)> {
     let parsed = ip.parse::<IpAddr>().ok()?;
-    let ip = parsed.to_string();
+    // Canonicalise IPv4-mapped IPv6 (::ffff:x.x.x.x) to plain IPv4 so that
+    // lookups against Transmission-provided addresses always match ADC responses
+    // regardless of which form the API or OS returns.
+    let canonical = match parsed {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(parsed),
+        v4 => v4,
+    };
+    let ip = canonical.to_string();
     Some((ip.clone(), format!("{ip}|{port}")))
 }
 

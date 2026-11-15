@@ -160,8 +160,19 @@ export function registerCooldownListener(listener: () => void): () => void {
   };
 }
 
+/**
+ * Collapses IPv4-mapped IPv6 (::ffff:x.x.x.x) to plain IPv4 and lowercases
+ * the result. This ensures frontend cache keys match regardless of whether the
+ * ADC API or the engine returns the IPv4-mapped form.
+ */
+function normalizeIp(ip: string): string {
+  const v4mapped = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (v4mapped) return v4mapped[1];
+  return ip.toLowerCase();
+}
+
 function getPeerKey(credentialRevision: number, infoHash: string, ip: string, port: number): string {
-  return `${credentialRevision}:${infoHash.toLowerCase()}:${ip}:${port}`;
+  return `${credentialRevision}:${infoHash.toLowerCase()}:${normalizeIp(ip)}:${port}`;
 }
 
 /**
@@ -261,7 +272,7 @@ export function storeSwarmResults(
       profile_url: normalizeProfileUrl(member.profile_url, member.user_id),
     };
     const key = getPeerKey(credentialRevision, infoHash, member.ip, member.port);
-    matchedKeys.add(`${member.ip}:${member.port}`);
+    matchedKeys.add(`${normalizeIp(member.ip)}:${member.port}`);
 
     if (peerCache.size >= MAX_ENTRIES && !peerCache.has(key)) {
       const oldestKey = peerCache.keys().next().value;
@@ -278,7 +289,7 @@ export function storeSwarmResults(
   // Mark requested peers that did not match as negative-cached
   if (result.status === 'matched' || result.status === 'no_matching_peers') {
     for (const peer of requestedPeers) {
-      if (!matchedKeys.has(`${peer.ip}:${peer.port}`)) {
+      if (!matchedKeys.has(`${normalizeIp(peer.ip)}:${peer.port}`)) {
         const key = getPeerKey(credentialRevision, infoHash, peer.ip, peer.port);
         if (peerCache.size >= MAX_ENTRIES && !peerCache.has(key)) {
           const oldestKey = peerCache.keys().next().value;

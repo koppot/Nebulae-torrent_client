@@ -669,7 +669,16 @@ fn request_error_class(error: &reqwest::Error) -> &'static str {
 
 fn normalized_peer_key(ip: &str, port: u16) -> Option<String> {
     let parsed = ip.parse::<std::net::IpAddr>().ok()?;
-    Some(format!("{}|{port}", parsed))
+    // Canonicalise IPv4-mapped IPv6 (::ffff:x.x.x.x) to plain IPv4 so that
+    // DB-cached member addresses always compare equal to Transmission peer addresses.
+    let canonical = match parsed {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(parsed),
+        v4 => v4,
+    };
+    Some(format!("{}|{port}", canonical))
 }
 
 /// Sends the authenticated HTTP request and classifies the endpoint response.

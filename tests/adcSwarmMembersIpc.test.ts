@@ -423,4 +423,107 @@ describe('ADC Swarm Continuous Display and Rate-Limit Resilience', () => {
 
     unregister();
   });
+
+  test('IPv4-mapped IPv6 member.ip does not falsely negative-cache the requesting peer', () => {
+    clearAllSwarmCache();
+    // Transmission reports plain IPv4; ADC API echoes IPv4-mapped IPv6
+    const plainIpv4Peer = { ip: '188.27.8.122', port: 62414 };
+    const matchedMember = {
+      ip: '::ffff:188.27.8.122',
+      port: 62414,
+      user_id: 42,
+      username: 'tomcat',
+      ratio: 1.5,
+      uploaded_bytes: 0,
+      downloaded_bytes: 0,
+      bonus_points: null,
+      profile_url: 'https://asiandvdclub.org/profile/42',
+      matched_at_epoch_ms: Date.now(),
+    };
+
+    storeSwarmResults(INFO_HASH, 1, [plainIpv4Peer], {
+      status: 'matched',
+      supported: true,
+      matches: [matchedMember],
+      error: null,
+    });
+
+    // The peer (plain IPv4) must be found in cache as a successful match,
+    // not negative-cached as 'unmatched' due to IP form mismatch.
+    const { cachedMap, unresolvedPeers } = getResolvedSwarm(INFO_HASH, 1, [plainIpv4Peer]);
+    assert.equal(cachedMap.size, 1, 'IPv4-mapped member must cache-hit plain IPv4 peer lookup');
+    assert.equal(unresolvedPeers.length, 0, 'No peer should require a redundant re-lookup');
+    const cached = cachedMap.get('188.27.8.122:62414');
+    assert.ok(cached, 'member must be retrievable via plain IPv4:port key');
+    assert.equal(cached?.username, 'tomcat');
+  });
+
+  test('IPv4-mapped IPv6 peer.ip resolves to same cache entry as plain IPv4', () => {
+    clearAllSwarmCache();
+    // Store entry with plain IPv4
+    const plainPeer = { ip: '10.0.0.1', port: 51413 };
+    const member = {
+      ip: '10.0.0.1',
+      port: 51413,
+      user_id: 7,
+      username: 'seedbox',
+      ratio: 2.0,
+      uploaded_bytes: 0,
+      downloaded_bytes: 0,
+      bonus_points: null,
+      profile_url: null,
+      matched_at_epoch_ms: Date.now(),
+    };
+
+    storeSwarmResults(INFO_HASH, 1, [plainPeer], {
+      status: 'matched',
+      supported: true,
+      matches: [member],
+      error: null,
+    });
+
+    // Look up using IPv4-mapped form — must hit same cache entry
+    const mappedPeer = { ip: '::ffff:10.0.0.1', port: 51413 };
+    const { cachedMap } = getResolvedSwarm(INFO_HASH, 1, [mappedPeer]);
+    assert.equal(cachedMap.size, 1, 'IPv4-mapped lookup must hit the plain-IPv4 cache entry');
+  });
+
+  test('rate-limited response preserves a previously cached IPv4-mapped match', () => {
+    clearAllSwarmCache();
+    const peer = { ip: '198.51.100.5', port: 61200 };
+    const member = {
+      ip: '::ffff:198.51.100.5',
+      port: 61200,
+      user_id: 99,
+      username: 'ratiogod',
+      ratio: 9.8,
+      uploaded_bytes: 0,
+      downloaded_bytes: 0,
+      bonus_points: null,
+      profile_url: null,
+      matched_at_epoch_ms: Date.now(),
+    };
+
+    // Initial successful match (ADC returns IPv4-mapped form)
+    storeSwarmResults(INFO_HASH, 1, [peer], {
+      status: 'matched',
+      supported: true,
+      matches: [member],
+      error: null,
+    });
+
+    // Subsequent request hits a rate limit
+    storeSwarmResults(INFO_HASH, 1, [peer], {
+      status: 'rate_limited',
+      supported: true,
+      matches: [],
+      error: null,
+      retry_after_seconds: 60,
+    } as Parameters<typeof storeSwarmResults>[3]);
+
+    // Previously cached match must remain visible during rate limiting
+    const { cachedMap } = getResolvedSwarm(INFO_HASH, 1, [peer]);
+    assert.equal(cachedMap.size, 1, 'Cached match must survive a rate-limited response');
+    assert.equal(cachedMap.get('198.51.100.5:61200')?.username, 'ratiogod');
+  });
 });
