@@ -116,7 +116,7 @@ export function isStaleEngineGen(gen: number | null | undefined): boolean {
   return closeCoordinator.isStaleEngineGen(gen);
 }
 
-let isOpening = false;
+let pendingOpen: { filePath: string; resume: boolean; promise: Promise<PlayerOpenInfo> } | null = null;
 
 /**
  * Resolve a save path / file / folder and start playback in the embedded
@@ -133,96 +133,99 @@ export async function openInPlayer(
     deferLibraryImport?: boolean;
   },
 ): Promise<PlayerOpenInfo> {
-  if (isOpening) {
-    console.warn('[playerStore] openInPlayer ignored: already opening');
-    const cur = playerStore.get();
-    return {
-      resolved_path: cur.resolvedPath || filePath,
-      title: cur.title || opts?.displayTitle || filePath,
-      is_disc: cur.isDisc,
-      external: false,
-    };
-  }
-  isOpening = true;
-  try {
-    // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
-    // interactive menu and stays there. Only an explicit resume skips the
-    // menu (engine flag, no race) and seeks once the feature engages.
-    const resume = !!opts?.resume;
-    const seekTo = opts?.seekTo ?? 0;
-    invoke('log_frontend', {
-      message: `[frontend-diag] openInPlayer starting: filePath=${filePath} resume=${resume} seekTo=${seekTo}`,
-    }).catch(() => {});
-    // A close still in flight must land BEFORE the new session starts:
-    // player_close stops whatever is live and the commands run concurrently
-    // on the backend, so an overlapping close would kill the new session.
-    const openEpoch = await closeCoordinator.beginOpen();
-    const info = await invoke<PlayerOpenInfo>('player_open', {
-      filePath,
-      resume,
-    });
-    invoke('log_frontend', {
-      message: `[frontend-diag] openInPlayer resolved: gen=${info.gen} path=${info.resolved_path} is_disc=${info.is_disc} external=${info.external}`,
-    }).catch(() => {});
-    // Fence anchor: even if no player-opened event or poll has arrived yet,
-    // a close right after this point still fences this session's callbacks.
-    closeCoordinator.noteEngineGen(info.gen);
-  if (!info.external) {
-    if (!closeCoordinator.isOpenCurrent(openEpoch)) {
-      // The user closed the player while this open was in flight: tear the
-      // orphaned session down instead of reopening the UI they dismissed.
-      void closeCoordinator.close();
-      return info;
+  const resume = !!opts?.resume;
+  if (pendingOpen) {
+    if (pendingOpen.filePath === filePath && pendingOpen.resume === resume) {
+      console.warn('[playerStore] openInPlayer reusing in-flight open for same media');
+      return pendingOpen.promise;
     }
-    playerStore.open(info, opts?.displayTitle, opts?.year);
-    // Media collection (owner): every externally-opened item is saved as a
-    // persistent title, EXCEPT anything inside a downloaded torrent's
-    // folder - those already appear as downloaded cards.
+    throw new Error('Playback opening already in progress for another title');
+  }
+
+  const doOpen = async (): Promise<PlayerOpenInfo> => {
     try {
-      const { useTorrentStore } = await import('../stores/torrentStore');
-      // The torrent's CONTENT lives at save_path/<name>: a broad save_path
-      // (e.g. a whole volume) must not swallow external discs that merely
-      // sit under the same parent - only items inside the torrent's own
-      // download directory count as "already in the library".
-      const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-      const filePath = norm(info.resolved_path);
-      const inDownload = useTorrentStore
-        .getState()
-        .torrents.some((t) => {
-          if (t.content_path) {
-            const cp = norm(t.content_path);
-            if (filePath === cp || filePath.startsWith(cp + '/')) return true;
+      // Plain opens are MENU-FIRST: the engine's watcher lands the disc on its
+      // interactive menu and stays there. Only an explicit resume skips the
+      // menu (engine flag, no race) and seeks once the feature engages.
+      const seekTo = opts?.seekTo ?? 0;
+      invoke('log_frontend', {
+        message: `[frontend-diag] openInPlayer starting: filePath=${filePath} resume=${resume} seekTo=${seekTo}`,
+      }).catch(() => {});
+      // A close still in flight must land BEFORE the new session starts:
+      // player_close stops whatever is live and the commands run concurrently
+      // on the backend, so an overlapping close would kill the new session.
+      const openEpoch = await closeCoordinator.beginOpen();
+      const info = await invoke<PlayerOpenInfo>('player_open', {
+        filePath,
+        resume,
+      });
+      invoke('log_frontend', {
+        message: `[frontend-diag] openInPlayer resolved: gen=${info.gen} path=${info.resolved_path} is_disc=${info.is_disc} external=${info.external}`,
+      }).catch(() => {});
+      // Fence anchor: even if no player-opened event or poll has arrived yet,
+      // a close right after this point still fences this session's callbacks.
+      closeCoordinator.noteEngineGen(info.gen);
+      if (!info.external) {
+        if (!closeCoordinator.isOpenCurrent(openEpoch)) {
+          // The user closed the player while this open was in flight: tear the
+          // orphaned session down instead of reopening the UI they dismissed.
+          void closeCoordinator.close();
+          return info;
+        }
+        playerStore.open(info, opts?.displayTitle, opts?.year);
+        // Media collection (owner): every externally-opened item is saved as a
+        // persistent title, EXCEPT anything inside a downloaded torrent's
+        // folder - those already appear as downloaded cards.
+        try {
+          const { useTorrentStore } = await import('../stores/torrentStore');
+          // The torrent's CONTENT lives at save_path/<name>: a broad save_path
+          // (e.g. a whole volume) must not swallow external discs that merely
+          // sit under the same parent - only items inside the torrent's own
+          // download directory count as "already in the library".
+          const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+          const normFilePath = norm(info.resolved_path);
+          const inDownload = useTorrentStore
+            .getState()
+            .torrents.some((t) => {
+              if (t.content_path) {
+                const cp = norm(t.content_path);
+                if (normFilePath === cp || normFilePath.startsWith(cp + '/')) return true;
+              }
+              if (t.save_path) {
+                const sp = norm(t.save_path);
+                if (t.raw_name) {
+                  const root = `${sp}/${norm(t.raw_name)}`;
+                  if (normFilePath === root || normFilePath.startsWith(root + '/')) return true;
+                }
+                if (t.name) {
+                  const root = `${sp}/${norm(t.name)}`;
+                  if (normFilePath === root || normFilePath.startsWith(root + '/')) return true;
+                }
+              }
+              return false;
+            });
+          if (!inDownload && !opts?.displayTitle && !opts?.deferLibraryImport) {
+            invoke('add_external_media', {
+              path: info.resolved_path,
+              title: info.title,
+            }).catch(() => {});
           }
-          if (t.save_path) {
-            const sp = norm(t.save_path);
-            if (t.raw_name) {
-              const root = `${sp}/${norm(t.raw_name)}`;
-              if (filePath === root || filePath.startsWith(root + '/')) return true;
-            }
-            if (t.name) {
-              const root = `${sp}/${norm(t.name)}`;
-              if (filePath === root || filePath.startsWith(root + '/')) return true;
-            }
-          }
-          return false;
-        });
-      if (!inDownload && !opts?.displayTitle && !opts?.deferLibraryImport) {
-        invoke('add_external_media', {
-          path: info.resolved_path,
-          title: info.title,
-        }).catch(() => {});
+        } catch {
+          /* collection is best-effort */
+        }
+        if (info.is_disc && resume && seekTo >= 10000) {
+          void seekWhenFeatureStarts(seekTo);
+        }
       }
-    } catch {
-      /* collection is best-effort */
+      return info;
+    } finally {
+      pendingOpen = null;
     }
-    if (info.is_disc && resume && seekTo >= 10000) {
-      void seekWhenFeatureStarts(seekTo);
-    }
-  }
-  return info;
-  } finally {
-    isOpening = false;
-  }
+  };
+
+  const promise = doOpen();
+  pendingOpen = { filePath, resume, promise };
+  return promise;
 }
 
 /**

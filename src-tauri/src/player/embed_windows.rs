@@ -19,18 +19,18 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, FillRect, GetStockObject, BLACK_BRUSH, HBRUSH, HDC,
+    ClientToScreen, FillRect, GetStockObject, MapWindowPoints, BLACK_BRUSH, HBRUSH, HDC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, IsIconic, LoadCursorW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW,
-    WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
-    WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED,
+    WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -78,11 +78,34 @@ static MAIN_WINDOW_WAS_MINIMIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_active_crop(_app: &AppHandle, _crop: Option<crate::player::letterbox::Bars>) {}
 
+/// Tracks whether the video surface is currently active/visible.
+/// Do not synchronize or reposition a hidden or inactive surface.
+static VIDEO_SURFACE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Main-thread reentrancy guard for surface position updates to prevent feedback loops.
+static IN_SURFACE_SYNC: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn update_video_surface_position(main_h: HWND) {
+    if !VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
     let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
     if v_hwnd_val == 0 {
         return;
     }
+
+    // Reentrancy guard: prevent cascading WM_WINDOWPOSCHANGED feedback
+    if IN_SURFACE_SYNC.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    struct SyncGuard;
+    impl Drop for SyncGuard {
+        fn drop(&mut self) {
+            IN_SURFACE_SYNC.store(false, Ordering::Release);
+        }
+    }
+    let _guard = SyncGuard;
+
     let video_hwnd = HWND(v_hwnd_val as _);
     unsafe {
         if IsIconic(main_h).as_bool() {
@@ -95,26 +118,25 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
             return;
         }
 
-        // Align video surface 1:1 to the client area of the main window.
-        // Direct3D 11 renders the video (including any active black-bar crop)
-        // directly into this swapchain with correct isotropic subtitle placement.
+        // Compare desired rectangle with current rectangle of video_hwnd; skip unchanged geometry.
+        let mut cur_rect = RECT::default();
+        if GetWindowRect(video_hwnd, &mut cur_rect).is_ok() {
+            let cur_w = cur_rect.right - cur_rect.left;
+            let cur_h = cur_rect.bottom - cur_rect.top;
+            if cur_rect.left == cx && cur_rect.top == cy && cur_w == cw && cur_h == ch {
+                return;
+            }
+        }
+
+        // Update ONLY the video surface - do NOT call SetWindowPos on main_h.
         let _ = SetWindowPos(
             video_hwnd,
-            Some(main_h),
+            None,
             cx,
             cy,
             cw,
             ch,
-            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
-        );
-        let _ = SetWindowPos(
-            main_h,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
         );
     }
 }
@@ -358,6 +380,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         if hidden {
+            VIDEO_SURFACE_ACTIVE.store(false, Ordering::SeqCst);
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
                 // When player is closed, restore rounded corners on the application window
@@ -388,6 +411,7 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 }
             }
         } else {
+            VIDEO_SURFACE_ACTIVE.store(true, Ordering::SeqCst);
             // Player opening: save current rect and reshape to 16:9 if not fullscreen
             let mut r = RECT::default();
             unsafe {
@@ -422,6 +446,28 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 
             unsafe {
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
+                // Perform one-time Z-order arrangement when showing playback, outside position handlers.
+                let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
+                if cw > 0 && ch > 0 {
+                    let _ = SetWindowPos(
+                        video_hwnd,
+                        Some(main_h),
+                        cx,
+                        cy,
+                        cw,
+                        ch,
+                        SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+                    );
+                    let _ = SetWindowPos(
+                        main_h,
+                        Some(HWND_TOP),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+                    );
+                }
                 // During video playback, ensure no DWM border or rounded corners appear around the video screen
                 let no_border: u32 = DWMWA_COLOR_NONE;
                 let _ = DwmSetWindowAttribute(
@@ -540,34 +586,27 @@ fn is_vlc_input_window_class(name: &str) -> bool {
 }
 
 /// Translate a mouse point from the overlay's client area to VLC's main window.
-unsafe fn map_mouse_lparam(surface: HWND, target: HWND, lparam: LPARAM) -> LPARAM {
-    let mut source_rect = RECT::default();
+/// Rejects coordinates that fall outside the target window's client bounds.
+unsafe fn map_mouse_lparam(surface: HWND, target: HWND, lparam: LPARAM) -> Option<LPARAM> {
+    let mut pt = POINT {
+        x: (lparam.0 as u32 as u16 as i16) as i32,
+        y: ((lparam.0 as u32 >> 16) as u16 as i16) as i32,
+    };
+    let _ = MapWindowPoints(Some(surface), Some(target), std::slice::from_mut(&mut pt));
     let mut target_rect = RECT::default();
-    let _ = GetClientRect(surface, &mut source_rect);
-    let _ = GetClientRect(target, &mut target_rect);
-    let source_w = (source_rect.right - source_rect.left).max(1) as i64;
-    let source_h = (source_rect.bottom - source_rect.top).max(1) as i64;
-    let target_w = (target_rect.right - target_rect.left).max(1) as i64;
-    let target_h = (target_rect.bottom - target_rect.top).max(1) as i64;
-    let source_x = (lparam.0 as u32 as u16 as i16) as i64;
-    let source_y = ((lparam.0 as u32 >> 16) as u16 as i16) as i64;
-    let (target_x, target_y) =
-        scale_client_point(source_x, source_y, source_w, source_h, target_w, target_h);
-    LPARAM(((target_x as u16 as u32) | ((target_y as u16 as u32) << 16)) as isize)
-}
-
-fn scale_client_point(
-    x: i64,
-    y: i64,
-    source_w: i64,
-    source_h: i64,
-    target_w: i64,
-    target_h: i64,
-) -> (i64, i64) {
-    (
-        x * target_w.max(1) / source_w.max(1),
-        y * target_h.max(1) / source_h.max(1),
-    )
+    if GetClientRect(target, &mut target_rect).is_err() {
+        return None;
+    }
+    if pt.x < target_rect.left
+        || pt.x >= target_rect.right
+        || pt.y < target_rect.top
+        || pt.y >= target_rect.bottom
+    {
+        return None; // Outside displayed video
+    }
+    Some(LPARAM(
+        ((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize,
+    ))
 }
 
 fn mouse_point_lparam(x: f64, y: f64) -> LPARAM {
@@ -585,10 +624,15 @@ fn mouse_point_lparam(x: f64, y: f64) -> LPARAM {
 
 unsafe fn post_vlc_mouse_move(surface: HWND, wparam: WPARAM, lparam: LPARAM) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
-    let target = find_vlc_video_main_window(surface)
-        .ok_or_else(|| "VLC video main child window not found".to_string())?;
-    let lparam = map_mouse_lparam(surface, target, lparam);
-    PostMessageW(Some(target), WM_MOUSEMOVE, wparam, lparam)
+    let target = match find_vlc_video_main_window(surface) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    let mapped = match map_mouse_lparam(surface, target, lparam) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
+    PostMessageW(Some(target), WM_MOUSEMOVE, wparam, mapped)
         .map_err(|e| format!("failed to forward VLC mouse move: {e}"))
 }
 
@@ -596,15 +640,20 @@ unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM) -> Result<(), Stri
     use windows::Win32::UI::WindowsAndMessaging::{
         PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
-    let target = find_vlc_video_main_window(surface)
-        .ok_or_else(|| "VLC video main child window not found".to_string())?;
-    let lparam = map_mouse_lparam(surface, target, lparam);
+    let target = match find_vlc_video_main_window(surface) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    let mapped = match map_mouse_lparam(surface, target, lparam) {
+        Some(l) => l,
+        None => return Ok(()),
+    };
     const MK_LBUTTON: usize = 0x0001;
-    PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), lparam)
+    PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), mapped)
         .map_err(|e| format!("failed to forward VLC mouse move: {e}"))?;
-    PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(MK_LBUTTON), lparam)
+    PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(MK_LBUTTON), mapped)
         .map_err(|e| format!("failed to forward VLC mouse down: {e}"))?;
-    PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), lparam)
+    PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), mapped)
         .map_err(|e| format!("failed to forward VLC mouse up: {e}"))
 }
 
@@ -805,9 +854,11 @@ unsafe extern "system" fn main_wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_WINDOWPOSCHANGED {
-        let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
-        if v_hwnd_val != 0 {
-            update_video_surface_position(hwnd);
+        if VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) {
+            let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+            if v_hwnd_val != 0 {
+                update_video_surface_position(hwnd);
+            }
         }
     } else if msg == WM_DISPLAYCHANGE {
         // Re-apply EDR/tone-mapping on screen change. If the window moved

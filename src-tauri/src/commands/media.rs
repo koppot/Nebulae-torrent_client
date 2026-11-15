@@ -3224,7 +3224,14 @@ pub fn player_menu_navigate(
     _app: tauri::AppHandle,
     state: tauri::State<'_, PlayerState>,
     mode: i32,
+    gen: Option<u64>,
 ) -> Result<(), String> {
+    if let Some(g) = gen {
+        let cur_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
+        if g != cur_gen {
+            return Ok(());
+        }
+    }
     let mode = mode.clamp(0, 5);
     tracing::info!("[player] menu_navigate({mode})");
 
@@ -3249,7 +3256,14 @@ pub fn player_menu_mouse_move(
     state: tauri::State<'_, crate::player::PlayerState>,
     x: f64,
     y: f64,
+    gen: Option<u64>,
 ) -> Result<(), String> {
+    if let Some(g) = gen {
+        let cur_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
+        if g != cur_gen {
+            return Ok(());
+        }
+    }
     // The frontend's menu state is polled. Recheck the authoritative native
     // state here so a delayed WebView event cannot move a closed menu.
     if !state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
@@ -3290,7 +3304,14 @@ pub fn player_menu_mouse_click(
     state: tauri::State<'_, crate::player::PlayerState>,
     x: f64,
     y: f64,
+    gen: Option<u64>,
 ) -> Result<bool, String> {
+    if let Some(g) = gen {
+        let cur_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
+        if g != cur_gen {
+            return Ok(false);
+        }
+    }
     if !state.at_menu.load(std::sync::atomic::Ordering::SeqCst) {
         return Ok(false);
     }

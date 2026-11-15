@@ -66,6 +66,13 @@
  *   guard.onMenuExit();
  */
 
+export interface MenuPoint {
+  x: number;
+  y: number;
+  gen?: number | null;
+  [key: string]: unknown;
+}
+
 export interface MenuMoveGuard {
   /**
    * Attempt to dispatch a mouse-move IPC call with the given point.
@@ -75,7 +82,7 @@ export interface MenuMoveGuard {
    *   previous pending point) and returns false. When the current call
    *   completes, the pending point is automatically dispatched.
    */
-  dispatch(point: { x: number; y: number }): boolean;
+  dispatch(point: MenuPoint): boolean;
 
   /**
    * Reset the guard on menu exit. Discards any pending coalesced point and
@@ -91,7 +98,7 @@ export interface MenuMoveGuard {
    * The latest point that was dropped because a call was in-flight.
    * null when nothing is pending. Visible for testing.
    */
-  pendingPoint(): { x: number; y: number } | null;
+  pendingPoint(): MenuPoint | null;
 }
 
 /**
@@ -101,7 +108,7 @@ export interface MenuMoveGuard {
  *   Promise that resolves/rejects when the backend has processed the message.
  */
 export function createMenuMoveGuard(
-  invoke: (point: { x: number; y: number }) => Promise<unknown>,
+  invoke: (point: MenuPoint) => Promise<unknown>,
 ): MenuMoveGuard {
   // 0 = idle; > 0 = in-flight (holds the current dispatch generation)
   let inFlightGen = 0;
@@ -109,9 +116,9 @@ export function createMenuMoveGuard(
   let counter = 0;
   // Latest position dropped while a call was in-flight. Dispatched when the
   // call completes. null when nothing is pending.
-  let pending: { x: number; y: number } | null = null;
+  let pending: MenuPoint | null = null;
 
-  function doDispatch(point: { x: number; y: number }): void {
+  function doDispatch(point: MenuPoint): void {
     const gen = ++counter;
     inFlightGen = gen;
     invoke(point)

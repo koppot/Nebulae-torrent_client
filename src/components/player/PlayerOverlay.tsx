@@ -198,7 +198,7 @@ export default function PlayerOverlay() {
   // from an earlier menu session cannot clear the guard for a newer call.
   // See src/lib/menuMoveGuard.ts for the full design rationale.
   const menuMoveGuardRef = useRef<MenuMoveGuard>(
-    createMenuMoveGuard((point) => invoke('player_menu_mouse_move', point)),
+    createMenuMoveGuard((point) => invoke('player_menu_mouse_move', { ...point })),
   );
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
@@ -416,7 +416,7 @@ export default function PlayerOverlay() {
       // ready, then clear the flag.
       if (p.at_menu && pendingActivationRef.current !== null) {
         pendingActivationRef.current = null;
-        invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+        invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {});
       }
       // Feature has started: any leftover pending activation is no longer
       // meaningful — it must not fire mid-feature or on the next menu visit.
@@ -437,7 +437,7 @@ export default function PlayerOverlay() {
         if (el) {
           const r = el.getBoundingClientRect();
           const point = nativeMenuPoint(r.width * 0.45, r.height * 0.42);
-          invoke('player_menu_mouse_move', point).catch(() => {});
+          invoke('player_menu_mouse_move', { ...point, gen: player.gen }).catch(() => {});
         }
       }
       if (wasAtMenuRef.current && !p.at_menu) {
@@ -580,7 +580,7 @@ export default function PlayerOverlay() {
   // seek/volume, F fullscreen, M mute).
   useEffect(() => {
     if (!player.open) return;
-    const nav = (mode: number) => invoke('player_menu_navigate', { mode }).catch(() => {});
+    const nav = (mode: number) => invoke('player_menu_navigate', { mode, gen: player.gen }).catch(() => {});
     const handle = (key: string) => {
       if (player.isDisc && pollRef.current.at_menu) {
         // In the menu domain, navigation keys route to dvdnav/libbluray.
@@ -1139,7 +1139,7 @@ export default function PlayerOverlay() {
       // entry. Position restore (if a saved position exists) is handled by
       // the poll-based wasAtMenuRef/pendingResumeRef mechanism which fires
       // for every input path — mouse, keyboard, and this overlay button.
-      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+      invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {});
       return;
     }
     // Disc is in the pre-menu title (title === 0 on multi-title disc, at_menu not yet true):
@@ -1280,7 +1280,7 @@ export default function PlayerOverlay() {
     lastMenuMoveRef.current = now;
     const rect = e.currentTarget.getBoundingClientRect();
     const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
-    menuMoveGuardRef.current.dispatch(point);
+    menuMoveGuardRef.current.dispatch({ ...point, gen: player.gen });
   };
 
   const scheduleVideoPause = (sequence: number) => {
@@ -1310,8 +1310,9 @@ export default function PlayerOverlay() {
       lastMenuClickRef.current = now;
       const rect = e.currentTarget.getBoundingClientRect();
       const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
-      invoke('player_menu_mouse_move', point).catch(() => {});
-      invoke('player_menu_navigate', { mode: 0 }).catch(() => {});
+      invoke('player_menu_mouse_move', { ...point, gen: player.gen }).catch(() => {});
+      invoke('player_menu_mouse_click', { ...point, gen: player.gen }).catch(() => {});
+      invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {});
       return;
     }
     const sequence = ++clickSequenceRef.current;
@@ -1326,7 +1327,7 @@ export default function PlayerOverlay() {
     e.preventDefault();
     if (wheelThrottleRef.current !== null) return;
     const mode = e.deltaY > 0 ? 2 : 1; // down = next (2), up = prev (1)
-    invoke('player_menu_navigate', { mode }).catch(() => {});
+    invoke('player_menu_navigate', { mode, gen: player.gen }).catch(() => {});
     wheelThrottleRef.current = window.setTimeout(() => {
       wheelThrottleRef.current = null;
     }, 300);
@@ -1484,7 +1485,7 @@ export default function PlayerOverlay() {
                 <button
                   key={mode}
                   type="button"
-                  onClick={() => invoke('player_menu_navigate', { mode }).catch(() => {})}
+                  onClick={() => invoke('player_menu_navigate', { mode, gen: player.gen }).catch(() => {})}
                   className="w-7 h-7 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
                   title={tip}
                 >
@@ -1493,7 +1494,7 @@ export default function PlayerOverlay() {
               ))}
               <button
                 type="button"
-                onClick={() => invoke('player_menu_navigate', { mode: 0 }).catch(() => {})}
+                onClick={() => invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {})}
                 className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
                 title="Activate the highlighted menu entry (Enter)"
               >

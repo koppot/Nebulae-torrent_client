@@ -46,7 +46,6 @@ impl DiscDetector {
             return None;
         }
 
-        let total_bytes = Self::calculate_total_bytes(path);
         let title = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -63,6 +62,7 @@ impl DiscDetector {
                 .unwrap_or("")
                 .to_lowercase();
             if ext == "iso" || ext == "img" {
+                let total_bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
                 let lower_title = title.to_lowercase();
                 let is_uhd = lower_title.contains("uhd")
                     || lower_title.contains("2160p")
@@ -90,6 +90,7 @@ impl DiscDetector {
         if path.is_dir() {
             // Check for Blu-ray BDMV structure
             if let Some(bdmv_path) = Self::find_subpath(path, "BDMV") {
+                let total_bytes = Self::calculate_total_bytes(path);
                 let lower_title = title.to_lowercase();
                 let is_uhd = lower_title.contains("uhd")
                     || lower_title.contains("2160p")
@@ -128,6 +129,7 @@ impl DiscDetector {
 
             // Check for DVD VIDEO_TS structure
             if let Some(video_ts_path) = Self::find_subpath(path, "VIDEO_TS") {
+                let total_bytes = Self::calculate_total_bytes(path);
                 let layer_spec = if total_bytes <= 4_700_000_000 {
                     DiscLayerSpec::Dvd5
                 } else {
@@ -150,6 +152,7 @@ impl DiscDetector {
 
             // Check for DVD AUDIO_TS structure
             if let Some(audio_ts_path) = Self::find_subpath(path, "AUDIO_TS") {
+                let total_bytes = Self::calculate_total_bytes(path);
                 return Some(DiscStructureInfo {
                     disc_type: DiscType::DvdAudio,
                     layer_spec: DiscLayerSpec::Dvd9,

@@ -148,7 +148,48 @@ export const SimpleMediaView: React.FC = () => {
   // (owner). The overlay lives INSIDE the poster box, so nothing can clip
   // it and no portal is needed.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [isLaunchingDisc, setIsLaunchingDisc] = useState(false);
+  const [launchingMediaId, setLaunchingMediaId] = useState<string | null>(null);
+  const launchInFlight = useRef(false);
+
+  // Bounded in-flight queue for disc structure detection (max 2 concurrent).
+  // Deduplicates pending requests and suspends while playback or disc launch is in flight.
+  const discQueueRef = useRef<{ key: string; path: string }[]>([]);
+  const discInFlightKeys = useRef<Set<string>>(new Set());
+  const discResolvedKeys = useRef<Set<string>>(new Set());
+  const discActiveWorkers = useRef(0);
+
+  const drainDiscQueue = useCallback(() => {
+    if (playerOpen || launchInFlight.current) return;
+    while (discActiveWorkers.current < 2 && discQueueRef.current.length > 0) {
+      const item = discQueueRef.current.shift()!;
+      if (discResolvedKeys.current.has(item.key) || discInFlightKeys.current.has(item.key)) {
+        continue;
+      }
+      discInFlightKeys.current.add(item.key);
+      discActiveWorkers.current++;
+      invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: item.path })
+        .then((set) => {
+          discResolvedKeys.current.add(item.key);
+          setDiscSetMap((prev) => ({ ...prev, [item.key]: set }));
+          const primary = set[0];
+          if (primary) {
+            setDiscMetaMap((prev) => ({ ...prev, [item.key]: primary }));
+          }
+        })
+        .catch((err) => {
+          discResolvedKeys.current.add(item.key);
+          invoke('log_frontend', {
+            message: `disc set failed for ${item.path}: ${errorMessage(err, 'unknown')}`,
+          }).catch(() => {});
+          setDiscSetMap((prev) => ({ ...prev, [item.key]: [] }));
+        })
+        .finally(() => {
+          discInFlightKeys.current.delete(item.key);
+          discActiveWorkers.current--;
+          drainDiscQueue();
+        });
+    }
+  }, [playerOpen]);
 
   // Right-click menu on a poster (owner): Show in Finder, Play, Resume, plus
   // a few useful extras. Viewport-anchored, grayscale, closes on any click.
@@ -462,26 +503,6 @@ export const SimpleMediaView: React.FC = () => {
     });
   }, [externalMedia, externalPosterMap, playerOpen]);
 
-  // Inspect optical disc format for external media items
-  useEffect(() => {
-    if (playerOpen) return;
-    externalMedia.forEach((m) => {
-      if (!(m.path in discSetMap)) {
-        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: m.path })
-          .then((set) => {
-            setDiscSetMap((prev) => ({ ...prev, [m.path]: set }));
-            const primary = set[0];
-            if (primary) {
-              setDiscMetaMap((prev) => ({ ...prev, [m.path]: primary }));
-            }
-          })
-          .catch(() => {
-            setDiscSetMap((prev) => ({ ...prev, [m.path]: [] }));
-          });
-      }
-    });
-  }, [externalMedia, discSetMap, playerOpen]);
-
   // Details popup for an external title (owner: same options/details as
   // the library).
   const [extDetails, setExtDetails] = useState<
@@ -529,31 +550,30 @@ export const SimpleMediaView: React.FC = () => {
   }, [fetchSeedTimeRecords]);
 
   // Inspect optical disc format for each media item, AND the full disc set
-  // (multi-ISO torrents classify every disc by its own size — the badge, the
-  // pills and the hover panel all read the set, not just the first image).
+  // (bounded queue: max 2 concurrent, deduplicated, suspends on playback/launch).
   useEffect(() => {
-    if (playerOpen) return;
-    torrents.forEach((t) => {
-      if (!(t.id in discSetMap)) {
-        invoke<DiscStructureInfo[]>('detect_disc_set', { filePath: contentPath(t) })
-          .then((set) => {
-            setDiscSetMap((prev) => ({ ...prev, [t.id]: set }));
-            const primary = set[0];
-            if (primary) {
-              setDiscMetaMap((prev) => ({ ...prev, [t.id]: primary }));
-            }
-          })
-          .catch((err) => {
-            invoke('log_frontend', {
-              message: `disc set failed for ${contentPath(t)}: ${errorMessage(err, 'unknown')}`,
-            }).catch(() => {});
-            setDiscSetMap((prev) => ({ ...prev, [t.id]: [] }));
-          });
-      } else if (!discMetaMap[t.id] && discSetMap[t.id]?.[0]) {
-        setDiscMetaMap((prev) => ({ ...prev, [t.id]: discSetMap[t.id][0] }));
+    if (playerOpen || launchInFlight.current) return;
+    let added = false;
+    externalMedia.forEach((m) => {
+      if (!discResolvedKeys.current.has(m.path) && !discInFlightKeys.current.has(m.path)) {
+        if (!discQueueRef.current.some((q) => q.key === m.path)) {
+          discQueueRef.current.push({ key: m.path, path: m.path });
+          added = true;
+        }
       }
     });
-  }, [torrents, discSetMap, discMetaMap, playerOpen]);
+    torrents.forEach((t) => {
+      if (!discResolvedKeys.current.has(t.id) && !discInFlightKeys.current.has(t.id)) {
+        if (!discQueueRef.current.some((q) => q.key === t.id)) {
+          discQueueRef.current.push({ key: t.id, path: contentPath(t) });
+          added = true;
+        }
+      }
+    });
+    if (added) {
+      drainDiscQueue();
+    }
+  }, [externalMedia, torrents, playerOpen, drainDiscQueue]);
 
   // Poster resolution (approved chain): 1) ADC poster (the artwork the
   // tracker already shows on torrents.php, matched by name and cached
@@ -664,8 +684,10 @@ export const SimpleMediaView: React.FC = () => {
     displayTitle?: string,
     year?: number | string | null,
   ) => {
-    if (isLaunchingDisc) return;
-    setIsLaunchingDisc(true);
+    if (launchInFlight.current) return;
+    launchInFlight.current = true;
+    const mediaId = groupId || torrent.id;
+    setLaunchingMediaId(mediaId);
     const playPath = targetPath || contentPath(torrent);
     invoke('log_frontend', {
       message: `disc button clicked: id=${torrent.id} path=${playPath}`,
@@ -704,7 +726,9 @@ export const SimpleMediaView: React.FC = () => {
           : undefined,
       });
     } finally {
-      setIsLaunchingDisc(false);
+      launchInFlight.current = false;
+      setLaunchingMediaId(null);
+      drainDiscQueue();
     }
   };
 
@@ -716,6 +740,9 @@ export const SimpleMediaView: React.FC = () => {
     displayTitle?: string,
     year?: number | string | null,
   ) => {
+    if (launchInFlight.current) return;
+    launchInFlight.current = true;
+    setLaunchingMediaId(groupId);
     const allGroups = groupItems([...activeDownloads, ...readyToWatch]);
     const g = allGroups.find((x) => x.id === groupId);
     const resolvedYear = year ?? g?.year;
@@ -752,6 +779,10 @@ export const SimpleMediaView: React.FC = () => {
               }
             : undefined,
       });
+    } finally {
+      launchInFlight.current = false;
+      setLaunchingMediaId(null);
+      drainDiscQueue();
     }
   };
 
@@ -1110,7 +1141,7 @@ export const SimpleMediaView: React.FC = () => {
         <div className="rounded-lg overflow-hidden">
           <div
             onClick={() => {
-              if (!isReordering && !isLaunchingDisc) {
+              if (!isReordering && !launchInFlight.current) {
                 handlePlayDisc(effDisc.torrent, group.id, effDisc.path, featureLabel(group.id), group.year);
               }
             }}
@@ -1134,12 +1165,12 @@ export const SimpleMediaView: React.FC = () => {
                     return (
                       <button
                         onClick={onPrimary}
-                        disabled={isLaunchingDisc}
+                        disabled={launchInFlight.current || !!launchingMediaId}
                         className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition disabled:opacity-60"
                         title="Play (interactive disc menus)"
                       >
                         <Play className="w-3 h-3 fill-black" />
-                        <span>{isLaunchingDisc ? 'Launching...' : 'Play'}</span>
+                        <span>{launchingMediaId === group.id ? 'Launching...' : 'Play'}</span>
                       </button>
                     );
                   })()}
@@ -1217,8 +1248,9 @@ export const SimpleMediaView: React.FC = () => {
         <div className="rounded-lg overflow-hidden">
           <div
             onClick={async () => {
-              if (!isReordering && !isLaunchingDisc) {
-                setIsLaunchingDisc(true);
+              if (!isReordering && !launchInFlight.current) {
+                launchInFlight.current = true;
+                setLaunchingMediaId(m.path);
                 try {
                   await openInPlayer(m.path, {
                     displayTitle: m.title,
@@ -1247,7 +1279,9 @@ export const SimpleMediaView: React.FC = () => {
                       : undefined,
                   });
                 } finally {
-                  setIsLaunchingDisc(false);
+                  launchInFlight.current = false;
+                  setLaunchingMediaId(null);
+                  drainDiscQueue();
                 }
               }
             }}
@@ -1274,11 +1308,12 @@ export const SimpleMediaView: React.FC = () => {
               extHovered === m.path && (
                 <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-stretch gap-1">
                   <button
-                    disabled={isLaunchingDisc}
+                    disabled={launchInFlight.current || !!launchingMediaId}
                     onClick={async (e) => {
                       e.stopPropagation();
-                      if (isLaunchingDisc) return;
-                      setIsLaunchingDisc(true);
+                      if (launchInFlight.current) return;
+                      launchInFlight.current = true;
+                      setLaunchingMediaId(m.path);
                       try {
                         await openInPlayer(m.path, {
                           displayTitle: m.title,
@@ -1307,14 +1342,16 @@ export const SimpleMediaView: React.FC = () => {
                             : undefined,
                         });
                       } finally {
-                        setIsLaunchingDisc(false);
+                        launchInFlight.current = false;
+                        setLaunchingMediaId(null);
+                        drainDiscQueue();
                       }
                     }}
                     className="flex-1 px-1.5 py-1.5 rounded-md bg-[#e5e5e5] hover:bg-white text-black text-[10px] font-semibold flex items-center justify-center gap-1 transition disabled:opacity-60"
                     title="Play (interactive disc menus)"
                   >
                     <Play className="w-3 h-3 fill-black" />
-                    <span>{isLaunchingDisc ? 'Launching...' : 'Play'}</span>
+                    <span>{launchingMediaId === m.path ? 'Launching...' : 'Play'}</span>
                   </button>
                   <button
                     onClick={(e) => {
