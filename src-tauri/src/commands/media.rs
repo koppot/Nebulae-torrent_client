@@ -897,9 +897,15 @@ fn start_playback_inner(
         }
     };
 
+    let t_start_playback = std::time::Instant::now();
+    tracing::info!("[perf] start_playback_inner entry: path='{}'", file_path);
+
     match player::ensure_overlay(app) {
         Ok(view) => {
-            tracing::info!("player_open: overlay ready (view ptr {view:#x})");
+            tracing::info!(
+                "[perf] ensure_overlay: elapsed={}ms view={view:#x}",
+                t_start_playback.elapsed().as_millis()
+            );
             let lib = match loaded_lib(state) {
                 Ok(l) => l,
                 Err(e) => {
@@ -911,6 +917,7 @@ fn start_playback_inner(
             // then reveal the overlay. This ensures the caopengllayer vout is
             // bound to the view before the view becomes visible, avoiding a
             // frame of transparency where the video has not yet landed.
+            let t_vlc_open = std::time::Instant::now();
             match VlcSession::open_shared(
                 &lib,
                 &state.shared_instance,
@@ -919,6 +926,10 @@ fn start_playback_inner(
                 bypass_menu,
             ) {
                 Ok(session) => {
+                    tracing::info!(
+                        "[perf] VlcSession::open_shared: elapsed={}ms",
+                        t_vlc_open.elapsed().as_millis()
+                    );
                     // Record session pointers immediately so stop_session and
                     // pollers are immediately aware of the live media player.
                     *poison(&state.instance) = session.instance;
@@ -934,9 +945,14 @@ fn start_playback_inner(
 
                     // Reveal the overlay now that the vout is attached, so the
                     // first frame the user sees is video, not transparency.
+                    let t_unhide = std::time::Instant::now();
                     if let Err(e) = player::set_overlay_hidden(app, false) {
                         tracing::error!("player_open: overlay unhide failed: {e}");
                     }
+                    tracing::info!(
+                        "[perf] set_overlay_hidden(false): elapsed={}ms",
+                        t_unhide.elapsed().as_millis()
+                    );
 
                     // HDR: detect UHD / HDR content from disc metadata or file path,
                     // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
@@ -1975,9 +1991,14 @@ pub async fn player_open_inner(
     explicit_feature: Option<String>,
     bypass_menu: bool,
 ) -> Result<PlayerOpenResult, String> {
+    let t_open_entry = std::time::Instant::now();
     let _open_guard = state.open_lock.lock().await;
     tracing::info!(
         "[lifecycle-diag] player_open entry: path='{file_path}' (resume={resume}, bypass_menu={bypass_menu})"
+    );
+    tracing::info!(
+        "[perf] open_lock acquired: waited={}ms",
+        t_open_entry.elapsed().as_millis()
     );
     stop_session(app, state);
     *poison(&state.current_path) = Some(file_path.clone());
@@ -2020,7 +2041,13 @@ pub async fn player_open_inner(
         explicit_feature.as_deref(),
         bypass_menu,
     ) {
-        Ok(r) => r,
+        Ok(r) => {
+            tracing::info!(
+                "[perf] start_playback_inner total: elapsed={}ms",
+                t_open_entry.elapsed().as_millis()
+            );
+            r
+        }
         Err(e) => {
             tracing::error!(
                 "[lifecycle-diag] player_open failed: path='{open_target}' error='{e}'"
@@ -2052,9 +2079,10 @@ pub async fn player_open_inner(
     // the overlay mounts and the shell clears away from the video. The
     use tauri::Emitter;
     tracing::info!(
-        "[lifecycle-diag] player-opened emitted: session_gen={} path='{}'",
+        "[lifecycle-diag] player-opened emitted: session_gen={} path='{}'\n[perf] player_open total to emit: elapsed={}ms",
         result.gen,
-        result.info.resolved_path
+        result.info.resolved_path,
+        t_open_entry.elapsed().as_millis()
     );
     let _ = app.emit("player-opened", &result);
     Ok(result)
@@ -3190,7 +3218,19 @@ pub fn player_menu_mouse_move(
     }
     #[cfg(target_os = "windows")]
     {
+        let t_mm = std::time::Instant::now();
         crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
+        let elapsed = t_mm.elapsed().as_micros();
+        // Sample every ~100 calls (counter mod 100 == 0) to get typical cost
+        // without flooding the log. forward_mouse_move uses PostMessageW which
+        // should be sub-millisecond; if we see >5ms here it indicates contention
+        // or find_vlc_video_main_window is walking a large window tree.
+        if elapsed > 1000 {
+            tracing::warn!(
+                "[perf] player_menu_mouse_move: forward_mouse_move took {}µs",
+                elapsed
+            );
+        }
     }
     #[cfg(target_os = "linux")]
     {
