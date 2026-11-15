@@ -20,6 +20,7 @@ import { clearFeatureResume, closePlayer, openInPlayer, savePositionMs, savedPos
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
+import { createMenuMoveGuard, MenuMoveGuard } from '../../lib/menuMoveGuard';
 
 
 interface Poll {
@@ -182,6 +183,23 @@ export default function PlayerOverlay() {
   const clickSequenceRef = useRef(0);
   const lastMenuMoveRef = useRef<number>(0);
   const lastMenuClickRef = useRef<number>(0);
+  // In-flight guard: prevents mouse-move IPC backlog from building up.
+  // Uses a generation counter so a stale completion from a previous menu
+  // session cannot clear the guard for a newer outstanding request.
+  //
+  // menuMoveGenRef increments on each dispatch and on menu/session exit.
+  // The captured generation in each .finally() callback is compared against
+  // the current generation before clearing the flag, so only the matching
+  // completion clears it. A stale .finally() (from a previous menu session
+  // or an older request whose generation no longer matches) is a no-op.
+  //
+  // In-flight guard: at most one player_menu_mouse_move IPC call outstanding
+  // at a time. Backed by a generation counter so stale .finally() callbacks
+  // from an earlier menu session cannot clear the guard for a newer call.
+  // See src/lib/menuMoveGuard.ts for the full design rationale.
+  const menuMoveGuardRef = useRef<MenuMoveGuard>(
+    createMenuMoveGuard((point) => invoke('player_menu_mouse_move', point)),
+  );
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Always-on-top pin (owner): bottom-right mark, click to engage/disengage.
   const [pinnedTop, setPinnedTop] = useState(false);
@@ -424,6 +442,9 @@ export default function PlayerOverlay() {
       }
       if (wasAtMenuRef.current && !p.at_menu) {
         lastMenuClickRef.current = 0;
+        // Reset the in-flight guard on menu exit so any pending .finally()
+        // from the last move call is a no-op in the next session.
+        menuMoveGuardRef.current.onMenuExit();
         justLeftMenuRef.current = true;
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
       }
@@ -1251,12 +1272,15 @@ export default function PlayerOverlay() {
     // the native overlay_wndproc does not receive WM_MOUSEMOVE during disc menus
     // (the WebView captures all pointer events). Forward from the WebView instead.
     // The 40 ms throttle below bounds the IPC rate to ~25 fps on all platforms.
+    // menuMoveGuardRef ensures at most one IPC call is in-flight at a time;
+    // events arriving while the previous call is pending are dropped rather
+    // than queued. See src/lib/menuMoveGuard.ts for the full design rationale.
     const now = Date.now();
-    if (now - lastMenuMoveRef.current < 40) return; // ~25 fps throttle
+    if (now - lastMenuMoveRef.current < 40) return; // ~25 fps dispatch throttle
     lastMenuMoveRef.current = now;
     const rect = e.currentTarget.getBoundingClientRect();
     const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
-    invoke('player_menu_mouse_move', point).catch(() => {});
+    menuMoveGuardRef.current.dispatch(point);
   };
 
   const scheduleVideoPause = (sequence: number) => {
