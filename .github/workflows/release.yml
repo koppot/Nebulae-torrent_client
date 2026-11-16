@@ -62,7 +62,7 @@ jobs:
           Refer to the [Installation Guide](docs/installation.md) for platform-specific launch instructions.
           BODY
           sed -i "s/@TAG@/$TAG/g" release-body.md
-          PRERELEASE_FLAG="--latest"
+          PRERELEASE_FLAG="--prerelease=false --latest"
           if [[ "$TAG" == *"beta"* || "$TAG" == *"alpha"* || "$TAG" == *"rc"* ]]; then
             PRERELEASE_FLAG="--prerelease"
           fi
