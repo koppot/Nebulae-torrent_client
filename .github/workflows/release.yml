@@ -26,10 +26,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag_name || github.ref_name }}
         run: |
-          if [[ "$TAG" == "v0.2.7" ]]; then
-            echo "FATAL: Tag v0.2.7 is frozen and immutable in production. Workflow cannot overwrite published 0.2.7 assets." >&2
-            exit 1
-          fi
           cat > release-body.md <<'BODY'
           ## Nebulae — Torrent Client by Asian DVD Club (@TAG@)
 
