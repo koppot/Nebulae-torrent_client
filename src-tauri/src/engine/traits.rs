@@ -153,4 +153,13 @@ pub trait TorrentEngine: Send + Sync {
     fn engine_version(&self) -> Option<String> {
         None
     }
+
+    /// Read-only engine diagnostic reporting exact daemon path/PID,
+    /// effective IPv4/IPv6 bind settings, VPN policy, IPv6 listeners,
+    /// and established IPv6 peer count.
+    fn engine_ipv6_diagnostic(
+        &self,
+    ) -> Result<crate::models::connectivity::EngineIpv6Diagnostic, String> {
+        Err("Not supported by this engine".to_string())
+    }
 }

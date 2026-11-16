@@ -19,6 +19,23 @@ pub enum NatType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EngineIpv6Diagnostic {
+    pub daemon_path: Option<String>,
+    pub daemon_pid: Option<u32>,
+    pub bind_address_ipv4: String,
+    pub bind_address_ipv6: String,
+    pub peer_port: u16,
+    pub vpn_mode: String,
+    pub is_vpn_required: bool,
+    pub active_vpn_interface: Option<String>,
+    pub vpn_has_ipv4_egress: bool,
+    pub vpn_has_ipv6_egress: bool,
+    pub ipv6_listening_sockets: Vec<String>,
+    pub established_ipv6_peer_connections: u32,
+    pub os_ipv6_reachability: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConnectivityReport {
     pub listening_port: u16,
     pub port_status: PortStatus,
@@ -28,6 +45,10 @@ pub struct ConnectivityReport {
     pub nat_type: NatType,
     pub ipv4_healthy: bool,
     pub ipv6_healthy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_ipv6_reachable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_ipv6_status: Option<String>,
     pub dns_health_ms: u32,
     pub vpn_interface_bound: bool,
     pub vpn_adapter_name: Option<String>,

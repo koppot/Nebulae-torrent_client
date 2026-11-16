@@ -796,6 +796,7 @@ pub fn run() {
             commands::peering::unblock_peer_ip,
             // Connectivity Doctor
             commands::connectivity::run_connectivity_doctor_test,
+            commands::connectivity::get_engine_ipv6_diagnostic,
             commands::connectivity::get_port_negotiation_result,
             commands::connectivity::get_connectivity_certificate,
             commands::connectivity::get_tailscale_status,

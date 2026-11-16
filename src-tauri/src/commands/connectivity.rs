@@ -1,6 +1,6 @@
 use crate::db::Database;
 use crate::engine::SharedEngine;
-use crate::models::connectivity::{ConnectivityReport, NatType, PortStatus};
+use crate::models::connectivity::{ConnectivityReport, EngineIpv6Diagnostic, NatType, PortStatus};
 use crate::utils::network::AdcLink;
 use serde::Serialize;
 use std::sync::Arc;
@@ -52,6 +52,14 @@ async fn probe_ipv4() -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(1500), async {
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.ok()?;
         socket.connect("1.1.1.1:53").await.ok()?;
+        let query: [u8; 29] = [
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+        socket.send(&query).await.ok()?;
+        let mut buf = [0u8; 512];
+        socket.recv(&mut buf).await.ok()?;
         Some(true)
     })
     .await
@@ -64,6 +72,14 @@ async fn probe_ipv6() -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(1500), async {
         let socket = tokio::net::UdpSocket::bind("[::]:0").await.ok()?;
         socket.connect("[2606:4700:4700::1111]:53").await.ok()?;
+        let query: [u8; 29] = [
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e',
+            b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00,
+            0x01,
+        ];
+        socket.send(&query).await.ok()?;
+        let mut buf = [0u8; 512];
+        socket.recv(&mut buf).await.ok()?;
         Some(true)
     })
     .await
@@ -182,11 +198,34 @@ pub async fn run_connectivity_doctor_test(
         );
     }
 
+    let engine_diag = engine.engine_ipv6_diagnostic().ok();
+    let engine_ipv6_status = engine_diag.as_ref().map(|d| {
+        if !d.ipv6_listening_sockets.is_empty() {
+            format!(
+                "Active (listening on {}; {} established peer(s))",
+                d.ipv6_listening_sockets.join(", "),
+                d.established_ipv6_peer_connections
+            )
+        } else if d.bind_address_ipv6 == "::1" {
+            "Disabled by VPN policy (bound to loopback ::1)".to_string()
+        } else {
+            format!(
+                "Configured ({}), no active IPv6 listener",
+                d.bind_address_ipv6
+            )
+        }
+    });
+
     if ipv6 {
         plain_language_findings
-            .push("Native IPv6 dual-stack connectivity is active and ready.".to_string());
+            .push("OS IPv6 internet reachability: Confirmed via request/reply probe.".to_string());
     } else {
-        plain_language_findings.push("Operating in IPv4-only mode; IPv6 not detected.".to_string());
+        plain_language_findings
+            .push("OS IPv6 internet reachability: Unreachable or IPv4-only network.".to_string());
+    }
+
+    if let Some(ref st) = engine_ipv6_status {
+        plain_language_findings.push(format!("Torrent engine IPv6: {st}"));
     }
 
     plain_language_findings.push(format!("DNS resolution latency measured at {dns_ms}ms."));
@@ -223,6 +262,8 @@ pub async fn run_connectivity_doctor_test(
         nat_type: NatType::Unknown,
         ipv4_healthy: ipv4,
         ipv6_healthy: ipv6,
+        os_ipv6_reachable: Some(ipv6),
+        engine_ipv6_status,
         dns_health_ms: dns_ms,
         vpn_interface_bound: vpn_bound,
         vpn_adapter_name: vpn_adapter,
@@ -235,6 +276,13 @@ pub async fn run_connectivity_doctor_test(
         plain_language_findings,
         suggested_fixes,
     })
+}
+
+#[tauri::command]
+pub fn get_engine_ipv6_diagnostic(
+    engine: State<'_, SharedEngine>,
+) -> Result<EngineIpv6Diagnostic, String> {
+    engine.engine_ipv6_diagnostic()
 }
 
 /// The port negotiator's latest verdict, for the front end's port-forward

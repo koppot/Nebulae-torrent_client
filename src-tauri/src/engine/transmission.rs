@@ -13,7 +13,10 @@ use crate::db::{Database, TorrentDbMetadata};
 use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
 use crate::models::peering::{LocalityTier, PeerTelemetry};
 use crate::utils::keyring::{get_secret, passkey_secret_target};
-use crate::utils::network::{find_active_egress_vpn_interface, find_active_vpn_interface};
+use crate::utils::network::{
+    find_active_egress_vpn_interface, find_active_ipv6_egress_vpn_interface,
+    find_active_vpn_interface,
+};
 use crate::utils::paths::AppPaths;
 
 /// Expands a leading `~` to the user's home directory. Relative paths resolve
@@ -908,6 +911,7 @@ pub struct TransmissionTorrentEngine {
     /// Set on graceful shutdown: the watchdog must stop respawning and the
     /// stop helper must terminate the daemon exactly once.
     shutdown_flag: Arc<AtomicBool>,
+    daemon_path: PathBuf,
     config_dir: PathBuf,
     db: Arc<Database>,
     #[allow(dead_code)]
@@ -938,6 +942,7 @@ pub fn build_transmission_settings(
     settings: &UserSettings,
     default_download_dir: &str,
     bind_ipv4: &str,
+    bind_ipv6: &str,
     rpc_port: u16,
     rpc_user: &str,
     rpc_password: &str,
@@ -1001,6 +1006,7 @@ pub fn build_transmission_settings(
 
         // Interface binding and storage
         "bind-address-ipv4": bind_ipv4,
+        "bind-address-ipv6": bind_ipv6,
         "download-dir": default_download_dir,
         "incomplete-dir": settings.temp_incomplete_directory,
         "incomplete-dir-enabled": settings.use_temp_incomplete_dir,
@@ -1448,6 +1454,7 @@ impl TransmissionTorrentEngine {
         let is_vpn_required = vpn_mode == "AdcOnlyVpn" || vpn_mode == "SystemVpn";
 
         let mut bind_ipv4 = "0.0.0.0".to_string();
+        let mut bind_ipv6 = "::".to_string();
         let mut initial_ks_active = false;
 
         if is_vpn_required {
@@ -1481,6 +1488,20 @@ impl TransmissionTorrentEngine {
                 bind_ipv4 = "127.0.0.1".to_string();
                 initial_ks_active = true;
             }
+
+            // For IPv6 when VPN is required:
+            // Do not permit IPv6 to bypass an explicitly required VPN merely to make it connect.
+            if let Some((_iface, vpn_ipv6)) = find_active_ipv6_egress_vpn_interface() {
+                bind_ipv6 = vpn_ipv6;
+                info!("Hardening at spawn: bound transmission-daemon to active tunnel IPv6 {bind_ipv6}");
+            } else {
+                bind_ipv6 = "::1".to_string();
+                info!("VPN is required but no active IPv6 VPN egress found; binding transmission-daemon IPv6 to ::1 to prevent leak");
+            }
+
+            if initial_ks_active {
+                bind_ipv6 = "::1".to_string();
+            }
         }
 
         // 5. Build settings.json for Transmission with private-tracker constraints hard-off
@@ -1488,6 +1509,7 @@ impl TransmissionTorrentEngine {
             settings,
             &default_download_dir.to_string_lossy(),
             &bind_ipv4,
+            &bind_ipv6,
             rpc_port,
             rpc_user,
             &rpc_password,
@@ -1697,6 +1719,7 @@ impl TransmissionTorrentEngine {
             let db_watch = Arc::clone(&db);
             let default_download_dir_watch = default_download_dir.clone();
             let bind_ipv4_watch = bind_ipv4.clone();
+            let bind_ipv6_watch = bind_ipv6.clone();
             let rpc_password_watch = rpc_password.clone();
 
             tauri::async_runtime::spawn(async move {
@@ -1768,6 +1791,7 @@ impl TransmissionTorrentEngine {
                             &user_settings,
                             &default_download_dir_watch.to_string_lossy(),
                             &bind_ipv4_watch,
+                            &bind_ipv6_watch,
                             new_port,
                             "nebulae",
                             &rpc_password_watch,
@@ -1953,6 +1977,7 @@ impl TransmissionTorrentEngine {
             rpc_client,
             child_process: child_arc,
             shutdown_flag,
+            daemon_path,
             config_dir: engine_dir,
             db,
             paths,
@@ -3037,38 +3062,56 @@ impl TorrentEngine for TransmissionTorrentEngine {
         // Immediate mitigation: pause all torrent transfers
         let _ = self.rpc_client.torrent_stop(None);
 
-        // Re-bind to local loopback so zero socket leaks occur
-        let _ = self
-            .rpc_client
-            .session_set(json!({ "bind-address-ipv4": "127.0.0.1" }));
+        // Re-bind to local loopback (both IPv4 and IPv6) so zero socket leaks occur
+        let _ = self.rpc_client.session_set(json!({
+            "bind-address-ipv4": "127.0.0.1",
+            "bind-address-ipv6": "::1"
+        }));
 
-        warn!("Killswitch engaged: all transfers paused and Transmission bound to 127.0.0.1");
+        warn!(
+            "Killswitch engaged: all transfers paused and Transmission bound to 127.0.0.1 and ::1"
+        );
         Ok(())
     }
 
     fn reset_kill_switch(&self) -> Result<(), String> {
         self.kill_switch_active.store(false, Ordering::SeqCst);
 
-        // Check if a VPN tunnel with real egress is currently active to
-        // restore binding. A mesh-VPN interface without egress must NOT
-        // receive the peer bind (torrents stall with zero peers).
-        let bind_ip = if let Some(vpn) = find_active_egress_vpn_interface() {
-            vpn.ip_addresses
-                .iter()
-                .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
-                .cloned()
-                .unwrap_or_else(|| "0.0.0.0".to_string())
+        let vpn_mode = self
+            .db
+            .get_setting("vpn_mode")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "NoVpn".to_string());
+        let is_vpn_required = vpn_mode == "AdcOnlyVpn" || vpn_mode == "SystemVpn";
+
+        let (bind_ip_v4, bind_ip_v6) = if is_vpn_required {
+            let v4 = if let Some(vpn) = find_active_egress_vpn_interface() {
+                vpn.ip_addresses
+                    .iter()
+                    .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
+                    .cloned()
+                    .unwrap_or_else(|| "0.0.0.0".to_string())
+            } else {
+                if find_active_vpn_interface().is_some() {
+                    warn!("[vpn] VPN interface present but without internet egress; keeping the default-route binding");
+                }
+                "0.0.0.0".to_string()
+            };
+            let v6 = find_active_ipv6_egress_vpn_interface()
+                .map(|(_, ip)| ip)
+                .unwrap_or_else(|| "::1".to_string());
+            (v4, v6)
         } else {
-            if find_active_vpn_interface().is_some() {
-                warn!("[vpn] VPN interface present but without internet egress; keeping the default-route binding");
-            }
-            "0.0.0.0".to_string()
+            ("0.0.0.0".to_string(), "::".to_string())
         };
 
-        let _ = self
-            .rpc_client
-            .session_set(json!({ "bind-address-ipv4": bind_ip }));
-        info!("Killswitch disengaged: Transmission restored binding to {bind_ip}");
+        let _ = self.rpc_client.session_set(json!({
+            "bind-address-ipv4": bind_ip_v4,
+            "bind-address-ipv6": bind_ip_v6,
+        }));
+        info!(
+            "Killswitch disengaged: Transmission restored binding to {bind_ip_v4} and {bind_ip_v6}"
+        );
         Ok(())
     }
 
@@ -4093,6 +4136,95 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn engine_version(&self) -> Option<String> {
         self.daemon_version.lock().unwrap().clone()
     }
+
+    fn engine_ipv6_diagnostic(
+        &self,
+    ) -> Result<crate::models::connectivity::EngineIpv6Diagnostic, String> {
+        let daemon_path = Some(self.daemon_path.to_string_lossy().to_string());
+        let daemon_pid = self
+            .child_process
+            .lock()
+            .ok()
+            .and_then(|c| c.as_ref().map(|p| p.id()))
+            .or_else(|| {
+                std::fs::read_to_string(self.config_dir.join("daemon.pid"))
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+            });
+
+        let session = self.rpc_client.session_get().unwrap_or(json!({}));
+        let bind_address_ipv4 = session
+            .get("bind-address-ipv4")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0.0")
+            .to_string();
+        let bind_address_ipv6 = session
+            .get("bind-address-ipv6")
+            .and_then(|v| v.as_str())
+            .unwrap_or("::")
+            .to_string();
+        let peer_port = session
+            .get("peer-port")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u16;
+
+        let vpn_mode = self
+            .db
+            .get_setting("vpn_mode")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "NoVpn".to_string());
+        let is_vpn_required = vpn_mode == "AdcOnlyVpn" || vpn_mode == "SystemVpn";
+        let active_vpn_interface = self
+            .bound_interface
+            .lock()
+            .ok()
+            .and_then(|b| b.clone())
+            .or_else(|| crate::utils::network::find_active_egress_vpn_interface().map(|i| i.name));
+        let vpn_has_ipv4_egress =
+            crate::utils::network::find_active_egress_vpn_interface().is_some();
+        let vpn_has_ipv6_egress =
+            crate::utils::network::find_active_ipv6_egress_vpn_interface().is_some();
+
+        let ipv6_listening_sockets = daemon_pid
+            .map(crate::utils::network::get_process_ipv6_listening_sockets)
+            .unwrap_or_default();
+
+        let mut established_ipv6_peer_connections = 0u32;
+        if let Ok(torrents) = self.rpc_client.torrent_peers_all() {
+            let mut seen_peers = std::collections::HashSet::new();
+            for t in torrents {
+                if let Some(peers) = t.get("peers").and_then(|v| v.as_array()) {
+                    for p in peers {
+                        if let Some(addr_str) = p.get("address").and_then(|a| a.as_str()) {
+                            if addr_str.parse::<std::net::Ipv6Addr>().is_ok() {
+                                seen_peers.insert(addr_str.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            established_ipv6_peer_connections = seen_peers.len() as u32;
+        }
+
+        let os_ipv6_reachability = crate::utils::network::has_ipv6_egress_through("::")
+            || crate::utils::network::find_active_ipv6_egress_vpn_interface().is_some();
+
+        Ok(crate::models::connectivity::EngineIpv6Diagnostic {
+            daemon_path,
+            daemon_pid,
+            bind_address_ipv4,
+            bind_address_ipv6,
+            peer_port,
+            vpn_mode,
+            is_vpn_required,
+            active_vpn_interface,
+            vpn_has_ipv4_egress,
+            vpn_has_ipv6_egress,
+            ipv6_listening_sockets,
+            established_ipv6_peer_connections,
+            os_ipv6_reachability,
+        })
+    }
 }
 
 fn parse_port_test_result(arguments: &Value) -> Option<bool> {
@@ -4394,6 +4526,7 @@ mod tests {
             &user_settings,
             "/home/user/Downloads",
             "10.2.0.5",
+            "::",
             9091,
             "nebulae",
             "secret_pass",
@@ -4423,6 +4556,7 @@ mod tests {
 
         // Interface and path
         assert_eq!(config["bind-address-ipv4"], "10.2.0.5");
+        assert_eq!(config["bind-address-ipv6"], "::");
         assert_eq!(config["download-dir"], "/home/user/Downloads");
     }
 
@@ -4667,6 +4801,7 @@ mod tests {
             &user_settings,
             "/downloads",
             "0.0.0.0",
+            "::",
             9091,
             "nebulae",
             "pass",
@@ -4688,6 +4823,7 @@ mod tests {
             &racing_settings,
             "/downloads",
             "0.0.0.0",
+            "::",
             9091,
             "nebulae",
             "pass",

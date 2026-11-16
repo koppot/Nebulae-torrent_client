@@ -63,16 +63,39 @@ pub fn find_active_vpn_interface() -> Option<NetworkInterfaceInfo> {
 }
 
 /// Proves real internet egress through the LOCAL address `ip`: one DNS A
-/// query to 1.1.1.1:53, source-bound to that address, with a short reply
-/// window. A mesh VPN (e.g. Tailscale without an exit node) accepts the
-/// bind but cannot carry the packet out, which is exactly the failure mode
-/// that stalled peer traffic — a route lookup alone cannot distinguish
-/// that, so an actual reply is required.
-fn has_egress_through(ip: &str) -> bool {
+/// query to 1.1.1.1:53 (for IPv4) or 2606:4700:4700::1111:53 (for IPv6),
+/// source-bound to that address, with a short reply window. A mesh VPN (e.g.
+/// Tailscale without an exit node) accepts the bind but cannot carry the packet
+/// out, which is exactly the failure mode that stalled peer traffic — a route
+/// lookup alone cannot distinguish that, so an actual reply is required.
+pub fn has_egress_through(ip: &str) -> bool {
     use std::net::UdpSocket;
     use std::time::Duration;
 
-    let socket = match UdpSocket::bind((ip, 0)) {
+    let is_ipv6 = ip.contains(':');
+    let bind_addr = if is_ipv6 {
+        if ip.starts_with('[') {
+            format!("{ip}:0")
+        } else {
+            format!("[{ip}]:0")
+        }
+    } else {
+        format!("{ip}:0")
+    };
+
+    let target_addr: std::net::SocketAddr = if is_ipv6 {
+        match "[2606:4700:4700::1111]:53".parse() {
+            Ok(a) => a,
+            Err(_) => return false,
+        }
+    } else {
+        match "1.1.1.1:53".parse() {
+            Ok(a) => a,
+            Err(_) => return false,
+        }
+    };
+
+    let socket = match UdpSocket::bind(&bind_addr) {
         Ok(s) => s,
         Err(_) => return false,
     };
@@ -82,7 +105,7 @@ fn has_egress_through(ip: &str) -> bool {
     {
         return false;
     }
-    if socket.connect(("1.1.1.1", 53)).is_err() {
+    if socket.connect(target_addr).is_err() {
         return false;
     }
     // Minimal well-formed DNS query: example.com A, recursion desired.
@@ -97,13 +120,22 @@ fn has_egress_through(ip: &str) -> bool {
     socket.recv_from(&mut buf).is_ok()
 }
 
+pub fn has_ipv4_egress_through(ip: &str) -> bool {
+    if ip.parse::<std::net::Ipv4Addr>().is_err() {
+        return false;
+    }
+    has_egress_through(ip)
+}
+
+pub fn has_ipv6_egress_through(ip: &str) -> bool {
+    if ip.parse::<std::net::Ipv6Addr>().is_err() {
+        return false;
+    }
+    has_egress_through(ip)
+}
+
 /// Like `find_active_vpn_interface`, but only returns interfaces through
-/// which internet traffic can ACTUALLY leave the machine. Binding the
-/// torrent engine to a mesh-VPN interface without egress (Tailscale member
-/// addresses in 100.64.0.0/10 with no exit node) makes every peer
-/// connection impossible while tracker announces still appear to work —
-/// the exact "torrent stalls with zero peers" signature this guards
-/// against.
+/// which internet traffic can ACTUALLY leave the machine via IPv4.
 pub fn find_active_egress_vpn_interface() -> Option<NetworkInterfaceInfo> {
     list_network_interfaces()
         .into_iter()
@@ -112,8 +144,93 @@ pub fn find_active_egress_vpn_interface() -> Option<NetworkInterfaceInfo> {
             iface
                 .ip_addresses
                 .iter()
-                .any(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok() && has_egress_through(ip))
+                .any(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok() && has_ipv4_egress_through(ip))
         })
+}
+
+/// Discovers an active VPN interface with confirmed IPv6 internet egress.
+/// An IPv4-successful VPN probe does not imply IPv6 capability.
+pub fn find_active_ipv6_egress_vpn_interface() -> Option<(NetworkInterfaceInfo, String)> {
+    for iface in list_network_interfaces() {
+        if iface.is_vpn && iface.is_up {
+            for ip in iface.ip_addresses.clone() {
+                if ip.parse::<std::net::Ipv6Addr>().is_ok()
+                    && !ip.starts_with("fe80")
+                    && ip != "::1"
+                    && has_ipv6_egress_through(&ip)
+                {
+                    return Some((iface, ip));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Inspects active IPv6 listening sockets bound by a process PID.
+/// Returns formatted protocol and local address strings (e.g. "TCP [::]:41413").
+pub fn get_process_ipv6_listening_sockets(pid: u32) -> Vec<String> {
+    let mut sockets = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("netstat").arg("-ano").output() {
+            if let Ok(stdout) = String::from_utf8(output.stdout) {
+                let pid_str = pid.to_string();
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        let proto = parts[0];
+                        if proto.eq_ignore_ascii_case("TCP") && parts.len() >= 5 {
+                            let state = parts[3];
+                            let line_pid = parts[4];
+                            if state.eq_ignore_ascii_case("LISTENING") && line_pid == pid_str {
+                                let local = parts[1];
+                                if local.contains(':')
+                                    && (local.starts_with('[') || local.contains("::"))
+                                {
+                                    sockets.push(format!("TCP {local}"));
+                                }
+                            }
+                        } else if proto.eq_ignore_ascii_case("UDP") && parts.len() >= 4 {
+                            let line_pid = parts[parts.len() - 1];
+                            if line_pid == pid_str {
+                                let local = parts[1];
+                                if local.contains(':')
+                                    && (local.starts_with('[') || local.contains("::"))
+                                {
+                                    sockets.push(format!("UDP {local}"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(output) = std::process::Command::new("lsof")
+            .args(["-nP", "-p", &pid.to_string(), "-a", "-i", "6"])
+            .output()
+        {
+            if let Ok(stdout) = String::from_utf8(output.stdout) {
+                for line in stdout.lines().skip(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 9 {
+                        let proto = parts[7];
+                        let name = parts[8];
+                        let is_listen = line.contains("(LISTEN)");
+                        if is_listen || proto.eq_ignore_ascii_case("UDP") {
+                            sockets.push(format!("{proto} {name}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    sockets.sort();
+    sockets.dedup();
+    sockets
 }
 
 /// Tailscale assigns member addresses from the CGNAT block 100.64.0.0/10.
