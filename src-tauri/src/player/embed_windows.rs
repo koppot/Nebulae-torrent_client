@@ -715,7 +715,7 @@ unsafe fn log_move_disposition(
     if changed || (disp != InputDisposition::Posted && throttled) {
         LAST_MOVE_LOG_TIME.store(now, Ordering::Relaxed);
         let class_name = target.map(|t| get_window_class_name(t)).unwrap_or_default();
-        let target_raw = target.map(|t| t.0).unwrap_or(0);
+        let target_raw = target.map(|t| t.0 as isize).unwrap_or(0);
         let pt_str = pt
             .map(|p| format!("({},{})", p.x, p.y))
             .unwrap_or_else(|| "none".to_string());
