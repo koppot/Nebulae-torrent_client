@@ -5,6 +5,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 #[test]
+#[ignore = "requires running nebulae-server-test-run docker container on port 9174"]
 fn test_live_container_full_lifecycle() {
     let base_url = "http://127.0.0.1:9174";
     let token = "testtoken123";
