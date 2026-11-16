@@ -146,4 +146,25 @@ mod tests {
             "ADC Connectable: Unknown — Port 41413 Reachability Unknown — IPv4 Only — Tracker Blocked — Direct Connection"
         );
     }
+
+    #[test]
+    fn test_engine_ipv6_diagnostic_serialization() {
+        let diag = EngineIpv6Diagnostic {
+            daemon_path: Some("C:\\path\\transmission-daemon.exe".to_string()),
+            daemon_pid: Some(1234),
+            bind_address_ipv4: "0.0.0.0".to_string(),
+            bind_address_ipv6: "::".to_string(),
+            peer_port: 41413,
+            vpn_mode: "NoVpn".to_string(),
+            is_vpn_required: false,
+            active_vpn_interface: None,
+            vpn_has_ipv4_egress: true,
+            vpn_has_ipv6_egress: true,
+            ipv6_listening_sockets: vec!["TCP [::]:41413".to_string()],
+            established_ipv6_peer_connections: 0,
+            os_ipv6_reachability: true,
+        };
+        let s = serde_json::to_string(&diag).unwrap();
+        assert!(s.contains("\"bind_address_ipv6\":\"::\""));
+    }
 }

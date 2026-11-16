@@ -561,4 +561,9 @@ mod tests {
         // Should execute without panicking on any platform
         assert!(!interfaces.is_empty());
     }
+
+    #[test]
+    fn test_get_process_ipv6_listening_sockets_does_not_panic() {
+        let _ = get_process_ipv6_listening_sockets(std::process::id());
+    }
 }
