@@ -99,6 +99,14 @@ export interface MenuMoveGuard {
    * null when nothing is pending. Visible for testing.
    */
   pendingPoint(): MenuPoint | null;
+
+  /**
+   * Execute a menu click barrier. Discards pending pre-click movement and
+   * advances the click epoch so stale in-flight move completions cannot drain
+   * old positions or replay movement after the click. Subsequent move dispatch
+   * is preserved once the click completes.
+   */
+  runClick<T>(clickFn: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -117,13 +125,19 @@ export function createMenuMoveGuard(
   // Latest position dropped while a call was in-flight. Dispatched when the
   // call completes. null when nothing is pending.
   let pending: MenuPoint | null = null;
+  // Monotone epoch for click barriers; increments on each runClick or onMenuExit
+  // so any earlier in-flight move's completion handler sees that its epoch is stale.
+  let clickEpoch = 0;
+  // True while a runClick operation is executing.
+  let clickInFlight = false;
 
   function doDispatch(point: MenuPoint): void {
     const gen = ++counter;
+    const epoch = clickEpoch;
     inFlightGen = gen;
     invoke(point)
       .finally(() => {
-        if (inFlightGen !== gen) return; // stale: a newer call or menu exit already took over
+        if (inFlightGen !== gen || clickEpoch !== epoch) return; // stale: a newer call, exit, or click barrier took over
         inFlightGen = 0;
         // Deliver the latest position that arrived while we were in-flight.
         if (pending !== null) {
@@ -139,7 +153,7 @@ export function createMenuMoveGuard(
 
   return {
     dispatch(point) {
-      if (inFlightGen !== 0) {
+      if (clickInFlight || inFlightGen !== 0) {
         // In-flight: coalesce — replace whatever pending point was stored.
         pending = point;
         return false;
@@ -150,18 +164,39 @@ export function createMenuMoveGuard(
     },
 
     onMenuExit() {
-      // Reset to idle and discard any stale pending position from this session.
-      // Any still-pending .finally() will see (0 !== capturedGen) → no-op.
+      // Reset to idle, advance epoch, and discard any stale pending position from this session.
+      // Any still-pending .finally() will see (clickEpoch !== capturedEpoch) → no-op.
       inFlightGen = 0;
       pending = null;
+      clickEpoch++;
+      clickInFlight = false;
     },
 
     isInFlight() {
-      return inFlightGen !== 0;
+      return inFlightGen !== 0 || clickInFlight;
     },
 
     pendingPoint() {
       return pending;
+    },
+
+    async runClick<T>(clickFn: () => Promise<T>): Promise<T> {
+      // Click barrier: discard any pending coalesced move and advance epoch
+      // so any current in-flight move's completion will be a no-op and won't replay.
+      pending = null;
+      clickEpoch++;
+      inFlightGen = 0;
+      clickInFlight = true;
+      try {
+        return await clickFn();
+      } finally {
+        clickInFlight = false;
+        if (pending !== null && inFlightGen === 0) {
+          const next = pending;
+          pending = null;
+          doDispatch(next);
+        }
+      }
     },
   };
 }

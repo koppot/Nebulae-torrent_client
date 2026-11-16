@@ -3276,7 +3276,7 @@ pub fn player_menu_mouse_move(
     #[cfg(target_os = "windows")]
     {
         let t_mm = std::time::Instant::now();
-        crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
+        let _disp = crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
         let elapsed = t_mm.elapsed().as_micros();
         // Sample every ~100 calls (counter mod 100 == 0) to get typical cost
         // without flooding the log. forward_mouse_move uses PostMessageW which
@@ -3319,16 +3319,18 @@ pub fn player_menu_mouse_click(
     #[cfg(target_os = "macos")]
     {
         crate::player::embed_macos::forward_mouse_click(&app, x, y)?;
+        Ok(true)
     }
     #[cfg(target_os = "windows")]
     {
-        crate::player::embed_windows::forward_mouse_click(&app, x, y)?;
+        let disp = crate::player::embed_windows::forward_mouse_click(&app, x, y)?;
+        Ok(disp == crate::player::embed_windows::InputDisposition::Posted)
     }
     #[cfg(target_os = "linux")]
     {
         crate::player::embed_linux::forward_mouse_click(&app, x, y)?;
+        Ok(true)
     }
-    Ok(true)
 }
 
 /// Jump to a CHAPTER of the current title (0-based; the overlay renders

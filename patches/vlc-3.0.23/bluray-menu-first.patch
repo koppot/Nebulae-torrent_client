@@ -86,7 +86,71 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
      var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
  
      /* Open BluRay */
-@@ -2166,6 +2173,27 @@
+@@ -1613,14 +1620,53 @@
+ static int onMouseEvent(vlc_object_t *p_vout, const char *psz_var, vlc_value_t old,
+                         vlc_value_t val, void *p_data)
+ {
+     demux_t     *p_demux = (demux_t*)p_data;
+     demux_sys_t *p_sys   = p_demux->p_sys;
+     VLC_UNUSED(old);
+     VLC_UNUSED(p_vout);
+ 
++    int x = val.coords.x;
++    int y = val.coords.y;
++
++    /* Dimension-derived conversion between source video coordinates and menu overlay plane */
++    int ov_w = 0, ov_h = 0;
++    if (p_sys->p_overlays[1] && p_sys->p_overlays[1]->width > 0 && p_sys->p_overlays[1]->height > 0) {
++        ov_w = p_sys->p_overlays[1]->width;
++        ov_h = p_sys->p_overlays[1]->height;
++    } else if (p_sys->p_overlays[0] && p_sys->p_overlays[0]->width > 0 && p_sys->p_overlays[0]->height > 0) {
++        ov_w = p_sys->p_overlays[0]->width;
++        ov_h = p_sys->p_overlays[0]->height;
++    }
++
++    int vid_w = 0, vid_h = 0;
++    if (p_sys->p_clip_info && p_sys->p_clip_info->video_stream_count > 0 && p_sys->p_clip_info->video_streams) {
++        switch (p_sys->p_clip_info->video_streams[0].format) {
++            case BLURAY_VIDEO_FORMAT_2160P:
++                vid_w = 3840; vid_h = 2160;
++                break;
++            case BLURAY_VIDEO_FORMAT_1080P:
++            case BLURAY_VIDEO_FORMAT_1080I:
++                vid_w = 1920; vid_h = 1080;
++                break;
++            case BLURAY_VIDEO_FORMAT_720P:
++                vid_w = 1280; vid_h = 720;
++                break;
++            case BLURAY_VIDEO_FORMAT_576P:
++            case BLURAY_VIDEO_FORMAT_576I:
++                vid_w = 720; vid_h = 576;
++                break;
++            case BLURAY_VIDEO_FORMAT_480P:
++            case BLURAY_VIDEO_FORMAT_480I:
++                vid_w = 720; vid_h = 480;
++                break;
++        }
++    }
++
++    if (ov_w > 0 && ov_h > 0 && vid_w > 0 && vid_h > 0 && (vid_w != ov_w || vid_h != ov_h)) {
++        x = (int)((int64_t)x * ov_w / vid_w);
++        y = (int)((int64_t)y * ov_h / vid_h);
++    }
++
+     if (psz_var[6] == 'm')   //Mouse moved
+-        bd_mouse_select(p_sys->bluray, -1, val.coords.x, val.coords.y);
++        bd_mouse_select(p_sys->bluray, -1, x, y);
+     else if (psz_var[6] == 'c') {
+-        bd_mouse_select(p_sys->bluray, -1, val.coords.x, val.coords.y);
++        bd_mouse_select(p_sys->bluray, -1, x, y);
+         bd_user_input(p_sys->bluray, -1, BD_VK_MOUSE_ACTIVATE);
+     } else {
+         vlc_assert_unreachable();
+     }
+     return VLC_SUCCESS;
+ }
+ 
+@@ -2166,6 +2212,27 @@
  }
  
  /*****************************************************************************

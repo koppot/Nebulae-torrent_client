@@ -333,3 +333,85 @@ test('coalescing chain: further drops during coalesced call are themselves coale
   assert.equal(guard.isInFlight(), false);
   assert.equal(guard.pendingPoint(), null);
 });
+
+// ---------------------------------------------------------------------------
+// 11. Click barrier: discards pending coalesced move
+// ---------------------------------------------------------------------------
+test('click barrier: discards pending coalesced move', async () => {
+  const d = deferred();
+  const guard = createMenuMoveGuard((_pt) => d.promise);
+
+  guard.dispatch({ x: 1, y: 1 });
+  guard.dispatch({ x: 2, y: 2 });
+  assert.deepEqual(guard.pendingPoint(), { x: 2, y: 2 }, 'pending point before click');
+
+  let clickExecuted = false;
+  await guard.runClick(async () => {
+    clickExecuted = true;
+    assert.equal(guard.pendingPoint(), null, 'pending discarded on click barrier entry');
+  });
+
+  assert.equal(clickExecuted, true);
+  assert.equal(guard.pendingPoint(), null, 'pending remains null after click');
+  d.resolve();
+  await flushMicrotasks();
+});
+
+// ---------------------------------------------------------------------------
+// 12. Click barrier: ignores post-click completion of an earlier in-flight move
+// ---------------------------------------------------------------------------
+test('click barrier: ignores post-click completion of an earlier in-flight move', async () => {
+  const d = deferred();
+  let invokeCount = 0;
+  const guard = createMenuMoveGuard((_pt) => {
+    invokeCount++;
+    return d.promise;
+  });
+
+  guard.dispatch({ x: 1, y: 1 });
+  assert.equal(invokeCount, 1);
+
+  await guard.runClick(async () => {
+    // click executed while move was in flight
+  });
+
+  // Now resolve the earlier in-flight move. Its completion must be ignored.
+  d.resolve();
+  await flushMicrotasks();
+
+  assert.equal(invokeCount, 1, 'earlier move completion does not trigger new dispatch');
+  assert.equal(guard.isInFlight(), false, 'guard is idle');
+  assert.equal(guard.pendingPoint(), null);
+});
+
+// ---------------------------------------------------------------------------
+// 13. Click barrier: preserves subsequent move dispatch after click completes
+// ---------------------------------------------------------------------------
+test('click barrier: preserves subsequent move dispatch after click completes', async () => {
+  const d1 = deferred();
+  const dispatchedPoints: { x: number; y: number }[] = [];
+  const guard = createMenuMoveGuard((pt) => {
+    dispatchedPoints.push(pt);
+    return d1.promise;
+  });
+
+  guard.dispatch({ x: 1, y: 1 });
+  assert.equal(dispatchedPoints.length, 1);
+
+  await guard.runClick(async () => {
+    // click barrier
+  });
+
+  // Dispatch a new move after click has completed
+  const d2 = deferred();
+  const accepted = guard.dispatch({ x: 10, y: 20 });
+  assert.equal(accepted, true, 'move after click accepted immediately');
+  assert.equal(dispatchedPoints.length, 2);
+  assert.deepEqual(dispatchedPoints[1], { x: 10, y: 20 });
+
+  d1.resolve();
+  d2.resolve();
+  await flushMicrotasks();
+  assert.equal(guard.isInFlight(), false);
+});
+

@@ -1305,14 +1305,27 @@ export default function PlayerOverlay() {
     // On macOS/Linux the native view hierarchy routes the click to VLC naturally.
     // On Windows, NebulaeVideoSurface is behind WebView2 and does not receive the
     // click natively, so the WebView path is the only functional forwarding path.
+    // Clicks are dispatched as a single ordered operation through the move guard's
+    // click barrier, which drops pre-click pending moves and prevents stale replays.
     if (player.isDisc && pollRef.current.at_menu) {
       if (now - lastMenuClickRef.current < 350) return;
       lastMenuClickRef.current = now;
       const rect = e.currentTarget.getBoundingClientRect();
       const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
-      invoke('player_menu_mouse_move', { ...point, gen: player.gen }).catch(() => {});
-      invoke('player_menu_mouse_click', { ...point, gen: player.gen }).catch(() => {});
-      invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {});
+      menuMoveGuardRef.current
+        .runClick(async () => {
+          const posted = await invoke<boolean>('player_menu_mouse_click', {
+            ...point,
+            gen: player.gen,
+          });
+          if (!posted) {
+            console.warn('[player-menu] click delivery not posted at', point);
+          }
+          return posted;
+        })
+        .catch((err) => {
+          console.warn('[player-menu] click invocation failed:', err);
+        });
       return;
     }
     const sequence = ++clickSequenceRef.current;

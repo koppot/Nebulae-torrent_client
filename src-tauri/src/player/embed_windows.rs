@@ -560,6 +560,68 @@ pub fn set_window_corner_radius(app: &AppHandle, radius: f64) -> Result<(), Stri
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputDisposition {
+    Posted,
+    NoTarget,
+    OutsideTarget,
+    NativeApiFailure,
+}
+
+static CHILD_HIERARCHY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+unsafe fn log_child_hierarchy(surface: HWND) {
+    if CHILD_HIERARCHY_LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetClientRect, GetWindow, GW_CHILD, GW_HWNDNEXT,
+    };
+    let mut surface_rect = RECT::default();
+    let _ = GetClientRect(surface, &mut surface_rect);
+    tracing::warn!(
+        "[menu-input] NoTarget: surface HWND={:?} bounds={:?}",
+        surface.0,
+        surface_rect
+    );
+
+    let mut child = match GetWindow(surface, GW_CHILD) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let mut index = 0;
+    while !child.is_invalid() {
+        let mut buf = [0u16; 128];
+        let len = GetClassNameW(child, &mut buf);
+        let class_name = if len > 0 {
+            String::from_utf16_lossy(&buf[..len as usize])
+        } else {
+            String::from("<unknown>")
+        };
+        let mut child_rect = RECT::default();
+        let _ = GetClientRect(child, &mut child_rect);
+        tracing::warn!(
+            "[menu-input]   child[{}] HWND={:?} class={:?} bounds={:?}",
+            index,
+            child.0,
+            class_name,
+            child_rect
+        );
+        index += 1;
+        child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+    }
+}
+
+unsafe fn get_window_class_name(hwnd: HWND) -> String {
+    let mut buf = [0u16; 128];
+    let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut buf);
+    if len > 0 {
+        String::from_utf16_lossy(&buf[..len as usize])
+    } else {
+        String::from("<unknown>")
+    }
+}
+
 /// Find VLC's event window among the direct children of the overlay.
 /// `events.c` registers this HWND as `VLC video main %p` and creates it with
 /// the overlay as its parent. The `VLC video output %p` class is a grandchild
@@ -587,7 +649,11 @@ fn is_vlc_input_window_class(name: &str) -> bool {
 
 /// Translate a mouse point from the overlay's client area to VLC's main window.
 /// Rejects coordinates that fall outside the target window's client bounds.
-unsafe fn map_mouse_lparam(surface: HWND, target: HWND, lparam: LPARAM) -> Option<LPARAM> {
+unsafe fn map_mouse_lparam(
+    surface: HWND,
+    target: HWND,
+    lparam: LPARAM,
+) -> Result<(LPARAM, POINT, RECT), InputDisposition> {
     let mut pt = POINT {
         x: (lparam.0 as u32 as u16 as i16) as i32,
         y: ((lparam.0 as u32 >> 16) as u16 as i16) as i32,
@@ -595,18 +661,17 @@ unsafe fn map_mouse_lparam(surface: HWND, target: HWND, lparam: LPARAM) -> Optio
     let _ = MapWindowPoints(Some(surface), Some(target), std::slice::from_mut(&mut pt));
     let mut target_rect = RECT::default();
     if GetClientRect(target, &mut target_rect).is_err() {
-        return None;
+        return Err(InputDisposition::NativeApiFailure);
     }
     if pt.x < target_rect.left
         || pt.x >= target_rect.right
         || pt.y < target_rect.top
         || pt.y >= target_rect.bottom
     {
-        return None; // Outside displayed video
+        return Err(InputDisposition::OutsideTarget);
     }
-    Some(LPARAM(
-        ((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize,
-    ))
+    let mapped = LPARAM(((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize);
+    Ok((mapped, pt, target_rect))
 }
 
 fn mouse_point_lparam(x: f64, y: f64) -> LPARAM {
@@ -622,39 +687,130 @@ fn mouse_point_lparam(x: f64, y: f64) -> LPARAM {
     LPARAM((x | (y << 16)) as isize)
 }
 
-unsafe fn post_vlc_mouse_move(surface: HWND, wparam: WPARAM, lparam: LPARAM) -> Result<(), String> {
+static LAST_MOVE_LOG_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_MOVE_LOG_DISP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0xff);
+
+unsafe fn log_move_disposition(
+    disp: InputDisposition,
+    target: Option<HWND>,
+    pt: Option<POINT>,
+    rect: Option<RECT>,
+) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let disp_u8 = match disp {
+        InputDisposition::Posted => 0,
+        InputDisposition::NoTarget => 1,
+        InputDisposition::OutsideTarget => 2,
+        InputDisposition::NativeApiFailure => 3,
+    };
+    let prev_disp = LAST_MOVE_LOG_DISP.swap(disp_u8, Ordering::Relaxed);
+    let prev_time = LAST_MOVE_LOG_TIME.load(Ordering::Relaxed);
+
+    let changed = prev_disp != disp_u8;
+    let throttled = now.saturating_sub(prev_time) >= 1000;
+
+    if changed || (disp != InputDisposition::Posted && throttled) {
+        LAST_MOVE_LOG_TIME.store(now, Ordering::Relaxed);
+        let class_name = target.map(|t| get_window_class_name(t)).unwrap_or_default();
+        let target_raw = target.map(|t| t.0).unwrap_or(0);
+        let pt_str = pt
+            .map(|p| format!("({},{})", p.x, p.y))
+            .unwrap_or_else(|| "none".to_string());
+        let rect_str = rect
+            .map(|r| format!("{:?}", r))
+            .unwrap_or_else(|| "none".to_string());
+        tracing::debug!(
+            "[menu-input] move disposition={:?} target HWND={:?} class={:?} mapped={} bounds={}",
+            disp,
+            target_raw,
+            class_name,
+            pt_str,
+            rect_str
+        );
+    }
+}
+
+unsafe fn post_vlc_mouse_move(surface: HWND, wparam: WPARAM, lparam: LPARAM) -> InputDisposition {
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
     let target = match find_vlc_video_main_window(surface) {
         Some(t) => t,
-        None => return Ok(()),
+        None => {
+            log_child_hierarchy(surface);
+            log_move_disposition(InputDisposition::NoTarget, None, None, None);
+            return InputDisposition::NoTarget;
+        }
     };
-    let mapped = match map_mouse_lparam(surface, target, lparam) {
-        Some(l) => l,
-        None => return Ok(()),
+    let (mapped, pt, target_rect) = match map_mouse_lparam(surface, target, lparam) {
+        Ok(v) => v,
+        Err(disp) => {
+            log_move_disposition(disp, Some(target), None, None);
+            return disp;
+        }
     };
-    PostMessageW(Some(target), WM_MOUSEMOVE, wparam, mapped)
-        .map_err(|e| format!("failed to forward VLC mouse move: {e}"))
+    let disp = match PostMessageW(Some(target), WM_MOUSEMOVE, wparam, mapped) {
+        Ok(_) => InputDisposition::Posted,
+        Err(e) => {
+            tracing::warn!("[menu-input] PostMessageW WM_MOUSEMOVE failed: {e}");
+            InputDisposition::NativeApiFailure
+        }
+    };
+    log_move_disposition(disp, Some(target), Some(pt), Some(target_rect));
+    disp
 }
 
-unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM) -> Result<(), String> {
+unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM) -> InputDisposition {
     use windows::Win32::UI::WindowsAndMessaging::{
         PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
     let target = match find_vlc_video_main_window(surface) {
         Some(t) => t,
-        None => return Ok(()),
+        None => {
+            log_child_hierarchy(surface);
+            tracing::warn!(
+                "[menu-input] click rejected: NoTarget (surface HWND={:?})",
+                surface.0
+            );
+            return InputDisposition::NoTarget;
+        }
     };
-    let mapped = match map_mouse_lparam(surface, target, lparam) {
-        Some(l) => l,
-        None => return Ok(()),
+    let class_name = get_window_class_name(target);
+    let (mapped, pt, target_rect) = match map_mouse_lparam(surface, target, lparam) {
+        Ok(v) => v,
+        Err(disp) => {
+            tracing::warn!(
+                "[menu-input] click rejected: disposition={:?} target HWND={:?} class={:?}",
+                disp,
+                target.0,
+                class_name
+            );
+            return disp;
+        }
     };
     const MK_LBUTTON: usize = 0x0001;
-    PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), mapped)
-        .map_err(|e| format!("failed to forward VLC mouse move: {e}"))?;
-    PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(MK_LBUTTON), mapped)
-        .map_err(|e| format!("failed to forward VLC mouse down: {e}"))?;
-    PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), mapped)
-        .map_err(|e| format!("failed to forward VLC mouse up: {e}"))
+    let mut disp = InputDisposition::Posted;
+    if let Err(e) = PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), mapped) {
+        tracing::warn!("[menu-input] click WM_MOUSEMOVE failed: {e}");
+        disp = InputDisposition::NativeApiFailure;
+    } else if let Err(e) = PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(MK_LBUTTON), mapped) {
+        tracing::warn!("[menu-input] click WM_LBUTTONDOWN failed: {e}");
+        disp = InputDisposition::NativeApiFailure;
+    } else if let Err(e) = PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), mapped) {
+        tracing::warn!("[menu-input] click WM_LBUTTONUP failed: {e}");
+        disp = InputDisposition::NativeApiFailure;
+    }
+    tracing::info!(
+        "[menu-input] click disposition={:?} target HWND={:?} class={:?} mapped=({},{}) bounds={:?}",
+        disp,
+        target.0,
+        class_name,
+        pt.x,
+        pt.y,
+        target_rect
+    );
+    disp
 }
 
 /// Stored original window procedure for the overlay HWND subclass.
@@ -1115,30 +1271,54 @@ pub fn fit_player_window_to_aspect(_app: &AppHandle, _aspect: f64) -> Result<(),
     Ok(())
 }
 
-pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<InputDisposition, String> {
     let hwnd_val = app
         .state::<crate::player::PlayerState>()
         .overlay_view
         .load(std::sync::atomic::Ordering::SeqCst);
     if hwnd_val == 0 {
-        return Ok(());
+        return Ok(InputDisposition::NoTarget);
     }
     use windows::Win32::Foundation::{HWND, WPARAM};
     let surface = HWND(hwnd_val as _);
-    unsafe { post_vlc_mouse_move(surface, WPARAM(0), mouse_point_lparam(x, y)) }
+    let disp = unsafe { post_vlc_mouse_move(surface, WPARAM(0), mouse_point_lparam(x, y)) };
+    Ok(disp)
 }
 
-pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<InputDisposition, String> {
     let hwnd_val = app
         .state::<crate::player::PlayerState>()
         .overlay_view
         .load(std::sync::atomic::Ordering::SeqCst);
     if hwnd_val == 0 {
-        return Ok(());
+        return Ok(InputDisposition::NoTarget);
     }
     use windows::Win32::Foundation::HWND;
     let surface = HWND(hwnd_val as _);
-    unsafe { post_vlc_mouse_click(surface, mouse_point_lparam(x, y)) }
+    let disp = unsafe { post_vlc_mouse_click(surface, mouse_point_lparam(x, y)) };
+    Ok(disp)
+}
+
+#[cfg(test)]
+fn scale_client_point(
+    x: i32,
+    y: i32,
+    from_w: i32,
+    from_h: i32,
+    to_w: i32,
+    to_h: i32,
+) -> (i32, i32) {
+    let scaled_x = if from_w > 0 {
+        ((x as i64 * to_w as i64) / from_w as i64) as i32
+    } else {
+        x
+    };
+    let scaled_y = if from_h > 0 {
+        ((y as i64 * to_h as i64) / from_h as i64) as i32
+    } else {
+        y
+    };
+    (scaled_x, scaled_y)
 }
 
 #[cfg(test)]
