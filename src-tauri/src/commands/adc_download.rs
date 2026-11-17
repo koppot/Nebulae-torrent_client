@@ -269,6 +269,9 @@ pub async fn resolve_adc_torrent(
     let bytes = fetch_adc_torrent_bytes(torrent_id, Arc::clone(&db)).await?;
     let parsed = ParsedTorrent::parse_bytes(&bytes)?;
 
+    let file_paths: Vec<String> = parsed.files.iter().map(|f| f.name.clone()).collect();
+    let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(&file_paths));
+
     Ok(InspectTorrentResult {
         name: parsed.name,
         total_bytes: parsed.total_bytes,
@@ -281,6 +284,7 @@ pub async fn resolve_adc_torrent(
         files: parsed.files,
         trackers: parsed.trackers,
         metainfo_bytes: Some(bytes),
+        hygiene,
     })
 }
 

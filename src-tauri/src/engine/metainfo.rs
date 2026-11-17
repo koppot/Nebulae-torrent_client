@@ -3,6 +3,114 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TorrentPathHygieneReport {
+    /// Definite unwanted junk files (e.g. desktop.ini, .DS_Store, AppleDouble ._*, _DS* variants, Thumbs.db)
+    pub definite_unwanted: Vec<String>,
+    /// Entries requiring review (e.g. AACS folders needing decryption verification, or other dot-prefixed items)
+    pub needs_review: Vec<String>,
+    /// Has any definite unwanted items
+    pub has_unwanted: bool,
+    /// Has any items requiring review
+    pub has_review: bool,
+    /// Recommendation message
+    pub recommendation: String,
+}
+
+impl TorrentPathHygieneReport {
+    pub fn is_clean(&self) -> bool {
+        !self.has_unwanted && !self.has_review
+    }
+}
+
+/// Normalizes path separators to '/' and trims whitespace.
+pub fn normalize_torrent_path(path: &str) -> String {
+    path.trim().replace('\\', "/")
+}
+
+/// Checks whether a single path component or relative path is definite unwanted junk.
+/// Case-insensitive match for:
+/// - desktop.ini
+/// - .ds_store
+/// - thumbs.db
+/// - ._* (AppleDouble resource fork)
+/// - _ds* (e.g. _ds_store)
+pub fn is_definite_unwanted_entry(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "desktop.ini"
+        || lower == ".ds_store"
+        || lower == "thumbs.db"
+        || lower.starts_with("._")
+        || lower.starts_with("_ds")
+}
+
+/// Inspects a list of relative paths for hygiene compliance against ADC tracker standards.
+pub fn inspect_paths_hygiene(paths: &[String]) -> TorrentPathHygieneReport {
+    let mut definite_unwanted = Vec::new();
+    let mut needs_review = Vec::new();
+
+    for raw_path in paths {
+        let normalized = normalize_torrent_path(raw_path);
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let segments: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
+        let mut is_unwanted = false;
+        let mut has_aacs = false;
+        let mut has_dot_component = false;
+
+        for seg in &segments {
+            if is_definite_unwanted_entry(seg) {
+                is_unwanted = true;
+                break;
+            }
+            let seg_lower = seg.to_ascii_lowercase();
+            if seg_lower == "aacs" {
+                has_aacs = true;
+            }
+            if seg.starts_with('.') && !is_definite_unwanted_entry(seg) {
+                has_dot_component = true;
+            }
+        }
+
+        if is_unwanted {
+            definite_unwanted.push(normalized);
+        } else if has_aacs || has_dot_component {
+            needs_review.push(normalized);
+        }
+    }
+
+    definite_unwanted.sort();
+    definite_unwanted.dedup();
+    needs_review.sort();
+    needs_review.dedup();
+
+    let has_unwanted = !definite_unwanted.is_empty();
+    let has_review = !needs_review.is_empty();
+
+    let recommendation = if has_unwanted && has_review {
+        "Definite unwanted OS junk files detected, and some entries (such as AACS or hidden items) need review. Remove unwanted files and ensure disc encryption is stripped before recreating your torrent."
+            .to_string()
+    } else if has_unwanted {
+        "Definite unwanted OS junk files detected. Please delete these files from your source directory and recreate the torrent."
+            .to_string()
+    } else if has_review {
+        "AACS directory or hidden entries detected. If uploading Blu-ray/UHD media, please verify all AACS encryption has been stripped."
+            .to_string()
+    } else {
+        "Directory structure is clean and meets tracker standards.".to_string()
+    };
+
+    TorrentPathHygieneReport {
+        definite_unwanted,
+        needs_review,
+        has_unwanted,
+        has_review,
+        recommendation,
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawMetainfo {
     pub announce: Option<String>,
@@ -343,8 +451,8 @@ pub fn build_torrent_file(
                 let entry = entry.map_err(|e| format!("Directory read error: {e}"))?;
                 let path = entry.path();
                 let fname = entry.file_name().to_string_lossy().to_string();
-                if fname.starts_with('.') {
-                    continue; // Skip hidden files like .DS_Store
+                if fname.starts_with('.') || is_definite_unwanted_entry(&fname) {
+                    continue; // Skip OS junk files like .DS_Store, Thumbs.db, desktop.ini
                 }
                 if path.is_dir() {
                     collect_files(root, &path, list)?;
@@ -480,4 +588,105 @@ pub fn build_torrent_file(
     })?;
 
     Ok(target_file_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_hygiene_normalization_and_case() {
+        let paths = vec![
+            "BDMV\\STREAM\\00001.m2ts".to_string(),
+            "Folder\\Subfolder/Desktop.ini".to_string(),
+            "movie/sample/.DS_Store".to_string(),
+            "disc/AACS/MKB_RO.inf".to_string(),
+            "disc/AACS/Content000.cer".to_string(),
+            "data/._file.mkv".to_string(),
+            "data/_DS_Store".to_string(),
+            "windows/folder/Thumbs.db".to_string(),
+            "clean/folder/video.mkv".to_string(),
+            "hidden/.config/settings.json".to_string(),
+        ];
+
+        let report = inspect_paths_hygiene(&paths);
+
+        // Check definite unwanted
+        assert!(report.has_unwanted);
+        assert!(report
+            .definite_unwanted
+            .contains(&"Folder/Subfolder/Desktop.ini".to_string()));
+        assert!(report
+            .definite_unwanted
+            .contains(&"movie/sample/.DS_Store".to_string()));
+        assert!(report
+            .definite_unwanted
+            .contains(&"data/._file.mkv".to_string()));
+        assert!(report
+            .definite_unwanted
+            .contains(&"data/_DS_Store".to_string()));
+        assert!(report
+            .definite_unwanted
+            .contains(&"windows/folder/Thumbs.db".to_string()));
+        assert_eq!(report.definite_unwanted.len(), 5);
+
+        // Check needs review
+        assert!(report.has_review);
+        assert!(report
+            .needs_review
+            .contains(&"disc/AACS/MKB_RO.inf".to_string()));
+        assert!(report
+            .needs_review
+            .contains(&"disc/AACS/Content000.cer".to_string()));
+        assert!(report
+            .needs_review
+            .contains(&"hidden/.config/settings.json".to_string()));
+        assert_eq!(report.needs_review.len(), 3);
+
+        // Clean file should not be flagged in either
+        assert!(!report
+            .definite_unwanted
+            .contains(&"clean/folder/video.mkv".to_string()));
+        assert!(!report
+            .needs_review
+            .contains(&"clean/folder/video.mkv".to_string()));
+        assert!(!report
+            .definite_unwanted
+            .contains(&"BDMV/STREAM/00001.m2ts".to_string()));
+        assert!(!report
+            .needs_review
+            .contains(&"BDMV/STREAM/00001.m2ts".to_string()));
+    }
+
+    #[test]
+    fn test_path_hygiene_clean_structure() {
+        let clean_paths = vec![
+            "BDMV/STREAM/00001.m2ts".to_string(),
+            "BDMV/PLAYLIST/00000.mpls".to_string(),
+            "BDMV/CLIPINF/00001.clpi".to_string(),
+            "CERTIFICATE/app.discroot.crt".to_string(),
+        ];
+
+        let report = inspect_paths_hygiene(&clean_paths);
+        assert!(report.is_clean());
+        assert!(!report.has_unwanted);
+        assert!(!report.has_review);
+        assert!(report.definite_unwanted.is_empty());
+        assert!(report.needs_review.is_empty());
+    }
+
+    #[test]
+    fn test_aacs_warning_classification() {
+        let aacs_paths = vec![
+            "Movie.2024.UHD/AACS/Unit_Key_RO.inf".to_string(),
+            "Movie.2024.UHD/BDMV/index.bdmv".to_string(),
+        ];
+        let report = inspect_paths_hygiene(&aacs_paths);
+        assert!(!report.has_unwanted);
+        assert!(report.has_review);
+        assert!(report.recommendation.contains("AACS directory"));
+        assert!(report
+            .needs_review
+            .contains(&"Movie.2024.UHD/AACS/Unit_Key_RO.inf".to_string()));
+    }
 }
