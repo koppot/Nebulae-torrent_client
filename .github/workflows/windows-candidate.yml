@@ -15,7 +15,18 @@ name: Windows Candidate Build
 # Authorized by the owner: one scratch branch, one artifacts-only workflow.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      patched_vlc_url:
+        description: 'URL to pre-built patched VLC tarball (e.g. patched-vlc-win64-3.0.23-complete.tar.xz; stages stock VLC if empty)'
+        required: false
+        type: string
+        default: ''
+      require_patched:
+        description: 'Enforce modified VLC requirement (--require-patched, fails build if stock VLC staged)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   windows-candidate:
@@ -65,15 +76,40 @@ jobs:
           python3 scripts/windows/fetch_inputs.py \
             --cache "$NEBULAE_CACHE"
 
-      - name: Stage runtime resources (pinned inputs; no exe, no --require-geo for candidate)
+      - name: Stage runtime resources (pinned inputs; stock fallback or patched VLC overlay)
         shell: bash
         run: |
           mkdir -p "$NEBULAE_STAGE"
-          python3 scripts/windows/stage_runtime.py \
-            --cache "$NEBULAE_CACHE" \
-            --out "$NEBULAE_STAGE" \
-            --manifest "$NEBULAE_STAGE/resources/build-manifest.json" \
+          STAGE_ARGS=(
+            --cache "$NEBULAE_CACHE"
+            --out "$NEBULAE_STAGE"
+            --manifest "$NEBULAE_STAGE/resources/build-manifest.json"
             --no-audit
+          )
+
+          # Staging complete modified VLC requires a full runtime tree (libvlc.dll with the 3 custom exports,
+          # libvlccore.dll, libbluray 1.5.0 jars, and libdirect3d11_plugin.dll with HDR tone mapping).
+          # Cross-compiling the full VLC tree from source requires a MinGW-w64 toolchain and 100+ contribs
+          # which is infeasible inline on ephemeral GitHub Actions windows-latest runners.
+          # Pre-built artifacts can be supplied via patched_vlc_url or local cache.
+          if [ -n "${{ inputs.patched_vlc_url }}" ]; then
+            echo "==> Downloading patched VLC runtime from ${{ inputs.patched_vlc_url }}..."
+            curl -fL -s "${{ inputs.patched_vlc_url }}" -o "$NEBULAE_CACHE/patched-vlc.tar.xz"
+            mkdir -p "$NEBULAE_CACHE/patched-vlc"
+            tar -xf "$NEBULAE_CACHE/patched-vlc.tar.xz" -C "$NEBULAE_CACHE/patched-vlc"
+            STAGE_ARGS+=(--patched-vlc "$NEBULAE_CACHE/patched-vlc")
+          elif [ "${{ inputs.require_patched }}" = "true" ]; then
+            echo "::error::require_patched was specified but no patched_vlc_url was provided."
+            exit 1
+          else
+            echo "==> Staging stock VLC fallback. Blu-ray custom navigation exports and D3D11 HDR tone mapping are inactive."
+          fi
+
+          if [ "${{ inputs.require_patched }}" = "true" ]; then
+            STAGE_ARGS+=(--require-patched)
+          fi
+
+          python3 scripts/windows/stage_runtime.py "${STAGE_ARGS[@]}"
 
       - name: Copy staged resources to src-tauri/resources
         shell: bash
