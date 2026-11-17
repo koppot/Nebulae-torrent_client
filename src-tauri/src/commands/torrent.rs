@@ -896,9 +896,22 @@ pub async fn rename_torrent_folder(
     new_folder_name: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
+    let trimmed_name = new_folder_name.trim().to_string();
+    if trimmed_name.is_empty() {
+        return Err("Folder name cannot be empty".to_string());
+    }
+    if trimmed_name.contains('/')
+        || trimmed_name.contains('\\')
+        || trimmed_name == ".."
+        || trimmed_name == "."
+    {
+        return Err(
+            "Folder name cannot contain path separators or relative dot tokens".to_string(),
+        );
+    }
     let engine = engine.inner().clone();
     tokio::task::spawn_blocking(move || {
-        engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
+        engine.rename_torrent_folder(&id, &old_folder_path, &trimmed_name)
     })
     .await
     .map_err(|e| format!("rename_torrent_folder task failed: {e}"))?
