@@ -744,6 +744,10 @@ export const TorrentManagerView: React.FC = () => {
       setRenameError('Name cannot be empty');
       return;
     }
+    if (trimmed.includes('/') || trimmed.includes('\\')) {
+      setRenameError('Name cannot contain slashes or path separators');
+      return;
+    }
 
     try {
       if (renameModal.type === 'torrent') {

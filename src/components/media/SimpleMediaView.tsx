@@ -137,7 +137,10 @@ export const SimpleMediaView: React.FC = () => {
   const [discSetMap, setDiscSetMap] = useState<Record<string, DiscStructureInfo[]>>({});
   // Read-only: per-disc selection now happens in the player's disc switcher;
   // the group's active item follows the last-played disc.
-  const [selectedDiscs] = useState<Record<string, number>>({});  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
+  const [selectedDiscs] = useState<Record<string, number>>({});
+  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
+  const inFlightPostersRef = useRef<Set<string>>(new Set());
+  const failedPostersRef = useRef<Map<string, number>>(new Map());
   const [tmdbMap, setTmdbMap] = useState<
     Record<string, { poster?: string; overview?: string; runtime?: number }>
   >({});
@@ -582,10 +585,20 @@ export const SimpleMediaView: React.FC = () => {
   // are fetched. When resolution fails temporarily, avoid poisoning thumbMap
   // with a permanent null so retry after temporary provider recovery works.
   useEffect(() => {
+    const now = Date.now();
     torrents.forEach((t) => {
+      const key = t.info_hash || t.id;
       if (thumbMap[t.id] || thumbMap[t.info_hash]) return;
+      if (inFlightPostersRef.current.has(key)) return;
+
+      // Throttle retries for posters that could not be resolved (60s cooloff)
+      const lastFailed = failedPostersRef.current.get(key);
+      if (lastFailed && now - lastFailed < 60_000) return;
+
+      inFlightPostersRef.current.add(key);
       resolvePoster(t.info_hash, t.name, contentPath(t))
         .then((src) => {
+          inFlightPostersRef.current.delete(key);
           if (src) {
             // Store under both the numeric id (what the card reads) and the
             // info hash (what set_custom_poster writes), so a custom poster
@@ -595,10 +608,13 @@ export const SimpleMediaView: React.FC = () => {
               [t.id]: src,
               [t.info_hash]: src,
             }));
+          } else {
+            failedPostersRef.current.set(key, Date.now());
           }
         })
         .catch(() => {
-          // Do not permanently lock out future retries with permanent null
+          inFlightPostersRef.current.delete(key);
+          failedPostersRef.current.set(key, Date.now());
         });
     });
   }, [torrents, thumbMap]);

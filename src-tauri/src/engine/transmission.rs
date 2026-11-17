@@ -3469,8 +3469,135 @@ impl TorrentEngine for TransmissionTorrentEngine {
         old_folder_path: &str,
         new_folder_name: &str,
     ) -> Result<(), String> {
+        let trimmed_name = new_folder_name.trim();
+        if trimmed_name.is_empty() {
+            return Err("Folder name cannot be empty".to_string());
+        }
+        if trimmed_name.contains('/')
+            || trimmed_name.contains('\\')
+            || trimmed_name == ".."
+            || trimmed_name == "."
+        {
+            return Err(
+                "Folder name cannot contain path separators or relative dot tokens".to_string(),
+            );
+        }
+
+        // Normalize old folder path separators to forward slashes and strip leading/trailing slashes
+        let old_norm = old_folder_path
+            .trim()
+            .replace('\\', "/")
+            .trim_matches('/')
+            .to_string();
+        if old_norm.is_empty() {
+            return Err("Folder path cannot be empty".to_string());
+        }
+
+        // 1. Resolve numeric ID and query full torrent info (including name and files)
+        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        let mut resolved_id = id.to_string();
+        if torrents.is_empty() {
+            if let Ok(all) = self.rpc_client.torrent_get(None) {
+                if let Some(matched) = all.into_iter().find(|t| {
+                    t.get("hashString")
+                        .and_then(|h| h.as_str())
+                        .map(|h| h.eq_ignore_ascii_case(id))
+                        .unwrap_or(false)
+                        || t.get("id")
+                            .and_then(|v| v.as_i64())
+                            .map(|i| i.to_string() == id)
+                            .unwrap_or(false)
+                }) {
+                    if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
+                        resolved_id = real_id.to_string();
+                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                    }
+                }
+            }
+        }
+        let torrent = torrents
+            .first()
+            .ok_or_else(|| format!("Torrent with id '{id}' not found"))?;
+
+        let current_torrent_name = torrent.get("name").and_then(|n| n.as_str()).unwrap_or("");
+
+        // 2. Identify canonical path recognized by Transmission
+        // Check if renaming the root folder:
+        // Either old_norm matches current_torrent_name, or if old_norm has no slashes AND
+        // matches current_torrent_name (or there are no subfolders with that name).
+        let files = torrent
+            .get("files")
+            .and_then(|f| f.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let is_root = old_norm == current_torrent_name;
+
+        let canonical_path = if is_root {
+            current_torrent_name.to_string()
+        } else {
+            // Find matching prefix in files list
+            let with_slash = format!("{old_norm}/");
+            let mut found_path = None;
+            for f in &files {
+                if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                    let norm_name = name.replace('\\', "/");
+                    if norm_name.starts_with(&with_slash) || norm_name == old_norm {
+                        found_path = Some(old_norm.clone());
+                        break;
+                    }
+                }
+            }
+
+            // If not found directly, check if old_norm was passed without the root folder prefix:
+            // e.g. "Season 1" when files have "ShowRoot/Season 1/ep.mkv"
+            if found_path.is_none() && !current_torrent_name.is_empty() {
+                let prefixed = format!("{current_torrent_name}/{old_norm}");
+                let prefixed_with_slash = format!("{prefixed}/");
+                for f in &files {
+                    if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                        let norm_name = name.replace('\\', "/");
+                        if norm_name.starts_with(&prefixed_with_slash) || norm_name == prefixed {
+                            found_path = Some(prefixed);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If still not found and old_norm has no slashes, could it be the root folder?
+            if found_path.is_none() && !old_norm.contains('/') {
+                current_torrent_name.to_string()
+            } else {
+                found_path.unwrap_or(old_norm)
+            }
+        };
+
+        let is_actually_root = canonical_path == current_torrent_name;
+
+        // If the new name is identical to the current leaf name, return Ok(()) immediately
+        let current_leaf = canonical_path.rsplit('/').next().unwrap_or(&canonical_path);
+        if current_leaf == trimmed_name {
+            return Ok(());
+        }
+
         self.rpc_client
-            .torrent_rename_path(id, old_folder_path, new_folder_name)
+            .torrent_rename_path(&resolved_id, &canonical_path, trimmed_name)?;
+
+        // If root folder was renamed, synchronize database and metadata cache
+        if is_actually_root {
+            if let Ok(mut cache) = self.metadata_cache.lock() {
+                if let Some(meta) = cache.get_mut(id) {
+                    meta.display_title = Some(trimmed_name.to_string());
+                    let _ = self.db.upsert_torrent_metadata(meta);
+                } else if let Some(meta) = cache.get_mut(&resolved_id) {
+                    meta.display_title = Some(trimmed_name.to_string());
+                    let _ = self.db.upsert_torrent_metadata(meta);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn export_torrent_bytes(&self, id: &str) -> Result<Vec<u8>, String> {

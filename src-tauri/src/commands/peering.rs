@@ -37,7 +37,10 @@ pub async fn get_peer_telemetry(
     torrent_id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<Vec<PeerTelemetry>, String> {
-    engine.get_peer_telemetry(&torrent_id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.get_peer_telemetry(&torrent_id))
+        .await
+        .map_err(|e| format!("get_peer_telemetry task failed: {e}"))?
 }
 
 #[tauri::command]
