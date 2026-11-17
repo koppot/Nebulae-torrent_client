@@ -436,6 +436,9 @@ pub fn run() {
                 });
             }
 
+            #[cfg(target_os = "windows")]
+            crate::taskbar_speed::init_taskbar_speed(app.handle());
+
             // Diagnostics for the reported white-screen-on-launch: log the
             // URL the main window was actually pointed at.
             if let Some(w) = app.get_webview_window("main") {

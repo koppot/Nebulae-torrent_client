@@ -128,9 +128,21 @@ mod windows_impl {
 
     const CLASS_NAME: PCWSTR = w!("NebulaeToolbarBand");
 
+    fn is_overlay_enabled(app: &AppHandle) -> bool {
+        app.try_state::<std::sync::Arc<crate::db::Database>>()
+            .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
+            .and_then(|json| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
+            })
+            .map(|s| s.show_taskbar_speed_overlay)
+            .unwrap_or(true)
+    }
+
     pub fn init_taskbar_speed(app: &AppHandle) {
         let _ = APP_HANDLE.set(app.clone());
         INIT_ONCE.call_once(|| {
+            let initial_enabled = is_overlay_enabled(app);
+            OVERLAY_ENABLED.store(initial_enabled, Ordering::SeqCst);
             std::thread::spawn(move || {
                 run_toolbar_band_window();
             });
