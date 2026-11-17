@@ -27,6 +27,8 @@ interface UiState {
   showConnectivityDoctor: boolean;
   showVpnManager: boolean;
   showTrackerDashboard: boolean;
+  showBugReport: boolean;
+  bugReportContext?: { error?: string; category?: string } | null;
   splashDismissed: boolean;
   activeManagerTab: ManagerTab;
   managerCategoryFilter: string;
@@ -51,6 +53,7 @@ interface UiState {
   setShowTrackerDashboard: (show: boolean) => void;
   showQbitImport: boolean;
   setShowQbitImport: (show: boolean) => void;
+  setShowBugReport: (show: boolean, ctx?: { error?: string; category?: string } | null) => void;
   setSplashDismissed: (dismissed: boolean) => void;
   setActiveManagerTab: (tab: ManagerTab) => void;
   setManagerCategoryFilter: (filter: string) => void;
@@ -89,6 +92,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   showVpnManager: false,
   showTrackerDashboard: false,
   showQbitImport: false,
+  showBugReport: false,
+  bugReportContext: null,
   splashDismissed: false,
   activeManagerTab: 'general',
   managerCategoryFilter: 'all',
@@ -147,6 +152,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setShowVpnManager: (showVpnManager) => set({ showVpnManager }),
   setShowTrackerDashboard: (showTrackerDashboard) => set({ showTrackerDashboard }),
   setShowQbitImport: (showQbitImport) => set({ showQbitImport }),
+  setShowBugReport: (showBugReport, ctx) =>
+    set({ showBugReport, bugReportContext: ctx ?? null }),
   setSplashDismissed: (splashDismissed) => set({ splashDismissed }),
   setActiveManagerTab: (activeManagerTab) => set({ activeManagerTab }),
   setManagerCategoryFilter: (managerCategoryFilter) => set({ managerCategoryFilter }),

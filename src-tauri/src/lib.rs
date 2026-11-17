@@ -721,6 +721,10 @@ pub fn run() {
             commands::diagnostics::export_logs,
             commands::diagnostics::open_external_link,
             commands::diagnostics::quit_app,
+            commands::diagnostics::generate_bug_report_bundle,
+            commands::diagnostics::save_bug_report_draft,
+            commands::diagnostics::get_bug_report_draft,
+            commands::diagnostics::clear_bug_report_draft,
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,

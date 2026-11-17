@@ -10,10 +10,11 @@ import {
   Download,
   AlertTriangle,
   LifeBuoy,
+  Bug,
 } from 'lucide-react';
 
 export const HelpModal: React.FC = () => {
-  const { showHelp, setShowHelp } = useUiStore();
+  const { showHelp, setShowHelp, setShowBugReport } = useUiStore();
   const [platformTab, setPlatformTab] = useState<'windows' | 'mac-arm' | 'mac-intel'>('mac-arm');
 
   if (!showHelp) return null;
@@ -189,6 +190,27 @@ export const HelpModal: React.FC = () => {
               className="mt-2 px-3 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-[11px] font-semibold transition"
             >
               Open Discord Support
+            </button>
+          </section>
+
+          {/* Bug Reporting */}
+          <section className="bg-[#1f1f1f] p-3 rounded-lg border border-[#333333]">
+            <h3 className="font-semibold text-white text-xs flex items-center gap-1.5 mb-1">
+              <Bug className="w-3.5 h-3.5 text-[#e50914]" />
+              <span>Report an Issue / Bug</span>
+            </h3>
+            <p className="text-[11px] text-[#a3a3a3]">
+              Encountered a problem or playback glitch? Submit an issue directly to the GitHub issue tracker with automatically sanitized diagnostic logs.
+            </p>
+            <button
+              onClick={() => {
+                setShowHelp(false);
+                setShowBugReport(true);
+              }}
+              className="mt-2 px-3 py-1.5 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-white text-[11px] font-semibold transition flex items-center gap-1.5"
+            >
+              <Bug className="w-3 h-3 text-[#e50914]" />
+              <span>Report a Bug</span>
             </button>
           </section>
 

@@ -37,6 +37,7 @@ import {
   Fingerprint,
   Info,
   FolderInput,
+  Bug,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -56,6 +57,7 @@ export const SettingsModal: React.FC = () => {
     showSettings,
     setShowSettings,
     setShowQbitImport,
+    setShowBugReport,
     settingsTab: activeTab,
     setSettingsTab: setActiveTab,
   } = useUiStore();
@@ -2308,6 +2310,14 @@ export const SettingsModal: React.FC = () => {
                     >
                       <FileText className="w-3.5 h-3.5 text-[#e50914]" />
                       <span>Copy Recent Logs</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowBugReport(true, { category: 'Other / General' })}
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
+                    >
+                      <Bug className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>Report a Bug</span>
                     </button>
                     <button
                       type="button"

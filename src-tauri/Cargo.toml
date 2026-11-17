@@ -69,6 +69,7 @@ libc = "0.2.191"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 maxminddb = "0.24"
 md5 = "0.7"
+regex = "1"
 minisign-verify = { version = "0.3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

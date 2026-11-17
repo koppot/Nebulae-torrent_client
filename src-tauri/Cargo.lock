@@ -2757,6 +2757,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
+ "regex",
  "reqwest",
  "rfd",
  "roxmltree",
