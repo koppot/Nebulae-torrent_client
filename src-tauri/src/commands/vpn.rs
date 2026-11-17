@@ -189,6 +189,8 @@ pub fn get_network_interfaces() -> Result<Vec<crate::utils::network::NetworkInte
 /// (default-route egress; the VPN tunnel IP when a VPN claims the route).
 /// Shown in the status bar's Connected tooltip (owner request).
 #[tauri::command]
-pub fn get_egress_source_ip() -> Result<Option<String>, String> {
-    Ok(crate::utils::network::egress_source_ip())
+pub async fn get_egress_source_ip() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(crate::utils::network::egress_source_ip)
+        .await
+        .map_err(|e| e.to_string())
 }

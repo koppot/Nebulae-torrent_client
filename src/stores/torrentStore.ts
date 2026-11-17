@@ -169,6 +169,34 @@ interface TorrentState {
   getSystemPathPresets: () => Promise<SystemPathPresets>;
 }
 
+function areTorrentsEqual(a: TorrentItem, b: TorrentItem): boolean {
+  return (
+    a.id === b.id &&
+    a.info_hash === b.info_hash &&
+    a.status === b.status &&
+    a.progress === b.progress &&
+    a.download_rate === b.download_rate &&
+    a.upload_rate === b.upload_rate &&
+    a.downloaded_bytes === b.downloaded_bytes &&
+    a.uploaded_bytes === b.uploaded_bytes &&
+    a.eta_seconds === b.eta_seconds &&
+    a.seeds === b.seeds &&
+    a.peers === b.peers &&
+    a.ratio === b.ratio &&
+    a.category === b.category &&
+    a.save_path === b.save_path &&
+    a.name === b.name &&
+    a.errorString === b.errorString &&
+    a.sequential_download === b.sequential_download &&
+    a.first_last_piece_prio === b.first_last_piece_prio &&
+    a.sort_order === b.sort_order &&
+    a.racingMode === b.racingMode &&
+    a.bandwidthPriority === b.bandwidthPriority &&
+    a.files === b.files &&
+    a.trackers === b.trackers
+  );
+}
+
 export const useTorrentStore = create<TorrentState>((set, get) => ({
   torrents: [],
   selectedId: null,
@@ -181,12 +209,34 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     const sanitized = sanitizeTorrentRates(incoming, prevTorrents);
     const reconciled = reconcileRecheckState(sanitized);
 
-    set({ torrents: reconciled, isLoading: false });
+    // Fast-path structural check to prevent React re-render cascades when nothing changed
+    let hasChanges = prevTorrents.length !== reconciled.length;
+    const finalTorrents: TorrentItem[] = [];
+
+    if (!hasChanges) {
+      for (let i = 0; i < reconciled.length; i++) {
+        const prev = prevTorrents[i];
+        const next = reconciled[i];
+        if (areTorrentsEqual(prev, next)) {
+          finalTorrents.push(prev);
+        } else {
+          hasChanges = true;
+          finalTorrents.push(next);
+        }
+      }
+    }
+
+    if (hasChanges) {
+      set({ torrents: hasChanges && finalTorrents.length === reconciled.length ? finalTorrents : reconciled, isLoading: false });
+    } else if (get().isLoading) {
+      set({ isLoading: false });
+    }
 
     // If a torrent is currently selected and lacks file details, trigger fetch
     const currentSelId = get().selectedId;
     if (currentSelId) {
-      const match = reconciled.find(
+      const activeList = hasChanges ? finalTorrents : prevTorrents;
+      const match = activeList.find(
         (t) => t.id === currentSelId || (t.info_hash && t.info_hash.toLowerCase() === currentSelId.toLowerCase())
       );
       if (match && (!match.files || match.files.length === 0) && get().filesLoadingId !== match.id && !get().filesError) {

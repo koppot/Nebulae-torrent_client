@@ -3960,30 +3960,38 @@ fn find_main_video(dir: &Path) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub fn get_volume_disk_space(
+pub async fn get_volume_disk_space(
     target_path: Option<String>,
 ) -> Result<crate::utils::library_cleaner::VolumeSpaceInfo, String> {
-    let p = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")));
-    crate::utils::library_cleaner::LibraryCleaner::get_disk_space(&p)
+    tokio::task::spawn_blocking(move || {
+        let p = target_path
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")));
+        crate::utils::library_cleaner::LibraryCleaner::get_disk_space(&p)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn clean_cache_files(
+pub async fn clean_cache_files(
     older_than_days: Option<u32>,
     dry_run: Option<bool>,
 ) -> Result<crate::utils::library_cleaner::CacheCleanupReport, String> {
-    let days = older_than_days.unwrap_or(30);
-    let dry = dry_run.unwrap_or(false);
+    tokio::task::spawn_blocking(move || {
+        let days = older_than_days.unwrap_or(30);
+        let dry = dry_run.unwrap_or(false);
 
-    let mut candidate_dirs = Vec::new();
-    if let Ok(paths) = crate::utils::paths::AppPaths::init() {
-        candidate_dirs.push(paths.cache_dir.clone());
-        candidate_dirs.push(paths.cache_dir.join("thumbnails"));
-        candidate_dirs.push(paths.logs_dir);
-    }
-    crate::utils::library_cleaner::LibraryCleaner::clean_cache_files(&candidate_dirs, days, dry)
+        let mut candidate_dirs = Vec::new();
+        if let Ok(paths) = crate::utils::paths::AppPaths::init() {
+            candidate_dirs.push(paths.cache_dir.clone());
+            candidate_dirs.push(paths.cache_dir.join("thumbnails"));
+            candidate_dirs.push(paths.logs_dir);
+        }
+        crate::utils::library_cleaner::LibraryCleaner::clean_cache_files(&candidate_dirs, days, dry)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -4115,83 +4123,88 @@ pub fn tmdb_configured() -> bool {
 /// only: any stored session cookie is attached, and a login-redirect answer
 /// is reported as unavailable so the frontend falls back to TMDB/Trakt.
 #[tauri::command]
-pub fn fetch_adc_page(url: String) -> Result<String, String> {
-    let parsed = url::Url::parse(&url).map_err(|e| format!("url: {e}"))?;
-    let host = parsed.host_str().unwrap_or_default().to_lowercase();
-    // Only the ADC site is ever fetched — never an arbitrary URL.
-    if !matches!(host.as_str(), "asiandvdclub.org" | "www.asiandvdclub.org") {
-        return Err(format!("not an ADC url: {host}"));
-    }
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("client: {e}"))?;
-    let mut req = client.get(&url);
-    // A website session (if the owner ever linked one) rides along; the
-    // announce passkey is NOT a website credential and is not sent.
-    if let Ok(cookie) = crate::utils::keyring::get_secret("adc:session_cookie") {
-        if !cookie.is_empty() {
-            req = req.header("Cookie", cookie);
+pub async fn fetch_adc_page(url: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let parsed = url::Url::parse(&url).map_err(|e| format!("url: {e}"))?;
+        let host = parsed.host_str().unwrap_or_default().to_lowercase();
+        // Only the ADC site is ever fetched — never an arbitrary URL.
+        if !matches!(host.as_str(), "asiandvdclub.org" | "www.asiandvdclub.org") {
+            return Err(format!("not an ADC url: {host}"));
         }
-    }
-    let html = req
-        .send()
-        .map_err(|e| format!("fetch: {e}"))?
-        .text()
-        .map_err(|e| format!("body: {e}"))?;
 
-    // Login gate or empty page → treat as "ADC info unavailable".
-    let lower = html.to_lowercase();
-    if lower.contains("name=\"form_login\"") || lower.contains("login.php") && html.len() < 4096 {
-        return Err("ADC page requires a website login".into());
-    }
-
-    // Crude HTML → text: drop script/style blocks and tags, collapse
-    // whitespace. `split('<')` alternates text and tag segments.
-    let mut text = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut skipping: Option<String> = None; // current <script>/<style> kind
-    for seg in html.split('<') {
-        if !in_tag {
-            if skipping.is_none() {
-                text.push_str(seg);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("client: {e}"))?;
+        let mut req = client.get(&url);
+        // A website session (if the owner ever linked one) rides along; the
+        // announce passkey is NOT a website credential and is not sent.
+        if let Ok(cookie) = crate::utils::keyring::get_secret("adc:session_cookie") {
+            if !cookie.is_empty() {
+                req = req.header("Cookie", cookie);
             }
-            in_tag = true;
-        } else if let Some(gt) = seg.find('>') {
-            let tag = seg[..gt].to_lowercase();
-            let rest = &seg[gt + 1..];
-            match &skipping {
-                Some(kind) => {
-                    if tag.starts_with(&format!("/{kind}")) {
-                        skipping = None;
+        }
+        let html = req
+            .send()
+            .map_err(|e| format!("fetch: {e}"))?
+            .text()
+            .map_err(|e| format!("body: {e}"))?;
+
+        // Login gate or empty page → treat as "ADC info unavailable".
+        let lower = html.to_lowercase();
+        if lower.contains("name=\"form_login\"") || lower.contains("login.php") && html.len() < 4096
+        {
+            return Err("ADC page requires a website login".into());
+        }
+
+        // Crude HTML → text: drop script/style blocks and tags, collapse
+        // whitespace. `split('<')` alternates text and tag segments.
+        let mut text = String::with_capacity(html.len());
+        let mut in_tag = false;
+        let mut skipping: Option<String> = None; // current <script>/<style> kind
+        for seg in html.split('<') {
+            if !in_tag {
+                if skipping.is_none() {
+                    text.push_str(seg);
+                }
+                in_tag = true;
+            } else if let Some(gt) = seg.find('>') {
+                let tag = seg[..gt].to_lowercase();
+                let rest = &seg[gt + 1..];
+                match &skipping {
+                    Some(kind) => {
+                        if tag.starts_with(&format!("/{kind}")) {
+                            skipping = None;
+                        }
+                    }
+                    None => {
+                        if tag.starts_with("script") {
+                            skipping = Some("script".into());
+                        } else if tag.starts_with("style") {
+                            skipping = Some("style".into());
+                        } else {
+                            text.push_str(rest);
+                        }
                     }
                 }
-                None => {
-                    if tag.starts_with("script") {
-                        skipping = Some("script".into());
-                    } else if tag.starts_with("style") {
-                        skipping = Some("style".into());
-                    } else {
-                        text.push_str(rest);
-                    }
-                }
+                in_tag = false;
             }
-            in_tag = false;
+            // A tag segment without '>' is malformed; drop it.
         }
-        // A tag segment without '>' is malformed; drop it.
-    }
-    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let text = text.trim().to_string();
-    if text.len() < 80 {
-        return Err("ADC page carried no usable description".into());
-    }
-    let mut excerpt = text.chars().take(1500).collect::<String>();
-    if excerpt.len() < text.len() {
-        excerpt.push('…');
-    }
-    tracing::info!("[adc] details page fetched: {} chars", excerpt.len());
-    Ok(excerpt)
+        let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = text.trim().to_string();
+        if text.len() < 80 {
+            return Err("ADC page carried no usable description".into());
+        }
+        let mut excerpt = text.chars().take(1500).collect::<String>();
+        if excerpt.len() < text.len() {
+            excerpt.push('…');
+        }
+        tracing::info!("[adc] details page fetched: {} chars", excerpt.len());
+        Ok(excerpt)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -4451,7 +4464,8 @@ mod tests {
 
     #[test]
     fn test_get_volume_disk_space_command() {
-        let space = get_volume_disk_space(None).expect("Failed to query root volume space");
+        let space = tauri::async_runtime::block_on(get_volume_disk_space(None))
+            .expect("Failed to query root volume space");
         assert!(space.total_bytes > 0);
         assert!(space.available_bytes > 0);
         assert!(space.used_percent <= 100);
@@ -4459,7 +4473,8 @@ mod tests {
 
     #[test]
     fn test_clean_cache_files_command() {
-        let report = clean_cache_files(Some(30), Some(true)).expect("Failed clean cache dry run");
+        let report = tauri::async_runtime::block_on(clean_cache_files(Some(30), Some(true)))
+            .expect("Failed clean cache dry run");
         assert!(report.dry_run);
     }
 
@@ -5019,143 +5034,148 @@ pub fn add_external_media(
 /// pruned on read ("saved as long as it's present in the original
 /// directory").
 #[tauri::command]
-pub fn list_external_media(
+pub async fn list_external_media(
     app: tauri::AppHandle,
     db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<Vec<ExternalMedia>, String> {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
 
-    // Source 1: JSON sidecar (user-added external media).
-    let sidecar_items = read_external_store(&app);
-    let mut live: Vec<ExternalMedia> = Vec::new();
-    let mut seen_live_paths = std::collections::HashSet::new();
-    for mut m in sidecar_items {
-        m.path = release_root_of(&m.path);
-        let key = m.path.trim().to_lowercase().replace('\\', "/");
-        if seen_live_paths.insert(key) {
-            live.push(m);
-        }
-    }
-    let _ = write_external_store(&app, &live);
-
-    // Track paths already in sidecar to avoid duplicates from DB source.
-    let mut seen_paths: std::collections::HashSet<String> = live
-        .iter()
-        .map(|m| m.path.trim().to_lowercase().replace('\\', "/"))
-        .collect();
-
-    // Source 2: DB rows with is_external = 1 (auto-reclassified by seeding.rs).
-    // These include the user's custom title, poster associations, and all
-    // metadata imported before the torrent was removed.
-    if let Ok(all_meta) = db.list_all_torrent_metadata() {
-        for (_, meta) in all_meta {
-            if !meta.is_external || meta.info_hash.len() < 20 {
-                continue;
+        // Source 1: JSON sidecar (user-added external media).
+        let sidecar_items = read_external_store(&app);
+        let mut live: Vec<ExternalMedia> = Vec::new();
+        let mut seen_live_paths = std::collections::HashSet::new();
+        for mut m in sidecar_items {
+            m.path = release_root_of(&m.path);
+            let key = m.path.trim().to_lowercase().replace('\\', "/");
+            if seen_live_paths.insert(key) {
+                live.push(m);
             }
-
-            // Use user-defined title if set; fall back to provider title, then
-            // a title derived from the save_path folder name, then info_hash.
-            // Transmission-sourced torrents never have display_title populated
-            // in the DB, so without this fallback they would appear in External
-            // under their raw info hash.
-            let derived_title = meta
-                .save_path
-                .as_deref()
-                .and_then(|p| std::path::Path::new(p).file_name())
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string());
-            let title = meta
-                .user_display_title
-                .as_deref()
-                .or(meta.display_title.as_deref())
-                .or(derived_title.as_deref())
-                .unwrap_or(&meta.info_hash)
-                .to_string();
-
-            // Reconstruct the content path from save_path and display_title.
-            let raw_path = match meta.save_path.as_deref() {
-                Some(p) if !p.is_empty() => p,
-                _ => continue,
-            };
-            let candidate_path = std::path::Path::new(raw_path);
-            let torrent_name = meta
-                .display_title
-                .as_deref()
-                .or(derived_title.as_deref())
-                .unwrap_or(&title);
-            let full_path = if candidate_path.ends_with(torrent_name)
-                || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
-            {
-                candidate_path.to_path_buf()
-            } else {
-                candidate_path.join(torrent_name)
-            };
-
-            let norm_path = if full_path.exists() {
-                full_path.to_string_lossy().to_string()
-            } else if candidate_path.exists() {
-                candidate_path.to_string_lossy().to_string()
-            } else {
-                full_path.to_string_lossy().to_string()
-            };
-
-            let norm_key = norm_path.trim().to_lowercase().replace('\\', "/");
-            // Skip if already covered by sidecar.
-            if !seen_paths.insert(norm_key) {
-                continue;
-            }
-
-            // Extract year from "Title (YYYY)" pattern.
-            let year = title.rfind(" (").and_then(|i| {
-                let s = &title[i + 2..];
-                s.find(')').and_then(|j| s[..j].parse::<i32>().ok())
-            });
-
-            let path_exists = std::path::Path::new(&norm_path).exists();
-            let kind = if path_exists {
-                classify_external(&norm_path)
-            } else {
-                // Payload missing but metadata remains — include as metadata-only entry.
-                "File".to_string()
-            };
-
-            let added_ms = meta.completed_on.map(|c| c as i64 * 1000).unwrap_or(now_ms);
-
-            let poster_url = meta.poster_path;
-            live.push(ExternalMedia {
-                path: norm_path,
-                title,
-                year,
-                kind,
-                added_ms,
-                poster_url,
-            });
         }
-    }
+        let _ = write_external_store(&app, &live);
 
-    // Ensure all live external items (both sidecar and DB-sourced) are free from cross-title contamination
-    auto_heal_external_media_posters(&mut live);
+        // Track paths already in sidecar to avoid duplicates from DB source.
+        let mut seen_paths: std::collections::HashSet<String> = live
+            .iter()
+            .map(|m| m.path.trim().to_lowercase().replace('\\', "/"))
+            .collect();
 
-    // Apply saved external media ordering if present
-    if let Ok(order_paths) = db.get_external_media_order() {
-        if !order_paths.is_empty() {
-            let mut order_map: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
-            for (i, p) in order_paths.iter().enumerate() {
-                let key = p.trim().to_lowercase().replace('\\', "/");
-                order_map.entry(key).or_insert(i);
+        // Source 2: DB rows with is_external = 1 (auto-reclassified by seeding.rs).
+        // These include the user's custom title, poster associations, and all
+        // metadata imported before the torrent was removed.
+        if let Ok(all_meta) = db.list_all_torrent_metadata() {
+            for (_, meta) in all_meta {
+                if !meta.is_external || meta.info_hash.len() < 20 {
+                    continue;
+                }
+
+                // Use user-defined title if set; fall back to provider title, then
+                // a title derived from the save_path folder name, then info_hash.
+                // Transmission-sourced torrents never have display_title populated
+                // in the DB, so without this fallback they would appear in External
+                // under their raw info hash.
+                let derived_title = meta
+                    .save_path
+                    .as_deref()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+                let title = meta
+                    .user_display_title
+                    .as_deref()
+                    .or(meta.display_title.as_deref())
+                    .or(derived_title.as_deref())
+                    .unwrap_or(&meta.info_hash)
+                    .to_string();
+
+                // Reconstruct the content path from save_path and display_title.
+                let raw_path = match meta.save_path.as_deref() {
+                    Some(p) if !p.is_empty() => p,
+                    _ => continue,
+                };
+                let candidate_path = std::path::Path::new(raw_path);
+                let torrent_name = meta
+                    .display_title
+                    .as_deref()
+                    .or(derived_title.as_deref())
+                    .unwrap_or(&title);
+                let full_path = if candidate_path.ends_with(torrent_name)
+                    || candidate_path.file_name().and_then(|n| n.to_str()) == Some(torrent_name)
+                {
+                    candidate_path.to_path_buf()
+                } else {
+                    candidate_path.join(torrent_name)
+                };
+
+                let norm_path = if full_path.exists() {
+                    full_path.to_string_lossy().to_string()
+                } else if candidate_path.exists() {
+                    candidate_path.to_string_lossy().to_string()
+                } else {
+                    full_path.to_string_lossy().to_string()
+                };
+
+                let norm_key = norm_path.trim().to_lowercase().replace('\\', "/");
+                // Skip if already covered by sidecar.
+                if !seen_paths.insert(norm_key) {
+                    continue;
+                }
+
+                // Extract year from "Title (YYYY)" pattern.
+                let year = title.rfind(" (").and_then(|i| {
+                    let s = &title[i + 2..];
+                    s.find(')').and_then(|j| s[..j].parse::<i32>().ok())
+                });
+
+                let path_exists = std::path::Path::new(&norm_path).exists();
+                let kind = if path_exists {
+                    classify_external(&norm_path)
+                } else {
+                    // Payload missing but metadata remains — include as metadata-only entry.
+                    "File".to_string()
+                };
+
+                let added_ms = meta.completed_on.map(|c| c as i64 * 1000).unwrap_or(now_ms);
+
+                let poster_url = meta.poster_path;
+                live.push(ExternalMedia {
+                    path: norm_path,
+                    title,
+                    year,
+                    kind,
+                    added_ms,
+                    poster_url,
+                });
             }
-            live.sort_by_key(|m| {
-                let key = m.path.trim().to_lowercase().replace('\\', "/");
-                order_map.get(&key).copied().unwrap_or(usize::MAX)
-            });
         }
-    }
 
-    Ok(live)
+        // Ensure all live external items (both sidecar and DB-sourced) are free from cross-title contamination
+        auto_heal_external_media_posters(&mut live);
+
+        // Apply saved external media ordering if present
+        if let Ok(order_paths) = db.get_external_media_order() {
+            if !order_paths.is_empty() {
+                let mut order_map: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for (i, p) in order_paths.iter().enumerate() {
+                    let key = p.trim().to_lowercase().replace('\\', "/");
+                    order_map.entry(key).or_insert(i);
+                }
+                live.sort_by_key(|m| {
+                    let key = m.path.trim().to_lowercase().replace('\\', "/");
+                    order_map.get(&key).copied().unwrap_or(usize::MAX)
+                });
+            }
+        }
+
+        Ok(live)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 /// Remove an entry explicitly (owner-initiated delete in the collection).
 /// Removes from both the JSON sidecar store and the DB row (is_external = 1)

@@ -2,7 +2,7 @@ use crate::engine::{EngineStatus, SharedEngine};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TorrentFileItem {
     pub index: u32,
     pub name: String,
@@ -11,7 +11,7 @@ pub struct TorrentFileItem {
     pub priority: u8, // 0: DoNotDownload, 1: Normal, 2: High, 3: Maximum
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TorrentTrackerItem {
     pub tier: u32,
     pub url: String,
@@ -29,7 +29,7 @@ pub struct TorrentTrackerItem {
     pub next_announce: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TorrentItem {
     pub id: String,
     pub name: String,
@@ -361,27 +361,37 @@ pub async fn get_torrent_details(
 }
 
 #[tauri::command]
-pub fn add_torrent(
+pub async fn add_torrent(
     source: String,
     download_dir: Option<String>,
     bytes: Option<Vec<u8>>,
     engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
-    if let Some(raw) = bytes {
-        if !raw.is_empty() {
-            return engine.add_torrent_from_bytes(&raw, download_dir.as_deref());
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(raw) = bytes {
+            if !raw.is_empty() {
+                return engine.add_torrent_from_bytes(&raw, download_dir.as_deref());
+            }
         }
-    }
-    engine.add_torrent(&source, download_dir.as_deref())
+        engine.add_torrent(&source, download_dir.as_deref())
+    })
+    .await
+    .map_err(|e| format!("add_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn add_torrent_bytes(
+pub async fn add_torrent_bytes(
     bytes: Vec<u8>,
     download_dir: Option<String>,
     engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
-    engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
+    })
+    .await
+    .map_err(|e| format!("add_torrent_bytes task failed: {e}"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -655,50 +665,56 @@ fn apply_torrent_renames_impl(
 }
 
 #[tauri::command]
-pub fn remove_torrent(
+pub async fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
     engine: State<'_, SharedEngine>,
     db: State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<(), String> {
-    let del = delete_files.unwrap_or(false);
-    let (info_hash, display_name): (Option<String>, Option<String>) =
-        if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-            (Some(id.to_lowercase()), None)
-        } else if let Ok(torrents) = engine.list_torrents() {
-            torrents
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| (Some(t.info_hash.to_lowercase()), Some(t.name.clone())))
-                .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
+    let engine = engine.inner().clone();
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let del = delete_files.unwrap_or(false);
+        let (info_hash, display_name): (Option<String>, Option<String>) =
+            if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+                (Some(id.to_lowercase()), None)
+            } else if let Ok(torrents) = engine.list_torrents() {
+                torrents
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| (Some(t.info_hash.to_lowercase()), Some(t.name.clone())))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
 
-    let res = engine.remove_torrent(&id, del);
+        let res = engine.remove_torrent(&id, del);
 
-    if let Some(ref hash) = info_hash {
-        if del {
-            let _ = db.delete_torrent_metadata(hash);
-        } else {
-            // Preserve the torrent's display name before reclassifying to
-            // External, so the External shelf shows the title instead of the
-            // raw info hash. Transmission-sourced torrents never have
-            // display_title populated in the DB.
-            if let Some(name) = &display_name {
-                if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
-                    if meta.display_title.is_none() {
-                        meta.display_title = Some(name.clone());
-                        let _ = db.upsert_torrent_metadata(&meta);
+        if let Some(ref hash) = info_hash {
+            if del {
+                let _ = db.delete_torrent_metadata(hash);
+            } else {
+                // Preserve the torrent's display name before reclassifying to
+                // External, so the External shelf shows the title instead of the
+                // raw info hash. Transmission-sourced torrents never have
+                // display_title populated in the DB.
+                if let Some(name) = &display_name {
+                    if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
+                        if meta.display_title.is_none() {
+                            meta.display_title = Some(name.clone());
+                            let _ = db.upsert_torrent_metadata(&meta);
+                        }
                     }
                 }
+                let _ = db.mark_as_external(hash);
+                let _ = db.mark_snatched_record_external(hash);
             }
-            let _ = db.mark_as_external(hash);
-            let _ = db.mark_snatched_record_external(hash);
         }
-    }
 
-    res
+        res
+    })
+    .await
+    .map_err(|e| format!("remove_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -753,32 +769,41 @@ pub async fn reannounce_torrent(id: String, engine: State<'_, SharedEngine>) -> 
 }
 
 #[tauri::command]
-pub fn set_torrent_location(
+pub async fn set_torrent_location(
     id: String,
     new_path: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.set_location(&id, &new_path)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_location(&id, &new_path))
+        .await
+        .map_err(|e| format!("set_torrent_location task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn set_torrent_category(
+pub async fn set_torrent_category(
     id: String,
     category: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.set_category(&id, &category)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_category(&id, &category))
+        .await
+        .map_err(|e| format!("set_torrent_category task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn set_torrent_speed_limits(
+pub async fn set_torrent_speed_limits(
     id: String,
     dl_kib: u32,
     ul_kib: u32,
     ratio_limit: f32,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.set_torrent_limits(&id, dl_kib, ul_kib, ratio_limit)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_torrent_limits(&id, dl_kib, ul_kib, ratio_limit))
+        .await
+        .map_err(|e| format!("set_torrent_speed_limits task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -786,7 +811,10 @@ pub async fn toggle_torrent_sequential(
     id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
-    engine.toggle_sequential_download(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.toggle_sequential_download(&id))
+        .await
+        .map_err(|e| format!("toggle_torrent_sequential task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -794,63 +822,86 @@ pub async fn toggle_torrent_first_last(
     id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
-    engine.toggle_first_last_piece_priority(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.toggle_first_last_piece_priority(&id))
+        .await
+        .map_err(|e| format!("toggle_torrent_first_last task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn toggle_torrent_super_seeding(
+pub async fn toggle_torrent_super_seeding(
     id: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<bool, String> {
-    engine.toggle_super_seeding(&id)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.toggle_super_seeding(&id))
+        .await
+        .map_err(|e| format!("toggle_torrent_super_seeding task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn set_torrent_racing_mode(
+pub async fn set_torrent_racing_mode(
     id: String,
     enabled: bool,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.set_torrent_racing_mode(&id, enabled)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_torrent_racing_mode(&id, enabled))
+        .await
+        .map_err(|e| format!("set_torrent_racing_mode task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn set_file_priority(
+pub async fn set_file_priority(
     id: String,
     file_index: u32,
     priority: u8,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.set_file_priority(&id, file_index, priority)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_file_priority(&id, file_index, priority))
+        .await
+        .map_err(|e| format!("set_file_priority task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn rename_torrent(
+pub async fn rename_torrent(
     id: String,
     new_name: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.rename_torrent(&id, &new_name)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.rename_torrent(&id, &new_name))
+        .await
+        .map_err(|e| format!("rename_torrent task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn rename_torrent_file(
+pub async fn rename_torrent_file(
     id: String,
     file_index: u32,
     new_file_name: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.rename_torrent_file(&id, file_index, &new_file_name)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.rename_torrent_file(&id, file_index, &new_file_name))
+        .await
+        .map_err(|e| format!("rename_torrent_file task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn rename_torrent_folder(
+pub async fn rename_torrent_folder(
     id: String,
     old_folder_path: String,
     new_folder_name: String,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
-    engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        engine.rename_torrent_folder(&id, &old_folder_path, &new_folder_name)
+    })
+    .await
+    .map_err(|e| format!("rename_torrent_folder task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1429,45 +1480,49 @@ pub fn get_system_path_presets() -> Result<SystemPathPresets, String> {
 /// rejected with "command not found" and was swallowed by the UI, so the
 /// buttons appeared completely dead.
 #[tauri::command]
-pub fn open_torrent_folder(path: String) -> Result<(), String> {
-    let p = std::path::PathBuf::from(&path);
-    if !p.exists() {
-        return Err(format!("Path does not exist on disk: {path}"));
-    }
-    #[cfg(target_os = "macos")]
-    let opened = if p.is_dir() {
-        std::process::Command::new("open").arg(&p).status()
-    } else {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(&p)
-            .status()
-    };
-    #[cfg(target_os = "windows")]
-    let opened = if p.is_dir() {
-        crate::utils::process::create_hidden_command("explorer")
-            .arg(&p)
-            .status()
-    } else {
-        crate::utils::process::create_hidden_command("explorer")
-            .arg(format!("/select,{}", p.display()))
-            .status()
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let opened = std::process::Command::new("xdg-open")
-        .arg(if p.is_dir() {
-            &p
+pub async fn open_torrent_folder(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let p = std::path::PathBuf::from(&path);
+        if !p.exists() {
+            return Err(format!("Path does not exist on disk: {path}"));
+        }
+        #[cfg(target_os = "macos")]
+        let opened = if p.is_dir() {
+            std::process::Command::new("open").arg(&p).status()
         } else {
-            p.parent().unwrap_or(&p)
-        })
-        .status();
-    match opened {
-        // Windows: explorer.exe exits 1 on success for some invocations.
-        // Treat 0 or 1 as success; anything else is a real failure.
-        Ok(s) if s.success() || s.code() == Some(1) => Ok(()),
-        Ok(s) => Err(format!("File manager exited with {s}")),
-        Err(e) => Err(format!("Failed to open folder: {e}")),
-    }
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&p)
+                .status()
+        };
+        #[cfg(target_os = "windows")]
+        let opened = if p.is_dir() {
+            crate::utils::process::create_hidden_command("explorer")
+                .arg(&p)
+                .status()
+        } else {
+            crate::utils::process::create_hidden_command("explorer")
+                .arg(format!("/select,{}", p.display()))
+                .status()
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let opened = std::process::Command::new("xdg-open")
+            .arg(if p.is_dir() {
+                &p
+            } else {
+                p.parent().unwrap_or(&p)
+            })
+            .status();
+        match opened {
+            // Windows: explorer.exe exits 1 on success for some invocations.
+            // Treat 0 or 1 as success; anything else is a real failure.
+            Ok(s) if s.success() || s.code() == Some(1) => Ok(()),
+            Ok(s) => Err(format!("File manager exited with {s}")),
+            Err(e) => Err(format!("Failed to open folder: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

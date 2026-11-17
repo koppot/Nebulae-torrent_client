@@ -1,19 +1,39 @@
+use crate::commands::torrent::TorrentItem;
 use crate::db::Database;
 use crate::engine::SharedEngine;
 use crate::status_bar;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let mut last_emitted_torrents: Option<Vec<TorrentItem>> = None;
+        let mut last_emitted_at = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
+        let mut last_rates: Option<(u64, u64)> = None;
+
         loop {
             interval.tick().await;
 
-            match engine.list_torrents() {
-                Ok(torrents) => {
-                    let _ = app_handle.emit("nebulae://telemetry", &torrents);
+            let engine_clone = Arc::clone(&engine);
+            let poll_result =
+                tokio::task::spawn_blocking(move || engine_clone.list_torrents()).await;
+
+            match poll_result {
+                Ok(Ok(torrents)) => {
+                    let has_changed = last_emitted_torrents.as_ref() != Some(&torrents);
+                    let heartbeat_due = last_emitted_at.elapsed() >= Duration::from_secs(5);
+
+                    if has_changed || heartbeat_due {
+                        let _ = app_handle.emit("nebulae://telemetry", &torrents);
+                        last_emitted_torrents = Some(torrents.clone());
+                        last_emitted_at = Instant::now();
+                    }
 
                     // Calculate aggregate transfer rates for macOS status bar and Windows toolbar
                     let (upload_rate, download_rate) =
@@ -21,17 +41,24 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
                             (acc.0 + torrent.upload_rate, acc.1 + torrent.download_rate)
                         });
 
-                    // Update status bar on macOS
-                    status_bar::update_status_bar(&app_handle, upload_rate, download_rate);
+                    let current_rates = (upload_rate, download_rate);
+                    if last_rates != Some(current_rates) {
+                        last_rates = Some(current_rates);
 
-                    // Windows taskbar toolbar speed band (adjacent to Nebulae application icon)
-                    crate::taskbar_speed::update_taskbar_speed(
-                        &app_handle,
-                        upload_rate,
-                        download_rate,
-                    );
+                        // Update status bar on macOS
+                        status_bar::update_status_bar(&app_handle, upload_rate, download_rate);
+
+                        // Windows taskbar toolbar speed band (adjacent to Nebulae application icon)
+                        crate::taskbar_speed::update_taskbar_speed(
+                            &app_handle,
+                            upload_rate,
+                            download_rate,
+                        );
+                    }
                 }
-                Err(_) => {
+                Ok(Err(_)) | Err(_) => {
+                    last_emitted_torrents = None;
+                    last_rates = None;
                     // Clear stale rates on engine stop or failure
                     status_bar::clear_status_bar(&app_handle);
                     crate::taskbar_speed::clear_taskbar_speed(&app_handle);

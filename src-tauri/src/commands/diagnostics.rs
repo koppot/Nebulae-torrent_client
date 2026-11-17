@@ -16,8 +16,11 @@ pub fn get_engine_init_error(state: State<EngineInitState>) -> Option<String> {
 /// Frontend breadcrumb: writes a webview-side message into the session log
 /// so clicks that never reach a command still leave a trace.
 #[tauri::command]
-pub fn log_frontend(message: String) {
-    tracing::info!("[frontend] {message}");
+pub async fn log_frontend(message: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        tracing::info!("[frontend] {message}");
+    })
+    .await;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
