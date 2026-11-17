@@ -78,12 +78,22 @@ pub struct Sample {
 }
 
 impl Sample {
-    /// The menu counts as reached only where the title report and the
-    /// demuxer's menu-visible ground truth agree. When the ground truth
-    /// exists, "menu not open" vetoes a (possibly spoofed) report; when it
-    /// does not, the report alone decides, as before.
+    /// The menu counts as reached when the demuxer's menu-visible ground truth
+    /// (`BD_EVENT_MENU`) confirms an interactive menu is open — either on Title 0
+    /// (`at_menu`) or on a non-FirstPlay, non-feature menu title (many Blu-rays
+    /// host their interactive HDMV/BD-J root menu on Title 1..N rather than
+    /// Title 0). First Play OSD overlays and popup menus over active features
+    /// are excluded. When the ground truth does not exist (`None`, e.g. DVD or
+    /// unpatched libVLC), `at_menu` decides as before.
     fn menu_really_open(&self) -> bool {
-        self.at_menu && self.menu_open != Some(false)
+        match self.menu_open {
+            Some(true) => {
+                self.at_menu
+                    || (matches!(self.kind, TitleKind::Other { .. }) && !self.feature_active)
+            }
+            Some(false) => false,
+            None => self.at_menu,
+        }
     }
 }
 
@@ -93,6 +103,7 @@ pub struct Progress {
     skipped_at_ms: Option<u64>,
     retry_after_skip_pending: bool,
     menu_since_ms: Option<u64>,
+    feature_retry_at_ms: Option<u64>,
     next_cadence_ms: u64,
 }
 
@@ -102,6 +113,7 @@ impl Default for Progress {
             skipped_at_ms: None,
             retry_after_skip_pending: false,
             menu_since_ms: None,
+            feature_retry_at_ms: None,
             next_cadence_ms: RETRY_EVERY_MS,
         }
     }
@@ -164,6 +176,7 @@ pub enum Decision {
 ///   [`RETRY_EVERY_MS`] grid.
 pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     if s.menu_really_open() {
+        progress.feature_retry_at_ms = None;
         let since = *progress.menu_since_ms.get_or_insert(now_ms);
         return if now_ms.saturating_sub(since) >= MENU_CONFIRM_MS {
             Decision::Reached
@@ -176,6 +189,24 @@ pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     if !s.has_menu && s.feature_active {
         return Decision::PlainPlayback;
     }
+
+    // Popup-only Blu-rays often author Title 0 ("Top Menu") as a MovieObject
+    // that jumps straight to Title 1 (Episode 1). When the Blu-ray ground truth
+    // (`menu_open == Some(false)`) proves no menu opened even after a menu
+    // retry fired directly against active feature playback, stop repeating
+    // RetryMenu so Episode 1 is not restarted every 2s for 15s.
+    if s.feature_active && s.menu_open == Some(false) {
+        if let Some(retried_at) = progress.feature_retry_at_ms {
+            return if now_ms.saturating_sub(retried_at) >= MENU_CONFIRM_MS {
+                Decision::PlainPlayback
+            } else {
+                Decision::Wait
+            };
+        }
+    } else {
+        progress.feature_retry_at_ms = None;
+    }
+
     if first_play_skip_allowed(
         s.has_menu,
         s.kind,
@@ -188,10 +219,16 @@ pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     }
     if progress.retry_after_skip_pending && matches!(s.kind, TitleKind::Other { .. }) {
         progress.retry_after_skip_pending = false;
+        if s.feature_active && s.menu_open == Some(false) {
+            progress.feature_retry_at_ms = Some(now_ms);
+        }
         return Decision::RetryMenu;
     }
     if now_ms >= progress.next_cadence_ms {
         progress.next_cadence_ms = (now_ms / RETRY_EVERY_MS + 1) * RETRY_EVERY_MS;
+        if s.feature_active && s.menu_open == Some(false) {
+            progress.feature_retry_at_ms = Some(now_ms);
+        }
         return Decision::RetryMenu;
     }
     Decision::Wait
@@ -705,5 +742,47 @@ mod tests {
         // open -> 15 s -> reopen.
         assert!(!startup_watchers_enabled(FALLBACK_BYPASS_MENU));
         assert!(startup_watchers_enabled(false));
+    }
+
+    #[test]
+    fn non_zero_menu_title_with_bluray_menu_open_confirms_reached() {
+        // Many Blu-rays host their authored interactive HDMV/BD-J root menu on
+        // Title 1..N (still-frame or short loop) rather than Title 0.
+        let menu_on_title_1 = Sample {
+            at_menu: false,
+            menu_open: Some(true),
+            has_menu: true,
+            kind: TitleKind::Other { duration_ms: 0 },
+            feature_active: false,
+        };
+        let events = run(|_| menu_on_title_1);
+        assert_eq!(events, vec![(POLL_MS + MENU_CONFIRM_MS, Decision::Reached)]);
+    }
+
+    #[test]
+    fn popup_over_active_feature_is_not_treated_as_startup_root_menu() {
+        let popup_over_feature = sample_with_menu_open(FEATURE, Some(true));
+        let mut p = Progress::default();
+        assert_eq!(decide(&mut p, 200, popup_over_feature), Decision::Wait);
+        assert_eq!(
+            decide(&mut p, 200 + MENU_CONFIRM_MS, popup_over_feature),
+            Decision::Wait
+        );
+    }
+
+    #[test]
+    fn popup_only_bluray_stops_retrying_once_active_feature_refuses_menu() {
+        // Popup-only Blu-rays where Title 0 ("Top Menu") jumps straight to
+        // Episode 1: RetryMenu fires once at 2000ms against the active feature,
+        // and when menu_open stays Some(false) for MENU_CONFIRM_MS, the watcher
+        // exits via PlainPlayback instead of restarting Episode 1 every 2s.
+        let events = run(|_| sample_with_menu_open(FEATURE, Some(false)));
+        assert_eq!(
+            events,
+            vec![
+                (RETRY_EVERY_MS, Decision::RetryMenu),
+                (RETRY_EVERY_MS + MENU_CONFIRM_MS, Decision::PlainPlayback),
+            ]
+        );
     }
 }
