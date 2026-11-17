@@ -539,3 +539,12 @@ export interface SwarmMembersResult {
   /** True when the Rust command served this request only from its persistent cache. */
   from_cache_only?: boolean;
 }
+
+/** Client target configuration for multi-client routing (e.g. Local vs Remote Seedbox). */
+export interface AdcClientTarget {
+  id: string;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  client_type: string; // 'local' | 'remote_rtorrent' | 'custom_agent'
+}

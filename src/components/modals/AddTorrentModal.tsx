@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -49,6 +50,7 @@ export const AddTorrentModal: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [warningSuppressed, setWarningSuppressed] = useState(false);
   const [contentMatch, setContentMatch] = useState<TorrentContentMatch | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
   const [renameInputs, setRenameInputs] = useState<Record<number, string>>({});
@@ -74,15 +76,24 @@ export const AddTorrentModal: React.FC = () => {
   }, [showAddTorrent, addTorrentRejection, setAddTorrentRejection]);
 
   useEffect(() => {
+    if (showAddTorrent) {
+      invoke<boolean>('get_adc_download_warning_suppressed')
+        .then((suppressed) => setWarningSuppressed(Boolean(suppressed)))
+        .catch(() => {});
+    }
+  }, [showAddTorrent]);
+
+  useEffect(() => {
     if (initialAddTorrentSource) {
       const isEmbeddedMetainfo = /^(base64|data):/i.test(initialAddTorrentSource);
+      const isAdc = /^adc:/i.test(initialAddTorrentSource);
       const isUrlSource = /^(magnet|adc|https?):/i.test(initialAddTorrentSource);
       setErrorMessage(null);
       setSelectedFileSize(null);
       setSelectedFileBytes(null);
       setInspectPreview(null);
       setTorrentSource(initialAddTorrentSource);
-      if (isUrlSource && !isEmbeddedMetainfo) {
+      if (isUrlSource && !isEmbeddedMetainfo && !isAdc) {
         setInputMode('magnet');
       } else {
         setInputMode('file');
@@ -99,9 +110,24 @@ export const AddTorrentModal: React.FC = () => {
         }
       }
       setSelectedFileName(
-        isEmbeddedMetainfo ? decodedEmbeddedName : isUrlSource ? null : name,
+        isEmbeddedMetainfo ? decodedEmbeddedName : isAdc ? 'AsianDVDClub Torrent' : isUrlSource ? null : name,
       );
       setInitialAddTorrentSource(null);
+
+      if (isAdc) {
+        setInspectLoading(true);
+        invoke<InspectTorrentResult>('resolve_adc_torrent', { uri: initialAddTorrentSource })
+          .then((preview) => {
+            applyInspectPreview(preview);
+          })
+          .catch((err) => {
+            setErrorMessage(toErrorMessage(err, 'Failed to resolve ADC torrent'));
+            setInspectPreview(null);
+          })
+          .finally(() => setInspectLoading(false));
+        return;
+      }
+
       if (isUrlSource && !isEmbeddedMetainfo) {
         setInspectLoading(false);
         return;
@@ -530,7 +556,19 @@ export const AddTorrentModal: React.FC = () => {
                     setSelectedFileName(null);
                     setSelectedFileSize(null);
                     setSelectedFileBytes(null);
-                    if (/^(magnet|https?|base64|data):/i.test(val.trim())) {
+                    setErrorMessage(null);
+                    if (/^adc:/i.test(val.trim())) {
+                      setInspectLoading(true);
+                      invoke<InspectTorrentResult>('resolve_adc_torrent', { uri: val.trim() })
+                        .then((preview) => {
+                          applyInspectPreview(preview);
+                        })
+                        .catch((err) => {
+                          setErrorMessage(toErrorMessage(err, 'Failed to resolve ADC torrent'));
+                          setInspectPreview(null);
+                        })
+                        .finally(() => setInspectLoading(false));
+                    } else if (/^(magnet|https?|base64|data):/i.test(val.trim())) {
                       setInspectLoading(true);
                       inspectTorrent(val.trim())
                         .then(applyInspectPreview)
@@ -742,6 +780,40 @@ export const AddTorrentModal: React.FC = () => {
                     </button>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Default Location Warning */}
+            {!warningSuppressed && (!downloadDir || downloadDir.trim() === '' || downloadDir.trim() === settings.download_directory.trim()) && (
+              <div className="mt-2.5 p-2.5 rounded-lg bg-[#241a1a] border border-[#7f1d1d] flex flex-col gap-1 text-xs text-[#fca5a5]">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-[#ef4444] flex-shrink-0" />
+                  <span className="font-medium text-[#fee2e2]">
+                    Saving to default downloads directory
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#fca5a5] pl-6">
+                  Ensure you have sufficient disk space or select a dedicated library folder before downloading.
+                </p>
+                <div className="pl-6 pt-1 flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-[11px] text-[#d1d5db] cursor-pointer hover:text-white">
+                    <input
+                      type="checkbox"
+                      checked={warningSuppressed}
+                      onChange={async (e) => {
+                        const checked = e.target.checked;
+                        setWarningSuppressed(checked);
+                        try {
+                          await invoke('set_adc_download_warning_suppressed', { suppressed: checked });
+                        } catch {
+                          // non-fatal
+                        }
+                      }}
+                      className="rounded bg-[#1a1a1a] border-[#4b5563] text-[#e50914] focus:ring-0"
+                    />
+                    <span>Do not show this warning again</span>
+                  </label>
+                </div>
               </div>
             )}
           </div>

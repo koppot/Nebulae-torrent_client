@@ -2913,10 +2913,10 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let lower = trimmed.to_ascii_lowercase();
 
         if lower.starts_with("adc:") {
-            return Err(
-                "ADC protocol links are not direct torrent sources. Open a .adc metainfo file or use a magnet/HTTP(S) link."
-                    .to_string(),
-            );
+            let torrent_id = crate::commands::adc_download::parse_adc_uri(&lower)?;
+            let bytes =
+                crate::commands::adc_download::fetch_adc_torrent_bytes_sync(torrent_id, &self.db)?;
+            return self.add_torrent_from_bytes(&bytes, download_dir);
         }
 
         // 1. Check if source is base64 encoded

@@ -238,6 +238,14 @@ pub fn inspect_torrent_file(
             });
         }
 
+        // ADC protocol link: requires authenticated passkey resolution
+        if lower.starts_with("adc:") {
+            return Err(
+                "ADC protocol links require passkey authentication. Use resolve_adc_torrent to resolve metainfo."
+                    .to_string(),
+            );
+        }
+
         // Disk path?
         let norm_path = crate::engine::mock::normalize_source_path(trimmed);
         let disk_path = if norm_path.is_file() {
@@ -1695,6 +1703,15 @@ mod tests {
         .unwrap();
         assert_eq!(result.info_hash, "0123456789abcdef0123456789abcdef01234567");
         assert_eq!(result.name, "Sample");
+    }
+
+    #[test]
+    fn inspect_adc_scheme_advises_resolution_command() {
+        let result = inspect_torrent_file(Some("adc://torrent/12345".into()), None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Use resolve_adc_torrent to resolve metainfo"));
     }
 }
 
