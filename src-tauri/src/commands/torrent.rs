@@ -143,6 +143,8 @@ pub struct InspectTorrentResult {
     pub trackers: Vec<TorrentTrackerItem>,
     #[serde(default)]
     pub metainfo_bytes: Option<Vec<u8>>,
+    #[serde(default)]
+    pub hygiene: Option<crate::engine::metainfo::TorrentPathHygieneReport>,
 }
 
 #[tauri::command]
@@ -154,6 +156,8 @@ pub fn inspect_torrent_file(
     if let Some(raw) = bytes {
         if !raw.is_empty() {
             let parsed = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw)?;
+            let file_paths: Vec<String> = parsed.files.iter().map(|f| f.name.clone()).collect();
+            let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(&file_paths));
             return Ok(InspectTorrentResult {
                 name: parsed.name,
                 total_bytes: parsed.total_bytes,
@@ -166,6 +170,7 @@ pub fn inspect_torrent_file(
                 files: parsed.files,
                 trackers: parsed.trackers,
                 metainfo_bytes: Some(raw),
+                hygiene,
             });
         }
     }
@@ -193,6 +198,9 @@ pub fn inspect_torrent_file(
         if let Some(b64) = b64_candidate {
             if let Ok(decoded) = crate::engine::mock::decode_base64_data(b64) {
                 if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&decoded) {
+                    let file_paths: Vec<String> =
+                        parsed.files.iter().map(|f| f.name.clone()).collect();
+                    let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(&file_paths));
                     return Ok(InspectTorrentResult {
                         name: parsed.name,
                         total_bytes: parsed.total_bytes,
@@ -205,6 +213,7 @@ pub fn inspect_torrent_file(
                         files: parsed.files,
                         trackers: parsed.trackers,
                         metainfo_bytes: Some(decoded),
+                        hygiene,
                     });
                 }
             }
@@ -235,7 +244,16 @@ pub fn inspect_torrent_file(
                 files: vec![],
                 trackers: vec![],
                 metainfo_bytes: None,
+                hygiene: None,
             });
+        }
+
+        // ADC protocol link: requires authenticated passkey resolution
+        if lower.starts_with("adc:") {
+            return Err(
+                "ADC protocol links require passkey authentication. Use resolve_adc_torrent to resolve metainfo."
+                    .to_string(),
+            );
         }
 
         // Disk path?
@@ -257,6 +275,9 @@ pub fn inspect_torrent_file(
             if let Ok(raw_bytes) = std::fs::read(&target_path) {
                 if let Ok(parsed) = crate::engine::metainfo::ParsedTorrent::parse_bytes(&raw_bytes)
                 {
+                    let file_paths: Vec<String> =
+                        parsed.files.iter().map(|f| f.name.clone()).collect();
+                    let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(&file_paths));
                     return Ok(InspectTorrentResult {
                         name: parsed.name,
                         total_bytes: parsed.total_bytes,
@@ -269,6 +290,7 @@ pub fn inspect_torrent_file(
                         files: parsed.files,
                         trackers: parsed.trackers,
                         metainfo_bytes: Some(raw_bytes),
+                        hygiene,
                     });
                 }
             }
@@ -279,6 +301,9 @@ pub fn inspect_torrent_file(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Local File".to_string());
                 let piece_size = recommended_piece_size_bytes(total_bytes);
+                let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(
+                    std::slice::from_ref(&file_name),
+                ));
                 return Ok(InspectTorrentResult {
                     name: file_name.clone(),
                     total_bytes,
@@ -297,6 +322,7 @@ pub fn inspect_torrent_file(
                     }],
                     trackers: vec![],
                     metainfo_bytes: None,
+                    hygiene,
                 });
             }
         } else if norm_path.is_dir() {
@@ -307,6 +333,8 @@ pub fn inspect_torrent_file(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Local Directory".to_string());
             let piece_size = recommended_piece_size_bytes(total_bytes);
+            let file_paths: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
+            let hygiene = Some(crate::engine::metainfo::inspect_paths_hygiene(&file_paths));
             return Ok(InspectTorrentResult {
                 name: dir_name,
                 total_bytes,
@@ -319,6 +347,7 @@ pub fn inspect_torrent_file(
                 files,
                 trackers: vec![],
                 metainfo_bytes: None,
+                hygiene,
             });
         }
     }
@@ -1763,6 +1792,15 @@ mod tests {
         .unwrap();
         assert_eq!(result.info_hash, "0123456789abcdef0123456789abcdef01234567");
         assert_eq!(result.name, "Sample");
+    }
+
+    #[test]
+    fn inspect_adc_scheme_advises_resolution_command() {
+        let result = inspect_torrent_file(Some("adc://torrent/12345".into()), None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Use resolve_adc_torrent to resolve metainfo"));
     }
 }
 

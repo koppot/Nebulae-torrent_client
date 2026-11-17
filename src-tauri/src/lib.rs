@@ -819,6 +819,12 @@ pub fn run() {
             commands::association::get_pending_open_payloads,
             commands::association::check_associations_status,
             commands::association::register_protocol_associations,
+            // ADC Direct One-Click Downloads
+            commands::adc_download::resolve_adc_torrent,
+            commands::adc_download::get_adc_download_warning_suppressed,
+            commands::adc_download::set_adc_download_warning_suppressed,
+            commands::adc_download::get_adc_client_targets,
+            commands::adc_download::set_adc_client_targets,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,

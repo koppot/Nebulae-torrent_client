@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
-import { EngineIdentityInfo, InspectTorrentResult } from '../../types';
-import { X, Sparkles, Folder, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { EngineIdentityInfo, InspectTorrentResult, TorrentPathHygieneReport } from '../../types';
+import { X, Sparkles, Folder, FileText, CheckCircle2, AlertCircle, AlertTriangle, Loader2 } from 'lucide-react';
 
 const LAST_SAVED_TRACKERS_KEY = 'nebulae_last_created_trackers';
 
@@ -27,6 +27,7 @@ export const CreateTorrentModal: React.FC = () => {
   const [creatorIdentity, setCreatorIdentity] = useState('Nebulae (version set by app build)');
   const [startSeeding, setStartSeeding] = useState(false); // Opt-in: do not seed unless asked
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hygieneReport, setHygieneReport] = useState<TorrentPathHygieneReport | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
   );
@@ -50,10 +51,14 @@ export const CreateTorrentModal: React.FC = () => {
 
   const handleSourceSelected = async (path: string) => {
     setSourcePath(path);
+    setHygieneReport(null);
     try {
-      const inspected = await invoke<InspectTorrentResult>('inspect_torrent_source', { source: path });
+      const inspected = await invoke<InspectTorrentResult>('inspect_torrent_file', { source: path });
       if (inspected && inspected.piece_size) {
         setPieceSizeKib(Math.max(16, Math.round(inspected.piece_size / 1024)));
+      }
+      if (inspected && inspected.hygiene) {
+        setHygieneReport(inspected.hygiene);
       }
     } catch {
       // Keep current piece size
@@ -172,7 +177,10 @@ export const CreateTorrentModal: React.FC = () => {
               <input
                 type="text"
                 value={sourcePath}
-                onChange={(e) => setSourcePath(e.target.value)}
+                onChange={(e) => {
+                  setSourcePath(e.target.value);
+                  setHygieneReport(null);
+                }}
                 placeholder="/path/to/folder or /path/to/movie.mkv"
                 className="flex-1 px-3 py-1.5 rounded border border-[#333333] bg-[#1f1f1f] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
               />
@@ -196,6 +204,60 @@ export const CreateTorrentModal: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Path Hygiene & Content Warning Banners */}
+          {hygieneReport && (hygieneReport.has_unwanted || hygieneReport.has_review) && (
+            <div
+              className={`p-3 rounded-lg border text-xs space-y-2 ${
+                hygieneReport.has_unwanted
+                  ? 'bg-amber-950/30 border-amber-600/50 text-amber-200'
+                  : 'bg-blue-950/30 border-blue-600/50 text-blue-200'
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                {hygieneReport.has_unwanted ? (
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1">
+                  <div className="font-semibold text-white">
+                    {hygieneReport.has_unwanted
+                      ? 'Unwanted OS Artifacts / Junk Detected'
+                      : 'Tracker Content Notice: Verification Required'}
+                  </div>
+                  <div className="text-[11px] opacity-90 leading-relaxed">
+                    {hygieneReport.recommendation}
+                  </div>
+                </div>
+              </div>
+
+              {hygieneReport.definite_unwanted.length > 0 && (
+                <div className="bg-black/40 rounded p-2 text-[11px] border border-amber-900/40">
+                  <span className="font-semibold text-amber-300">Flagged OS Artifacts (remove from source folder):</span>
+                  <ul className="list-disc list-inside mt-1 font-mono text-[10px] text-amber-100 max-h-24 overflow-y-auto">
+                    {hygieneReport.definite_unwanted.map((path) => (
+                      <li key={path}>{path}</li>
+                    ))}
+                  </ul>
+                  <div className="mt-1 text-[10px] text-amber-300/80 italic">
+                    Note: Nebulae will never delete or alter your files. Please delete these files manually and recreate the torrent.
+                  </div>
+                </div>
+              )}
+
+              {hygieneReport.needs_review.length > 0 && (
+                <div className="bg-black/40 rounded p-2 text-[11px] border border-blue-900/40">
+                  <span className="font-semibold text-blue-300">Entries Requiring Review:</span>
+                  <ul className="list-disc list-inside mt-1 font-mono text-[10px] text-blue-100 max-h-24 overflow-y-auto">
+                    {hygieneReport.needs_review.map((path) => (
+                      <li key={path}>{path}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Piece Size & Destination Folder */}
           <div className="grid grid-cols-2 gap-3">

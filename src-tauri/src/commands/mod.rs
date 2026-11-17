@@ -1,3 +1,4 @@
+pub mod adc_download;
 pub mod association;
 pub mod connectivity;
 pub mod diagnostics;

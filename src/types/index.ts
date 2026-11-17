@@ -26,6 +26,14 @@ export interface TorrentTrackerItem {
   next_announce: number | null;
 }
 
+export interface TorrentPathHygieneReport {
+  definite_unwanted: string[];
+  needs_review: string[];
+  has_unwanted: boolean;
+  has_review: boolean;
+  recommendation: string;
+}
+
 export interface InspectTorrentResult {
   name: string;
   total_bytes: number;
@@ -38,6 +46,7 @@ export interface InspectTorrentResult {
   files: TorrentFileItem[];
   trackers: TorrentTrackerItem[];
   metainfo_bytes?: number[];
+  hygiene?: TorrentPathHygieneReport;
 }
 
 export interface TorrentContentFileMatch {
@@ -396,19 +405,6 @@ export interface DiscPlayerStatus {
   note?: string | null;
 }
 
-export interface InspectTorrentResult {
-  name: string;
-  total_bytes: number;
-  piece_size: number;
-  total_pieces: number;
-  info_hash: string;
-  is_private: boolean;
-  comment: string;
-  created_by: string;
-  files: TorrentFileItem[];
-  trackers: TorrentTrackerItem[];
-  metainfo_bytes?: number[];
-}
 
 export * from './peering';
 export * from './connectivity';
@@ -540,4 +536,13 @@ export interface SwarmMembersResult {
   error?: string | null;
   /** True when the Rust command served this request only from its persistent cache. */
   from_cache_only?: boolean;
+}
+
+/** Client target configuration for multi-client routing (e.g. Local vs Remote Seedbox). */
+export interface AdcClientTarget {
+  id: string;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  client_type: string; // 'local' | 'remote_rtorrent' | 'custom_agent'
 }
