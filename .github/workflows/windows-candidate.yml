@@ -96,7 +96,8 @@ jobs:
             echo "==> Downloading patched VLC runtime from ${{ inputs.patched_vlc_url }}..."
             curl -fL -s "${{ inputs.patched_vlc_url }}" -o "$NEBULAE_CACHE/patched-vlc.tar.xz"
             mkdir -p "$NEBULAE_CACHE/patched-vlc"
-            tar -xf "$NEBULAE_CACHE/patched-vlc.tar.xz" -C "$NEBULAE_CACHE/patched-vlc"
+            # Use bsdtar from Windows system to avoid MSYS tar misinterpreting C: as remote host
+            /c/Windows/System32/tar.exe -xf "$NEBULAE_CACHE/patched-vlc.tar.xz" -C "$NEBULAE_CACHE/patched-vlc"
             STAGE_ARGS+=(--patched-vlc "$NEBULAE_CACHE/patched-vlc")
           elif [ "${{ inputs.require_patched }}" = "true" ]; then
             echo "::error::require_patched was specified but no patched_vlc_url was provided."
