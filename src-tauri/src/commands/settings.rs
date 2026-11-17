@@ -188,6 +188,11 @@ pub struct UserSettings {
     /// Defaults to true; explicit false is preserved.
     #[serde(default = "default_true")]
     pub blackout_other_displays_in_fullscreen: bool,
+    // 14. Windows Taskbar Speed Overlay
+    /// When enabled, an upload/download transfer rate overlay band appears in the Windows taskbar.
+    /// Defaults to true; explicit false is preserved.
+    #[serde(default = "default_true")]
+    pub show_taskbar_speed_overlay: bool,
 }
 
 fn default_true() -> bool {
@@ -355,6 +360,8 @@ impl Default for UserSettings {
             media_mode_enabled: true,
             media_mode_decision_made: false,
             blackout_other_displays_in_fullscreen: true,
+            // 14. Windows Taskbar Speed Overlay
+            show_taskbar_speed_overlay: true,
         }
     }
 }
@@ -437,6 +444,9 @@ pub fn save_user_settings(
 
     #[cfg(target_os = "macos")]
     crate::player::embed_macos::update_blackout_state(&_app);
+
+    #[cfg(target_os = "windows")]
+    crate::taskbar_speed::set_taskbar_speed_enabled(&_app, settings.show_taskbar_speed_overlay);
 
     Ok(())
 }

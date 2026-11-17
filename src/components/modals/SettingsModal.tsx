@@ -452,6 +452,22 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
+                    {typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent) && (
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settings.show_taskbar_speed_overlay ?? true}
+                          onChange={(e) => saveSettings({ show_taskbar_speed_overlay: e.target.checked })}
+                          className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                        />
+                        <div>
+                          <span className="text-white font-medium">Show live transfer speed band on Windows taskbar</span>
+                          <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
+                            Displays real-time aggregate upload and download transfer rates directly on the Windows bottom taskbar. Disabling removes the overlay while preserving background torrent activity and system tray notifications.
+                          </span>
+                        </div>
+                      </label>
+                    )}
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"

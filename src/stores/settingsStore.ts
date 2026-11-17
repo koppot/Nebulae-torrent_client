@@ -158,6 +158,8 @@ export const defaultSettings: UserSettings = {
   media_mode_enabled: true,
   media_mode_decision_made: false,
   blackout_other_displays_in_fullscreen: true,
+  // 14. Windows Taskbar Speed Overlay
+  show_taskbar_speed_overlay: true,
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
