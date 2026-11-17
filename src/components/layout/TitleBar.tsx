@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import AppInfoModal from './AppInfoModal';
+import InboxToolbarButton from '../inbox/InboxToolbarButton';
 import brandLogo from '../../assets/brand-logo.png';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
@@ -324,6 +325,9 @@ export const TitleBar: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* ADC Private Messages Inbox */}
+          <InboxToolbarButton />
 
           {/* Help (?) (owner): top bar, right before Settings — it carries
             the installation/documentation info. Manager-only row gating

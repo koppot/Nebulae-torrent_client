@@ -1,6 +1,7 @@
 pub mod association;
 pub mod connectivity;
 pub mod diagnostics;
+pub mod inbox;
 pub mod keys;
 pub mod library;
 pub mod media;

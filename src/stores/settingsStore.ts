@@ -25,6 +25,8 @@ export const defaultSettings: UserSettings = {
   close_to_tray: true,
   notify_on_download_finished: true,
   notify_on_torrent_added: true,
+  notify_on_inbox_message: true,
+  notify_inbox_previews: false,
   inhibit_sleep_when_active: true,
   confirm_torrent_deletion: true,
   confirm_exit_when_active: true,

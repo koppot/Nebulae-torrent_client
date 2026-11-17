@@ -111,6 +111,7 @@ impl Database {
         conn.execute(schema::CREATE_MANUAL_PEER_BLOCKS_TABLE, [])?;
         conn.execute_batch(schema::CREATE_PEER_HISTORY_TABLE)?;
         conn.execute_batch(schema::CREATE_ADC_PEER_CACHE_TABLE)?;
+        conn.execute_batch(schema::CREATE_ADC_INBOX_TABLE)?;
         ensure_peer_history_columns(&conn)?;
 
         // Backward compatibility migration for torrent_metadata
@@ -1540,6 +1541,153 @@ impl Database {
         );
         Ok(())
     }
+
+    pub fn save_inbox_messages(
+        &self,
+        messages: &[AdcInboxMessageRow],
+        total_unread: u32,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO adc_inbox_messages (
+                    id, sender_id, sender_username, subject, preview, added_at, pm_unread, fetched_at_epoch_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for msg in messages {
+                stmt.execute(params![
+                    msg.id,
+                    msg.sender_id,
+                    msg.sender_username,
+                    msg.subject,
+                    msg.preview,
+                    msg.added_at,
+                    if msg.pm_unread { 1 } else { 0 },
+                    msg.fetched_at_epoch_ms,
+                ])?;
+            }
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_unread_count', ?1)",
+            params![total_unread.to_string()],
+        )?;
+        tx.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_last_polled_at', ?1)",
+            params![now.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_inbox_messages(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<AdcInboxMessageRow>, u32)> {
+        let conn = self.conn.lock().unwrap();
+        let unread_count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM adc_inbox_messages WHERE pm_unread = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let mut stmt = conn.prepare(
+            "SELECT id, sender_id, sender_username, subject, preview, added_at, pm_unread, fetched_at_epoch_ms
+             FROM adc_inbox_messages
+             ORDER BY id DESC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit, offset], |row| {
+            let pm_unread_int: i32 = row.get(6)?;
+            Ok(AdcInboxMessageRow {
+                id: row.get(0)?,
+                sender_id: row.get(1)?,
+                sender_username: row.get(2)?,
+                subject: row.get(3)?,
+                preview: row.get(4)?,
+                added_at: row.get(5)?,
+                pm_unread: pm_unread_int != 0,
+                fetched_at_epoch_ms: row.get(7)?,
+            })
+        })?;
+
+        let mut messages = Vec::new();
+        for msg in rows {
+            messages.push(msg?);
+        }
+        Ok((messages, unread_count))
+    }
+
+    pub fn mark_inbox_message_read(&self, message_id: u64) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE adc_inbox_messages SET pm_unread = 0 WHERE id = ?1",
+            params![message_id],
+        )?;
+        let unread_count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM adc_inbox_messages WHERE pm_unread = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_unread_count', ?1)",
+            params![unread_count.to_string()],
+        )?;
+        Ok(unread_count)
+    }
+
+    pub fn clear_inbox_cache(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM adc_inbox_messages", [])?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_unread_count', '0')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_last_notified_id', '0')",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_inbox_last_notified_id(&self) -> Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let val: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'adc_inbox_last_notified_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(val.and_then(|s| s.parse().ok()).unwrap_or(0))
+    }
+
+    pub fn set_inbox_last_notified_id(&self, id: u64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_last_notified_id', ?1)",
+            params![id.to_string()],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdcInboxMessageRow {
+    pub id: u64,
+    pub sender_id: u64,
+    pub sender_username: String,
+    pub subject: String,
+    pub preview: String,
+    pub added_at: String,
+    pub pm_unread: bool,
+    pub fetched_at_epoch_ms: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]

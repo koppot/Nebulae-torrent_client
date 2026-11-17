@@ -544,6 +544,31 @@ export const SettingsModal: React.FC = () => {
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
+                        checked={settings.notify_on_inbox_message}
+                        onChange={(e) => saveSettings({ notify_on_inbox_message: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show OS desktop notification when new ADC inbox message arrives</span>
+                    </label>
+                    {settings.notify_on_inbox_message && (
+                      <div className="ml-6 space-y-1">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={settings.notify_inbox_previews}
+                            onChange={(e) => saveSettings({ notify_inbox_previews: e.target.checked })}
+                            className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                          />
+                          <span className="text-white text-xs">Include message subject and sender in notification</span>
+                        </label>
+                        <p className="text-[11px] text-[#737373]">
+                          When disabled, notifications show only the unread count to protect message privacy.
+                        </p>
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
                         checked={settings.confirm_torrent_deletion}
                         onChange={(e) => saveSettings({ confirm_torrent_deletion: e.target.checked })}
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"

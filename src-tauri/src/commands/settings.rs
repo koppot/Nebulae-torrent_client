@@ -15,6 +15,8 @@ pub struct UserSettings {
     pub close_to_tray: bool,
     pub notify_on_download_finished: bool,
     pub notify_on_torrent_added: bool,
+    pub notify_on_inbox_message: bool,
+    pub notify_inbox_previews: bool,
     pub inhibit_sleep_when_active: bool,
     pub confirm_torrent_deletion: bool,
     pub confirm_exit_when_active: bool,
@@ -215,6 +217,8 @@ impl Default for UserSettings {
             close_to_tray: true,
             notify_on_download_finished: true,
             notify_on_torrent_added: true,
+            notify_on_inbox_message: true,
+            notify_inbox_previews: false,
             inhibit_sleep_when_active: true,
             confirm_torrent_deletion: true,
             confirm_exit_when_active: true,
@@ -359,8 +363,7 @@ impl Default for UserSettings {
     }
 }
 
-#[tauri::command]
-pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, String> {
+pub fn load_user_settings_from_db(db: &Database) -> UserSettings {
     let mut settings = UserSettings::default();
 
     if let Ok(Some(val)) = db.get_setting("user_settings_json") {
@@ -389,7 +392,12 @@ pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, Stri
         }
     }
 
-    Ok(settings)
+    settings
+}
+
+#[tauri::command]
+pub fn load_user_settings(db: State<Arc<Database>>) -> Result<UserSettings, String> {
+    Ok(load_user_settings_from_db(&db))
 }
 
 #[tauri::command]

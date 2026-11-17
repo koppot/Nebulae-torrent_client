@@ -137,3 +137,18 @@ CREATE INDEX IF NOT EXISTS idx_adc_peer_cache_lookup
 CREATE INDEX IF NOT EXISTS idx_adc_peer_cache_matched_at
     ON adc_peer_cache(matched_at_epoch_ms DESC);
 "#;
+
+pub const CREATE_ADC_INBOX_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS adc_inbox_messages (
+    id INTEGER PRIMARY KEY,
+    sender_id INTEGER NOT NULL DEFAULT 0,
+    sender_username TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    preview TEXT NOT NULL DEFAULT '',
+    added_at TEXT NOT NULL DEFAULT '',
+    pm_unread INTEGER NOT NULL DEFAULT 1,
+    fetched_at_epoch_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_adc_inbox_unread
+    ON adc_inbox_messages(pm_unread, id DESC);
+"#;
