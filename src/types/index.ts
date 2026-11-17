@@ -200,6 +200,8 @@ export interface UserSettings {
   close_to_tray: boolean;
   notify_on_download_finished: boolean;
   notify_on_torrent_added: boolean;
+  notify_on_inbox_message: boolean;
+  notify_inbox_previews: boolean;
   inhibit_sleep_when_active: boolean;
   confirm_torrent_deletion: boolean;
   confirm_exit_when_active: boolean;
@@ -545,4 +547,28 @@ export interface AdcClientTarget {
   priority: number;
   enabled: boolean;
   client_type: string; // 'local' | 'remote_rtorrent' | 'custom_agent'
+}
+
+/** ADC Private Messaging / Inbox notification types */
+export interface AdcInboxItem {
+  id: number;
+  sender_id: number;
+  sender_username: string;
+  subject: string;
+  preview: string;
+  added_at: string;
+  pm_unread: boolean;
+}
+
+export interface AdcInboxSummary {
+  unread_count: number;
+  messages: AdcInboxItem[];
+  last_polled_at: number | null;
+}
+
+export interface AdcInboxMarkReadResult {
+  success: boolean;
+  message_id: number;
+  unread_count: number;
+  error?: string | null;
 }

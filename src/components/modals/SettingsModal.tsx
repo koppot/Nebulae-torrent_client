@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore } from '../../stores/torrentStore';
+import { AdcClientPriorityPanel } from '../settings/AdcClientPriorityPanel';
 import {
   DiagnosticSummary,
   AssociationStatus,
@@ -37,6 +38,7 @@ import {
   Fingerprint,
   Info,
   FolderInput,
+  Bug,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -56,6 +58,7 @@ export const SettingsModal: React.FC = () => {
     showSettings,
     setShowSettings,
     setShowQbitImport,
+    setShowBugReport,
     settingsTab: activeTab,
     setSettingsTab: setActiveTab,
   } = useUiStore();
@@ -557,6 +560,31 @@ export const SettingsModal: React.FC = () => {
                       />
                       <span className="text-white">Show desktop notification when new torrent is added</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.notify_on_inbox_message}
+                        onChange={(e) => saveSettings({ notify_on_inbox_message: e.target.checked })}
+                        className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                      />
+                      <span className="text-white">Show OS desktop notification when new ADC inbox message arrives</span>
+                    </label>
+                    {settings.notify_on_inbox_message && (
+                      <div className="ml-6 space-y-1">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={settings.notify_inbox_previews}
+                            onChange={(e) => saveSettings({ notify_inbox_previews: e.target.checked })}
+                            className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                          />
+                          <span className="text-white text-xs">Include message subject and sender in notification</span>
+                        </label>
+                        <p className="text-[11px] text-[#737373]">
+                          When disabled, notifications show only the unread count to protect message privacy.
+                        </p>
+                      </div>
+                    )}
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
@@ -1705,6 +1733,11 @@ export const SettingsModal: React.FC = () => {
                   />
                   <p className="text-[10px] text-[#a3a3a3] mt-1">One URL per line. Applied to public torrents only; private torrents are protected and will never receive default trackers.</p>
                 </div>
+
+                {/* AsianDVDClub Client Priority Routing */}
+                <div className="pt-3 border-t border-[#333333]">
+                  <AdcClientPriorityPanel />
+                </div>
               </div>
             )}
 
@@ -2299,6 +2332,14 @@ export const SettingsModal: React.FC = () => {
                     >
                       <FileText className="w-3.5 h-3.5 text-[#e50914]" />
                       <span>Copy Recent Logs</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowBugReport(true, { category: 'Other / General' })}
+                      className="px-3 py-1.5 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white flex items-center gap-1.5 transition"
+                    >
+                      <Bug className="w-3.5 h-3.5 text-[#e50914]" />
+                      <span>Report a Bug</span>
                     </button>
                     <button
                       type="button"

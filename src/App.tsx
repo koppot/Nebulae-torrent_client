@@ -18,6 +18,7 @@ import { CompactBarView } from './components/compact/CompactBarView';
 import { RemoteServerView } from './components/server/RemoteServerView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { HelpModal } from './components/modals/HelpModal';
+import { BugReportModal } from './components/modals/BugReportModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
 import { CreateTorrentModal } from './components/modals/CreateTorrentModal';
 import { ConnectivityDoctorModal } from './components/modals/ConnectivityDoctorModal';
@@ -747,6 +748,7 @@ export const App: React.FC = () => {
       {/* 5. Modals */}
       <SettingsModal />
       <HelpModal />
+      <BugReportModal />
       <PlayerOverlay />
       <AddTorrentModal />
       <CreateTorrentModal />

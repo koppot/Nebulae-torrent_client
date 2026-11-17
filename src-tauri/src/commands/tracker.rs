@@ -338,6 +338,9 @@ fn bump_adc_account_revision_if_changed(db: &Database, username: &str) -> Result
     if let Err(error) = db.clear_cached_adc_members(Some(current_revision.saturating_add(1))) {
         tracing::warn!("[swarm-members] could not clear cache after ADC account change: {error}");
     }
+    if let Err(error) = db.clear_inbox_cache() {
+        tracing::warn!("[inbox] could not clear inbox cache after ADC account change: {error}");
+    }
     Ok(())
 }
 
@@ -425,6 +428,7 @@ pub async fn unlink_adc_account(db: State<'_, Arc<Database>>) -> Result<(), Stri
             .map_err(|e| e.to_string())?;
         db.set_setting("adc_masked_passkey", "")
             .map_err(|e| e.to_string())?;
+        let _ = db.clear_inbox_cache();
         // Do not inspect or erase the legacy adc_passkey setting here. It may
         // contain the only pre-Keychain copy; migration/deletion needs approval.
         Ok(())

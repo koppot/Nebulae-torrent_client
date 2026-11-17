@@ -346,6 +346,7 @@ pub fn run() {
     let engine_for_rss = Arc::clone(&engine);
     let db_for_rss = Arc::clone(&db);
     let db_for_stats_poller = Arc::clone(&db);
+    let db_for_inbox_poller = Arc::clone(&db);
 
     let app = tauri::Builder::default()
         // Single instance (owner): double-clicking another .torrent must
@@ -492,6 +493,7 @@ pub fn run() {
             engine::watcher::spawn_watched_folder_loop(engine_for_watcher, db_for_watcher);
             engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
             commands::tracker::spawn_stats_poller(db_for_stats_poller);
+            commands::inbox::spawn_inbox_poller(app.handle().clone(), db_for_inbox_poller);
 
             #[cfg(desktop)]
             {
@@ -754,6 +756,10 @@ pub fn run() {
             commands::diagnostics::export_logs,
             commands::diagnostics::open_external_link,
             commands::diagnostics::quit_app,
+            commands::diagnostics::generate_bug_report_bundle,
+            commands::diagnostics::save_bug_report_draft,
+            commands::diagnostics::get_bug_report_draft,
+            commands::diagnostics::clear_bug_report_draft,
             // Settings
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
@@ -922,6 +928,11 @@ pub fn run() {
             commands::tracker::calculate_ratio_projection,
             commands::tracker::sync_adc_stats,
             commands::tracker::adc_swarm_members,
+            // ADC Inbox & Notifications
+            commands::inbox::get_adc_inbox_summary,
+            commands::inbox::sync_adc_inbox,
+            commands::inbox::mark_adc_inbox_read,
+            commands::inbox::clear_adc_inbox,
             // Feature 6: editable listing names
             commands::library::set_user_display_title,
             commands::library::reset_user_display_title,

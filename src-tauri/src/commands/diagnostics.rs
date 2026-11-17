@@ -168,6 +168,192 @@ pub fn quit_app(app: tauri::AppHandle) {
     crate::shutdown::initiate_shutdown(&app);
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugReportBundle {
+    pub title: String,
+    pub category: String,
+    pub description: String,
+    pub app_version: String,
+    pub os: String,
+    pub arch: String,
+    pub database_status: String,
+    pub engine_status: String,
+    pub logs_preview: String,
+    pub error_fingerprint: String,
+    pub formatted_markdown: String,
+    pub github_issue_url: String,
+    pub is_url_truncated: bool,
+}
+
+pub fn sanitize_diagnostic_text(text: &str) -> String {
+    let mut s = text.to_string();
+
+    // 1. Redact Passkeys
+    if let Ok(re) = regex::Regex::new(r"(?i)(passkey[=/: ]+)[a-zA-Z0-9]{8,}") {
+        s = re.replace_all(&s, "$1[REDACTED_PASSKEY]").to_string();
+    }
+
+    // 2. Redact Authorization tokens, API keys, Bearer tokens
+    if let Ok(re) = regex::Regex::new(
+        r"(?i)(bearer\s+|token[=/: ]+|auth[=/: ]+|key[=/: ]+)[a-zA-Z0-9_\-\.]{8,}",
+    ) {
+        s = re.replace_all(&s, "$1[REDACTED_TOKEN]").to_string();
+    }
+
+    // 3. Redact ADC tracker announce URLs
+    if let Ok(re) = regex::Regex::new(r"https?://[^/\s]+/(?:announce|scrape)/[a-zA-Z0-9]+") {
+        s = re.replace_all(&s, "[REDACTED_TRACKER_URL]").to_string();
+    }
+
+    // 4. Redact Magnet URIs and info hashes
+    if let Ok(re) = regex::Regex::new(r"magnet:\?[^\s]+") {
+        s = re
+            .replace_all(&s, "magnet:?[REDACTED_MAGNET_LINK]")
+            .to_string();
+    }
+    if let Ok(re) = regex::Regex::new(r"(?i)\b[0-9a-f]{40}\b") {
+        s = re.replace_all(&s, "[REDACTED_HASH]").to_string();
+    }
+
+    // 5. Redact Public IP Addresses (preserving loopback and zero)
+    if let Ok(re) = regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b") {
+        s = re
+            .replace_all(&s, |caps: &regex::Captures| {
+                let ip = &caps[0];
+                if ip == "127.0.0.1" || ip == "0.0.0.0" {
+                    ip.to_string()
+                } else {
+                    "[REDACTED_IP]".to_string()
+                }
+            })
+            .to_string();
+    }
+
+    // 6. Redact Local Username and User Directory Paths
+    if let Ok(re) = regex::Regex::new(r"/Users/[^/\s]+") {
+        s = re.replace_all(&s, "~").to_string();
+    }
+    if let Ok(re) = regex::Regex::new(r"(?i)[a-z]:\\Users\\[^\s\\]+") {
+        s = re.replace_all(&s, "%USERPROFILE%").to_string();
+    }
+    if let Ok(re) = regex::Regex::new(r"/home/[^/\s]+") {
+        s = re.replace_all(&s, "~").to_string();
+    }
+
+    s
+}
+
+#[tauri::command]
+pub fn generate_bug_report_bundle(
+    paths: State<Arc<AppPaths>>,
+    title: String,
+    description: String,
+    category: String,
+    context_error: Option<String>,
+    include_logs: bool,
+) -> Result<BugReportBundle, String> {
+    let clean_title = sanitize_diagnostic_text(&title);
+    let clean_desc = sanitize_diagnostic_text(&description);
+    let clean_err = context_error.as_deref().map(sanitize_diagnostic_text);
+
+    let summary = get_diagnostic_summary(paths.clone())?;
+
+    let logs_preview = if include_logs {
+        let raw_logs = export_logs(paths)?;
+        sanitize_diagnostic_text(&raw_logs)
+    } else {
+        "(User opted out of log bundle)".to_string()
+    };
+
+    // Calculate deterministic error fingerprint
+    let err_seed = format!(
+        "{category}:{}:{clean_title}",
+        clean_err.as_deref().unwrap_or("")
+    );
+    let fingerprint = format!("{:x}", md5::compute(err_seed.as_bytes()))[..8].to_uppercase();
+
+    let mut markdown = format!(
+        "### Bug Summary\n**Category:** {category}\n**Fingerprint:** `{fingerprint}`\n\n### Description\n{clean_desc}\n\n"
+    );
+
+    if let Some(err) = &clean_err {
+        markdown.push_str(&format!("### Observed Error\n```text\n{err}\n```\n\n"));
+    }
+
+    markdown.push_str(&format!(
+        "### Environment\n- **App Version:** {}\n- **OS:** {} ({})\n- **Engine Status:** {}\n- **Database:** {}\n\n",
+        summary.version, summary.os, summary.arch, summary.engine_status, summary.database_status
+    ));
+
+    if include_logs {
+        markdown.push_str(&format!(
+            "### Diagnostic Logs (Sanitized)\n<details>\n<summary>Click to view latest logs</summary>\n\n```text\n{logs_preview}\n```\n\n</details>\n"
+        ));
+    }
+
+    let issue_title = format!("[Bug] [{category}] [{fingerprint}] {clean_title}");
+
+    // URL encoding for GitHub issue link
+    let mut is_url_truncated = false;
+    let base_github = "https://github.com/koppot/Nebulae-torrent_client/issues/new";
+
+    let full_url = format!(
+        "{}?title={}&body={}",
+        base_github,
+        urlencoding::encode(&issue_title),
+        urlencoding::encode(&markdown)
+    );
+
+    let github_issue_url = if full_url.len() > 3500 {
+        is_url_truncated = true;
+        let truncated_body = format!(
+            "### Bug Summary\n**Category:** {category}\n**Fingerprint:** `{fingerprint}`\n\n### Description\n{clean_desc}\n\n*Note: Complete diagnostic bundle exceeds URL limits and was copied to your clipboard. Please paste below:*\n\n```text\n[Paste copied diagnostics here]\n```"
+        );
+        format!(
+            "{}?title={}&body={}",
+            base_github,
+            urlencoding::encode(&issue_title),
+            urlencoding::encode(&truncated_body)
+        )
+    } else {
+        full_url
+    };
+
+    Ok(BugReportBundle {
+        title: clean_title,
+        category,
+        description: clean_desc,
+        app_version: summary.version,
+        os: summary.os,
+        arch: summary.arch,
+        database_status: summary.database_status,
+        engine_status: summary.engine_status,
+        logs_preview,
+        error_fingerprint: fingerprint,
+        formatted_markdown: markdown,
+        github_issue_url,
+        is_url_truncated,
+    })
+}
+
+#[tauri::command]
+pub fn save_bug_report_draft(db: State<Arc<Database>>, draft: String) -> Result<(), String> {
+    db.set_setting("bug_report_draft", &draft)
+        .map_err(|e| format!("Save draft: {e}"))
+}
+
+#[tauri::command]
+pub fn get_bug_report_draft(db: State<Arc<Database>>) -> Result<Option<String>, String> {
+    db.get_setting("bug_report_draft")
+        .map_err(|e| format!("Get draft: {e}"))
+}
+
+#[tauri::command]
+pub fn clear_bug_report_draft(db: State<Arc<Database>>) -> Result<(), String> {
+    let _ = db.set_setting("bug_report_draft", "");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +370,59 @@ mod tests {
         assert!(validate_external_url("file:///etc/passwd").is_err());
         assert!(validate_external_url("javascript:alert(1)").is_err());
         assert!(validate_external_url("sh -c rm -rf /").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_diagnostic_text_passkey_and_tokens() {
+        let input = "Error connecting with passkey: 12345678abcdef and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let clean = sanitize_diagnostic_text(input);
+        assert!(!clean.contains("12345678abcdef"));
+        assert!(!clean.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+        assert!(clean.contains("[REDACTED_PASSKEY]"));
+        assert!(clean.contains("[REDACTED_TOKEN]"));
+    }
+
+    #[test]
+    fn test_sanitize_diagnostic_text_paths_and_ips() {
+        let input = "Failed to open file at /Users/johndoe/Downloads/Movie.mkv from peer 198.51.100.45:6881 (local 127.0.0.1:41413)";
+        let clean = sanitize_diagnostic_text(input);
+        assert!(!clean.contains("johndoe"));
+        assert!(!clean.contains("198.51.100.45"));
+        assert!(clean.contains("~/Downloads/Movie.mkv"));
+        assert!(clean.contains("[REDACTED_IP]:6881"));
+        assert!(clean.contains("127.0.0.1:41413")); // Loopback preserved
+    }
+
+    #[test]
+    fn test_sanitize_diagnostic_text_magnet_and_tracker() {
+        let input = "Announce to https://asiandvdclub.org/announce/secretpasskey123 failed for magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Test";
+        let clean = sanitize_diagnostic_text(input);
+        assert!(!clean.contains("secretpasskey123"));
+        assert!(clean.contains("[REDACTED_TRACKER_URL]"));
+        assert!(clean.contains("magnet:?[REDACTED_MAGNET_LINK]"));
+    }
+
+    #[test]
+    fn test_bug_report_draft_lifecycle() {
+        use std::path::Path;
+        let db = Database::new(Path::new(":memory:")).unwrap();
+        db.set_setting("bug_report_draft", "Draft content here")
+            .unwrap();
+        let loaded = db.get_setting("bug_report_draft").unwrap();
+        assert_eq!(loaded.as_deref(), Some("Draft content here"));
+        let _ = db.set_setting("bug_report_draft", "");
+        let cleared = db.get_setting("bug_report_draft").unwrap();
+        assert_eq!(cleared.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn test_error_fingerprint_generation() {
+        let err1 = "playback_init_failed";
+        let title1 = "VLC fails to open disc";
+        let seed = format!("Playback:{err1}:{title1}");
+        let fp1 = format!("{:x}", md5::compute(seed.as_bytes()))[..8].to_uppercase();
+        let fp2 = format!("{:x}", md5::compute(seed.as_bytes()))[..8].to_uppercase();
+        assert_eq!(fp1, fp2);
+        assert_eq!(fp1.len(), 8);
     }
 }
