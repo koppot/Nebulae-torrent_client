@@ -81,15 +81,18 @@ pub fn update_taskbar_speed(_app: &tauri::AppHandle, _up: u64, _down: u64) {}
 #[cfg(not(target_os = "windows"))]
 pub fn clear_taskbar_speed(_app: &tauri::AppHandle) {}
 
+#[cfg(not(target_os = "windows"))]
+pub fn set_taskbar_speed_enabled(_app: &tauri::AppHandle, _enabled: bool) {}
+
 #[cfg(target_os = "windows")]
 pub use windows_impl::*;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use std::sync::atomic::{AtomicI32, AtomicIsize, AtomicU64, Ordering};
-    use std::sync::Once;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, Ordering};
+    use std::sync::{Once, OnceLock};
     use std::time::Instant;
-    use tauri::AppHandle;
+    use tauri::{AppHandle, Manager};
     use windows::core::{w, BOOL, PCWSTR};
     use windows::Win32::Foundation::{
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
@@ -103,13 +106,13 @@ mod windows_impl {
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
-        GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, PeekMessageW, PostMessageW,
-        PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetWindowPos, ShowWindow,
-        TrackPopupMenu, UpdateLayeredWindow, HCURSOR, HICON, HWND_TOPMOST, MF_STRING, MSG,
-        PM_REMOVE, SWP_NOACTIVATE, SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-        TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP,
-        WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+        SetWindowPos, ShowWindow, TrackPopupMenu, UpdateLayeredWindow, HCURSOR, HICON,
+        HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_HIDE, SW_RESTORE, SW_SHOWNA,
+        TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
@@ -120,10 +123,13 @@ mod windows_impl {
     static BAND_W: AtomicI32 = AtomicI32::new(136);
     static BAND_H: AtomicI32 = AtomicI32::new(40);
     static INIT_ONCE: Once = Once::new();
+    static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+    static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(true);
 
     const CLASS_NAME: PCWSTR = w!("NebulaeToolbarBand");
 
-    pub fn init_taskbar_speed(_app: &AppHandle) {
+    pub fn init_taskbar_speed(app: &AppHandle) {
+        let _ = APP_HANDLE.set(app.clone());
         INIT_ONCE.call_once(|| {
             std::thread::spawn(move || {
                 run_toolbar_band_window();
@@ -131,10 +137,43 @@ mod windows_impl {
         });
     }
 
+    pub fn set_taskbar_speed_enabled(app: &AppHandle, enabled: bool) {
+        init_taskbar_speed(app);
+        let prev = OVERLAY_ENABLED.swap(enabled, Ordering::SeqCst);
+        let hwnd_val = BAND_HWND.load(Ordering::Relaxed);
+        if hwnd_val != 0 {
+            let hwnd = HWND(hwnd_val as *mut _);
+            unsafe {
+                if enabled {
+                    let _ = ShowWindow(hwnd, SW_SHOWNA);
+                    let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
+                } else {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+        } else if enabled && !prev {
+            let hwnd_val = BAND_HWND.load(Ordering::Relaxed);
+            if hwnd_val != 0 {
+                unsafe {
+                    let _ = ShowWindow(HWND(hwnd_val as *mut _), SW_SHOWNA);
+                }
+            }
+        }
+    }
+
     pub fn update_taskbar_speed(app: &AppHandle, up: u64, down: u64) {
         init_taskbar_speed(app);
-        UP_RATE.store(up, Ordering::Relaxed);
-        DOWN_RATE.store(down, Ordering::Relaxed);
+        let prev_up = UP_RATE.swap(up, Ordering::Relaxed);
+        let prev_down = DOWN_RATE.swap(down, Ordering::Relaxed);
+
+        if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Optimization: skip posting WM_RENDER_BAND when rates are identical
+        if prev_up == up && prev_down == down {
+            return;
+        }
 
         let hwnd_val = BAND_HWND.load(Ordering::Relaxed);
         if hwnd_val != 0 {
@@ -195,7 +234,11 @@ mod windows_impl {
             if let Ok(hwnd) = hwnd {
                 BAND_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
                 render_band(hwnd);
-                let _ = ShowWindow(hwnd, SW_SHOWNA);
+                if OVERLAY_ENABLED.load(Ordering::Relaxed) {
+                    let _ = ShowWindow(hwnd, SW_SHOWNA);
+                } else {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
 
                 let mut msg = MSG::default();
                 let mut last_pos_check = Instant::now();
@@ -562,13 +605,23 @@ mod windows_impl {
     }
 
     unsafe extern "system" fn enum_find_nebulae(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let mut proc_id = 0u32;
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut proc_id));
+        if proc_id != std::process::id() {
+            return BOOL(1);
+        }
+
         let len = GetWindowTextLengthW(hwnd);
         if len > 0 {
             let mut buf = vec![0u16; (len + 1) as usize];
             let read = GetWindowTextW(hwnd, &mut buf);
             if read > 0 {
                 let title = String::from_utf16_lossy(&buf[..read as usize]);
-                if title.contains("Nebulae") && !title.contains("Toolbar") {
+                // Ignore the video surface child and toolbar band
+                if title.contains("Nebulae")
+                    && !title.contains("Toolbar")
+                    && !title.contains("Video Surface")
+                {
                     *(lparam.0 as *mut HWND) = hwnd;
                     return BOOL(0);
                 }
@@ -578,6 +631,16 @@ mod windows_impl {
     }
 
     fn activate_main_window() {
+        if let Some(app) = APP_HANDLE.get() {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+                return;
+            }
+        }
+
+        // Secondary fallback if AppHandle is uninitialized
         unsafe {
             let mut target_hwnd = HWND(core::ptr::null_mut());
             let _ = windows::Win32::UI::WindowsAndMessaging::EnumWindows(

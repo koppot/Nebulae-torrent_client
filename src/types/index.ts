@@ -328,6 +328,8 @@ export interface UserSettings {
   media_mode_enabled: boolean;
   media_mode_decision_made: boolean;
   blackout_other_displays_in_fullscreen?: boolean;
+  // 14. Windows Taskbar Speed Overlay
+  show_taskbar_speed_overlay?: boolean;
 }
 
 export interface EngineIdentityInfo {
