@@ -648,6 +648,11 @@ mod windows_impl {
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
+                if let Ok(hwnd) = win.hwnd() {
+                    unsafe {
+                        let _ = SetForegroundWindow(hwnd);
+                    }
+                }
                 return;
             }
         }

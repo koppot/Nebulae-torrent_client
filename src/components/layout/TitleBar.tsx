@@ -85,11 +85,25 @@ export const TitleBar: React.FC = () => {
     }
 
     let unlistenResize: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
+    const handleWindowFocus = async () => {
+      try {
+        setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
+      } catch {
+        // Fallback for non-tauri contexts
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
     (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const currentWin = getCurrentWindow();
         setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
-        unlistenResize = await getCurrentWindow().onResized(async () => {
+        unlistenResize = await currentWin.onResized(async () => {
+          setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
+        });
+        unlistenFocus = await currentWin.onFocusChanged(async () => {
           setIsMaximized(await invoke<boolean>('window_is_maximized_cmd'));
         });
       } catch {
@@ -98,7 +112,9 @@ export const TitleBar: React.FC = () => {
     })();
 
     return () => {
+      window.removeEventListener('focus', handleWindowFocus);
       if (unlistenResize) unlistenResize();
+      if (unlistenFocus) unlistenFocus();
     };
   }, []);
 

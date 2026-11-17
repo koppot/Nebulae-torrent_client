@@ -363,6 +363,12 @@ pub fn run() {
                 let _ = win.show();
                 let _ = win.unminimize();
                 let _ = win.set_focus();
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = win.hwnd() {
+                    unsafe {
+                        let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                    }
+                }
             }
             for arg in argv.iter().skip(1) {
                 let lower = arg.to_ascii_lowercase();
@@ -557,6 +563,12 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            #[cfg(target_os = "windows")]
+                            if let Ok(hwnd) = window.hwnd() {
+                                unsafe {
+                                    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                                }
+                            }
                         }
                     }
                     "add-torrent" | "create-torrent" => {
@@ -568,6 +580,12 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            #[cfg(target_os = "windows")]
+                            if let Ok(hwnd) = window.hwnd() {
+                                unsafe {
+                                    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                                }
+                            }
                             let action = if event.id.as_ref() == "add-torrent" {
                                 "add-torrent"
                             } else {
@@ -604,12 +622,20 @@ pub fn run() {
                             .get_webview_window("main")
                             .or_else(|| app.webview_windows().into_values().next())
                         {
-                            if window.is_visible().unwrap_or(false) {
+                            let is_minimized = window.is_minimized().unwrap_or(false);
+                            let is_visible = window.is_visible().unwrap_or(false);
+                            if is_visible && !is_minimized {
                                 let _ = window.hide();
                             } else {
                                 let _ = window.show();
                                 let _ = window.unminimize();
                                 let _ = window.set_focus();
+                                #[cfg(target_os = "windows")]
+                                if let Ok(hwnd) = window.hwnd() {
+                                    unsafe {
+                                        let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                                    }
+                                }
                             }
                         }
                     }
@@ -622,6 +648,12 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            #[cfg(target_os = "windows")]
+                            if let Ok(hwnd) = window.hwnd() {
+                                unsafe {
+                                    let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+                                }
+                            }
                         }
                     }
                     _ => {}
