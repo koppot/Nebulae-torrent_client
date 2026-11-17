@@ -158,26 +158,86 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 /// Title indices are validated defensively: libvlc_media_player_get_title
 /// returns -1 while the demuxer is still starting.
 ///
+/// Tri-state cache of `BDMV/index.bdmv` Top Menu support for the active session:
+/// `-1` = non-Blu-ray (DVD, file) or unknown, `0` = Blu-ray with no Top Menu
+/// (`id_ref == 0xFFFF` or `bypass_menu`), `1` = Blu-ray with an authored Top Menu.
+static CURRENT_DISC_TOP_MENU_SUPPORTED: std::sync::atomic::AtomicI8 =
+    std::sync::atomic::AtomicI8::new(-1);
+
+pub fn current_disc_has_top_menu() -> Option<bool> {
+    match CURRENT_DISC_TOP_MENU_SUPPORTED.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
+/// Pure helper combining libVLC's title table, `BD_EVENT_MENU` ground truth
+/// (`bluray_open`), and `BDMV/index.bdmv` Top Menu presence (`top_menu_supported`)
+/// to decide whether an interactive disc menu is currently on screen.
+pub fn resolve_menu_title_visibility(
+    titles: &[TitleSnapshot],
+    current: i32,
+    bluray_open: Option<bool>,
+    top_menu_supported: Option<bool>,
+) -> bool {
+    let kind = classify_current_title(titles, current);
+    match bluray_open {
+        // Patched Blu-ray ground truth (`BD_EVENT_MENU` = 1): covers Title 0
+        // Top Menus, Title 1..N interactive root menus, and in-feature Popup
+        // Menus (`BD_VK_POPUP`), while excluding First Play studio intros.
+        Some(true) => !matches!(kind, TitleKind::FirstPlay { .. }),
+        // Patched Blu-ray ground truth (`BD_EVENT_MENU` = 0): vetoes spoofed
+        // `set_title(0)` title announcements when no menu overlay is open.
+        Some(false) => false,
+        // DVD, plain file, or unpatched libVLC: trust `INPUT_TITLE_MENU` unless
+        // `BDMV/index.bdmv` proved this Blu-ray has no Top Menu (`id_ref == 0xFFFF`).
+        None => {
+            if top_menu_supported == Some(false) {
+                false
+            } else {
+                kind == TitleKind::Menu
+            }
+        }
+    }
+}
+
 /// # Safety
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
-    let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
+    let bluray_open = bluray_menu_open(lib, mp);
+    if bluray_open == Some(false) {
+        return false;
+    }
+    let mut titles_ptr: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
-    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
-    if n <= 0 || titles.is_null() {
-        return false;
+    let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles_ptr);
+    if n <= 0 || titles_ptr.is_null() {
+        return bluray_open == Some(true);
     }
     let current = (lib.libvlc_media_player_get_title)(m);
-    if current < 0 || current >= n {
-        (lib.libvlc_title_descriptions_release)(titles, n);
-        return false;
+    let mut snaps = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let t = &**titles_ptr.add(i as usize);
+        let name = if !t.psz_name.is_null() {
+            Some(
+                std::ffi::CStr::from_ptr(t.psz_name)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else {
+            None
+        };
+        snaps.push(TitleSnapshot {
+            duration_ms: t.i_duration,
+            flags: t.i_flags,
+            name,
+        });
     }
-    let t = &**titles.add(current as usize);
-    let is_menu = (t.i_flags & INPUT_TITLE_MENU) != 0;
-    (lib.libvlc_title_descriptions_release)(titles, n);
-    is_menu
+    (lib.libvlc_title_descriptions_release)(titles_ptr, n);
+    resolve_menu_title_visibility(&snaps, current, bluray_open, current_disc_has_top_menu())
 }
 
 /// Whether the Blu-ray graphics controller reports an interactive menu on
@@ -204,10 +264,15 @@ pub unsafe fn bluray_menu_open(lib: &VlcLib, mp: usize) -> Option<bool> {
 }
 
 /// Return the 0-based index of the first title marked with INPUT_TITLE_MENU, if any.
+/// Returns `None` when `BDMV/index.bdmv` proves the Blu-ray disc has no authored
+/// Top Menu (`id_ref == 0xFFFF`), filtering out VLC's unconditional placeholder entry.
 ///
 /// # Safety
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn find_menu_title(lib: &VlcLib, mp: usize) -> Option<i32> {
+    if current_disc_has_top_menu() == Some(false) {
+        return None;
+    }
     let m = mp as *mut c_void;
     let mut titles: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     let n = (lib.libvlc_media_player_get_full_title_descriptions)(m, &mut titles);
@@ -1076,6 +1141,37 @@ pub struct VlcSession {
     pub media_player: usize,
 }
 
+#[cfg(target_os = "windows")]
+fn session_video_targets() -> &'static std::sync::Mutex<std::collections::HashMap<usize, usize>> {
+    static TARGETS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, usize>>> =
+        std::sync::OnceLock::new();
+    TARGETS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn record_session_video_target(mp: usize, target: usize) {
+    if mp == 0 || target == 0 {
+        return;
+    }
+    let mut map = match session_video_targets().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    map.insert(mp, target);
+}
+
+#[cfg(target_os = "windows")]
+fn take_session_video_target(mp: usize) -> Option<usize> {
+    if mp == 0 {
+        return None;
+    }
+    let mut map = match session_video_targets().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    map.remove(&mp)
+}
+
 /// Owned playback session. Dropping releases everything in order.
 impl VlcSession {
     /// Start playing `path`, rendering video into `video_target` (a raw
@@ -1099,6 +1195,16 @@ impl VlcSession {
         bypass_menu: bool,
     ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
+        let top_menu_state = if bypass_menu {
+            0
+        } else {
+            match crate::player::bluray_meta::is_disc_top_menu_supported(path) {
+                Some(true) => 1,
+                Some(false) => 0,
+                None => -1,
+            }
+        };
+        CURRENT_DISC_TOP_MENU_SUPPORTED.store(top_menu_state, std::sync::atomic::Ordering::SeqCst);
         let mut args = vec![
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
@@ -1275,6 +1381,7 @@ impl VlcSession {
                 }
                 #[cfg(target_os = "windows")]
                 {
+                    record_session_video_target(mp as usize, video_target);
                     (lib.libvlc_media_player_set_hwnd)(mp, video_target as *mut c_void);
                 }
                 #[cfg(target_os = "linux")]
@@ -1288,8 +1395,16 @@ impl VlcSession {
             }
             let rc = (lib.libvlc_media_player_play)(mp);
             if rc != 0 {
+                #[cfg(target_os = "windows")]
+                {
+                    (lib.libvlc_media_player_set_hwnd)(mp, std::ptr::null_mut());
+                }
                 (lib.libvlc_media_player_release)(mp);
                 (lib.libvlc_media_release)(media);
+                #[cfg(target_os = "windows")]
+                if let Some(target) = take_session_video_target(mp as usize) {
+                    crate::player::embed_windows::release_session_surface(target);
+                }
                 return Err(format!("libvlc refused to play {path} (rc={rc})"));
             }
             Ok(VlcSession {
@@ -1303,6 +1418,8 @@ impl VlcSession {
     /// Tear down. Runs on the main thread on macOS (the vout view lives
     /// there); on other platforms any thread is fine.
     pub fn close(&self, lib: &VlcLib) {
+        #[cfg(target_os = "windows")]
+        let win_target = take_session_video_target(self.media_player);
         unsafe {
             if self.media_player != 0 {
                 (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
@@ -1326,6 +1443,10 @@ impl VlcSession {
             // races the next session's metadata parsing and aborts the
             // process. Keep it for the app's lifetime.
         }
+        #[cfg(target_os = "windows")]
+        if let Some(target) = win_target {
+            crate::player::embed_windows::release_session_surface(target);
+        }
     }
 
     /// Offload VLC stop+release to a background OS thread so the tokio
@@ -1342,6 +1463,8 @@ impl VlcSession {
         // boundary without triggering Send checks on *mut c_void.
         let mp = self.media_player;
         let md = self.media;
+        #[cfg(target_os = "windows")]
+        let win_target = take_session_video_target(mp);
         std::thread::Builder::new()
             .name("vlc-teardown".into())
             .spawn(move || {
@@ -1361,6 +1484,10 @@ impl VlcSession {
                     if md != 0 {
                         (lib.libvlc_media_release)(md as *mut c_void);
                     }
+                }
+                #[cfg(target_os = "windows")]
+                if let Some(target) = win_target {
+                    crate::player::embed_windows::release_session_surface(target);
                 }
                 tracing::info!(
                     "[perf] vlc-teardown thread: elapsed={}ms",
@@ -1560,5 +1687,54 @@ mod tests {
         ] {
             assert!(!first_play_skip_allowed(true, kind, false, false));
         }
+    }
+
+    #[test]
+    fn menu_visibility_combines_bluray_ground_truth_and_index_bdmv_support() {
+        let titles = bd_menu_layout(36_000);
+
+        // 1. Patched Blu-ray ground truth open (`BD_EVENT_MENU = 1`):
+        //    - Title 0 Top Menu -> true
+        //    - Title 1 (Popup Menu or non-0 root menu) -> true
+        //    - First Play studio intro (index 2) -> false
+        assert!(resolve_menu_title_visibility(
+            &titles,
+            0,
+            Some(true),
+            Some(true)
+        ));
+        assert!(resolve_menu_title_visibility(
+            &titles,
+            1,
+            Some(true),
+            Some(false)
+        ));
+        assert!(!resolve_menu_title_visibility(
+            &titles,
+            2,
+            Some(true),
+            Some(true)
+        ));
+
+        // 2. Patched Blu-ray ground truth closed (`BD_EVENT_MENU = 0`):
+        //    vetoes VLC's spoofed `set_title(0)` announcement.
+        assert!(!resolve_menu_title_visibility(
+            &titles,
+            0,
+            Some(false),
+            Some(true)
+        ));
+
+        // 3. Unpatched libVLC / DVD (`bluray_open == None`):
+        //    - DVD (`top_menu_supported == None`) trusts `INPUT_TITLE_MENU`
+        //    - Blu-ray with `index.bdmv` `id_ref == 0xFFFF` (`Some(false)`) rejects placeholder title[0]
+        assert!(resolve_menu_title_visibility(&titles, 0, None, None));
+        assert!(resolve_menu_title_visibility(&titles, 0, None, Some(true)));
+        assert!(!resolve_menu_title_visibility(
+            &titles,
+            0,
+            None,
+            Some(false)
+        ));
     }
 }

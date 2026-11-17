@@ -23,14 +23,14 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, GetClientRect, GetWindowLongPtrW,
-    GetWindowRect, IsIconic, LoadCursorW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED,
-    WNDCLASSEXW, WNDPROC, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_POPUP, WS_VISIBLE,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, LoadCursorW, RegisterClassExW,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC,
+    HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -42,7 +42,7 @@ unsafe extern "system" fn surface_wndproc_init(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-/// Lazily registers the dedicated black video surface window class once.
+/// Lazily registers the dedicated black video surface and per-session slot window classes once.
 static SURFACE_CLASS_INIT: OnceLock<()> = OnceLock::new();
 
 fn ensure_surface_class() {
@@ -59,6 +59,18 @@ fn ensure_surface_class() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&wc);
+
+        let slot_wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
+            lpfnWndProc: Some(overlay_wndproc),
+            hInstance: HINSTANCE(std::ptr::null_mut()),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: black_brush,
+            lpszClassName: w!("NebulaeVideoSlot"),
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&slot_wc);
     });
 }
 
@@ -66,8 +78,110 @@ fn ensure_surface_class() {
 /// Set once by `overlay_app_init` during `ensure_overlay`.
 static OVERLAY_APP: OnceLock<AppHandle> = OnceLock::new();
 
-/// Cached HWND of the video surface window.
+/// ThreadId of Tauri's Win32 main UI thread, recorded when `NebulaeVideoSurface` is created.
+static MAIN_UI_THREAD_ID: OnceLock<std::thread::ThreadId> = OnceLock::new();
+
+/// Cached HWND of the persistent container video surface window (`NebulaeVideoSurface`).
 static VIDEO_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Active per-session child HWND (`NebulaeVideoSlot`) bound via `libvlc_media_player_set_hwnd`.
+///
+/// Giving each `VlcSession` its own child HWND prevents VLC 3.0.x `modules/video_output/drawable.c`
+/// (`static uintptr_t *used`) from rejecting the new session's HWND as `"busy"` while the previous
+/// session is still tearing down BD-J/libbluray on the background `vlc-teardown` thread — which
+/// previously caused VLC to fall back to a standalone `"VLC (Direct3D11 output)"` OS window.
+static ACTIVE_VIDEO_SLOT: AtomicIsize = AtomicIsize::new(0);
+
+/// Retired per-session child HWNDs whose VLC teardown (`stop` + `set_hwnd(null)` + `release`) has
+/// completed and are awaiting `DestroyWindow` on the Win32 creator (main UI) thread.
+static RETIRED_VIDEO_SLOTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+const MAX_RETIRED_SLOTS_QUEUE: usize = 64;
+
+/// Must only be called on the Win32 main UI thread that created the slot HWNDs.
+unsafe fn sweep_retired_slots() {
+    let slots = match RETIRED_VIDEO_SLOTS.lock() {
+        Ok(mut g) => std::mem::take(&mut *g),
+        Err(p) => std::mem::take(&mut *p.into_inner()),
+    };
+    let surface_raw = VIDEO_HWND.load(Ordering::SeqCst) as usize;
+    for raw in slots {
+        if raw == 0 || raw == surface_raw {
+            continue;
+        }
+        let _ =
+            ACTIVE_VIDEO_SLOT.compare_exchange(raw as isize, 0, Ordering::SeqCst, Ordering::SeqCst);
+        let hwnd = HWND(raw as _);
+        if IsWindow(Some(hwnd)).as_bool() {
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+}
+
+/// Schedule destruction of a retired session's child slot HWND after VLC has completely stopped
+/// and released its video output (`drawable.c:Close()`). Safe to call from any thread (including
+/// `vlc-teardown`).
+pub(crate) fn release_session_surface(slot_hwnd: usize) {
+    let surface_raw = VIDEO_HWND.load(Ordering::SeqCst) as usize;
+    if slot_hwnd == 0 || slot_hwnd == surface_raw {
+        return;
+    }
+    let _ = ACTIVE_VIDEO_SLOT.compare_exchange(
+        slot_hwnd as isize,
+        0,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    {
+        let mut guard = match RETIRED_VIDEO_SLOTS.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if !guard.contains(&slot_hwnd) && guard.len() < MAX_RETIRED_SLOTS_QUEUE {
+            guard.push(slot_hwnd);
+        }
+    }
+    if MAIN_UI_THREAD_ID.get() == Some(&std::thread::current().id()) {
+        unsafe {
+            sweep_retired_slots();
+        }
+    } else if let Some(app) = overlay_app_handle() {
+        let _ = app.run_on_main_thread(|| unsafe {
+            sweep_retired_slots();
+        });
+    }
+}
+
+/// Ensure the active session's child slot HWND matches `(0, 0, cw, ch)` inside `NebulaeVideoSurface`.
+unsafe fn sync_active_slot_size(cw: i32, ch: i32) {
+    if cw <= 0 || ch <= 0 {
+        return;
+    }
+    let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+    if slot_val == 0 {
+        return;
+    }
+    let slot_hwnd = HWND(slot_val as _);
+    if !IsWindow(Some(slot_hwnd)).as_bool() {
+        return;
+    }
+    let mut rc = RECT::default();
+    if GetClientRect(slot_hwnd, &mut rc).is_ok()
+        && (rc.right - rc.left) == cw
+        && (rc.bottom - rc.top) == ch
+    {
+        return;
+    }
+    let _ = SetWindowPos(
+        slot_hwnd,
+        None,
+        0,
+        0,
+        cw,
+        ch,
+        SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
+    );
+}
 
 /// Saved pre-player window rect for restoring window size on close.
 static PRE_PLAYER_RECT: Mutex<Option<RECT>> = Mutex::new(None);
@@ -117,6 +231,10 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
         if cw <= 0 || ch <= 0 {
             return;
         }
+
+        // Always keep the active session slot sized to (cw, ch), even when video_hwnd's
+        // outer screen rect was already updated before this call.
+        sync_active_slot_size(cw, ch);
 
         // Compare desired rectangle with current rectangle of video_hwnd; skip unchanged geometry.
         let mut cur_rect = RECT::default();
@@ -220,38 +338,124 @@ pub(crate) fn force_apply_edr(app: &AppHandle) {
     });
 }
 
-pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
-    overlay_app_init(app.clone());
-    let existing = app
+fn prepare_session_slot_on_main_thread(app: &AppHandle) -> Result<usize, String> {
+    let _ = MAIN_UI_THREAD_ID.set(std::thread::current().id());
+    unsafe {
+        sweep_retired_slots();
+    }
+
+    let mut surface_val = app
         .state::<crate::player::PlayerState>()
         .overlay_view
         .load(std::sync::atomic::Ordering::SeqCst);
-    if existing != 0 {
-        return Ok(existing);
+
+    if surface_val == 0 {
+        let created = attach_main_window_child(app)?;
+        app.state::<crate::player::PlayerState>()
+            .overlay_view
+            .store(created, std::sync::atomic::Ordering::SeqCst);
+        if let Err(e) = register_display_change_handler(app) {
+            tracing::warn!("register_display_change_handler: {e}");
+        }
+        surface_val = created;
+    }
+
+    let surface_hwnd = HWND(surface_val as _);
+
+    // Immediately hide any outgoing session's child slot while its VLC player
+    // finishes stopping on the background vlc-teardown thread.
+    let prev_slot = ACTIVE_VIDEO_SLOT.swap(0, Ordering::SeqCst);
+    if prev_slot != 0 && (prev_slot as usize) != surface_val {
+        unsafe {
+            let prev_hwnd = HWND(prev_slot as _);
+            if IsWindow(Some(prev_hwnd)).as_bool() {
+                let _ = ShowWindow(prev_hwnd, SW_HIDE);
+            }
+        }
+    }
+
+    // Pre-compute the target client dimensions (matching set_overlay_hidden(false)'s
+    // 16:9 reshape when windowed) so VLC's initial vout `place` matches the final
+    // geometry even on still-frame Blu-ray menus (BD_EVENT_STILL_TIME).
+    let (slot_w, slot_h) = if let Ok(main_h) = main_hwnd(app) {
+        let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
+        let is_fs = app
+            .get_webview_window("main")
+            .and_then(|w| w.is_fullscreen().ok())
+            .unwrap_or(false);
+        let target_w = cw.max(1);
+        let target_h = if !is_fs && !VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) && cw > 0 {
+            ((cw as f64) * 9.0 / 16.0).round() as i32
+        } else {
+            ch
+        }
+        .max(1);
+        unsafe {
+            let _ = SetWindowPos(
+                surface_hwnd,
+                None,
+                cx,
+                cy,
+                target_w,
+                target_h,
+                SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
+            );
+        }
+        (target_w, target_h)
+    } else {
+        (1280, 720)
+    };
+
+    ensure_surface_class();
+
+    // Create a brand-new child HWND for this VlcSession so VLC 3.0.x drawable.c
+    // (`static uintptr_t *used`) never collides with an outgoing session's HWND.
+    let slot_res = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0),
+            w!("NebulaeVideoSlot"),
+            w!(""),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+            0,
+            0,
+            slot_w,
+            slot_h,
+            Some(surface_hwnd),
+            None,
+            None,
+            None,
+        )
+    };
+
+    match slot_res {
+        Ok(slot_hwnd) => {
+            ACTIVE_VIDEO_SLOT.store(slot_hwnd.0 as isize, Ordering::SeqCst);
+            Ok(slot_hwnd.0 as usize)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "NebulaeVideoSlot CreateWindowExW failed ({e}); falling back to NebulaeVideoSurface"
+            );
+            Ok(surface_val)
+        }
+    }
+}
+
+pub fn ensure_overlay(app: &AppHandle) -> Result<usize, String> {
+    overlay_app_init(app.clone());
+    if MAIN_UI_THREAD_ID.get() == Some(&std::thread::current().id()) {
+        return prepare_session_slot_on_main_thread(app);
     }
 
     let app2 = app.clone();
     let (tx, rx) = mpsc::channel::<Result<usize, String>>();
     app.run_on_main_thread(move || {
-        let res = attach_main_window_child(&app2);
+        let res = prepare_session_slot_on_main_thread(&app2);
         let _ = tx.send(res);
     })
     .map_err(|e| format!("main thread unavailable: {e}"))?;
-    let hwnd = rx
-        .recv()
-        .map_err(|_| "main thread callback lost".to_string())??;
-
-    app.state::<crate::player::PlayerState>()
-        .overlay_view
-        .store(hwnd, std::sync::atomic::Ordering::SeqCst);
-
-    // Register the display-change and position-change handler so EDR/tone-mapping
-    // is re-applied and video_hwnd rect stays locked to main_hwnd.
-    if let Err(e) = register_display_change_handler(app) {
-        tracing::warn!("register_display_change_handler: {e}");
-    }
-
-    Ok(hwnd)
+    rx.recv()
+        .map_err(|_| "main thread callback lost".to_string())?
 }
 
 /// Helper: compute the exact screen coordinates and pixel size of the
@@ -268,6 +472,7 @@ pub(crate) fn get_client_rect_in_screen(hwnd: HWND) -> (i32, i32, i32, i32) {
 }
 
 fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
+    let _ = MAIN_UI_THREAD_ID.set(std::thread::current().id());
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
@@ -280,16 +485,17 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
 
     // Create the video surface as an independent WS_POPUP window with no owner,
     // positioned directly behind the transparent main window's client area with a black background.
+    // Initially hidden until `set_overlay_hidden(app, false)` reveals the active session.
     let hwnd = unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0),
             w!("NebulaeVideoSurface"),
             w!("Nebulae Video Surface"),
-            WINDOW_STYLE(WS_POPUP.0 | WS_VISIBLE.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
+            WINDOW_STYLE(WS_POPUP.0 | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0),
             x,
             y,
-            w,
-            h,
+            w.max(1),
+            h.max(1),
             None,
             None,
             None,
@@ -318,8 +524,8 @@ fn attach_main_window_child(app: &AppHandle) -> Result<usize, String> {
             Some(main_hwnd),
             x,
             y,
-            w,
-            h,
+            w.max(1),
+            h.max(1),
             SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
         );
         // Suppress DWM border and corner rounding on both windows so no visible frame
@@ -377,11 +583,21 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     }
     let app2 = app.clone();
     app.run_on_main_thread(move || {
+        unsafe {
+            sweep_retired_slots();
+        }
         let video_hwnd = HWND(hwnd as _);
         let Ok(main_h) = main_hwnd(&app2) else { return };
         if hidden {
             VIDEO_SURFACE_ACTIVE.store(false, Ordering::SeqCst);
             unsafe {
+                let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+                if slot_val != 0 {
+                    let slot_h = HWND(slot_val as _);
+                    if IsWindow(Some(slot_h)).as_bool() {
+                        let _ = ShowWindow(slot_h, SW_HIDE);
+                    }
+                }
                 let _ = ShowWindow(video_hwnd, SW_HIDE);
                 // When player is closed, restore rounded corners on the application window
                 let round: u32 = DWMWCP_ROUND.0 as u32;
@@ -445,10 +661,18 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
             }
 
             unsafe {
+                let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+                if slot_val != 0 {
+                    let slot_h = HWND(slot_val as _);
+                    if IsWindow(Some(slot_h)).as_bool() {
+                        let _ = ShowWindow(slot_h, SW_SHOWNA);
+                    }
+                }
                 let _ = ShowWindow(video_hwnd, SW_SHOW);
                 // Perform one-time Z-order arrangement when showing playback, outside position handlers.
                 let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
                 if cw > 0 && ch > 0 {
+                    sync_active_slot_size(cw, ch);
                     let _ = SetWindowPos(
                         video_hwnd,
                         Some(main_h),
@@ -532,6 +756,7 @@ pub fn sync_frame(
 /// (Windows 10 1809+). Best-effort: silently no-ops on older Windows
 /// or if the main HWND is not yet available.
 pub unsafe fn apply_window_corner_radius(app: &AppHandle, _radius: f64) {
+    overlay_app_init(app.clone());
     if let Ok(hwnd) = main_hwnd(app) {
         let preference: u32 = DWMWCP_ROUND.0 as u32;
         let _ = DwmSetWindowAttribute(
@@ -548,6 +773,9 @@ pub unsafe fn apply_window_corner_radius(app: &AppHandle, _radius: f64) {
             &no_border as *const u32 as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
+        // Install main_wndproc once at startup so WM_SIZE(SIZE_RESTORED) foreground focus
+        // restoration works on taskbar restores even before any media session opens.
+        let _ = register_display_change_handler(app);
     }
 }
 
@@ -622,13 +850,15 @@ unsafe fn get_window_class_name(hwnd: HWND) -> String {
     }
 }
 
-/// Find VLC's event window among the direct children of the overlay.
-/// `events.c` registers this HWND as `VLC video main %p` and creates it with
-/// the overlay as its parent. The `VLC video output %p` class is a grandchild
-/// used for the rendered picture, not the event window to forward input to.
-unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
+/// Find VLC's event window inside the active session's child slot (or `parent`
+/// when running in fallback mode).
+/// `events.c` registers this HWND as `VLC video main %p` and creates it as a
+/// direct child of the HWND passed to `libvlc_media_player_set_hwnd`. Scoping
+/// the search to `ACTIVE_VIDEO_SLOT` guarantees mouse input is never delivered
+/// to a retiring session still tearing down on `vlc-teardown`.
+unsafe fn find_vlc_direct_child(container: HWND) -> Option<HWND> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
-    let mut child = GetWindow(parent, GW_CHILD).ok()?;
+    let mut child = GetWindow(container, GW_CHILD).ok()?;
     while !child.is_invalid() {
         let mut buf = [0u16; 128];
         let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(child, &mut buf);
@@ -641,6 +871,17 @@ unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
         child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
     }
     None
+}
+
+unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
+    let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+    if slot_val != 0 {
+        let slot_hwnd = HWND(slot_val as _);
+        if IsWindow(Some(slot_hwnd)).as_bool() {
+            return find_vlc_direct_child(slot_hwnd);
+        }
+    }
+    find_vlc_direct_child(parent)
 }
 
 fn is_vlc_input_window_class(name: &str) -> bool {
@@ -976,11 +1217,12 @@ unsafe extern "system" fn overlay_wndproc(
         }
         _ => {}
     }
-    if let Some(orig) = OVERLAY_WNDPROC.get() {
-        CallWindowProcW(*orig, hwnd, msg, wparam, lparam)
-    } else {
-        DefWindowProcW(hwnd, msg, wparam, lparam)
+    if hwnd.0 as isize == VIDEO_HWND.load(Ordering::Relaxed) {
+        if let Some(orig) = OVERLAY_WNDPROC.get() {
+            return CallWindowProcW(*orig, hwnd, msg, wparam, lparam);
+        }
     }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 /// Stored original window procedure for the main window subclass.
@@ -1059,15 +1301,22 @@ unsafe extern "system" fn main_wndproc(
 /// Subclasses the main window so `WM_DISPLAYCHANGE` is intercepted and
 /// EDR/tone-mapping is re-applied when the window moves between displays.
 fn register_display_change_handler(app: &AppHandle) -> Result<(), String> {
+    if MAIN_WNDPROC.get().is_some() {
+        return Ok(());
+    }
     let hwnd = main_hwnd(app)?;
     unsafe {
         let orig = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
-        let _ = MAIN_WNDPROC.set(std::mem::transmute::<isize, WNDPROC>(orig));
-        let _ = SetWindowLongPtrW(
-            hwnd,
-            GWLP_WNDPROC,
-            main_wndproc as *const () as usize as isize,
-        );
+        if MAIN_WNDPROC
+            .set(std::mem::transmute::<isize, WNDPROC>(orig))
+            .is_ok()
+        {
+            let _ = SetWindowLongPtrW(
+                hwnd,
+                GWLP_WNDPROC,
+                main_wndproc as *const () as usize as isize,
+            );
+        }
     }
     Ok(())
 }
@@ -1159,6 +1408,7 @@ pub fn toggle_fullscreen(app: &AppHandle) -> Result<(), String> {
         if hwnd != 0 {
             let (x, y, w, h) = get_client_rect_in_screen(main_h);
             unsafe {
+                sync_active_slot_size(w, h);
                 let _ = SetWindowPos(
                     main_h,
                     Some(HWND_TOP),
@@ -1231,6 +1481,9 @@ pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
         }
         return Err("main window not found".into());
     }
+    if let Some(win) = app.get_webview_window("main") {
+        return win.minimize().map_err(|e| format!("minimize: {e}"));
+    }
     let hwnd = main_hwnd(app)?;
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::SW_MINIMIZE;
@@ -1240,6 +1493,19 @@ pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let zoomed = main_hwnd(app)
+            .map(|hwnd| unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+                IsZoomed(hwnd).as_bool()
+            })
+            .unwrap_or_else(|_| win.is_maximized().unwrap_or(false));
+        if zoomed {
+            return win.unmaximize().map_err(|e| format!("unmaximize: {e}"));
+        } else {
+            return win.maximize().map_err(|e| format!("maximize: {e}"));
+        }
+    }
     let hwnd = main_hwnd(app)?;
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, SW_MAXIMIZE, SW_RESTORE};
@@ -1370,5 +1636,27 @@ mod tests {
     fn overlay_app_handle_returns_none_before_init() {
         // OVERLAY_APP is a OnceLock; before overlay_app_init is called it must be empty.
         assert!(overlay_app_handle().is_none());
+    }
+
+    #[test]
+    fn release_session_surface_protects_container_and_retires_active_slot() {
+        VIDEO_HWND.store(0x1000, Ordering::SeqCst);
+        ACTIVE_VIDEO_SLOT.store(0x2000, Ordering::SeqCst);
+        RETIRED_VIDEO_SLOTS.lock().unwrap().clear();
+
+        // Container surface and 0 must never be retired.
+        release_session_surface(0);
+        release_session_surface(0x1000);
+        assert!(RETIRED_VIDEO_SLOTS.lock().unwrap().is_empty());
+        assert_eq!(ACTIVE_VIDEO_SLOT.load(Ordering::SeqCst), 0x2000);
+
+        // Retiring the active slot clears ACTIVE_VIDEO_SLOT and queues it once.
+        release_session_surface(0x2000);
+        release_session_surface(0x2000);
+        assert_eq!(ACTIVE_VIDEO_SLOT.load(Ordering::SeqCst), 0);
+        assert_eq!(RETIRED_VIDEO_SLOTS.lock().unwrap().as_slice(), &[0x2000]);
+
+        RETIRED_VIDEO_SLOTS.lock().unwrap().clear();
+        VIDEO_HWND.store(0, Ordering::SeqCst);
     }
 }

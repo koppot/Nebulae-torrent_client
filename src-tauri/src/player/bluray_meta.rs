@@ -1118,6 +1118,125 @@ pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
     }
 }
 
+/// Resolve a Blu-ray disc root directory from either `<disc_root>` or
+/// `<disc_root>/BDMV` (or a file inside `BDMV/`). Returns `None` if no
+/// `BDMV` directory can be located.
+fn resolve_bdmv_dir(disc_path: &str) -> Option<PathBuf> {
+    let p = Path::new(disc_path);
+    if p.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("BDMV"))
+        && p.is_dir()
+    {
+        return Some(p.to_path_buf());
+    }
+    let child_bdmv = p.join("BDMV");
+    if child_bdmv.is_dir() {
+        return Some(child_bdmv);
+    }
+    let child_lower = p.join("bdmv");
+    if child_lower.is_dir() {
+        return Some(child_lower);
+    }
+    for anc in p.ancestors().skip(1) {
+        if anc
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("BDMV"))
+            && anc.is_dir()
+        {
+            return Some(anc.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Inspect `BDMV/index.bdmv` in pure Rust to determine whether the Blu-ray disc
+/// actually defines an authored Top Menu (`disc_info.top_menu_supported` in
+/// `libbluray/src/libbluray/bluray.c:1149-1155`).
+///
+/// VLC's `blurayInitTitles` (`modules/access/bluray.c:2124-2126`) unconditionally
+/// creates `title[0]` named `"Top Menu"` with `INPUT_TITLE_MENU` whenever
+/// `--bluray-menu` is active, even when `index.bdmv` marks Top Menu absent
+/// (`object_type == HDMV` and `id_ref == 0xFFFF`). Reading `index.bdmv` directly
+/// allows the engine and startup watcher to distinguish Top-Menu-less / popup-only
+/// Blu-rays from discs with a real Top Menu without depending on custom libVLC exports.
+///
+/// Returns:
+/// - `Some(true)` if `BDMV/index.bdmv` declares a supported HDMV or BD-J Top Menu;
+/// - `Some(false)` if `BDMV/index.bdmv` exists and declares no usable Top Menu;
+/// - `None` if `disc_path` is not a Blu-ray folder (e.g. DVD `VIDEO_TS`, ISO, or plain file)
+///   or `index.bdmv` cannot be parsed.
+pub fn is_disc_top_menu_supported(disc_path: &str) -> Option<bool> {
+    let bdmv_dir = resolve_bdmv_dir(disc_path)?;
+    let index_path = ["index.bdmv", "INDEX.BDMV"]
+        .into_iter()
+        .map(|name| bdmv_dir.join(name))
+        .find(|cand| cand.is_file())?;
+    let bytes = std::fs::read(&index_path).ok()?;
+    parse_index_bdmv_top_menu_supported(&bytes, Some(&bdmv_dir))
+}
+
+fn parse_index_bdmv_top_menu_supported(bytes: &[u8], bdmv_dir: Option<&Path>) -> Option<bool> {
+    // Header (index_parse.c:_parse_header):
+    //   0..4:  "INDX"
+    //   4..8:  version ("0100", "0200", "0300", ...)
+    //   8..12: index_start (u32 BE)
+    //  12..16: extension_data_start (u32 BE)
+    if bytes.len() < 16 || &bytes[0..4] != b"INDX" {
+        return None;
+    }
+    let index_start = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    // Index section (index_parse.c:_parse_index):
+    //   +0..+4:   index_len (u32 BE)
+    //   +4..+16:  first_play (12 bytes)
+    //  +16..+28:  top_menu (12 bytes)
+    if index_start.checked_add(28)? > bytes.len() {
+        return None;
+    }
+    let index_len = u32::from_be_bytes([
+        bytes[index_start],
+        bytes[index_start + 1],
+        bytes[index_start + 2],
+        bytes[index_start + 3],
+    ]) as usize;
+    if index_len < 24 || index_start.checked_add(4)?.checked_add(index_len)? > bytes.len() {
+        return None;
+    }
+
+    let top_menu = &bytes[index_start + 16..index_start + 28];
+    let object_type = top_menu[0] >> 6;
+    match object_type {
+        // indx_object_type_hdmv (1): top_menu[6..8] is u16 id_ref; 0xFFFF = not present.
+        1 => {
+            let id_ref = u16::from_be_bytes([top_menu[6], top_menu[7]]);
+            Some(id_ref != 0xFFFF)
+        }
+        // indx_object_type_bdj (2): top_menu[6..11] is 5-char ASCII BDJO name.
+        2 => {
+            let name_bytes = &top_menu[6..11];
+            if name_bytes.iter().all(|&b| b == 0)
+                || name_bytes.eq_ignore_ascii_case(b"FFFFF")
+                || !name_bytes.iter().all(|b| b.is_ascii_alphanumeric())
+            {
+                return Some(false);
+            }
+            if let Some(bdmv) = bdmv_dir {
+                let name = std::str::from_utf8(name_bytes).ok()?;
+                let bdjo_dirs = ["BDJO", "bdjo"];
+                let has_bdjo = bdjo_dirs.iter().any(|d| {
+                    let dir = bdmv.join(d);
+                    dir.join(format!("{name}.bdjo")).is_file()
+                        || dir.join(format!("{name}.BDJO")).is_file()
+                });
+                return Some(has_bdjo);
+            }
+            Some(true)
+        }
+        _ => Some(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1370,5 +1489,97 @@ mod tests {
         assert_eq!(parsed.chapters_ms, vec![0, 120_000]);
 
         let _ = std::fs::remove_file(&mpls_path);
+    }
+
+    fn build_synthetic_index_bdmv(top_menu_obj: [u8; 12]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"INDX0200");
+        let index_start: u32 = 78;
+        bytes.extend_from_slice(&index_start.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // extension_data_start
+        while bytes.len() < index_start as usize {
+            bytes.push(0);
+        }
+        // index_len = 26 (12 first_play + 12 top_menu + 2 num_titles=0)
+        bytes.extend_from_slice(&26u32.to_be_bytes());
+        // first_play: HDMV (1 << 6), id_ref = 0x0000
+        let mut first_play = [0u8; 12];
+        first_play[0] = 1 << 6;
+        bytes.extend_from_slice(&first_play);
+        // top_menu
+        bytes.extend_from_slice(&top_menu_obj);
+        // num_titles = 0
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn index_bdmv_distinguishes_authored_and_absent_top_menu() {
+        let root = std::env::temp_dir().join(format!("nebulae_index_bdmv_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("BDMV/BDJO")).unwrap();
+
+        // 1. HDMV Top Menu absent (id_ref = 0xFFFF): popup-only / menuless Blu-ray.
+        let mut absent = [0u8; 12];
+        absent[0] = 1 << 6;
+        absent[6] = 0xFF;
+        absent[7] = 0xFF;
+        std::fs::write(
+            root.join("BDMV/index.bdmv"),
+            build_synthetic_index_bdmv(absent),
+        )
+        .unwrap();
+        assert_eq!(
+            is_disc_top_menu_supported(root.to_str().unwrap()),
+            Some(false)
+        );
+        // Also works when caller passes .../BDMV directly (multi-disc play_target).
+        assert_eq!(
+            is_disc_top_menu_supported(root.join("BDMV").to_str().unwrap()),
+            Some(false)
+        );
+
+        // 2. HDMV Top Menu present (id_ref = 0x0001).
+        let mut hdmv_ok = [0u8; 12];
+        hdmv_ok[0] = 1 << 6;
+        hdmv_ok[4] = 1 << 6; // interactive
+        hdmv_ok[6] = 0x00;
+        hdmv_ok[7] = 0x01;
+        std::fs::write(
+            root.join("BDMV/index.bdmv"),
+            build_synthetic_index_bdmv(hdmv_ok),
+        )
+        .unwrap();
+        assert_eq!(
+            is_disc_top_menu_supported(root.to_str().unwrap()),
+            Some(true)
+        );
+
+        // 3. BD-J Top Menu: requires matching .bdjo file on disk.
+        let mut bdj = [0u8; 12];
+        bdj[0] = 2 << 6;
+        bdj[4] = 3 << 6;
+        bdj[6..11].copy_from_slice(b"00000");
+        std::fs::write(
+            root.join("BDMV/index.bdmv"),
+            build_synthetic_index_bdmv(bdj),
+        )
+        .unwrap();
+        assert_eq!(
+            is_disc_top_menu_supported(root.to_str().unwrap()),
+            Some(false)
+        );
+        std::fs::write(root.join("BDMV/BDJO/00000.bdjo"), b"BDJO0200").unwrap();
+        assert_eq!(
+            is_disc_top_menu_supported(root.to_str().unwrap()),
+            Some(true)
+        );
+
+        // 4. Non-Blu-ray directory returns None (DVD / plain file untouched).
+        let dvd_dir = root.join("VIDEO_TS");
+        std::fs::create_dir_all(&dvd_dir).unwrap();
+        assert_eq!(is_disc_top_menu_supported(dvd_dir.to_str().unwrap()), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

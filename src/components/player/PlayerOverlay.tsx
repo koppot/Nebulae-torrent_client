@@ -267,6 +267,16 @@ export default function PlayerOverlay() {
   const userPausedRef = useRef(false);
   // Distinguishes explicit Menu button / M key clicks from natural disc-menu return.
   const userMenuClickedRef = useRef(false);
+  // Consecutive poll ticks reporting at_menu=true; requires >=2 ticks before
+  // cancelling pendingResumeRef so a 1-tick spoofed set_title(0) announce on
+  // unpatched libVLC cannot wipe saved resume state.
+  const menuConfirmPollsRef = useRef(0);
+  // Guards against popup-only / JumpTitle-1 Blu-rays where clicking Menu
+  // restarts the active feature at 0:00 instead of opening an authored Top Menu.
+  const menuReturnGuardRef = useRef<{ title: number; timeMs: number; deadline: number } | null>(null);
+  // Real pointer position inside holderRef (null when cursor has not entered or left),
+  // replacing the old hardcoded (0.45, 0.42) phantom menu hover.
+  const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   // Authoritative tracking of the previous feature title and its progress.
   const lastFeatureTitleRef = useRef<number>(0);
   const lastFeatureTimeRef = useRef<number>(0);
@@ -309,6 +319,8 @@ export default function PlayerOverlay() {
     setAuthoredTitle(null);
     setErrorMessage(null);
     wasAtMenuRef.current = false;
+    menuConfirmPollsRef.current = 0;
+    menuReturnGuardRef.current = null;
     pendingResumeRef.current = null;
     pendingResumeTitleRef.current = null;
     justLeftMenuRef.current = false;
@@ -434,10 +446,18 @@ export default function PlayerOverlay() {
       // episode if the user later selects a different title from the menu.
       if (!wasAtMenuRef.current && p.at_menu) {
         const el = holderRef.current;
-        if (el) {
+        const ptr = lastPointerClientRef.current;
+        if (el && ptr) {
           const r = el.getBoundingClientRect();
-          const point = nativeMenuPoint(r.width * 0.45, r.height * 0.42);
-          invoke('player_menu_mouse_move', { ...point, gen: player.gen }).catch(() => {});
+          if (
+            ptr.x >= r.left &&
+            ptr.x < r.right &&
+            ptr.y >= r.top &&
+            ptr.y < r.bottom
+          ) {
+            const point = nativeMenuPoint(ptr.x - r.left, ptr.y - r.top);
+            invoke('player_menu_mouse_move', { ...point, gen: player.gen }).catch(() => {});
+          }
         }
       }
       if (wasAtMenuRef.current && !p.at_menu) {
@@ -447,6 +467,34 @@ export default function PlayerOverlay() {
         menuMoveGuardRef.current.onMenuExit();
         justLeftMenuRef.current = true;
         invoke('log_frontend', { message: `[resume-diag] MENU-EXIT tick: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} time_ms=${p.time_ms}` }).catch(() => {});
+      }
+      menuConfirmPollsRef.current = p.at_menu ? menuConfirmPollsRef.current + 1 : 0;
+      if (menuReturnGuardRef.current !== null) {
+        const guard = menuReturnGuardRef.current;
+        if (menuConfirmPollsRef.current >= 2) {
+          // Real interactive menu confirmed open; disarm restart recovery.
+          menuReturnGuardRef.current = null;
+        } else if (now > guard.deadline) {
+          menuReturnGuardRef.current = null;
+        } else if (
+          !p.at_menu &&
+          p.playing &&
+          p.length_ms > 300_000 &&
+          p.title === guard.title &&
+          p.time_ms >= 0 &&
+          p.time_ms < 5_000 &&
+          guard.timeMs >= 10_000
+        ) {
+          // Pressing Menu restarted the active feature from 0:00 (common on
+          // popup-only Blu-rays whose Title 0 MovieObject jumps to Title 1).
+          // Restore the user's position and toggle the Popup Menu instead.
+          menuReturnGuardRef.current = null;
+          invoke('log_frontend', {
+            message: `[menu-diag] Top Menu restarted feature title=${p.title} at time_ms=${p.time_ms}; restoring positionMs=${guard.timeMs} and requesting Popup Menu`,
+          }).catch(() => {});
+          invoke('player_seek', { positionMs: guard.timeMs }).catch(() => {});
+          invoke('player_menu_navigate', { mode: 5, gen: player.gen }).catch(() => {});
+        }
       }
       const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null;
       if (shouldAttemptResume) {
@@ -496,12 +544,11 @@ export default function PlayerOverlay() {
           invoke('log_frontend', { message: `[resume-diag] APPLY blocked: gen=${player.gen} pending=${pendingResumeRef.current} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${guardPlaying} length_ok=${guardLen} time_ok=${guardTime} at_menu=${p.at_menu}` }).catch(() => {});
         }
       }
-      // Cancel pending resume if the user returned to the menu (e.g. pressed
-      // Menu again before the feature was confirmed) or if the player opened
-      // a different disc (resolvedPath changed → new useEffect instance).
-      if (p.at_menu) {
+      // Cancel pending resume only once the menu has confirmed across >=2 poll
+      // ticks (prevents a 1-tick spoofed set_title(0) announce from wiping resume).
+      if (p.at_menu && menuConfirmPollsRef.current >= 2) {
         if (pendingResumeRef.current !== null) {
-          invoke('log_frontend', { message: `[resume-diag] CANCEL: gen=${player.gen} returned to menu, clearing pendingResume=${pendingResumeRef.current}` }).catch(() => {});
+          invoke('log_frontend', { message: `[resume-diag] CANCEL: gen=${player.gen} confirmed at menu, clearing pendingResume=${pendingResumeRef.current}` }).catch(() => {});
         }
         pendingResumeRef.current = null;
         pendingResumeTitleRef.current = null;
@@ -671,6 +718,15 @@ export default function PlayerOverlay() {
           }
           break;
         }
+        case 'p':
+        case 'P': {
+          // Toggle Blu-ray Popup Menu (BD_VK_POPUP = libvlc_navigate_popup = 5)
+          // without leaving or restarting the current feature title.
+          if (player.isDisc) {
+            nav(5);
+          }
+          break;
+        }
         case 'm':
         case 'M': {
           // During disc playback M returns to the authored menu (same command
@@ -682,9 +738,16 @@ export default function PlayerOverlay() {
             // Save position before leaving the feature (mirrors the Menu
             // button onClick — ensures paused state is always captured).
             const p = pollRef.current;
-            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
-              savePositionMs(player.resolvedPath, p.time_ms, p.title);
-              invoke('log_frontend', { message: `[resume-diag] SAVE M-key path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000) {
+              menuReturnGuardRef.current = {
+                title: p.title,
+                timeMs: p.time_ms,
+                deadline: Date.now() + 5000,
+              };
+              if (!completedTitlesRef.current.has(p.title)) {
+                savePositionMs(player.resolvedPath, p.time_ms, p.title);
+                invoke('log_frontend', { message: `[resume-diag] SAVE M-key path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+              }
             }
             invoke('player_return_to_menu').catch(() => {});
           } else {
@@ -705,7 +768,7 @@ export default function PlayerOverlay() {
       // Suppress key-repeat for disc-menu navigation keys to prevent a held
       // Enter from activating multiple entries in quick succession.
       if (e.repeat && player.isDisc && pollRef.current.at_menu) return;
-      const keys = new Set(['Escape', ' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
+      const keys = new Set(['Escape', ' ', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'f', 'F', 'm', 'M', 'p', 'P', 'a', 'A', 's', 'S', 'q', 'Q', 'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute']);
       if (!keys.has(e.key)) return;
       e.preventDefault();
       handle(e.key);
@@ -1267,6 +1330,7 @@ export default function PlayerOverlay() {
   // the double-click handler. During an authored disc menu (at_menu) a left
   // click activates the currently highlighted menu entry instead.
   const onVideoMouseMove = (e: React.MouseEvent) => {
+    lastPointerClientRef.current = { x: e.clientX, y: e.clientY };
     if (!player.isDisc || !pollRef.current.at_menu) return;
     // On Windows, NebulaeVideoSurface sits behind the WebView2 host window, so
     // the native overlay_wndproc does not receive WM_MOUSEMOVE during disc menus
@@ -1283,6 +1347,10 @@ export default function PlayerOverlay() {
     menuMoveGuardRef.current.dispatch({ ...point, gen: player.gen });
   };
 
+  const onVideoMouseLeave = () => {
+    lastPointerClientRef.current = null;
+  };
+
   const scheduleVideoPause = (sequence: number) => {
     if (sequence !== clickSequenceRef.current || clickTimerRef.current !== null) return;
     clickTimerRef.current = window.setTimeout(() => {
@@ -1292,6 +1360,7 @@ export default function PlayerOverlay() {
   };
 
   const onVideoClick = (e: React.MouseEvent) => {
+    lastPointerClientRef.current = { x: e.clientX, y: e.clientY };
     const now = Date.now();
 
     // A double-click on the video during a disc menu would re-trigger the
@@ -1314,6 +1383,12 @@ export default function PlayerOverlay() {
       const point = nativeMenuPoint(e.clientX - rect.left, e.clientY - rect.top);
       menuMoveGuardRef.current
         .runClick(async () => {
+          // Ensure VLC's hover coordinates match the exact click target even if
+          // the preceding mousemove fell inside the 40ms dispatch throttle.
+          await invoke('player_menu_mouse_move', {
+            ...point,
+            gen: player.gen,
+          }).catch(() => {});
           const posted = await invoke<boolean>('player_menu_mouse_click', {
             ...point,
             gen: player.gen,
@@ -1378,6 +1453,7 @@ export default function PlayerOverlay() {
         className="absolute inset-0"
         onMouseDown={onVideoPointerDown}
         onMouseMove={onVideoMouseMove}
+        onMouseLeave={onVideoMouseLeave}
         onClick={onVideoClick}
         onDoubleClick={onVideoDoubleClick}
         onWheel={onVideoWheel}
@@ -1454,16 +1530,36 @@ export default function PlayerOverlay() {
                 // or freshly-playing state is always captured regardless
                 // of the poll throttle.
                 const p = pollRef.current;
-                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000 && !completedTitlesRef.current.has(p.title)) {
-                  savePositionMs(player.resolvedPath, p.time_ms, p.title);
-                  invoke('log_frontend', { message: `[resume-diag] SAVE Menu-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000) {
+                  menuReturnGuardRef.current = {
+                    title: p.title,
+                    timeMs: p.time_ms,
+                    deadline: Date.now() + 5000,
+                  };
+                  if (!completedTitlesRef.current.has(p.title)) {
+                    savePositionMs(player.resolvedPath, p.time_ms, p.title);
+                    invoke('log_frontend', { message: `[resume-diag] SAVE Menu-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
+                  }
                 }
                 invoke('player_return_to_menu').catch(() => {});
               }}
               className="shrink-0 text-xs text-white font-medium px-2 py-1 rounded-md border border-white hover:text-white hover:border-white transition text-left"
-              title="Return to the disc's interactive menu"
+              title="Return to the disc's interactive menu (M)"
             >
               Menu
+            </button>
+          )}
+
+          {player.isDisc && !/video_ts/i.test(player.resolvedPath) && (
+            <button
+              type="button"
+              onClick={() => {
+                invoke('player_menu_navigate', { mode: 5, gen: player.gen }).catch(() => {});
+              }}
+              className="shrink-0 text-xs text-white font-medium px-2 py-1 rounded-md border border-white hover:text-white hover:border-white transition text-left"
+              title="Toggle Blu-ray popup menu without restarting playback (P)"
+            >
+              Popup
             </button>
           )}
 
@@ -1481,39 +1577,6 @@ export default function PlayerOverlay() {
             >
               Play Main Feature
             </button>
-          )}
-
-          {/* Keep explicit navigation controls available alongside mouse and keyboard input. */}
-          {player.isDisc && poll.at_menu && (
-            <div
-              className="shrink-0 flex items-center gap-0.5"
-              title="Disc menu navigation — arrow keys work too, Enter selects"
-            >
-              {([
-                ['◀', 3, 'Menu: left'],
-                ['▲', 1, 'Menu: up'],
-                ['▼', 2, 'Menu: down'],
-                ['▶', 4, 'Menu: right'],
-              ] as const).map(([glyph, mode, tip]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => invoke('player_menu_navigate', { mode, gen: player.gen }).catch(() => {})}
-                  className="w-7 h-7 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
-                  title={tip}
-                >
-                  {glyph}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {})}
-                className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
-                title="Activate the highlighted menu entry (Enter)"
-              >
-                Select
-              </button>
-            </div>
           )}
 
           {/* Skip controls: single arrows switch chapters (seeking to the
