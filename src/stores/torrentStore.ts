@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { TorrentItem, CreateTorrentParams, InspectTorrentResult, TorrentContentMatch, TorrentRenameEntry } from '../types';
 import { invoke } from '@tauri-apps/api/core';
+import { createLatestGate, mergeFileStats } from '../lib/torrentFiles';
+
+// Per-torrent request ordering for detail fetches: a response is applied only
+// to its own torrent, and never after a response to a newer request for it.
+const detailGate = createLatestGate();
 
 // Display-side speed presentation (owner directive 2026-10-20): the Manager
 // shows the AVERAGE rate since the respective transfer began - total bytes
@@ -141,6 +146,8 @@ interface TorrentState {
   clearTorrents: () => void;
   applyTorrentTelemetry: (incoming: TorrentItem[]) => void;
   fetchTorrentDetails: (id: string) => Promise<void>;
+  /** Silently re-reads per-file statistics for one torrent (no loading state). */
+  refreshTorrentFiles: (id: string) => Promise<void>;
   setSelectedId: (id: string | null) => void;
   pauseTorrent: (id: string) => Promise<void>;
   resumeTorrent: (id: string) => Promise<void>;
@@ -249,13 +256,14 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   fetchTorrentDetails: async (id: string) => {
     set({ filesLoadingId: id, filesError: null });
+    const seq = detailGate.begin(id);
     try {
       const detail = await invoke<TorrentItem>('get_torrent_details', { id });
-      if (detail) {
+      if (detail && detailGate.accept(id, seq)) {
         set((state) => ({
           torrents: state.torrents.map((t) =>
             t.id === id || (t.info_hash && detail.info_hash && t.info_hash.toLowerCase() === detail.info_hash.toLowerCase())
-              ? { ...t, files: detail.files, trackers: detail.trackers }
+              ? { ...t, files: mergeFileStats(t.files, detail.files ?? []), trackers: detail.trackers }
               : t
           ),
           filesLoadingId: state.filesLoadingId === id ? null : state.filesLoadingId,
@@ -271,6 +279,32 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         filesLoadingId: state.filesLoadingId === id ? null : state.filesLoadingId,
         filesError: state.selectedId === id ? String(err) : state.filesError,
       }));
+    }
+  },
+
+  refreshTorrentFiles: async (id: string) => {
+    const seq = detailGate.begin(id);
+    try {
+      const detail = await invoke<TorrentItem>('get_torrent_details', { id });
+      if (!detail || !detailGate.accept(id, seq)) return;
+      const nextFiles = detail.files ?? [];
+      if (nextFiles.length === 0) return;
+      set((state) => {
+        let changed = false;
+        const torrents = state.torrents.map((t) => {
+          const same =
+            t.id === id ||
+            (t.info_hash && detail.info_hash && t.info_hash.toLowerCase() === detail.info_hash.toLowerCase());
+          if (!same) return t;
+          const files = mergeFileStats(t.files, nextFiles);
+          if (files === t.files) return t;
+          changed = true;
+          return { ...t, files };
+        });
+        return changed ? { torrents } : state;
+      });
+    } catch {
+      // A failed background refresh keeps the last good snapshot on screen.
     }
   },
 

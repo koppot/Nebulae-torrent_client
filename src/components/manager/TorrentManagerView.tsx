@@ -6,7 +6,15 @@ import { useUiStore, ManagerTab } from '../../stores/uiStore';
 import { usePeeringStore } from '../../stores/peeringStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { formatBytes, formatSpeed, formatEta, formatRatio } from '../../lib/formatters';
-import { TorrentFileItem, TorrentItem } from '../../types';
+import {
+  FileTreeNode,
+  buildFileTree,
+  countFilesInNode,
+  nodeMatchesFilter,
+  nodeProgress,
+  progressPercent,
+} from '../../lib/torrentFiles';
+import { TorrentItem } from '../../types';
 import PosterHoverPopup, { PosterPopupTarget } from './PosterHoverPopup';
 import { PeersTabPanel } from './PeersTabPanel';
 import { PeerHistoryPanel } from './PeerHistoryPanel';
@@ -86,92 +94,6 @@ interface ContextMenuState {
   torrentId: string;
 }
 
-export interface FileTreeNode {
-  name: string;
-  path: string;
-  isFolder: boolean;
-  size_bytes: number;
-  file?: TorrentFileItem;
-  children: FileTreeNode[];
-}
-
-function buildFileTree(files: TorrentFileItem[]): FileTreeNode {
-  const root: FileTreeNode = {
-    name: 'root',
-    path: '',
-    isFolder: true,
-    size_bytes: 0,
-    children: [],
-  };
-
-  for (const file of files) {
-    const parts = file.name.replace(/\\/g, '/').split('/').filter(Boolean);
-    let current = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isLast = i === parts.length - 1;
-      const currentPath = parts.slice(0, i + 1).join('/');
-
-      if (isLast) {
-        current.children.push({
-          name: part,
-          path: currentPath,
-          isFolder: false,
-          size_bytes: file.size_bytes,
-          file,
-          children: [],
-        });
-      } else {
-        let folderNode = current.children.find((c) => c.isFolder && c.name === part);
-        if (!folderNode) {
-          folderNode = {
-            name: part,
-            path: currentPath,
-            isFolder: true,
-            size_bytes: 0,
-            children: [],
-          };
-          current.children.push(folderNode);
-        }
-        current = folderNode;
-      }
-    }
-  }
-
-  function computeFolderSize(node: FileTreeNode): number {
-    if (!node.isFolder) {
-      return node.size_bytes;
-    }
-    node.size_bytes = node.children.reduce((acc, c) => acc + computeFolderSize(c), 0);
-    node.children.sort((a, b) => {
-      if (a.isFolder === b.isFolder) {
-        return a.name.localeCompare(b.name);
-      }
-      return a.isFolder ? -1 : 1;
-    });
-    return node.size_bytes;
-  }
-
-  computeFolderSize(root);
-  return root;
-}
-
-function countFilesInNode(node: FileTreeNode): number {
-  if (!node.isFolder) return 1;
-  return node.children.reduce((acc, c) => acc + countFilesInNode(c), 0);
-}
-
-function nodeMatchesFilter(node: FileTreeNode, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  if (node.name.toLowerCase().includes(q)) return true;
-  if (node.isFolder) {
-    return node.children.some((c) => nodeMatchesFilter(c, query));
-  }
-  return false;
-}
-
 // qBittorrent-style tracker grouping: collapse each announce URL to its
 // hostname so the sidebar lists trackers the way qBittorrent does
 // ("tracker.example.org" with a torrent count and health dot).
@@ -196,31 +118,15 @@ const trackersAllFailingCheck = (t: TorrentItem): boolean =>
 
 // qBittorrent-style per-row download progress: a slim monochrome bar
 // (gray fill on a near-black track) with GB and percent next to it.
-// Folders aggregate their subtree by byte weight.
-const nodeProgress = (node: FileTreeNode): number => {
-  if (!node.isFolder) return node.file?.progress ?? 0;
-  let done = 0;
-  let total = 0;
-  for (const child of node.children) {
-    if (child.isFolder) {
-      done += nodeProgress(child) * child.size_bytes;
-      total += child.size_bytes;
-    } else if (child.file) {
-      done += child.file.progress * child.file.size_bytes;
-      total += child.file.size_bytes;
-    }
-  }
-  return total > 0 ? done / total : 0;
-};
-
+// Folders aggregate their subtree by byte weight (see lib/torrentFiles).
 const ProgressBars = { track: '#111111', fill: '#9ca3af', fillDone: '#d4d4d4' };
 
 const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
   progress,
   sizeBytes,
 }) => {
-  const pct = Math.round(progress * 100);
-  const done = pct >= 100;
+  const pct = progressPercent(progress);
+  const done = progress >= 1;
   return (
     <div className="flex items-center gap-2 flex-shrink-0" style={{ width: 180 }}>
       <div
@@ -590,6 +496,26 @@ export const TorrentManagerView: React.FC = () => {
       clearPeers();
     }
   }, [selectedTorrent?.id, selectedTorrent?.info_hash, activeManagerTab, fetchPeers, clearPeers]);
+
+  // Live per-file statistics: the overview telemetry omits files, so the open
+  // Files / Content tab re-reads the selected torrent's files on a timer.
+  const refreshTorrentFiles = useTorrentStore((s) => s.refreshTorrentFiles);
+  const filesTargetId = selectedTorrent?.id;
+  const filesComplete = (selectedTorrent?.progress ?? 0) >= 1;
+  useEffect(() => {
+    if (activeManagerTab !== 'files' || !filesTargetId) return;
+    let inFlight = false;
+    const tick = () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      void refreshTorrentFiles(filesTargetId).finally(() => {
+        inFlight = false;
+      });
+    };
+    tick();
+    const interval = setInterval(tick, filesComplete ? 5000 : 2000);
+    return () => clearInterval(interval);
+  }, [activeManagerTab, filesTargetId, filesComplete, refreshTorrentFiles]);
 
   // Announce/scrape status for the General tab: prefer a tracker that is not
   // working (its failure message is what the user needs to see), otherwise
