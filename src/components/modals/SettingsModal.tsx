@@ -328,7 +328,7 @@ export const SettingsModal: React.FC = () => {
           {/* Settings Sidebar Tabs (Canonical 8 qBittorrent Sections) */}
           <div className="w-48 bg-[#1f1f1f] border-r border-[#333333] p-2 space-y-1 text-xs">
             {[
-              { id: 'behavior', label: 'Behavior', icon: Sliders },
+              { id: 'behavior', label: 'Appearance & Behavior', icon: Sliders },
               { id: 'downloads', label: 'Downloads', icon: Folder },
               { id: 'connection', label: 'Connection', icon: Network },
               { id: 'speed', label: 'Speed', icon: Gauge },
