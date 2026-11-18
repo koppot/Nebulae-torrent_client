@@ -21,6 +21,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
 import { createMenuMoveGuard, MenuMoveGuard } from '../../lib/menuMoveGuard';
+import { armMenuReturnGuard, evaluateMenuReturnGuard, type MenuReturnGuardState } from '../../lib/menuReturnGuard';
 
 
 interface Poll {
@@ -273,7 +274,7 @@ export default function PlayerOverlay() {
   const menuConfirmPollsRef = useRef(0);
   // Guards against popup-only / JumpTitle-1 Blu-rays where clicking Menu
   // restarts the active feature at 0:00 instead of opening an authored Top Menu.
-  const menuReturnGuardRef = useRef<{ title: number; timeMs: number; deadline: number } | null>(null);
+  const menuReturnGuardRef = useRef<MenuReturnGuardState | null>(null);
   // Real pointer position inside holderRef (null when cursor has not entered or left),
   // replacing the old hardcoded (0.45, 0.42) phantom menu hover.
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
@@ -470,30 +471,23 @@ export default function PlayerOverlay() {
       }
       menuConfirmPollsRef.current = p.at_menu ? menuConfirmPollsRef.current + 1 : 0;
       if (menuReturnGuardRef.current !== null) {
-        const guard = menuReturnGuardRef.current;
-        if (menuConfirmPollsRef.current >= 2) {
-          // Real interactive menu confirmed open; disarm restart recovery.
-          menuReturnGuardRef.current = null;
-        } else if (now > guard.deadline) {
-          menuReturnGuardRef.current = null;
-        } else if (
-          !p.at_menu &&
-          p.playing &&
-          p.length_ms > 300_000 &&
-          p.title === guard.title &&
-          p.time_ms >= 0 &&
-          p.time_ms < 5_000 &&
-          guard.timeMs >= 10_000
-        ) {
-          // Pressing Menu restarted the active feature from 0:00 (common on
-          // popup-only Blu-rays whose Title 0 MovieObject jumps to Title 1).
-          // Restore the user's position and toggle the Popup Menu instead.
-          menuReturnGuardRef.current = null;
+        const { nextGuard, result } = evaluateMenuReturnGuard(
+          menuReturnGuardRef.current,
+          p,
+          now,
+          menuConfirmPollsRef.current,
+        );
+        menuReturnGuardRef.current = nextGuard;
+        if (result.action === 'recover_restart') {
           invoke('log_frontend', {
-            message: `[menu-diag] Top Menu restarted feature title=${p.title} at time_ms=${p.time_ms}; restoring positionMs=${guard.timeMs} and requesting Popup Menu`,
+            message: `[menu-diag] Top Menu restarted feature title=${p.title} at time_ms=${p.time_ms}; restoring positionMs=${result.restoreTimeMs} and requesting Popup Menu`,
           }).catch(() => {});
-          invoke('player_seek', { positionMs: guard.timeMs }).catch(() => {});
-          invoke('player_menu_navigate', { mode: 5, gen: player.gen }).catch(() => {});
+          invoke('player_seek', { positionMs: result.restoreTimeMs }).catch(() => {});
+          invoke('player_menu_navigate', { mode: result.mode, gen: player.gen }).catch(() => {});
+        } else if (result.action === 'disarm_title_changed') {
+          invoke('log_frontend', {
+            message: `[menu-diag] Menu return guard disarmed: title changed from ${result.previousTitle} to ${result.newTitle}`,
+          }).catch(() => {});
         }
       }
       const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null;
@@ -738,12 +732,9 @@ export default function PlayerOverlay() {
             // Save position before leaving the feature (mirrors the Menu
             // button onClick — ensures paused state is always captured).
             const p = pollRef.current;
-            if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000) {
-              menuReturnGuardRef.current = {
-                title: p.title,
-                timeMs: p.time_ms,
-                deadline: Date.now() + 5000,
-              };
+            const armed = armMenuReturnGuard(p, Date.now());
+            if (armed) {
+              menuReturnGuardRef.current = armed;
               if (!completedTitlesRef.current.has(p.title)) {
                 savePositionMs(player.resolvedPath, p.time_ms, p.title);
                 invoke('log_frontend', { message: `[resume-diag] SAVE M-key path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
@@ -1530,12 +1521,9 @@ export default function PlayerOverlay() {
                 // or freshly-playing state is always captured regardless
                 // of the poll throttle.
                 const p = pollRef.current;
-                if (!p.at_menu && p.length_ms > 300_000 && p.time_ms >= 10_000) {
-                  menuReturnGuardRef.current = {
-                    title: p.title,
-                    timeMs: p.time_ms,
-                    deadline: Date.now() + 5000,
-                  };
+                const armed = armMenuReturnGuard(p, Date.now());
+                if (armed) {
+                  menuReturnGuardRef.current = armed;
                   if (!completedTitlesRef.current.has(p.title)) {
                     savePositionMs(player.resolvedPath, p.time_ms, p.title);
                     invoke('log_frontend', { message: `[resume-diag] SAVE Menu-btn path=${player.resolvedPath} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});

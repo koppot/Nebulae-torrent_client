@@ -902,6 +902,23 @@ fn is_vlc_input_window_class(name: &str) -> bool {
     name.starts_with("VLC video main")
 }
 
+pub(crate) fn is_point_within_client_rect(
+    pt_x: i32,
+    pt_y: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> bool {
+    pt_x >= left && pt_x < right && pt_y >= top && pt_y < bottom
+}
+
+pub(crate) fn unpack_mouse_lparam(lparam: isize) -> (i16, i16) {
+    let x = lparam as u32 as u16 as i16;
+    let y = (lparam as u32 >> 16) as u16 as i16;
+    (x, y)
+}
+
 /// Translate a mouse point from the overlay's client area to VLC's main window.
 /// Rejects coordinates that fall outside the target window's client bounds.
 unsafe fn map_mouse_lparam(
@@ -909,20 +926,24 @@ unsafe fn map_mouse_lparam(
     target: HWND,
     lparam: LPARAM,
 ) -> Result<(LPARAM, POINT, RECT), InputDisposition> {
+    let (px, py) = unpack_mouse_lparam(lparam.0);
     let mut pt = POINT {
-        x: (lparam.0 as u32 as u16 as i16) as i32,
-        y: ((lparam.0 as u32 >> 16) as u16 as i16) as i32,
+        x: px as i32,
+        y: py as i32,
     };
     let _ = MapWindowPoints(Some(surface), Some(target), std::slice::from_mut(&mut pt));
     let mut target_rect = RECT::default();
     if GetClientRect(target, &mut target_rect).is_err() {
         return Err(InputDisposition::NativeApiFailure);
     }
-    if pt.x < target_rect.left
-        || pt.x >= target_rect.right
-        || pt.y < target_rect.top
-        || pt.y >= target_rect.bottom
-    {
+    if !is_point_within_client_rect(
+        pt.x,
+        pt.y,
+        target_rect.left,
+        target_rect.top,
+        target_rect.right,
+        target_rect.bottom,
+    ) {
         return Err(InputDisposition::OutsideTarget);
     }
     let mapped = LPARAM(((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize);
@@ -948,6 +969,7 @@ static LAST_MOVE_LOG_DISP: std::sync::atomic::AtomicU8 = std::sync::atomic::Atom
 unsafe fn log_move_disposition(
     disp: InputDisposition,
     target: Option<HWND>,
+    raw: (f64, f64),
     pt: Option<POINT>,
     rect: Option<RECT>,
 ) {
@@ -965,9 +987,9 @@ unsafe fn log_move_disposition(
     let prev_time = LAST_MOVE_LOG_TIME.load(Ordering::Relaxed);
 
     let changed = prev_disp != disp_u8;
-    let throttled = now.saturating_sub(prev_time) >= 1000;
+    let throttled = now.saturating_sub(prev_time) >= 500;
 
-    if changed || (disp != InputDisposition::Posted && throttled) {
+    if changed || (disp != InputDisposition::Posted && throttled) || throttled {
         LAST_MOVE_LOG_TIME.store(now, Ordering::Relaxed);
         let class_name = target.map(|t| get_window_class_name(t)).unwrap_or_default();
         let target_raw = target.map(|t| t.0 as isize).unwrap_or(0);
@@ -977,31 +999,38 @@ unsafe fn log_move_disposition(
         let rect_str = rect
             .map(|r| format!("{:?}", r))
             .unwrap_or_else(|| "none".to_string());
-        tracing::debug!(
-            "[menu-input] move disposition={:?} target HWND={:?} class={:?} mapped={} bounds={}",
+        tracing::info!(
+            "[menu-input] forward_mouse_move: raw=({:.1}, {:.1}) mapped={} target_bounds={} disp={:?} target_hwnd={:?} class={:?}",
+            raw.0,
+            raw.1,
+            pt_str,
+            rect_str,
             disp,
             target_raw,
-            class_name,
-            pt_str,
-            rect_str
+            class_name
         );
     }
 }
 
-unsafe fn post_vlc_mouse_move(surface: HWND, wparam: WPARAM, lparam: LPARAM) -> InputDisposition {
+unsafe fn post_vlc_mouse_move(
+    surface: HWND,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    raw: (f64, f64),
+) -> InputDisposition {
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_MOUSEMOVE};
     let target = match find_vlc_video_main_window(surface) {
         Some(t) => t,
         None => {
             log_child_hierarchy(surface);
-            log_move_disposition(InputDisposition::NoTarget, None, None, None);
+            log_move_disposition(InputDisposition::NoTarget, None, raw, None, None);
             return InputDisposition::NoTarget;
         }
     };
     let (mapped, pt, target_rect) = match map_mouse_lparam(surface, target, lparam) {
         Ok(v) => v,
         Err(disp) => {
-            log_move_disposition(disp, Some(target), None, None);
+            log_move_disposition(disp, Some(target), raw, None, None);
             return disp;
         }
     };
@@ -1012,11 +1041,11 @@ unsafe fn post_vlc_mouse_move(surface: HWND, wparam: WPARAM, lparam: LPARAM) -> 
             InputDisposition::NativeApiFailure
         }
     };
-    log_move_disposition(disp, Some(target), Some(pt), Some(target_rect));
+    log_move_disposition(disp, Some(target), raw, Some(pt), Some(target_rect));
     disp
 }
 
-unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM) -> InputDisposition {
+unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM, raw: (f64, f64)) -> InputDisposition {
     use windows::Win32::UI::WindowsAndMessaging::{
         PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
@@ -1057,13 +1086,15 @@ unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM) -> InputDispositio
         disp = InputDisposition::NativeApiFailure;
     }
     tracing::info!(
-        "[menu-input] click disposition={:?} target HWND={:?} class={:?} mapped=({},{}) bounds={:?}",
-        disp,
-        target.0,
-        class_name,
+        "[menu-input] forward_mouse_click: raw=({:.1}, {:.1}) mapped=({},{}) target_bounds={:?} disp={:?} target_hwnd={:?} class={:?}",
+        raw.0,
+        raw.1,
         pt.x,
         pt.y,
-        target_rect
+        target_rect,
+        disp,
+        target.0,
+        class_name
     );
     disp
 }
@@ -1130,7 +1161,8 @@ unsafe extern "system" fn overlay_wndproc(
                 // The native video surface owns mouse input on Windows, so the
                 // WebView does not reliably receive pointer coordinates. Forward
                 // the native client point directly to VLC's video child.
-                let _ = post_vlc_mouse_move(hwnd, WPARAM(0), lparam);
+                let (px, py) = unpack_mouse_lparam(lparam.0);
+                let _ = post_vlc_mouse_move(hwnd, WPARAM(0), lparam, (px as f64, py as f64));
             }
             if now.saturating_sub(LAST_MOUSE_MOVE.load(Ordering::Relaxed)) > 150 {
                 LAST_MOUSE_MOVE.store(now, Ordering::Relaxed);
@@ -1218,7 +1250,8 @@ unsafe extern "system" fn overlay_wndproc(
                         // The WebView may not receive this click because the
                         // native video surface owns hit-testing. Forward this
                         // native client point exactly once to VLC's video child.
-                        let _ = post_vlc_mouse_click(hwnd, lparam);
+                        let (px, py) = unpack_mouse_lparam(lparam.0);
+                        let _ = post_vlc_mouse_click(hwnd, lparam, (px as f64, py as f64));
                     } else {
                         // Single click on video -> toggle play/pause
                         if let Some(app) = overlay_app_handle() {
@@ -1573,7 +1606,8 @@ pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<InputDispos
         }
     };
 
-    let disp = unsafe { post_vlc_mouse_move(source_hwnd, WPARAM(0), mouse_point_lparam(x, y)) };
+    let disp =
+        unsafe { post_vlc_mouse_move(source_hwnd, WPARAM(0), mouse_point_lparam(x, y), (x, y)) };
     Ok(disp)
 }
 
@@ -1599,7 +1633,7 @@ pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<InputDispo
         }
     };
 
-    let disp = unsafe { post_vlc_mouse_click(source_hwnd, mouse_point_lparam(x, y)) };
+    let disp = unsafe { post_vlc_mouse_click(source_hwnd, mouse_point_lparam(x, y), (x, y)) };
     Ok(disp)
 }
 
@@ -1637,6 +1671,75 @@ mod tests {
         );
         assert_eq!(scale_client_point(320, 180, 1280, 720, 640, 360), (160, 90));
         assert_eq!(scale_client_point(-10, 5, 100, 50, 200, 100), (-20, 10));
+    }
+
+    #[test]
+    fn mouse_point_lparam_pack_unpack_round_trip() {
+        // (0, 0) origin
+        let lp = mouse_point_lparam(0.0, 0.0);
+        assert_eq!(unpack_mouse_lparam(lp.0), (0, 0));
+
+        // 1080p FHD coordinate
+        let lp = mouse_point_lparam(1920.0, 1080.0);
+        assert_eq!(unpack_mouse_lparam(lp.0), (1920, 1080));
+
+        // 4K UHD coordinate
+        let lp = mouse_point_lparam(3840.0, 2160.0);
+        assert_eq!(unpack_mouse_lparam(lp.0), (3840, 2160));
+
+        // Negative coordinates after letterbox/drag offset
+        let lp = mouse_point_lparam(-42.0, -18.0);
+        assert_eq!(unpack_mouse_lparam(lp.0), (-42, -18));
+
+        // Rounding fractional values
+        let lp = mouse_point_lparam(123.4, 567.8);
+        assert_eq!(unpack_mouse_lparam(lp.0), (123, 568));
+
+        // Clamping non-finite / NaN values to 0
+        let lp = mouse_point_lparam(f64::NAN, f64::INFINITY);
+        assert_eq!(unpack_mouse_lparam(lp.0), (0, 0));
+
+        // Clamping to i16 boundaries
+        let lp = mouse_point_lparam(-50000.0, 50000.0);
+        assert_eq!(unpack_mouse_lparam(lp.0), (i16::MIN, i16::MAX));
+    }
+
+    #[test]
+    fn point_within_client_rect_boundary_and_rejection() {
+        // Standard 1080p client rect
+        let (left, top, right, bottom) = (0, 0, 1920, 1080);
+
+        // Origin and interior points
+        assert!(is_point_within_client_rect(0, 0, left, top, right, bottom));
+        assert!(is_point_within_client_rect(
+            960, 540, left, top, right, bottom
+        ));
+        assert!(is_point_within_client_rect(
+            1919, 1079, left, top, right, bottom
+        ));
+
+        // Out of bounds: right and bottom boundary (exclusive)
+        assert!(!is_point_within_client_rect(
+            1920, 540, left, top, right, bottom
+        ));
+        assert!(!is_point_within_client_rect(
+            960, 1080, left, top, right, bottom
+        ));
+
+        // Out of bounds: negative coordinates (left and top)
+        assert!(!is_point_within_client_rect(
+            -1, 540, left, top, right, bottom
+        ));
+        assert!(!is_point_within_client_rect(
+            960, -1, left, top, right, bottom
+        ));
+
+        // Large 8K surface (7680 x 4320)
+        assert!(is_point_within_client_rect(7679, 4319, 0, 0, 7680, 4320));
+        assert!(!is_point_within_client_rect(7680, 4320, 0, 0, 7680, 4320));
+
+        // Empty rect
+        assert!(!is_point_within_client_rect(0, 0, 0, 0, 0, 0));
     }
 
     #[test]
