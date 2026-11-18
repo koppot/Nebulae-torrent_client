@@ -93,6 +93,22 @@ Applied on the ADC server (45.135.163.139, Ubuntu 22.04). Baseline before any ch
 
 `contact show` is disabled in production: `/etc/nebulae-reports/maintainers` does not exist, so every retrieval is denied (verified). No maintainer OS accounts have been named, so none were invented. Scheduled and manual purge still work.
 
+## Synthetic end-to-end test (2026-11-18, owner-approved, exactly three reports)
+
+Deployed revision: commit 6ed71aa (service tree d6a2b0a, identical to later HEAD). Discord channel status: **@everyone denied; remaining effective access not audited** (owner exception for this synthetic test only). Effective channel access and the privacy disclosure must be resolved before real-user intake is enabled.
+
+| Report | Ref | Linear | Discord message | Notes |
+| --- | --- | --- | --- | --- |
+| A text-only, synthetic contact, mention strings, markdown/fence content, same-ID replay | NBR-ED8HKK5F | ASI-33 | 1572690454074622085 | replay returned 200 with the same reference, no second issue |
+| B PNG + JPEG screenshots | NBR-TRBK36TX | ASI-34 | 1572691072411504756 | 2 images in Linear (private assets, SHA-256 equal to the intake copies) and 2 Discord attachments |
+| C failure drill | NBR-TNKS8QBJ | ASI-35 | 1572691309741740033 | see below |
+
+* Drill: an isolated copy of the configuration with an invalid Discord token, worker scoped with --ref. Result: Linear job done, Discord answered HTTP 401, classified as retryable with a 30-minute delay (job pending, next attempt 19:43:30 UTC), no Discord message. An immediate rerun did nothing (backoff held, no duplicate issue). Recovery was **manually triggered** with admin.php requeue NBR-TNKS8QBJ --kind discord at 19:13:47 UTC, then the scoped worker with the correct configuration posted the message and the link jobs completed. This verified the documented administrative path, not automatic retry after the full backoff. The production configuration file was not modified; the temporary copy was shredded.
+* Totals: 3 Linear issues (project Nebulae Bug Reports, Backlog, labels Bug, user-report, needs-triage), 3 Discord messages, 12 jobs done, 3 reports, 2 screenshots stored.
+* Isolation: the contact address appears in no Linear issue, no Discord message (mention_everyone false, no mentions), no log and no payload; the intake database holds it only as ciphertext.
+* Open observation: Linear returns the stored description with a 3-backtick fence even though the service sent a 4-backtick fence around text that contains a 3-backtick run. Whether Linear renders that text fully inside the code block has to be checked in the Linear UI (ASI-33).
+* State after the test: intake disabled, worker cron off, all records retained for inspection.
+
 ## Operations
 
 * `admin.php queue | show REF | requeue REF [--kind K] | metrics | alert-check | cleanup | disable | enable | contact …`
