@@ -40,6 +40,7 @@ pub fn is_definite_unwanted_entry(name: &str) -> bool {
     lower == "desktop.ini"
         || lower == ".ds_store"
         || lower == "thumbs.db"
+        || lower == "__macosx"
         || lower.starts_with("._")
         || lower.starts_with("_ds")
 }
@@ -605,6 +606,7 @@ mod tests {
             "data/._file.mkv".to_string(),
             "data/_DS_Store".to_string(),
             "windows/folder/Thumbs.db".to_string(),
+            "__MACOSX/._movie.mkv".to_string(),
             "clean/folder/video.mkv".to_string(),
             "hidden/.config/settings.json".to_string(),
         ];
@@ -628,7 +630,10 @@ mod tests {
         assert!(report
             .definite_unwanted
             .contains(&"windows/folder/Thumbs.db".to_string()));
-        assert_eq!(report.definite_unwanted.len(), 5);
+        assert!(report
+            .definite_unwanted
+            .contains(&"__MACOSX/._movie.mkv".to_string()));
+        assert_eq!(report.definite_unwanted.len(), 6);
 
         // Check needs review
         assert!(report.has_review);
