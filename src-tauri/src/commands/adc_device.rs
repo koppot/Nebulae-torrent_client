@@ -1127,6 +1127,109 @@ async fn poll_deliveries_from_server(
     Ok(poll_res.deliveries.unwrap_or_default())
 }
 
+/// A claim older than the tracker's 24h request TTL can no longer be redeemed.
+const RECOVERY_WINDOW_SECS: i64 = 23 * 3600;
+const RECOVERY_MAX_PER_CYCLE: usize = 3;
+const RECOVERY_RETRY_BASE_SECS: i64 = 60;
+const RECOVERY_RETRY_MAX_SECS: i64 = 900;
+
+/// Per-token (attempts, last attempt) so a request the tracker no longer lists is not
+/// re-polled every cycle.
+static RECOVERY_ATTEMPTS: LazyLock<std::sync::Mutex<HashMap<String, (u32, i64)>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn recovery_due(token: &str, now: i64) -> bool {
+    let attempts = RECOVERY_ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
+    match attempts.get(token) {
+        None => true,
+        Some((count, last)) => {
+            let wait = (RECOVERY_RETRY_BASE_SECS << (*count).min(5)).min(RECOVERY_RETRY_MAX_SECS);
+            now - last >= wait
+        }
+    }
+}
+
+fn note_recovery_attempt(token: &str, now: i64, succeeded: bool) {
+    let mut attempts = RECOVERY_ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
+    if succeeded {
+        attempts.remove(token);
+    } else {
+        let count = attempts.get(token).map(|(c, _)| *c).unwrap_or(0);
+        attempts.insert(token.to_string(), (count.saturating_add(1), now));
+    }
+}
+
+/// Tokens this account/device claimed locally but never finished, oldest first.
+fn recoverable_tokens(db: &Database, scope: &str, now: i64) -> Vec<String> {
+    let ledger = load_delivery_ledger(db);
+    let mut open: Vec<(i64, String)> = ledger
+        .entries
+        .iter()
+        .filter(|(_, e)| {
+            e.account_scope == scope
+                && !matches!(e.status, LocalDeliveryStatus::Delivered { .. })
+                && now - e.updated_at <= RECOVERY_WINDOW_SECS
+        })
+        .map(|(token, e)| (e.updated_at, token.clone()))
+        .collect();
+    open.sort();
+    open.into_iter().map(|(_, token)| token).collect()
+}
+
+/// Resumes requests left half-finished by an interrupted run. The ordinary delivery path
+/// already refuses to add a torrent the engine holds and only re-sends the final
+/// acknowledgement, so resuming cannot add a duplicate.
+async fn recover_interrupted_deliveries(
+    app: Option<&tauri::AppHandle>,
+    engine: &Arc<dyn TorrentEngine>,
+    db: &Arc<Database>,
+    transport: &dyn DeliveryTransport,
+    passkey: &str,
+    device_id: &str,
+) -> usize {
+    let scope = compute_account_scope(passkey, device_id);
+    let now = now_unix_secs();
+    let mut recovered = 0;
+    let mut tried = 0;
+
+    for token in recoverable_tokens(db, &scope, now) {
+        if tried >= RECOVERY_MAX_PER_CYCLE {
+            break;
+        }
+        if !recovery_due(&token, now) {
+            continue;
+        }
+        tried += 1;
+
+        let items = match transport
+            .poll_token_delivery(passkey, device_id, &token)
+            .await
+        {
+            Ok(items) => items,
+            Err(e) => {
+                tracing::debug!("[adc-delivery] recovery poll failed: {e}");
+                note_recovery_attempt(&token, now, false);
+                continue;
+            }
+        };
+        let Some(item) = items.into_iter().next() else {
+            // The tracker no longer lists it as open (delivered elsewhere or expired).
+            note_recovery_attempt(&token, now, false);
+            continue;
+        };
+
+        let ok =
+            process_single_delivery_item(app, engine, db, transport, passkey, device_id, &item)
+                .await
+                .is_ok();
+        note_recovery_attempt(&token, now, ok);
+        if ok {
+            recovered += 1;
+        }
+    }
+    recovered
+}
+
 /// Polls for incoming one-click download deliveries, downloads metainfo, adds to engine, and acknowledges.
 pub async fn poll_and_process_deliveries(
     app: &tauri::AppHandle,
@@ -1158,13 +1261,18 @@ pub async fn poll_and_process_deliveries(
 
     let _guard = DELIVERY_MUTEX.lock().await;
 
-    let deliveries = poll_deliveries_from_server(&client, &passkey, &device_id, None).await?;
-    if deliveries.is_empty() {
-        return Ok(0);
-    }
-
+    let polled = poll_deliveries_from_server(&client, &passkey, &device_id, None).await;
     let transport = LiveDeliveryTransport { client };
     let mut processed_count = 0;
+
+    // A request this client claimed but never finished (restart, crash, lost ack) is not
+    // listed by the plain poll, so it is resumed by token. Runs even when the plain poll
+    // was rate limited: token polls are not subject to that limit.
+    processed_count +=
+        recover_interrupted_deliveries(Some(app), engine, db, &transport, &passkey, &device_id)
+            .await;
+
+    let deliveries = polled?;
 
     for delivery in deliveries {
         if process_single_delivery_item(
@@ -1965,6 +2073,192 @@ mod tests {
                 .map(|e| &e.status),
             Some(LocalDeliveryStatus::Delivered { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn test_interrupted_claim_is_resumed_without_duplicate_add() {
+        let tmp = TempTestDir::new("delivery_recover_claimed");
+        let db = setup_linked_db(Some(&tmp.str_path()));
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let token = sample_token('7');
+        let passkey = "0123456789abcdef0123456789abcdef";
+        let device_id = get_or_create_device_id(&db);
+        let metainfo = make_valid_torrent_bytes("Interrupted.ISO", 4096);
+        let expected_hash = ParsedTorrent::parse_bytes(&metainfo).unwrap().info_hash;
+
+        // The previous run claimed the request and added the torrent, then stopped
+        // before the final acknowledgement.
+        engine
+            .add_torrent_from_bytes(&metainfo, Some(&tmp.str_path()))
+            .unwrap();
+        let mut ledger = load_delivery_ledger(&db);
+        ledger.entries.insert(
+            token.clone(),
+            LocalDeliveryEntry {
+                account_scope: compute_account_scope(passkey, &device_id),
+                queue_id: 501,
+                torrent_id: 77,
+                status: LocalDeliveryStatus::Claimed,
+                updated_at: now_unix_secs(),
+            },
+        );
+        save_delivery_ledger(&db, &mut ledger).unwrap();
+
+        let item = DeliveryItem {
+            queue_id: 501,
+            torrent_id: 77,
+            request_token: token.clone(),
+            status: Some("claimed".to_string()),
+            name: Some("Interrupted.ISO".to_string()),
+            info_hash: None,
+            created_at: None,
+            expires_at: None,
+        };
+        let transport = MockDeliveryTransport::success(item, metainfo);
+
+        let recovered =
+            recover_interrupted_deliveries(None, &engine, &db, &transport, passkey, &device_id)
+                .await;
+
+        assert_eq!(recovered, 1);
+        assert_eq!(*transport.poll_calls.lock().unwrap(), vec![token.clone()]);
+        assert_eq!(engine.list_torrents().unwrap().len(), 1, "no duplicate add");
+        assert_eq!(
+            transport
+                .ack_calls
+                .lock()
+                .unwrap()
+                .last()
+                .map(|c| c.4.clone()),
+            Some("delivered".to_string())
+        );
+        match load_delivery_ledger(&db)
+            .entries
+            .get(&token)
+            .map(|e| &e.status)
+        {
+            Some(LocalDeliveryStatus::Delivered { info_hash }) => {
+                assert!(info_hash.eq_ignore_ascii_case(&expected_hash))
+            }
+            other => panic!("expected Delivered, got {other:?}"),
+        }
+
+        // Finished work is not polled again.
+        let polls_before = transport.poll_calls.lock().unwrap().len();
+        let again =
+            recover_interrupted_deliveries(None, &engine, &db, &transport, passkey, &device_id)
+                .await;
+        assert_eq!(again, 0);
+        assert_eq!(transport.poll_calls.lock().unwrap().len(), polls_before);
+    }
+
+    #[tokio::test]
+    async fn test_recovery_backs_off_when_tracker_no_longer_lists_the_request() {
+        let tmp = TempTestDir::new("delivery_recover_gone");
+        let db = setup_linked_db(Some(&tmp.str_path()));
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let token = sample_token('8');
+        let passkey = "0123456789abcdef0123456789abcdef";
+        let device_id = get_or_create_device_id(&db);
+
+        let mut ledger = load_delivery_ledger(&db);
+        ledger.entries.insert(
+            token.clone(),
+            LocalDeliveryEntry {
+                account_scope: compute_account_scope(passkey, &device_id),
+                queue_id: 502,
+                torrent_id: 78,
+                status: LocalDeliveryStatus::Claimed,
+                updated_at: now_unix_secs(),
+            },
+        );
+        save_delivery_ledger(&db, &mut ledger).unwrap();
+
+        let item = DeliveryItem {
+            queue_id: 502,
+            torrent_id: 78,
+            request_token: token.clone(),
+            status: None,
+            name: None,
+            info_hash: None,
+            created_at: None,
+            expires_at: None,
+        };
+        let transport = MockDeliveryTransport::success(item, Vec::new());
+        *transport.poll_result.lock().unwrap() = Ok(Vec::new());
+
+        for _ in 0..4 {
+            let n =
+                recover_interrupted_deliveries(None, &engine, &db, &transport, passkey, &device_id)
+                    .await;
+            assert_eq!(n, 0);
+        }
+        assert_eq!(
+            transport.poll_calls.lock().unwrap().len(),
+            1,
+            "a request the tracker no longer lists must not be polled every cycle"
+        );
+        assert!(transport.ack_calls.lock().unwrap().is_empty());
+        assert!(engine.list_torrents().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_recovery_ignores_other_accounts_and_stale_claims() {
+        let db = setup_linked_db(None);
+        let passkey = "0123456789abcdef0123456789abcdef";
+        let device_id = get_or_create_device_id(&db);
+        let scope = compute_account_scope(passkey, &device_id);
+        let now = now_unix_secs();
+        let entry = |scope: &str, age: i64, status: LocalDeliveryStatus| LocalDeliveryEntry {
+            account_scope: scope.to_string(),
+            queue_id: 1,
+            torrent_id: 1,
+            status,
+            updated_at: now - age,
+        };
+        let mut ledger = load_delivery_ledger(&db);
+        ledger.entries.insert(
+            sample_token('1'),
+            entry(&scope, 10, LocalDeliveryStatus::Claimed),
+        );
+        ledger.entries.insert(
+            sample_token('2'),
+            entry("someone-else", 10, LocalDeliveryStatus::Claimed),
+        );
+        ledger.entries.insert(
+            sample_token('3'),
+            entry(
+                &scope,
+                RECOVERY_WINDOW_SECS + 5,
+                LocalDeliveryStatus::Claimed,
+            ),
+        );
+        ledger.entries.insert(
+            sample_token('4'),
+            entry(
+                &scope,
+                10,
+                LocalDeliveryStatus::Delivered {
+                    info_hash: "h".into(),
+                },
+            ),
+        );
+        ledger.entries.insert(
+            sample_token('5'),
+            entry(
+                &scope,
+                5,
+                LocalDeliveryStatus::AddedPendingAck {
+                    info_hash: "h".into(),
+                },
+            ),
+        );
+        save_delivery_ledger(&db, &mut ledger).unwrap();
+
+        assert_eq!(
+            recoverable_tokens(&db, &scope, now),
+            vec![sample_token('1'), sample_token('5')]
+        );
     }
 
     #[tokio::test]
