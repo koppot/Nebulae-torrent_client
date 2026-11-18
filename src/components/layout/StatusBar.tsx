@@ -54,7 +54,7 @@ interface VolumeSpace {
   used_percent: number;
 }
 
-const REPORT_FRESH_MS = 15 * 60 * 1000;
+const REPORT_FRESH_MS = 10 * 60 * 1000;
 
 export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
