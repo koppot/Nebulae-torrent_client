@@ -1,9 +1,9 @@
 name: Release
 
+# Manual only. Release assets for a tag are built and verified locally (patched
+# VLC, bundled runtimes, signed updater payloads) and uploaded by hand, so a tag
+# push must never rebuild and overwrite them with --clobber.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag_name:
