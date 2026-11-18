@@ -10,7 +10,7 @@ The Nebulae desktop app can drive a headless torrent engine running on a remote 
 ## Architecture & Bridge Repositories
 
 - **In-tree bridge (`server/`)**: This repository includes the `nebulae-server` crate (`server/`), an Actix-web REST bridge that translates authenticated `/api/v1/*` requests to a local **Transmission** JSON-RPC daemon (`TRANSMISSION_RPC_URL`, default `http://127.0.0.1:9091/transmission/rpc`).
-- **Standalone deployment repository**: Container packaging, Docker Compose/Unraid templates, and release automation are maintained in **<https://github.com/koppot/nebulae-server>**.
+- **Standalone distribution repository**: <https://github.com/koppot/nebulae-server> remains as the Unraid-template/distribution repository; the Docker sources for 0.2.8 live in `server/docker/` here (see *Docker Deployment*).
 
 ## Supported Bridge API Endpoints (`/api/v1/*`)
 
@@ -32,32 +32,90 @@ All endpoints require `Authorization: Bearer <NEBULAE_TOKEN>`:
 
 ## Docker Deployment
 
-Build and run from the repository root:
+### Source of truth
+
+The authoritative 0.2.8 source for the server image is **this repository**: `server/` (Rust bridge) and `server/docker/` (Dockerfile, `entrypoint.sh`, `docker-compose.yml`, `.env.example`, and `transmission-4.1.3-identity-override.patch`). The image bundles stock Transmission **4.1.3** (SHA-256 pinned at build) with the identity-override patch, and the `nebulae-server` bridge built from the same commit. The separate repository <https://github.com/koppot/nebulae-server> remains the distribution/Unraid-template repository; it is not removed, and the tagged image published from this repository is what the Unraid template and Compose file should point to.
+
+### Start (published image)
 
 ```bash
-export NEBULAE_TOKEN="your-secret-token"
-docker compose -f server/docker/docker-compose.yml up -d
+cd server/docker
+cp .env.example .env
+# edit .env: set NEBULAE_TOKEN (generate with: openssl rand -hex 32)
+docker compose pull
+docker compose up -d
+docker compose ps          # wait for "healthy"
 ```
 
-Or build manually:
+`.env` holds the token and must never be committed (it is git-ignored; only `.env.example`, which contains placeholders, is tracked). Compose refuses to start when `NEBULAE_TOKEN` is unset.
+
+### Build from source
+
+Build from the **repository root** (the build context needs `server/Cargo.*`, `server/src` and `server/docker/*`):
 
 ```bash
-docker build -f server/docker/Dockerfile -t nebulae-server .
-docker run -d \
-  -e NEBULAE_TOKEN="your-secret-token" \
+docker build -f server/docker/Dockerfile \
+  --build-arg BUILD_ID="$(git rev-parse HEAD)" \
+  -t ghcr.io/koppot/nebulae-server:0.2.8 .
+# or, from server/docker:  BUILD_ID=$(git rev-parse HEAD) docker compose build
+```
+
+Plain `docker run` equivalent:
+
+```bash
+docker run -d --name nebulae-server --restart unless-stopped \
+  -e NEBULAE_TOKEN="$NEBULAE_TOKEN" \
   -p 9174:9174 -p 51413:51413 -p 51413:51413/udp \
   -v nebulae-downloads:/data/downloads \
   -v nebulae-config:/data/config \
-  nebulae-server
+  -v nebulae-watch:/data/watch \
+  ghcr.io/koppot/nebulae-server:0.2.8
 ```
 
-Volumes:
+### Version and build identity
 
-| Volume | Path in container | Purpose |
+`GET /api/v1/status` (authenticated) reports the bridge `version` (0.2.8), the running Transmission `engine_version` (4.1.3, read live from the daemon) and the `build_id` (git commit baked in at build time). The image also carries OCI labels (`org.opencontainers.image.version`, `.revision`, `io.nebulae.transmission.version`, `io.nebulae.transmission.patch`); inspect with `docker image inspect <image> --format '{{json .Config.Labels}}'`.
+
+### Authentication and safe exposure
+
+- Every `/api/v1/*` call needs `Authorization: Bearer <NEBULAE_TOKEN>`; missing or wrong tokens get `401`.
+- The Transmission RPC port (9091) listens on `127.0.0.1` inside the container and is never published.
+- The API is plain HTTP. Do not expose port 9174 directly to the internet: put it behind a TLS reverse proxy, a VPN, or a Tailscale network, and forward only the peer port (51413 TCP+UDP) on your router.
+- Rotate the token by editing `.env` and running `docker compose up -d` (the container is recreated; torrents are kept), then update the token in the desktop Server tab.
+
+### Volumes, permissions and ports
+
+| Mount | Path in container | Purpose |
 |---|---|---|
-| `nebulae-downloads` | `/data/downloads` | Completed and in-progress downloads |
-| `nebulae-config` | `/data/config` | Transmission `settings.json` and resume files |
-| `nebulae-watch` | `/data/watch` | Drop `.torrent` files here to auto-add |
+| `DOWNLOAD_DIR` (default named volume `nebulae-downloads`) | `/data/downloads` | Completed and in-progress downloads |
+| `nebulae-config` | `/data/config` | Transmission `settings.json`, torrents and resume state |
+| `WATCH_DIR` (default named volume `nebulae-watch`) | `/data/watch` | Drop `.torrent` files here to auto-add |
+
+For host paths set `DOWNLOAD_DIR` / `WATCH_DIR` and `PUID` / `PGID` to the owning user of those folders; the entrypoint switches the container user to match and fixes ownership of `/data`.
+
+| Port | Purpose |
+|---|---|
+| `9174/tcp` (`NEBULAE_HOST_PORT`) | Authenticated REST API used by the desktop client |
+| `51413/tcp+udp` | BitTorrent peer port (forward on the router) |
+
+### Connect the desktop client
+
+Settings → **Server** → enable *Drive torrents on a Nebulae Server instead of locally* → URL `http://<host>:9174` and the token → **Test connection** → restart the app. The client then lists, adds, pauses/resumes, re-prioritizes files, relocates and sets sequential mode on the remote engine.
+
+### Update, stop, back up, roll back
+
+```bash
+cd server/docker
+docker compose stop                     # graceful: Transmission writes resume data first
+docker compose down                     # remove the container, keep the volumes
+NEBULAE_TAG=0.2.8 docker compose pull && docker compose up -d     # update to a tag
+# Back up configuration/resume state (the downloads volume is your data; copy it separately):
+docker run --rm -v nebulae-config:/c -v "$PWD":/b debian:bookworm-slim tar czf /b/nebulae-config-backup.tgz -C /c .
+# Roll back: set NEBULAE_TAG to the previous version and run `docker compose up -d`;
+# to restore configuration, extract the backup into the nebulae-config volume while the container is stopped.
+```
+
+Never run `docker compose down -v` unless you intend to delete the named volumes (config, resume state and, by default, downloads).
 
 ---
 
@@ -91,7 +149,7 @@ Previous Nebulae releases supported rTorrent over SCGI as a remote engine. The c
    - Enter `http://<server-ip>:9174` and your `NEBULAE_TOKEN`.
    - Click **Test connection**, then restart the app.
 
-5. **Peer port:** Open port `51413` (TCP + UDP) on your firewall/router, or set `PEER_PORT` to your preferred port in the Docker environment and update your firewall accordingly.
+5. **Peer port:** Open port `51413` (TCP + UDP) on your firewall/router, or change `peer-port` in `/data/config/settings.json` and the published ports to match.
 
 ### Not supported after migration
 

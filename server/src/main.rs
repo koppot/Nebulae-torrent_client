@@ -87,6 +87,12 @@ struct StatusResponse {
     paused_torrents: usize,
     kill_switch_engaged: bool,
     bound_interface: Option<String>,
+    /// Version string reported by the running Transmission daemon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engine_version: Option<String>,
+    /// Source revision this image was built from (NEBULAE_BUILD_ID at image build time).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -215,6 +221,10 @@ async fn get_status(req: HttpRequest, state: web::Data<Arc<AppState>>) -> HttpRe
         paused_torrents,
         kill_switch_engaged: state.kill_switch.load(Ordering::Relaxed),
         bound_interface: None,
+        engine_version: state.transmission.engine_version().await,
+        build_id: std::env::var("NEBULAE_BUILD_ID")
+            .ok()
+            .filter(|v| !v.is_empty()),
     })
 }
 
@@ -462,6 +472,12 @@ async fn set_torrent_file_priority(
     }
     let id = path.into_inner();
 
+    if body.priority > 3 {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "priority must be 0 (skip), 1 (normal) or 2 (high)"
+        }));
+    }
+
     match state
         .transmission
         .set_file_priority(&id, body.file_index, body.priority)
@@ -627,17 +643,21 @@ mod tests {
     fn status_response_serializes_engine_status_contract() {
         let status = StatusResponse {
             name: "nebulae-server".to_string(),
-            version: "0.1.0".to_string(),
+            version: "0.2.8".to_string(),
             engine: "transmission".to_string(),
             active_torrents: 3,
             paused_torrents: 2,
             kill_switch_engaged: true,
             bound_interface: Some("wg0".to_string()),
+            engine_version: Some("4.1.3 (test)".to_string()),
+            build_id: None,
         };
         let value = serde_json::to_value(&status).expect("serialize StatusResponse");
         assert_eq!(value["active_torrents"], 3);
         assert_eq!(value["paused_torrents"], 2);
         assert_eq!(value["kill_switch_engaged"], true);
         assert_eq!(value["bound_interface"], "wg0");
+        assert_eq!(value["engine_version"], "4.1.3 (test)");
+        assert!(value.get("build_id").is_none());
     }
 }

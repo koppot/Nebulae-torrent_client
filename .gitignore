@@ -46,6 +46,8 @@ ehthumbs.db
 # Environment and sensitive keys
 .env
 .env.*
+!.env.example
+!server/docker/.env.example
 *.pem
 *.key
 *.p12

@@ -49,6 +49,14 @@ EOF
     echo "Generated default Transmission settings at ${SETTINGS_FILE}"
 fi
 
+# Match the container user to the host owner of the mounted volumes when PUID/PGID are set.
+if [ -n "${PGID:-}" ] && [ "$PGID" != "$(id -g nebulae)" ]; then
+    groupmod -o -g "$PGID" nebulae
+fi
+if [ -n "${PUID:-}" ] && [ "$PUID" != "$(id -u nebulae)" ]; then
+    usermod -o -u "$PUID" nebulae
+fi
+
 # Fix permissions.
 chown -R nebulae:nebulae /data
 

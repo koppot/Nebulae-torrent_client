@@ -1,30 +1,40 @@
+# Nebulae Server (headless): Nebulae bridge + Transmission 4.1.3.
+# Copy .env.example to .env, set NEBULAE_TOKEN, then: docker compose up -d
+# Run from this directory (server/docker). Full guide: docs/nebulae-server.md
 services:
   nebulae-server:
+    # Published image by default; `docker compose build` builds the same tag from source.
+    image: "${NEBULAE_IMAGE:-ghcr.io/koppot/nebulae-server}:${NEBULAE_TAG:-0.2.8}"
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: nebulae-server:latest
+      context: ../..
+      dockerfile: server/docker/Dockerfile
+      args:
+        BUILD_ID: "${BUILD_ID:-unknown}"
     container_name: nebulae-server
     restart: unless-stopped
     environment:
-      NEBULAE_TOKEN: "${NEBULAE_TOKEN}"
-      NEBULAE_PORT: "${NEBULAE_PORT:-9174}"
-      NEBULAE_BIND: "${NEBULAE_BIND:-0.0.0.0}"
+      NEBULAE_TOKEN: "${NEBULAE_TOKEN:?Set NEBULAE_TOKEN in .env (see .env.example)}"
+      NEBULAE_PORT: "9174"
+      NEBULAE_BIND: "0.0.0.0"
       TRANSMISSION_RPC_URL: "http://127.0.0.1:9091/transmission/rpc"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
     ports:
-      - "${NEBULAE_PORT:-9174}:9174"
+      - "${NEBULAE_HOST_PORT:-9174}:9174"
       - "51413:51413"
       - "51413:51413/udp"
     volumes:
-      - nebulae-downloads:/data/downloads
-      - nebulae-config:/data/config
-      - nebulae-watch:/data/watch
+      # A host path (for example /mnt/user/media/downloads) or, by default, a named volume.
+      - "${DOWNLOAD_DIR:-nebulae-downloads}:/data/downloads"
+      - "nebulae-config:/data/config"
+      - "${WATCH_DIR:-nebulae-watch}:/data/watch"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "-H", "Authorization: Bearer ${NEBULAE_TOKEN}", "http://localhost:9174/api/v1/status"]
+      # The token is read inside the container so it is not repeated in the container config.
+      test: ["CMD-SHELL", "curl -sf -H \"Authorization: Bearer $$NEBULAE_TOKEN\" http://127.0.0.1:9174/api/v1/status >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
 
 volumes:
   nebulae-downloads:

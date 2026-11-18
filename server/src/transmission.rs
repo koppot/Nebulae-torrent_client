@@ -102,6 +102,17 @@ impl TransmissionClient {
         Err("Transmission RPC: max retries exceeded".to_string())
     }
 
+    /// Transmission's own version string (for example "4.1.3 (abcdef0123)").
+    pub async fn engine_version(&self) -> Option<String> {
+        let args = self
+            .rpc("session-get", Some(json!({ "fields": ["version"] })))
+            .await
+            .ok()?;
+        args.get("version")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
     /// List all torrents with full details.
     pub async fn list_torrents(&self) -> Result<Vec<ApiTorrentItem>, String> {
         let fields = json!([

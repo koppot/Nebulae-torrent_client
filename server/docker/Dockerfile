@@ -5,13 +5,16 @@
 #   Stage 1: Build nebulae-server (Rust)
 #   Stage 2: Build transmission-daemon 4.1.3 (C++ / CMake / Ninja) with ADC identity override patch
 #   Stage 3: Minimal Debian Bookworm runtime image
+#
+# Build context is the repository root:
+#   docker build -f server/docker/Dockerfile --build-arg BUILD_ID=$(git rev-parse HEAD) -t nebulae-server .
 
 # ── Stage 1: Build nebulae-server ──────────────────────────────────────────
 FROM rust:bookworm AS server-builder
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY server/Cargo.toml server/Cargo.lock ./
+COPY server/src ./src
 RUN cargo build --release --locked 2>/dev/null || cargo build --release
 
 # ── Stage 2: Build Transmission 4.1.3 ──────────────────────────────────────
@@ -43,7 +46,7 @@ RUN curl -fsSL "https://github.com/transmission/transmission/releases/download/$
     && echo "${TRANSMISSION_SHA256}  transmission.tar.xz" | sha256sum -c - \
     && tar -xJf transmission.tar.xz
 
-COPY docker/transmission-4.1.3-identity-override.patch /tmp/identity.patch
+COPY server/docker/transmission-4.1.3-identity-override.patch /tmp/identity.patch
 RUN patch -d "transmission-${TRANSMISSION_VERSION}" -p1 < /tmp/identity.patch
 
 WORKDIR /src/transmission-${TRANSMISSION_VERSION}/build
@@ -70,6 +73,19 @@ FROM debian:bookworm-slim
 
 ARG PUID=1000
 ARG PGID=1000
+ARG NEBULAE_VERSION=0.2.8
+ARG TRANSMISSION_VERSION=4.1.3
+ARG BUILD_ID=unknown
+
+LABEL org.opencontainers.image.title="Nebulae Server" \
+      org.opencontainers.image.description="Headless Nebulae bridge with Transmission 4.1.3" \
+      org.opencontainers.image.source="https://github.com/koppot/Nebulae-torrent_client" \
+      org.opencontainers.image.version="${NEBULAE_VERSION}" \
+      org.opencontainers.image.revision="${BUILD_ID}" \
+      io.nebulae.transmission.version="${TRANSMISSION_VERSION}" \
+      io.nebulae.transmission.patch="transmission-4.1.3-identity-override"
+
+ENV NEBULAE_BUILD_ID=${BUILD_ID}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -93,7 +109,7 @@ RUN groupadd -g ${PGID} nebulae && \
 # Copy built binaries
 COPY --from=server-builder /build/target/release/nebulae-server /usr/local/bin/nebulae-server
 COPY --from=transmission-builder /src/transmission-4.1.3/build/daemon/transmission-daemon /usr/local/bin/transmission-daemon
-COPY docker/entrypoint.sh /entrypoint.sh
+COPY server/docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /usr/local/bin/nebulae-server /usr/local/bin/transmission-daemon /entrypoint.sh
 
