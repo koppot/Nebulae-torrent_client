@@ -98,6 +98,15 @@ ${UnStrLoc}
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Register Capabilities for Default Programs / RegisteredApplications
+  WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationName" "Nebulae"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationDescription" "BitTorrent client by Asian DVD Club"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".torrent" "Nebulae.torrent"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".adc" "Nebulae.adc"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\URLAssociations" "magnet" "magnet"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\URLAssociations" "adc" "adc"
+  WriteRegStr HKCU "Software\RegisteredApplications" "Nebulae" "Software\Nebulae\Capabilities"
+
   ; magnet: URL scheme (deep links are not part of the bundler's config here)
   WriteRegStr HKCU "Software\Classes\magnet" "" "URL:BitTorrent Magnet Link"
   WriteRegStr HKCU "Software\Classes\magnet" "URL Protocol" ""
@@ -141,6 +150,9 @@ ${UnStrLoc}
     ${If} $R7 == '"$INSTDIR\nebulae.exe" "%1"'
       DeleteRegKey HKCU "Software\Classes\adc"
     ${EndIf}
+
+    DeleteRegValue HKCU "Software\RegisteredApplications" "Nebulae"
+    DeleteRegKey HKCU "Software\Nebulae\Capabilities"
 
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Torrent Client" "$INSTDIR\nebulae.exe"
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Transmission Daemon" "$INSTDIR\resources\engine\transmission\transmission-daemon.exe"
