@@ -596,21 +596,26 @@ impl TransmissionRpcClient {
     /// of a definitive IPv4 result. Passing `ip_protocol` forces the family the
     /// daemon is actually listening on.
     pub fn port_test(&self, ip_protocol: Option<&str>) -> Result<Option<bool>, String> {
-        let args = ip_protocol
-            .map(|p| json!({ "ip_protocol": p }))
-            .unwrap_or_else(|| json!({}));
-        match self.request("port-test", Some(args)) {
-            Ok(res) => Ok(parse_port_test_result(&res)),
-            // Some Transmission 4.1.3 builds (notably the stock Windows MSI
-            // daemon) do not accept the ip_protocol parameter and reject the
-            // port-test RPC outright. Retry without it so we still get a
-            // verdict when possible.
-            Err(_) if ip_protocol.is_some() => {
-                let res = self.request("port-test", Some(json!({})))?;
-                Ok(parse_port_test_result(&res))
+        let try_with = |proto: Option<&str>| -> Result<Option<bool>, String> {
+            let args = proto
+                .map(|p| json!({ "ip_protocol": p }))
+                .unwrap_or_else(|| json!({}));
+            let res = self.request("port-test", Some(args))?;
+            Ok(parse_port_test_result(&res))
+        };
+        // Try with the specified protocol first (e.g. ipv4 for IPv4-only bindings).
+        if let Some(proto) = ip_protocol {
+            match try_with(Some(proto)) {
+                Ok(Some(true)) => return Ok(Some(true)),
+                Ok(Some(false)) => return Ok(Some(false)),
+                // Non-boolean result or RPC error: fall through to retry without ip_protocol.
+                Ok(None) | Err(_) => {}
             }
-            Err(e) => Err(e),
         }
+        // Some Transmission 4.1.3 builds (notably the stock Windows MSI
+        // daemon) do not accept the ip_protocol parameter. Retry without it
+        // so we still get a verdict when possible.
+        try_with(None)
     }
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
         let fields = if ids.is_some() {
