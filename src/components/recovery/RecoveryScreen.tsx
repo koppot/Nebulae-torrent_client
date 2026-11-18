@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { DiagnosticSummary } from '../../types';
-import { AlertTriangle, RefreshCw, Copy, Check, Power } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Copy, Check, Power, Bug } from 'lucide-react';
+import { useUiStore } from '../../stores/uiStore';
+import { BugReportModal } from '../modals/BugReportModal';
 
 interface RecoveryScreenProps {
   error?: string | null;
@@ -162,9 +164,20 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
             ) : (
               <>
                 <Copy className="w-3.5 h-3.5 text-[#a3a3a3]" />
-                <span>Copy Diagnostic Report</span>
+                <span>Copy Diagnostics</span>
               </>
             )}
+          </button>
+
+          <button
+            onClick={() => useUiStore.getState().setShowBugReport(true, {
+              error: engineError ?? 'Engine Initialization Failure',
+              category: 'App Crash / Startup Failure',
+            })}
+            className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-[#333333] bg-[#141414] hover:bg-[#262626] text-white text-xs font-semibold transition"
+          >
+            <Bug className="w-3.5 h-3.5 text-[#e50914]" />
+            <span>Report Bug</span>
           </button>
         </div>
 
@@ -177,6 +190,8 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({ error: errorProp
           <span>Quit Application</span>
         </button>
       </div>
+
+      <BugReportModal />
     </div>
   );
 };

@@ -414,6 +414,7 @@ pub async fn link_adc_account(
     });
 
     let db_for_device_reg = Arc::clone(&db);
+    let db_for_inbox = Arc::clone(&db);
     tauri::async_runtime::spawn(async move {
         match tokio::task::spawn_blocking(move || {
             crate::commands::adc_device::register_device_sync(&db_for_device_reg)
@@ -428,6 +429,12 @@ pub async fn link_adc_account(
             }
             Err(e) => tracing::error!("[adc-device] spawn_blocking join error: {e}"),
         }
+
+        // Immediately fetch inbox for newly linked account
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = crate::commands::inbox::fetch_and_persist_inbox(None, &db_for_inbox);
+        })
+        .await;
     });
     Ok(profile)
 }
