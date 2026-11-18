@@ -37,7 +37,10 @@ export const AddTorrentModal: React.FC = () => {
 
   const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
   const [torrentSource, setTorrentSource] = useState('');
-  const [downloadDir, setDownloadDir] = useState(settings.download_directory);
+  // A Nebulae Server runs on another machine: this computer's folders mean nothing there, so
+  // the destination starts empty (the server default) and is only sent when typed explicitly.
+  const isRemoteEngine = engineMode === 'rtorrent_server';
+  const [downloadDir, setDownloadDir] = useState(isRemoteEngine ? '' : settings.download_directory);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [selectedFileSize, setSelectedFileSize] = useState<number | null>(null);
   const [selectedFileBytes, setSelectedFileBytes] = useState<number[] | null>(null);
@@ -145,7 +148,7 @@ export const AddTorrentModal: React.FC = () => {
   const submitAdd = async () => {
     const source = (torrentSource || selectedFileName || '').trim();
     if (!source || isSubmitting) return;
-    const targetDir = (downloadDir || settings.download_directory || '').trim();
+    const targetDir = (isRemoteEngine ? downloadDir : downloadDir || settings.download_directory || '').trim();
     try {
       setIsSubmitting(true);
       setErrorMessage(null);
@@ -162,7 +165,7 @@ export const AddTorrentModal: React.FC = () => {
         }
       }
       await addTorrent(source, targetDir, selectedFileBytes || undefined);
-      if (targetDir) {
+      if (targetDir && !isRemoteEngine) {
         await addRecentDirectory(targetDir);
       }
       setTorrentSource('');
@@ -374,7 +377,7 @@ export const AddTorrentModal: React.FC = () => {
 
   const handleFindContent = async () => {
     const source = (torrentSource || selectedFileName || '').trim();
-    const targetDir = (downloadDir || settings.download_directory || '').trim();
+    const targetDir = (isRemoteEngine ? downloadDir : downloadDir || settings.download_directory || '').trim();
     if (!source || !targetDir || matchLoading) return;
     // A bare filename (no directory component) means the webview could not
     // give us the absolute path — explain that instead of failing with a
@@ -745,8 +748,9 @@ export const AddTorrentModal: React.FC = () => {
                 value={downloadDir}
                 onChange={(e) => setDownloadDir(e.target.value)}
                 className="flex-1 px-3 py-1.5 rounded-lg bg-[#1f1f1f] border border-[#333333] text-white font-mono text-xs focus:outline-none focus:border-[#e50914]"
-                placeholder="/path/to/download"
+                placeholder={isRemoteEngine ? 'Server default (for example /data/downloads)' : '/path/to/download'}
               />
+              {!isRemoteEngine && (
               <button
                 type="button"
                 onClick={handleBrowseFolder}
@@ -755,10 +759,11 @@ export const AddTorrentModal: React.FC = () => {
                 <Folder className="w-3.5 h-3.5 text-[#e50914]" />
                 <span>Browse...</span>
               </button>
+              )}
             </div>
 
             {/* Recent Destination Buttons */}
-            {settings.recent_download_directories && settings.recent_download_directories.length > 0 && (
+            {!isRemoteEngine && settings.recent_download_directories && settings.recent_download_directories.length > 0 && (
               <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px] font-mono">
                 <span className="text-[#a3a3a3]">Recent:</span>
                 {settings.recent_download_directories.map((dirPath) => {
@@ -784,7 +789,7 @@ export const AddTorrentModal: React.FC = () => {
             )}
 
             {/* Default Location Warning */}
-            {!warningSuppressed && (!downloadDir || downloadDir.trim() === '' || downloadDir.trim() === settings.download_directory.trim()) && (
+            {!isRemoteEngine && !warningSuppressed && (!downloadDir || downloadDir.trim() === '' || downloadDir.trim() === settings.download_directory.trim()) && (
               <div className="mt-2.5 p-2.5 rounded-lg bg-[#241a1a] border border-[#7f1d1d] flex flex-col gap-1 text-xs text-[#fca5a5]">
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-[#ef4444] flex-shrink-0" />
