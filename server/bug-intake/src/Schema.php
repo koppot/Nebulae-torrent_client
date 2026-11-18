@@ -102,11 +102,17 @@ final class Schema
                 reason VARCHAR(200) NOT NULL
             )",
         ];
-        $db->transaction(function () use ($db, $statements): void {
-            foreach ($statements as $sql) {
+        // MySQL commits implicitly on DDL, so a wrapping transaction cannot make this atomic. Every statement
+        // therefore tolerates "already exists" and the version row is written last, making a partial run re-runnable.
+        foreach ($statements as $sql) {
+            try {
                 $db->pdo->exec($sql);
+            } catch (\PDOException $e) {
+                if (!in_array((int) ($e->errorInfo[1] ?? 0), [1050, 1061], true)) {
+                    throw $e;
+                }
             }
-            $db->run('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)', [Db::now()]);
-        });
+        }
+        $db->run('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)', [Db::now()]);
     }
 }

@@ -16,8 +16,13 @@ final class Db
 
     public static function connect(Config $c): self
     {
-        $pdo = new PDO($c->str('DB_DSN'), $c->str('DB_USER') ?: null, $c->str('DB_PASS') ?: null);
-        return new self($pdo);
+        return self::fromDsn($c->str('DB_DSN'), $c->str('DB_USER') ?: null, $c->str('DB_PASS') ?: null);
+    }
+
+    public static function fromDsn(string $dsn, ?string $user, ?string $pass): self
+    {
+        $opts = str_starts_with($dsn, 'mysql:') ? [PDO::MYSQL_ATTR_FOUND_ROWS => true] : [];
+        return new self(new PDO($dsn, $user, $pass, $opts));
     }
 
     public static function memory(): self
@@ -62,7 +67,9 @@ final class Db
         $this->pdo->beginTransaction();
         try {
             $r = $fn();
-            $this->pdo->commit();
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->commit();
+            }
             return $r;
         } catch (\Throwable $e) {
             if ($this->pdo->inTransaction()) {

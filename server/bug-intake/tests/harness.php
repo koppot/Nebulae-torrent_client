@@ -163,7 +163,20 @@ final class Env
             'DISCORD_BUGS_WEBHOOK_URL' => 'https://discord.com/api/webhooks/123456789012345678/TEST_webhook-token_ABC',
             'DISCORD_BUGS_CHANNEL_ID' => '777', 'DISCORD_GUILD_ID' => '999',
         ]);
-        $this->db = Db::memory();
+        $mysql = getenv('NEBULAE_TEST_MYSQL_DSN');
+        if ($mysql !== false && $mysql !== '') {
+            // One throwaway database per Env (like one :memory: db per Env); the DSN must not name a database.
+            $user = getenv('NEBULAE_TEST_MYSQL_USER') ?: null;
+            $pass = getenv('NEBULAE_TEST_MYSQL_PASS') ?: null;
+            $name = 'nebulae_reports_test_' . bin2hex(random_bytes(4));
+            Db::fromDsn($mysql, $user, $pass)->pdo->exec("CREATE DATABASE $name CHARACTER SET utf8mb4");
+            $this->db = Db::fromDsn($mysql . ';dbname=' . $name, $user, $pass);
+            register_shutdown_function(static function () use ($mysql, $user, $pass, $name): void {
+                Db::fromDsn($mysql, $user, $pass)->pdo->exec("DROP DATABASE IF EXISTS $name");
+            });
+        } else {
+            $this->db = Db::memory();
+        }
         Schema::migrate($this->db);
         $this->net = new FakeNet();
         $log = new Log($this->logFile);

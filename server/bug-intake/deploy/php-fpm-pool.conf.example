@@ -1,4 +1,4 @@
-; /etc/php/8.2/fpm/pool.d/nebulae-reports.conf (new file; the default www pool is untouched)
+; /etc/php/8.3/fpm/pool.d/nebulae-reports.conf (new file; the default www pool is untouched)
 [nebulae-reports]
 user = nebulae-reports
 group = nebulae-reports
