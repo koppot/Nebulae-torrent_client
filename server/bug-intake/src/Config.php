@@ -39,6 +39,7 @@ final class Config
         'IP_HASH_KEY' => '',
         'RETENTION_ATTACHMENT_DAYS' => '30',
         'RETENTION_REPORT_DAYS' => '365',
+        'RETENTION_STUCK_DAYS' => '14',
         'RETENTION_CONTACT_DAYS' => '90',
         'CONTACT_KEY_FILE' => '/etc/nebulae-reports/contact.key',
         'MAINTAINERS_FILE' => '/etc/nebulae-reports/maintainers',

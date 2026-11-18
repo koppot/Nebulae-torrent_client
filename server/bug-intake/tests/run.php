@@ -299,6 +299,22 @@ T::eq(Maintenance::cleanup($c->db, $c->config, $c->vault)['orphans_removed'], 1,
 $c->db->run('UPDATE reports SET created_at = ?', [Db::now(-86400 * 400)]);
 T::eq(Maintenance::cleanup($c->db, $c->config, $c->vault)['reports_deleted'], 1, 'report row deleted after retention');
 
+// ---- Dead-letter retention ----
+$c = new Env();
+$c->submit(Env::report(), [Env::png()]);
+$blob = $c->dir . '/' . $c->db->one('SELECT blob_path FROM attachments')['blob_path'];
+$c->db->run("UPDATE reports SET created_at = ?", [Db::now(-86400 * 60)]);
+$c->db->run("UPDATE jobs SET state = 'stuck', updated_at = ?", [Db::now(-86400 * 3)]);
+Maintenance::cleanup($c->db, $c->config, $c->vault);
+T::ok(is_file($blob), 'blob kept while a stuck job is within the dead-letter window');
+$c->db->run("UPDATE jobs SET updated_at = ?", [Db::now(-86400 * 20)]);
+$res = Maintenance::cleanup($c->db, $c->config, $c->vault);
+T::eq($res['jobs_abandoned'], 2, 'stuck jobs abandoned after the dead-letter window');
+Maintenance::cleanup($c->db, $c->config, $c->vault);
+T::ok(!is_file($blob), 'screenshot purged once the jobs are abandoned');
+$c->db->run('UPDATE reports SET created_at = ?', [Db::now(-86400 * 400)]);
+T::eq(Maintenance::cleanup($c->db, $c->config, $c->vault)['reports_deleted'], 1, 'abandoned report deleted at report retention');
+
 // ---- Client address resolution ----
 $cf = ['173.245.48.0/20', '2400:cb00::/32'];
 T::eq(NebulaeIntake\ClientIp::resolve('173.245.50.1', '198.51.100.9', $cf), '198.51.100.9', 'CF header trusted from a Cloudflare peer');

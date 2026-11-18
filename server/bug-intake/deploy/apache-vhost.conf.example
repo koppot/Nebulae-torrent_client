@@ -32,8 +32,10 @@
     # Everything is routed to the single front controller. No other file in the tree is served.
     <Directory /opt/nebulae-reports/public>
         Require all granted
-        Options -Indexes -FollowSymLinks
+        Options -Indexes +SymLinksIfOwnerMatch
         AllowOverride None
+        # Pass the Authorization (receipt token) header through to PHP-FPM; Apache strips it otherwise.
+        CGIPassAuth On
         RewriteEngine On
         RewriteCond %{REQUEST_FILENAME} !-f
         RewriteRule ^ /index.php [L]

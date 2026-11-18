@@ -12,7 +12,7 @@ final class Maintenance
         foreach ($db->all('SELECT kind, state, COUNT(*) AS n FROM jobs GROUP BY kind, state') as $r) {
             $by[$r['kind'] . ':' . $r['state']] = (int) $r['n'];
         }
-        $oldest = $db->one("SELECT MIN(created_at) AS t FROM jobs WHERE state <> 'done'");
+        $oldest = $db->one("SELECT MIN(created_at) AS t FROM jobs WHERE state NOT IN ('done','abandoned')");
         $age = $oldest && $oldest['t'] ? (int) ((time() - strtotime($oldest['t'] . ' UTC')) / 60) : null;
         return [
             'reports_total' => (int) ($db->one('SELECT COUNT(*) AS n FROM reports')['n'] ?? 0),
@@ -28,14 +28,21 @@ final class Maintenance
     /** Retention and orphan cleanup. Never touches blobs that a pending delivery still needs. */
     public static function cleanup(Db $db, Config $config, ContactVault $vault): array
     {
-        $out = ['attachments_purged' => 0, 'orphans_removed' => 0, 'reports_deleted' => 0, 'contacts_purged' => 0];
+        $out = ['jobs_abandoned' => 0, 'attachments_purged' => 0, 'orphans_removed' => 0, 'reports_deleted' => 0, 'contacts_purged' => 0];
         $out['contacts_purged'] = $vault->purge();
+
+        // Dead letter: a job that exhausted its retries ('stuck') is kept for RETENTION_STUCK_DAYS so a maintainer can
+        // requeue it after fixing the cause, then abandoned. Abandoned jobs no longer pin screenshots or the report.
+        $out['jobs_abandoned'] = $db->run(
+            "UPDATE jobs SET state = 'abandoned', updated_at = ? WHERE state = 'stuck' AND updated_at < ?",
+            [Db::now(), Db::now(-86400 * $config->int('RETENTION_STUCK_DAYS'))]
+        )->rowCount();
 
         $cut = Db::now(-86400 * $config->int('RETENTION_ATTACHMENT_DAYS'));
         $rows = $db->all(
             "SELECT a.id, a.blob_path FROM attachments a JOIN reports r ON r.id = a.report_id
              WHERE a.purged_at IS NULL AND r.created_at < ?
-               AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.report_id = r.id AND j.state <> 'done')",
+               AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.report_id = r.id AND j.state NOT IN ('done','abandoned'))",
             [$cut]
         );
         foreach ($rows as $a) {
@@ -61,7 +68,7 @@ final class Maintenance
 
         $old = Db::now(-86400 * $config->int('RETENTION_REPORT_DAYS'));
         foreach ($db->all('SELECT id FROM reports WHERE created_at < ?', [$old]) as $r) {
-            if ($db->one("SELECT id FROM jobs WHERE report_id = ? AND state <> 'done'", [$r['id']]) !== null) {
+            if ($db->one("SELECT id FROM jobs WHERE report_id = ? AND state NOT IN ('done','abandoned')", [$r['id']]) !== null) {
                 continue;
             }
             $db->transaction(function () use ($db, $r): void {

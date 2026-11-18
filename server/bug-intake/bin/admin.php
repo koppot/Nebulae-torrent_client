@@ -50,7 +50,7 @@ switch ($cmd) {
         break;
     case 'requeue': // controlled reprocessing: only resets scheduling, never creates duplicates (delivery is idempotent per step)
         $kind = opt($argv, 'kind');
-        $sql = "UPDATE jobs SET state = 'pending', attempts = 0, locked_until = NULL, next_attempt_at = ?, updated_at = ? WHERE state <> 'done' AND report_id IN (SELECT id FROM reports WHERE report_ref = ?)";
+        $sql = "UPDATE jobs SET state = 'pending', attempts = 0, locked_until = NULL, next_attempt_at = ?, updated_at = ? WHERE state IN ('pending','stuck') AND report_id IN (SELECT id FROM reports WHERE report_ref = ?)";
         $params = [Db::now(), Db::now(), $arg];
         if ($kind !== null) {
             $sql .= ' AND kind = ?';
