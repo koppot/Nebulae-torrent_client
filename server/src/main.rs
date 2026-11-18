@@ -474,7 +474,7 @@ async fn set_torrent_file_priority(
 
     if body.priority > 3 {
         return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "priority must be 0 (skip), 1 (normal) or 2 (high)"
+            "error": "priority must be 0 (skip), 1 (normal), 2 (high) or 3 (maximum, treated as high)"
         }));
     }
 
