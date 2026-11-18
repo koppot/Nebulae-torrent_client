@@ -1,6 +1,31 @@
 --- a/libtransmission/peer-msgs.cc
 +++ b/libtransmission/peer-msgs.cc
-@@ -1198,7 +1198,15 @@
+@@ -175,7 +175,7 @@
+ auto constexpr MinChokePeriodSec = time_t{ 10 };
+ 
+ // idle seconds before we send a keepalive
+-auto constexpr KeepaliveIntervalSecs = time_t{ 100 };
++auto constexpr KeepaliveIntervalSecs = time_t{ 60 };
+ 
+ auto constexpr MetadataReqQ = size_t{ 64U };
+ 
+@@ -458,6 +458,15 @@
+         {
+             set_client_interested(interested);
+             protocol_send_interest(interested);
++            if (interested)
++            {
++                // Some seedboxes (rtorrent/libtorrent 0.13 family) only act on a
++                // fresh interested message once more traffic arrives on the
++                // connection; a keepalive straight after it gets the peer
++                // unchoked immediately instead of never.
++                logtrace(this, "NEBULAE_INTEREST_KEEPALIVE");
++                protocol_send_keepalive();
++            }
+             update_active(TR_PEER_TO_CLIENT);
+         }
+     }
+@@ -1198,7 +1207,15 @@
      // Client name and version (as a utf-8 string). This is a much more
      // reliable way of identifying the client than relying on the
      // peer id encoding.

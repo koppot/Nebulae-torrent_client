@@ -73,6 +73,7 @@ is_patched_daemon() {
     [ -n "$bin" ] && [ -x "$bin" ] && \
         grep -q -a "TRANSMISSION_PEER_ID_PREFIX" "$bin" && \
         grep -q -a "TRANSMISSION_PEER_ID_SUFFIX" "$bin" && \
+        grep -q -a "NEBULAE_INTEREST_KEEPALIVE" "$bin" && \
         grep -q -a "TRANSMISSION_USER_AGENT" "$bin"
 }
 
