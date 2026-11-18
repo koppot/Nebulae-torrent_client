@@ -321,6 +321,8 @@ mod windows_impl {
         layout: super::BandLayout,
         /// True when the band must be suppressed due to insufficient taskbar space.
         hide_no_space: bool,
+        /// Free span between the last task button and the right-hand controls (diagnostics).
+        span: (i32, i32),
     }
 
     /// Right edge (screen px) of the last real task button, read from the taskbar's
@@ -382,6 +384,7 @@ mod windows_impl {
                         h: l.height,
                         layout: l,
                         hide_no_space: false,
+                        span: (0, 0),
                     };
                 }
             };
@@ -499,6 +502,7 @@ mod windows_impl {
                     h: tray_h,
                     layout,
                     hide_no_space: false,
+                    span: (left_wall, right_wall),
                 },
                 None => BandPlacement {
                     x: left_wall,
@@ -507,6 +511,7 @@ mod windows_impl {
                     h: tray_h,
                     layout,
                     hide_no_space: true,
+                    span: (left_wall, right_wall),
                 },
             }
         }
@@ -578,18 +583,21 @@ mod windows_impl {
         // or when a fullscreen window covers its monitor.
         let now_fullscreen = foreground_is_fullscreen_on_band_monitor(hwnd);
         let want_hidden = p.hide_no_space || now_fullscreen;
-        let was_suppressed = FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed);
-
-        if want_hidden == was_suppressed {
+        // Compare with the window's real state, not only the suppression flag: the band can be
+        // created hidden (no room at startup) while the flag still reads "not suppressed".
+        let visible = unsafe { IsWindowVisible(hwnd).as_bool() };
+        FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
+        if want_hidden == !visible {
             return; // No state change — nothing to do.
         }
-        FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
         tracing::info!(
             hidden = want_hidden,
             no_space = p.hide_no_space,
             fullscreen = now_fullscreen,
             x = p.x,
             width = p.w,
+            free_span_left = p.span.0,
+            free_span_right = p.span.1,
             "taskbar speed band visibility changed"
         );
         unsafe {
