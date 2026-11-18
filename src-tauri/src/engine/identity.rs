@@ -170,6 +170,84 @@ pub fn check_daemon_identity_support(daemon_path: &Path) -> bool {
     }
 }
 
+const PEER_ID_SUFFIX_POOL: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+const PEER_ID_SUFFIX_FILE: &str = "peer-id-suffix";
+
+/// A peer id suffix is the 12 characters after the 8-byte client prefix.
+pub fn is_valid_peer_id_suffix(s: &str) -> bool {
+    s.len() == 12 && s.bytes().all(|b| PEER_ID_SUFFIX_POOL.contains(&b))
+}
+
+pub fn generate_peer_id_suffix() -> String {
+    let id = uuid::Uuid::new_v4();
+    id.as_bytes()
+        .iter()
+        .take(12)
+        .map(|b| PEER_ID_SUFFIX_POOL[*b as usize % PEER_ID_SUFFIX_POOL.len()] as char)
+        .collect()
+}
+
+/// Returns the install's persistent peer id suffix, creating it on first use.
+///
+/// Transmission otherwise picks a fresh random suffix on every start, so a
+/// restart (or a crash that never sent the tracker a `stopped` event) makes
+/// the tracker see a second client for the same torrents.
+pub fn load_or_create_peer_id_suffix(engine_dir: &Path) -> String {
+    let path = engine_dir.join(PEER_ID_SUFFIX_FILE);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if is_valid_peer_id_suffix(existing) {
+            return existing.to_string();
+        }
+    }
+    let fresh = generate_peer_id_suffix();
+    let _ = std::fs::write(&path, &fresh);
+    fresh
+}
+
+/// Whether the daemon was built with the stable peer id suffix hook.
+pub fn check_daemon_peer_id_suffix_support(daemon_path: &Path) -> bool {
+    std::fs::read(daemon_path)
+        .map(|bytes| {
+            let needle = b"TRANSMISSION_PEER_ID_SUFFIX";
+            bytes.windows(needle.len()).any(|w| w == needle)
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod peer_id_suffix_tests {
+    use super::*;
+
+    #[test]
+    fn generated_suffix_is_valid() {
+        for _ in 0..50 {
+            assert!(is_valid_peer_id_suffix(&generate_peer_id_suffix()));
+        }
+    }
+
+    #[test]
+    fn rejects_bad_suffixes() {
+        assert!(!is_valid_peer_id_suffix("short"));
+        assert!(!is_valid_peer_id_suffix("ABCDEFGHIJKL"));
+        assert!(!is_valid_peer_id_suffix("0123456789a-"));
+        assert!(is_valid_peer_id_suffix("0123456789ab"));
+    }
+
+    #[test]
+    fn suffix_persists_across_loads_and_repairs_corruption() {
+        let dir = std::env::temp_dir().join(format!("neb-suffix-{}", generate_peer_id_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = load_or_create_peer_id_suffix(&dir);
+        assert_eq!(first, load_or_create_peer_id_suffix(&dir));
+        std::fs::write(dir.join("peer-id-suffix"), "garbage").unwrap();
+        let repaired = load_or_create_peer_id_suffix(&dir);
+        assert!(is_valid_peer_id_suffix(&repaired));
+        assert_eq!(repaired, load_or_create_peer_id_suffix(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Status payload returned to the Settings UI to accurately represent
 /// active engine identity, configured profile, and engine capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize)]

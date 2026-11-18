@@ -112,6 +112,7 @@ if [ -z "$DAEMON_BIN" ] || [ ! -x "$DAEMON_BIN" ]; then
 fi
 
 if ! grep -q -a "TRANSMISSION_PEER_ID_PREFIX" "$DAEMON_BIN" || \
+   ! grep -q -a "TRANSMISSION_PEER_ID_SUFFIX" "$DAEMON_BIN" || \
    ! grep -q -a "TRANSMISSION_USER_AGENT" "$DAEMON_BIN"; then
     echo "ERROR: Built transmission-daemon at $DAEMON_BIN lacks required identity overrides!"
     exit 1

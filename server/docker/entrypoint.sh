@@ -63,7 +63,18 @@ chown -R nebulae:nebulae /data
 # ── Start Transmission daemon ──────────────────────────────────────────────
 
 TRANS_CONFIG_DIR="${TRANSMISSION_HOME}"
-TRANS_CMD="transmission-daemon --config-dir ${TRANS_CONFIG_DIR} --foreground --log-level=info"
+# Keep one peer id across restarts so a recreated container is not seen by the
+# tracker as a second client. The suffix lives in the persisted config volume.
+SUFFIX_FILE="${TRANS_CONFIG_DIR}/peer-id-suffix"
+if ! grep -qE '^[0-9a-z]{12}$' "${SUFFIX_FILE}" 2>/dev/null; then
+    head -c 512 /dev/urandom | tr -dc '0-9a-z' | head -c 12 > "${SUFFIX_FILE}" || true
+fi
+PEER_ID_SUFFIX="$(cat "${SUFFIX_FILE}" 2>/dev/null || true)"
+if ! printf '%s' "${PEER_ID_SUFFIX}" | grep -qE '^[0-9a-z]{12}$'; then
+    PEER_ID_SUFFIX=""
+fi
+chown nebulae:nebulae "${SUFFIX_FILE}" 2>/dev/null || true
+TRANS_CMD="TRANSMISSION_PEER_ID_SUFFIX=${PEER_ID_SUFFIX} transmission-daemon --config-dir ${TRANS_CONFIG_DIR} --foreground --log-level=info"
 
 echo "Starting Transmission daemon..."
 su -s /bin/sh nebulae -c "${TRANS_CMD}" &

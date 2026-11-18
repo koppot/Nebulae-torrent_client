@@ -72,6 +72,7 @@ is_patched_daemon() {
     local bin="$1"
     [ -n "$bin" ] && [ -x "$bin" ] && \
         grep -q -a "TRANSMISSION_PEER_ID_PREFIX" "$bin" && \
+        grep -q -a "TRANSMISSION_PEER_ID_SUFFIX" "$bin" && \
         grep -q -a "TRANSMISSION_USER_AGENT" "$bin"
 }
 

@@ -290,6 +290,10 @@ fn cleanup_orphan_daemon(config_dir: &Path) {
     }
 }
 
+/// Upper bound for the daemon to finish its `stopped` tracker announces and
+/// flush resume state after `session-close`.
+pub const ENGINE_GRACEFUL_STOP_MAX: Duration = Duration::from_secs(20);
+
 /// Terminate process by PID if it appears to be transmission-daemon.
 fn terminate_pid_if_transmission(pid: u32) {
     if pid == 0 || pid == std::process::id() {
@@ -1567,6 +1571,8 @@ impl TransmissionTorrentEngine {
 
         let daemon_supports_identity =
             crate::engine::identity::check_daemon_identity_support(&daemon_path);
+        let daemon_supports_suffix =
+            crate::engine::identity::check_daemon_peer_id_suffix_support(&daemon_path);
         let app_version = crate::engine::identity::get_app_version();
         let nebulae_ua_res = crate::engine::identity::derive_nebulae_user_agent(app_version);
         let nebulae_prefix_res =
@@ -1636,6 +1642,15 @@ impl TransmissionTorrentEngine {
             cmd.env_remove("TRANSMISSION_USER_AGENT");
             cmd.env_remove("TRANSMISSION_PEER_ID_PREFIX");
             info!("[identity] launched daemon with stock Transmission identity");
+        }
+        if daemon_supports_suffix {
+            cmd.env(
+                "TRANSMISSION_PEER_ID_SUFFIX",
+                crate::engine::identity::load_or_create_peer_id_suffix(&engine_dir),
+            );
+        } else {
+            cmd.env_remove("TRANSMISSION_PEER_ID_SUFFIX");
+            warn!("[identity] daemon has no stable peer-id hook; peer id changes on every engine start");
         }
         // transmission-daemon is a CONSOLE program: without CREATE_NO_WINDOW
         // Windows opens a cmd window (showing the engine dir) next to the app.
@@ -1747,6 +1762,7 @@ impl TransmissionTorrentEngine {
             let spawned_prefix_watch = spawned_prefix.clone();
             let spawned_profile_watch = spawned_profile.clone();
             let daemon_supports_identity_watch = daemon_supports_identity;
+            let daemon_supports_suffix_watch = daemon_supports_suffix;
             let is_shutting_down_watch = Arc::clone(&is_shutting_down);
             let rpc_client_watch = Arc::clone(&rpc_client);
             let db_watch = Arc::clone(&db);
@@ -1850,6 +1866,14 @@ impl TransmissionTorrentEngine {
                         } else {
                             cmd.env_remove("TRANSMISSION_USER_AGENT");
                             cmd.env_remove("TRANSMISSION_PEER_ID_PREFIX");
+                        }
+                        if daemon_supports_suffix_watch {
+                            cmd.env(
+                                "TRANSMISSION_PEER_ID_SUFFIX",
+                                crate::engine::identity::load_or_create_peer_id_suffix(
+                                    &engine_dir_watch,
+                                ),
+                            );
                         }
                         #[cfg(target_os = "windows")]
                         {
@@ -2225,9 +2249,14 @@ impl TransmissionTorrentEngine {
         let _ = self.rpc_client.request("session-close", None);
         if let Ok(mut lock) = self.child_process.lock() {
             if let Some(ref mut child) = *lock {
-                // Bounded wait for transmission-daemon to flush fastresume state and settings to disk
+                // On `session-close` the daemon sends a `stopped` announce for every
+                // torrent before it exits (about 7 s for 7 torrents at 0.8 s tracker
+                // latency). Killing it earlier leaves the old peer_id registered at
+                // the tracker, and private trackers then reject the next session's
+                // new peer_id as a second client. The wait ends as soon as the
+                // daemon exits; the cap only bounds an unresponsive daemon.
                 let start = std::time::Instant::now();
-                let timeout = std::time::Duration::from_millis(2500);
+                let timeout = ENGINE_GRACEFUL_STOP_MAX;
                 let mut exited = false;
                 while start.elapsed() < timeout {
                     match child.try_wait() {
@@ -3423,12 +3452,24 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {
+        self.set_files_priority(id, &[file_index], priority)
+    }
+
+    fn set_files_priority(
+        &self,
+        id: &str,
+        file_indices: &[u32],
+        priority: u8,
+    ) -> Result<(), String> {
+        if file_indices.is_empty() {
+            return Ok(());
+        }
         // UI scale: 0 = do not download, 1 = normal, 2 = high, 3 = max.
         // Transmission RPC has three wanted-file priority buckets
         // (priority-low / priority-normal / priority-high); "maximum"
         // collapses into priority-high.
         let args = if priority == 0 {
-            json!({ "files-unwanted": [file_index] })
+            json!({ "files-unwanted": file_indices })
         } else {
             let bucket = match priority {
                 1 => "priority-normal",
@@ -3436,8 +3477,8 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 _ => "priority-normal",
             };
             let mut map = serde_json::Map::new();
-            map.insert("files-wanted".to_string(), json!([file_index]));
-            map.insert(bucket.to_string(), json!([file_index]));
+            map.insert("files-wanted".to_string(), json!(file_indices));
+            map.insert(bucket.to_string(), json!(file_indices));
             Value::Object(map)
         };
         self.rpc_client.torrent_set(id, args)

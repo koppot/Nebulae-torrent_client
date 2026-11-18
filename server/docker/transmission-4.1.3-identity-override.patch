@@ -1,31 +1,3 @@
---- a/libtransmission/session.cc
-+++ b/libtransmission/session.cc
-@@ -189,8 +189,11 @@
- 
-     // starts with -TRXXXX-
-     auto constexpr Prefix = std::string_view{ PEERID_PREFIX };
-+    auto const custom_prefix = tr_env_get_string("TRANSMISSION_PEER_ID_PREFIX");
-+    auto const effective_prefix = custom_prefix.size() == 8 ?
-+        std::string_view{ custom_prefix } : Prefix;
-     auto const* const end = it + std::size(peer_id);
--    it = std::copy_n(std::data(Prefix), std::size(Prefix), it);
-+    it = std::copy_n(std::data(effective_prefix), std::size(effective_prefix), it);
- 
-     // remainder is randomly-generated characters
-     auto constexpr Pool = std::string_view{ "0123456789abcdefghijklmnopqrstuvwxyz" };
-@@ -320,6 +323,11 @@
- 
- std::optional<std::string_view> tr_session::WebMediator::userAgent() const
- {
-+    static std::string const custom_ua = tr_env_get_string("TRANSMISSION_USER_AGENT");
-+    if (!custom_ua.empty())
-+    {
-+        return custom_ua;
-+    }
-     return TR_NAME "/" SHORT_VERSION_STRING;
- }
- 
-
 --- a/libtransmission/peer-msgs.cc
 +++ b/libtransmission/peer-msgs.cc
 @@ -1198,7 +1198,15 @@
@@ -45,3 +17,43 @@
  
      // https://www.bittorrent.org/beps/bep_0021.html
      // A peer that is a partial seed SHOULD include an extra header in
+--- a/libtransmission/session.cc
++++ b/libtransmission/session.cc
+@@ -189,11 +189,24 @@
+ 
+     // starts with -TRXXXX-
+     auto constexpr Prefix = std::string_view{ PEERID_PREFIX };
++    auto const custom_prefix = tr_env_get_string("TRANSMISSION_PEER_ID_PREFIX");
++    auto const effective_prefix = custom_prefix.size() == 8 ?
++        std::string_view{ custom_prefix } : Prefix;
+     auto const* const end = it + std::size(peer_id);
+-    it = std::copy_n(std::data(Prefix), std::size(Prefix), it);
++    it = std::copy_n(std::data(effective_prefix), std::size(effective_prefix), it);
+ 
+     // remainder is randomly-generated characters
+     auto constexpr Pool = std::string_view{ "0123456789abcdefghijklmnopqrstuvwxyz" };
++    // A stable per-install suffix keeps the same peer id across engine restarts
++    // so private trackers do not see a restart as a second client.
++    auto const custom_suffix = tr_env_get_string("TRANSMISSION_PEER_ID_SUFFIX");
++    if (static_cast<std::ptrdiff_t>(std::size(custom_suffix)) == end - it &&
++        custom_suffix.find_first_not_of(Pool) == std::string::npos)
++    {
++        std::copy(std::begin(custom_suffix), std::end(custom_suffix), it);
++        return peer_id;
++    }
++
+     auto total = 0;
+     tr_rand_buffer(it, end - it);
+     while (it + 1 < end)
+@@ -320,6 +333,11 @@
+ 
+ std::optional<std::string_view> tr_session::WebMediator::userAgent() const
+ {
++    static std::string const custom_ua = tr_env_get_string("TRANSMISSION_USER_AGENT");
++    if (!custom_ua.empty())
++    {
++        return custom_ua;
++    }
+     return TR_NAME "/" SHORT_VERSION_STRING;
+ }
+ 

@@ -4,6 +4,8 @@ use tracing::info;
 
 static SHUTDOWN_INITIATED: AtomicBool = AtomicBool::new(false);
 
+const SHUTDOWN_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(35);
+
 /// Returns true if an explicit application shutdown has been initiated.
 pub fn is_shutting_down() -> bool {
     SHUTDOWN_INITIATED.load(Ordering::SeqCst)
@@ -31,9 +33,11 @@ pub fn initiate_shutdown(app: &tauri::AppHandle) {
 
     info!("Initiating shared intentional shutdown...");
 
-    // Safety watchdog: ensure process terminates within 5 seconds even if an external thread wedges
+    // Safety watchdog: terminate even if a step wedges. It must outlast the
+    // engine's graceful stop, otherwise the daemon is orphaned before its
+    // `stopped` tracker announces finish and the next launch hard-kills it.
     std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(SHUTDOWN_WATCHDOG);
         std::process::exit(0);
     });
 
@@ -132,6 +136,15 @@ pub fn install_macos_terminate_hook(app_handle: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchdog_outlasts_engine_graceful_stop() {
+        assert!(
+            SHUTDOWN_WATCHDOG
+                > crate::engine::transmission::ENGINE_GRACEFUL_STOP_MAX
+                    + std::time::Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn test_shutdown_flag_lifecycle() {
