@@ -152,14 +152,15 @@ const trackersAllFailingCheck = (t: TorrentItem): boolean =>
 // The track must stand out from the #141414 row background even at 0%.
 const ProgressBars = { track: '#1f1f1f', trackBorder: '#ffffff', fill: '#c4c4c4', fillDone: '#ffffff' };
 
-const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
-  progress,
-  sizeBytes,
-}) => {
+// One grid template shared by the header and every file/folder row so the
+// size, progress, priority and action columns line up at every depth.
+const FILE_ROW_GRID = 'minmax(0,1fr) 76px 150px 132px 96px';
+
+const FileProgressBar: React.FC<{ progress: number }> = ({ progress }) => {
   const pct = progressPercent(progress);
   const done = progress >= 1;
   return (
-    <div className="flex items-center gap-2 flex-shrink-0" style={{ width: 180 }}>
+    <div className="flex items-center gap-2 w-full">
       <div
         className="flex-1 box-border h-2.5 rounded-sm overflow-hidden"
         style={{
@@ -175,8 +176,10 @@ const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
           }}
         />
       </div>
-      <span className={`text-[10px] font-mono whitespace-nowrap ${done ? 'text-white' : 'text-[#a3a3a3]'}`}>
-        {formatBytes(sizeBytes)} · {pct}%
+      <span
+        className={`w-9 text-right text-[10px] font-mono tabular-nums whitespace-nowrap ${done ? 'text-white' : 'text-[#a3a3a3]'}`}
+      >
+        {pct}%
       </span>
     </div>
   );
@@ -791,6 +794,19 @@ export const TorrentManagerView: React.FC = () => {
   const isMediaFileName = (name: string) =>
     /\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|iso|mp3|flac|wav|m4a|aac)$/i.test(name);
 
+  const filesHeader = (
+    <div
+      className="sticky top-0 z-10 grid items-center gap-3 py-1 pr-2 pl-2 bg-[#141414] border-b border-[#262626] text-[10px] uppercase tracking-wide text-[#737373] font-sans"
+      style={{ gridTemplateColumns: FILE_ROW_GRID }}
+    >
+      <span>Name</span>
+      <span className="text-right">Size</span>
+      <span>Progress</span>
+      <span>Priority</span>
+      <span />
+    </div>
+  );
+
   const renderTreeNode = (node: FileTreeNode, depth = 0): React.ReactNode => {
     if (node.isFolder) {
       const isCollapsed = !!collapsedFolders[node.path];
@@ -803,8 +819,8 @@ export const TorrentManagerView: React.FC = () => {
       return (
         <React.Fragment key={node.path || node.name}>
           <div
-            className="group flex items-center justify-between p-1.5 rounded hover:bg-[#222222] border border-transparent hover:border-[#333333] transition text-xs"
-            style={{ paddingLeft: `${depth * 18 + 8}px` }}
+            className="group grid items-center gap-3 py-1.5 pr-2 rounded hover:bg-[#222222] border border-transparent hover:border-[#333333] transition text-xs"
+            style={{ gridTemplateColumns: FILE_ROW_GRID, paddingLeft: `${depth * 18 + 8}px` }}
             onContextMenu={(e) => {
               e.preventDefault();
               if (isTransmission && !isRemoteServer && node.path) {
@@ -840,14 +856,18 @@ export const TorrentManagerView: React.FC = () => {
               <span className="font-semibold text-white truncate max-w-sm font-sans">
                 {node.name}
               </span>
-              <span className="text-[10px] text-[#a3a3a3] font-mono">
-                ({formatBytes(node.size_bytes)} · {fileCount} {fileCount === 1 ? 'file' : 'files'})
+              <span className="text-[10px] text-[#737373] font-mono whitespace-nowrap">
+                {fileCount} {fileCount === 1 ? 'file' : 'files'}
               </span>
             </div>
 
-            <FileProgressBar progress={nodeProgress(node)} sizeBytes={node.size_bytes} />
+            <span className="text-right text-[11px] text-[#a3a3a3] font-mono tabular-nums whitespace-nowrap">
+              {formatBytes(node.size_bytes)}
+            </span>
 
-            <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
+            <FileProgressBar progress={nodeProgress(node)} />
+
+            <div className="opacity-80 group-hover:opacity-100 transition">
               <select
                 value={nodePriority(node)}
                 onChange={(e) =>
@@ -858,7 +878,7 @@ export const TorrentManagerView: React.FC = () => {
                   )
                 }
                 title={`Priority for every file in "${node.name}"`}
-                className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+                className="w-full px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
               >
                 <option value="mixed" disabled>
                   Mixed Priority
@@ -868,6 +888,9 @@ export const TorrentManagerView: React.FC = () => {
                 <option value={2}>High Priority</option>
                 <option value={3}>Maximum Priority</option>
               </select>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 opacity-80 group-hover:opacity-100 transition">
               {!isRemoteServer && (
                 isTransmission || !node.path.includes('/') ? (
                   <button
@@ -907,8 +930,8 @@ export const TorrentManagerView: React.FC = () => {
     return (
       <div
         key={file.index}
-        className="group flex items-center justify-between p-1.5 rounded hover:bg-[#1f1f1f] border border-transparent hover:border-[#2a2a2a] transition text-xs font-mono"
-        style={{ paddingLeft: `${depth * 18 + 14}px` }}
+        className="group grid items-center gap-3 py-1.5 pr-2 rounded hover:bg-[#1f1f1f] border border-transparent hover:border-[#2a2a2a] transition text-xs font-mono"
+        style={{ gridTemplateColumns: FILE_ROW_GRID, paddingLeft: `${depth * 18 + 14}px` }}
         onContextMenu={(e) => {
           e.preventDefault();
           if (node.file && isTransmission && !isRemoteServer) {
@@ -926,24 +949,28 @@ export const TorrentManagerView: React.FC = () => {
           <span className="text-white truncate max-w-md font-sans font-medium" title={file.name}>
             {node.name}
           </span>
-          <span className="text-[10px] text-[#a3a3a3]">
-            ({formatBytes(file.size_bytes)})
-          </span>
         </div>
 
-        <FileProgressBar progress={file.progress} sizeBytes={file.size_bytes} />
+        <span className="text-right text-[11px] text-[#a3a3a3] font-mono tabular-nums whitespace-nowrap">
+          {formatBytes(file.size_bytes)}
+        </span>
 
-        <div className="flex items-center gap-2 flex-shrink-0 opacity-90 group-hover:opacity-100 transition">
+        <FileProgressBar progress={file.progress} />
+
+        <div className="opacity-90 group-hover:opacity-100 transition">
           <select
             value={file.priority}
             onChange={(e) => setFilePriority(selectedTorrent!.id, file.index, Number(e.target.value))}
-            className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+            className="w-full px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
           >
             <option value={0}>Do Not Download</option>
             <option value={1}>Normal Priority</option>
             <option value={2}>High Priority</option>
             <option value={3}>Maximum Priority</option>
           </select>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 opacity-90 group-hover:opacity-100 transition">
           {!isRemoteServer && isMediaFileName(file.name) && (
             <button
               type="button"
@@ -1733,7 +1760,10 @@ export const TorrentManagerView: React.FC = () => {
                       </div>
                     ) : filesViewMode === 'tree' ? (
                       fileTree && fileTree.children.length > 0 ? (
-                        fileTree.children.map((child) => renderTreeNode(child, 0))
+                        <>
+                          {filesHeader}
+                          {fileTree.children.map((child) => renderTreeNode(child, 0))}
+                        </>
                       ) : (
                         <div className="p-3 text-center text-[#a3a3a3]">
                           {fileFilter ? 'No matching files found.' : 'No files found in torrent.'}
@@ -1741,10 +1771,13 @@ export const TorrentManagerView: React.FC = () => {
                       )
                     ) : (
                       filteredFlatFiles.length > 0 ? (
-                        filteredFlatFiles.map((file) => (
+                        <>
+                        {filesHeader}
+                        {filteredFlatFiles.map((file) => (
                           <div
                             key={file.index}
-                            className="p-2 rounded bg-[#1f1f1f] border border-[#262626] flex justify-between items-center hover:border-[#333333]"
+                            className="grid items-center gap-3 py-1.5 px-2 rounded bg-[#1f1f1f] border border-[#262626] hover:border-[#333333]"
+                            style={{ gridTemplateColumns: FILE_ROW_GRID }}
                             onContextMenu={(e) => {
                               e.preventDefault();
                               if (isTransmission && !isRemoteServer) {
@@ -1764,23 +1797,26 @@ export const TorrentManagerView: React.FC = () => {
                               <span className="text-white truncate max-w-md font-sans">
                                 {file.name}
                               </span>
-                              <span className="text-[10px] text-[#a3a3a3]">
-                                ({formatBytes(file.size_bytes)})
-                              </span>
                             </div>
-                            <div className="flex items-center gap-3 flex-shrink-0">
+                            <span className="text-right text-[11px] text-[#a3a3a3] font-mono tabular-nums whitespace-nowrap">
+                              {formatBytes(file.size_bytes)}
+                            </span>
+                            <FileProgressBar progress={file.progress} />
+                            <div>
                               <select
                                 value={file.priority}
                                 onChange={(e) =>
                                   setFilePriority(selectedTorrent.id, file.index, Number(e.target.value))
                                 }
-                                className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+                                className="w-full px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
                               >
                                 <option value={0}>Do Not Download</option>
                                 <option value={1}>Normal Priority</option>
                                 <option value={2}>High Priority</option>
                                 <option value={3}>Maximum Priority</option>
                               </select>
+                            </div>
+                            <div className="flex items-center justify-end gap-2">
                               {!isRemoteServer && isMediaFileName(file.name) && (
                                 <button
                                   type="button"
@@ -1807,7 +1843,6 @@ export const TorrentManagerView: React.FC = () => {
                                     title={`Rename file "${file.name}"`}
                                   >
                                     <Edit2 className="w-3 h-3 text-[#e50914]" />
-                                    <span>Rename</span>
                                   </button>
                                 ) : (
                                   <span
@@ -1815,13 +1850,13 @@ export const TorrentManagerView: React.FC = () => {
                                     title="Individual files cannot be renamed with the active engine"
                                   >
                                     <Edit2 className="w-3 h-3 text-[#525252]" />
-                                    <span>Rename</span>
                                   </span>
                                 )
                               )}
                             </div>
                           </div>
-                        ))
+                        ))}
+                        </>
                       ) : (
                         <div className="p-3 text-center text-[#a3a3a3]">
                           {fileFilter ? 'No matching files found.' : 'No files found.'}
