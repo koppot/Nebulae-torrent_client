@@ -13,6 +13,11 @@ struct FirstLastResponse {
     first_last_piece_prio: bool,
 }
 
+#[derive(Deserialize)]
+struct SequentialResponse {
+    sequential_download: bool,
+}
+
 pub struct RemoteServerEngine {
     base_url: String,
     token: String,
@@ -274,10 +279,15 @@ impl TorrentEngine for RemoteServerEngine {
         )
     }
 
-    fn toggle_sequential_download(&self, _id: &str) -> Result<bool, String> {
-        // rtorrent has no sequential-download support; the bridge reports the
-        // same honest error.
-        Err("sequential download is not supported by the rtorrent engine".to_string())
+    fn toggle_sequential_download(&self, id: &str) -> Result<bool, String> {
+        let response = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/api/v1/torrents/{id}/sequential"),
+            )?
+            .json::<SequentialResponse>()
+            .map_err(|e| format!("nebulae-server: bad response: {e}"))?;
+        Ok(response.sequential_download)
     }
 
     fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String> {
