@@ -62,7 +62,7 @@ export const SettingsModal: React.FC = () => {
     settingsTab: activeTab,
     setSettingsTab: setActiveTab,
   } = useUiStore();
-  const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode } = useSettingsStore();
+  const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode, platform } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
   const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -455,12 +455,17 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
-                    {typeof navigator !== 'undefined' && !/macintosh|mac os x|linux/i.test(navigator.userAgent) && (
+                    {typeof navigator !== 'undefined' && /win/i.test(navigator.platform) && (
                       <label className="flex items-start gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={settings.show_taskbar_speed_overlay ?? true}
-                          onChange={(e) => saveSettings({ show_taskbar_speed_overlay: e.target.checked })}
+                          onChange={async (e) => {
+                            const val = e.target.checked;
+                            saveSettings({ show_taskbar_speed_overlay: val });
+                            // Apply immediately without waiting for Apply/Done
+                            try { await storeSaveSettings({ show_taskbar_speed_overlay: val }); } catch {}
+                          }}
                           className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                         />
                         <div>
