@@ -174,7 +174,9 @@ pub struct BugReportBundle {
     pub category: String,
     pub description: String,
     pub app_version: String,
+    pub build_id: String,
     pub os: String,
+    pub os_version: String,
     pub arch: String,
     pub database_status: String,
     pub engine_status: String,
@@ -380,7 +382,9 @@ pub fn generate_bug_report_bundle(
         category,
         description: clean_desc,
         app_version: summary.version,
+        build_id: env!("NEBULAE_BUILD_ID").to_string(),
         os: summary.os,
+        os_version: os_version_string(),
         arch: summary.arch,
         database_status: summary.database_status,
         engine_status: summary.engine_status,
@@ -390,6 +394,16 @@ pub fn generate_bug_report_bundle(
         github_issue_url,
         is_url_truncated,
     })
+}
+
+/// Base URL of the account-free report service. `NEBULAE_BUG_REPORT_ENDPOINT` redirects a run to a
+/// test deployment so verification never touches production destinations.
+#[tauri::command]
+pub fn bug_report_endpoint() -> String {
+    std::env::var("NEBULAE_BUG_REPORT_ENDPOINT")
+        .ok()
+        .filter(|v| v.starts_with("https://") || v.starts_with("http://127.0.0.1"))
+        .unwrap_or_else(|| "https://nebulae-reports.asiandvdclub.org".to_string())
 }
 
 #[tauri::command]

@@ -767,6 +767,7 @@ pub fn run() {
             commands::diagnostics::open_external_link,
             commands::diagnostics::quit_app,
             commands::diagnostics::generate_bug_report_bundle,
+            commands::diagnostics::bug_report_endpoint,
             commands::diagnostics::save_bug_report_draft,
             commands::diagnostics::get_bug_report_draft,
             commands::diagnostics::clear_bug_report_draft,
