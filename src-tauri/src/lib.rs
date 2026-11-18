@@ -740,6 +740,10 @@ pub fn run() {
 
                     if should_close_to_tray {
                         api.prevent_close();
+                        // Windows keeps the taskbar button (minimized) rather than hiding to the tray.
+                        #[cfg(target_os = "windows")]
+                        let _ = window.minimize();
+                        #[cfg(not(target_os = "windows"))]
                         let _ = window.hide();
                     } else {
                         crate::shutdown::initiate_shutdown(app);
