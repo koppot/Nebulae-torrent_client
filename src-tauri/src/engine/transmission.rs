@@ -600,15 +600,28 @@ impl TransmissionRpcClient {
             let args = proto
                 .map(|p| json!({ "ip_protocol": p }))
                 .unwrap_or_else(|| json!({}));
-            let res = self.request("port-test", Some(args))?;
-            Ok(parse_port_test_result(&res))
+            match self.request("port-test", Some(args)) {
+                Ok(res) => Ok(parse_port_test_result(&res)),
+                // Stock Transmission 4.1.3 (Windows MSI) returns "No Response (0)"
+                // when it tests the port and gets no reply. That IS a definitive
+                // result: the port is not reachable. Treat it as closed, not
+                // inconclusive, so the indicator shows "closed" instead of yellow.
+                Err(e) if e.contains("No Response") => Ok(Some(false)),
+                // Some stock builds also reject the ip_protocol parameter
+                // outright. Retry without it so we still get a verdict.
+                Err(_) if proto.is_some() => {
+                    let res = self.request("port-test", Some(json!({})))?;
+                    Ok(parse_port_test_result(&res))
+                }
+                Err(e) => Err(e),
+            }
         };
         // Try with the specified protocol first (e.g. ipv4 for IPv4-only bindings).
         if let Some(proto) = ip_protocol {
             match try_with(Some(proto)) {
                 Ok(Some(true)) => return Ok(Some(true)),
                 Ok(Some(false)) => return Ok(Some(false)),
-                // Non-boolean result or RPC error: fall through to retry without ip_protocol.
+                // Non-boolean result or other RPC error: fall through to retry without ip_protocol.
                 Ok(None) | Err(_) => {}
             }
         }
