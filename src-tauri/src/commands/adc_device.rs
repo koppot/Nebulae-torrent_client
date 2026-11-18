@@ -24,6 +24,13 @@ pub const SETTING_ADC_DELIVERY_LEDGER: &str = "adc_delivery_ledger_json";
 /// Max retained completed ledger entries to keep SQLite state bounded.
 const MAX_LEDGER_ENTRIES: usize = 500;
 
+/// Setting key storing per-request failure state so one failed request is
+/// reported once and retried with backoff instead of on every poll.
+pub const SETTING_ADC_DELIVERY_FAILURES: &str = "adc_delivery_failures_json";
+const MAX_FAILURE_ENTRIES: usize = 100;
+const FAILURE_RETRY_BASE_SECS: i64 = 60;
+const FAILURE_RETRY_MAX_SECS: i64 = 900;
+
 /// Serializes poll-driven and URI-driven delivery redemption so concurrent paths
 /// never race on the same `request_token`.
 static DELIVERY_MUTEX: LazyLock<tokio::sync::Mutex<()>> =
@@ -318,22 +325,147 @@ pub fn validate_configured_download_dir(db: &Database) -> Result<String, String>
                 .to_string(),
         );
     }
-    let path = std::path::Path::new(&dir);
-    if path.exists() {
-        if !path.is_dir() {
-            return Err(format!(
-                "Configured download destination '{dir}' is not a directory."
-            ));
+    // The same resolved path is validated and handed to the engine, so a saved
+    // `~/Downloads` is never created relative to the process working directory.
+    crate::utils::paths::prepare_local_download_dir(&dir)
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("Configured download destination '{dir}' is unavailable: {e}"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeliveryFailureRecord {
+    pub reason: String,
+    /// Download destination setting in effect when the attempt failed; a change
+    /// means the user may have corrected the problem, so retry immediately.
+    pub destination: String,
+    pub attempts: u32,
+    pub last_attempt_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeliveryFailureLedger {
+    pub entries: HashMap<String, DeliveryFailureRecord>,
+}
+
+fn load_failure_ledger(db: &Database) -> DeliveryFailureLedger {
+    db.get_setting(SETTING_ADC_DELIVERY_FAILURES)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<DeliveryFailureLedger>(raw.trim()).ok())
+        .unwrap_or_default()
+}
+
+fn save_failure_ledger(db: &Database, ledger: &mut DeliveryFailureLedger) {
+    if ledger.entries.len() > MAX_FAILURE_ENTRIES {
+        let mut by_age: Vec<(i64, String)> = ledger
+            .entries
+            .iter()
+            .map(|(k, v)| (v.last_attempt_at, k.clone()))
+            .collect();
+        by_age.sort();
+        let over = ledger.entries.len() - MAX_FAILURE_ENTRIES;
+        for (_, key) in by_age.into_iter().take(over) {
+            ledger.entries.remove(&key);
         }
-        return Ok(dir);
     }
-    std::fs::create_dir_all(path)
-        .map_err(|e| format!("Configured download destination '{dir}' is unavailable: {e}"))?;
-    Ok(dir)
+    if let Ok(json) = serde_json::to_string(ledger) {
+        let _ = db.set_setting(SETTING_ADC_DELIVERY_FAILURES, &json);
+    }
+}
+
+fn current_destination_setting(db: &Database) -> String {
+    crate::commands::settings::load_user_settings_from_db(db)
+        .download_directory
+        .trim()
+        .to_string()
+}
+
+fn failure_backoff_secs(attempts: u32) -> i64 {
+    let shift = attempts.saturating_sub(1).min(10);
+    (FAILURE_RETRY_BASE_SECS << shift).min(FAILURE_RETRY_MAX_SECS)
+}
+
+/// Whether a background poll should try this request again. A deliberate
+/// (user-initiated) attempt always proceeds.
+fn should_attempt_delivery(db: &Database, token: &str, deliberate: bool) -> bool {
+    if deliberate {
+        return true;
+    }
+    match load_failure_ledger(db).entries.get(token) {
+        None => true,
+        Some(rec) => {
+            rec.destination != current_destination_setting(db)
+                || now_unix_secs() - rec.last_attempt_at >= failure_backoff_secs(rec.attempts)
+        }
+    }
+}
+
+/// Records a failure for `token`; returns true when the reason is new for this
+/// request (no earlier record, or a different reason) and so worth surfacing.
+fn record_delivery_failure(db: &Database, token: &str, reason: &str) -> bool {
+    let mut ledger = load_failure_ledger(db);
+    let destination = current_destination_setting(db);
+    let is_new = match ledger.entries.get_mut(token) {
+        Some(rec) if rec.reason == reason => {
+            rec.attempts = rec.attempts.saturating_add(1);
+            rec.last_attempt_at = now_unix_secs();
+            rec.destination = destination;
+            false
+        }
+        _ => {
+            ledger.entries.insert(
+                token.to_string(),
+                DeliveryFailureRecord {
+                    reason: reason.to_string(),
+                    destination,
+                    attempts: 1,
+                    last_attempt_at: now_unix_secs(),
+                },
+            );
+            true
+        }
+    };
+    save_failure_ledger(db, &mut ledger);
+    is_new
+}
+
+fn clear_delivery_failure(db: &Database, token: &str) {
+    let mut ledger = load_failure_ledger(db);
+    if ledger.entries.remove(token).is_some() {
+        save_failure_ledger(db, &mut ledger);
+    }
+}
+
+pub fn clear_delivery_failures(db: &Database) {
+    let _ = db.set_setting(SETTING_ADC_DELIVERY_FAILURES, "");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn report_delivery_failure(
+    app: Option<&tauri::AppHandle>,
+    db: &Database,
+    token: &str,
+    queue_id: Option<u64>,
+    torrent_id: Option<u64>,
+    title: Option<&str>,
+    reason: &str,
+    deliberate: bool,
+) {
+    let is_new = record_delivery_failure(db, token, reason);
+    if is_new || deliberate {
+        emit_delivery_failure(app, Some(token), queue_id, torrent_id, title, reason);
+    } else {
+        tracing::debug!(
+            queue_id = ?queue_id,
+            reason = %reason,
+            "[adc-delivery] Repeat failure suppressed; already reported for this request"
+        );
+    }
 }
 
 fn emit_delivery_failure(
     app: Option<&tauri::AppHandle>,
+    request_token: Option<&str>,
     queue_id: Option<u64>,
     torrent_id: Option<u64>,
     title: Option<&str>,
@@ -357,6 +489,7 @@ fn emit_delivery_failure(
         let _ = app_handle.emit(
             "nebulae://adc-delivery-failed",
             serde_json::json!({
+                "request_token": request_token,
                 "queue_id": queue_id,
                 "torrent_id": torrent_id,
                 "title": title,
@@ -540,6 +673,23 @@ async fn process_single_delivery_item(
     device_id: &str,
     delivery: &DeliveryItem,
 ) -> Result<String, String> {
+    process_delivery_item(
+        app, engine, db, transport, passkey, device_id, delivery, false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_delivery_item(
+    app: Option<&tauri::AppHandle>,
+    engine: &Arc<dyn TorrentEngine>,
+    db: &Arc<Database>,
+    transport: &dyn DeliveryTransport,
+    passkey: &str,
+    device_id: &str,
+    delivery: &DeliveryItem,
+    deliberate: bool,
+) -> Result<String, String> {
     let torrent_id = delivery.torrent_id;
     let queue_id = delivery.queue_id;
     let token = delivery.request_token.trim().to_ascii_lowercase();
@@ -547,16 +697,28 @@ async fn process_single_delivery_item(
         .name
         .clone()
         .unwrap_or_else(|| format!("Torrent #{torrent_id}"));
+    let fail = |reason: &str| {
+        report_delivery_failure(
+            app,
+            db,
+            &token,
+            Some(queue_id),
+            Some(torrent_id),
+            Some(&title),
+            reason,
+            deliberate,
+        )
+    };
 
     if passkey.trim().len() < 8 || device_id.trim().is_empty() {
         let msg = "ADC account or device identity is missing.".to_string();
-        emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &msg);
+        fail(&msg);
         return Err(msg);
     }
 
     if !is_valid_delivery_token(&token) {
         let msg = "Invalid delivery request token format.".to_string();
-        emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &msg);
+        fail(&msg);
         return Err(msg);
     }
 
@@ -566,7 +728,7 @@ async fn process_single_delivery_item(
     if let Some(existing) = ledger.entries.get(&token).cloned() {
         if existing.account_scope != scope {
             let msg = "Delivery token belongs to a different ADC account or device.".to_string();
-            emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &msg);
+            fail(&msg);
             return Err(msg);
         }
 
@@ -624,11 +786,17 @@ async fn process_single_delivery_item(
         }
     }
 
+    // A request that already failed is retried with backoff (or at once after the
+    // destination setting changes) so a bad configuration cannot spin every poll.
+    if !should_attempt_delivery(db, &token, deliberate) {
+        return Err("Delivery is waiting to retry after an earlier failure.".to_string());
+    }
+
     // Validate configured default destination directory before claiming on server (D12 / D17 / D18).
     let dest_dir = match validate_configured_download_dir(db) {
         Ok(d) => d,
         Err(reason) => {
-            emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &reason);
+            fail(&reason);
             return Err(reason);
         }
     };
@@ -645,7 +813,7 @@ async fn process_single_delivery_item(
         .ack_delivery(passkey, device_id, queue_id, &token, "claimed")
         .await
     {
-        emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &reason);
+        fail(&reason);
         return Err(reason);
     }
 
@@ -665,7 +833,7 @@ async fn process_single_delivery_item(
     let raw_bytes = match transport.fetch_metainfo(torrent_id, Arc::clone(db)).await {
         Ok(b) => b,
         Err(reason) => {
-            emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &reason);
+            fail(&reason);
             return Err(reason);
         }
     };
@@ -673,7 +841,7 @@ async fn process_single_delivery_item(
     let parsed = match ParsedTorrent::parse_bytes(&raw_bytes) {
         Ok(p) => p,
         Err(reason) => {
-            emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &reason);
+            fail(&reason);
             return Err(reason);
         }
     };
@@ -700,6 +868,7 @@ async fn process_single_delivery_item(
             },
         );
         let _ = save_delivery_ledger(db, &mut ledger);
+        clear_delivery_failure(db, &token);
         emit_delivery_added(app, queue_id, torrent_id, &title, &expected_hash, true);
         return Ok(expected_hash);
     }
@@ -731,7 +900,7 @@ async fn process_single_delivery_item(
     let added_hash = match add_res {
         Ok(h) => h,
         Err(reason) => {
-            emit_delivery_failure(app, Some(queue_id), Some(torrent_id), Some(&title), &reason);
+            fail(&reason);
             return Err(reason);
         }
     };
@@ -757,7 +926,7 @@ async fn process_single_delivery_item(
     {
         Ok(()) => {
             ledger.entries.insert(
-                token,
+                token.clone(),
                 LocalDeliveryEntry {
                     account_scope: scope,
                     queue_id,
@@ -779,6 +948,7 @@ async fn process_single_delivery_item(
         }
     }
 
+    clear_delivery_failure(db, &token);
     emit_delivery_added(app, queue_id, torrent_id, &title, &added_hash, false);
     Ok(added_hash)
 }
@@ -1006,7 +1176,7 @@ async fn redeem_delivery_with_transport(
     let token = match extract_delivery_token(request_token_or_uri) {
         Ok(tok) => tok,
         Err(msg) => {
-            emit_delivery_failure(app, None, None, None, &msg);
+            emit_delivery_failure(app, None, None, None, None, &msg);
             return Err(msg);
         }
     };
@@ -1019,7 +1189,7 @@ async fn redeem_delivery_with_transport(
     if !is_linked {
         let msg = "ADC account is not linked. Link your account in Tracker Integration first."
             .to_string();
-        emit_delivery_failure(app, None, None, None, &msg);
+        report_delivery_failure(app, db, &token, None, None, None, &msg, true);
         return Err(msg);
     }
 
@@ -1028,7 +1198,7 @@ async fn redeem_delivery_with_transport(
         None => {
             let msg = "ADC passkey is unavailable. Relink your account in Tracker Integration."
                 .to_string();
-            emit_delivery_failure(app, None, None, None, &msg);
+            report_delivery_failure(app, db, &token, None, None, None, &msg, true);
             return Err(msg);
         }
     };
@@ -1036,30 +1206,43 @@ async fn redeem_delivery_with_transport(
     let device_id = get_or_create_device_id(db);
     let scope = compute_account_scope(&passkey, &device_id);
 
-    let _guard = DELIVERY_MUTEX.lock().await;
+    // If a poll cycle held the lock, it may have just delivered this same request.
+    let (_guard, waited) = match DELIVERY_MUTEX.try_lock() {
+        Ok(g) => (g, false),
+        Err(_) => (DELIVERY_MUTEX.lock().await, true),
+    };
 
     let ledger = load_delivery_ledger(db);
     if let Some(existing) = ledger.entries.get(&token) {
         if existing.account_scope != scope {
             let msg = "Delivery token belongs to a different ADC account or device.".to_string();
-            emit_delivery_failure(
+            report_delivery_failure(
                 app,
+                db,
+                &token,
                 Some(existing.queue_id),
                 Some(existing.torrent_id),
                 None,
                 &msg,
+                true,
             );
             return Err(msg);
         }
-        if matches!(existing.status, LocalDeliveryStatus::Delivered { .. }) {
+        if let LocalDeliveryStatus::Delivered { info_hash } = &existing.status {
+            if waited {
+                return Ok(info_hash.clone());
+            }
             let msg =
                 "Delivery request has already been redeemed and cannot be replayed.".to_string();
-            emit_delivery_failure(
+            report_delivery_failure(
                 app,
+                db,
+                &token,
                 Some(existing.queue_id),
                 Some(existing.torrent_id),
                 None,
                 &msg,
+                true,
             );
             return Err(msg);
         }
@@ -1071,7 +1254,7 @@ async fn redeem_delivery_with_transport(
     {
         Ok(items) => items,
         Err(msg) => {
-            emit_delivery_failure(app, None, None, None, &msg);
+            report_delivery_failure(app, db, &token, None, None, None, &msg, true);
             return Err(msg);
         }
     };
@@ -1084,12 +1267,15 @@ async fn redeem_delivery_with_transport(
         None => {
             let msg = "Delivery request was not found, has expired, or belongs to a different ADC account or device."
                 .to_string();
-            emit_delivery_failure(app, None, None, None, &msg);
+            report_delivery_failure(app, db, &token, None, None, None, &msg, true);
             return Err(msg);
         }
     };
 
-    process_single_delivery_item(app, engine, db, transport, &passkey, &device_id, &delivery).await
+    process_delivery_item(
+        app, engine, db, transport, &passkey, &device_id, &delivery, true,
+    )
+    .await
 }
 
 /// Redeems an opaque website-created delivery request URI/token (`adc://delivery/<token>`)
@@ -1130,6 +1316,12 @@ mod tests {
     use std::sync::Mutex;
 
     static NEXT_TEST_DIR_ID: AtomicU64 = AtomicU64::new(1);
+
+    /// Tests that go through `redeem_delivery_with_transport` share the global
+    /// delivery lock; running them one at a time keeps the "waited for the lock"
+    /// branch deterministic.
+    static REDEEM_TEST_SERIAL: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     struct TempTestDir {
         path: PathBuf,
@@ -1348,6 +1540,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_valid_claim_add_verify_and_delivered_flow() {
+        let _serial = REDEEM_TEST_SERIAL.lock().await;
         let tmp = TempTestDir::new("delivery_valid");
         let db = setup_linked_db(Some(&tmp.str_path()));
         let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
@@ -1419,6 +1612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_rejects_ownership_expiry_and_replay_before_metainfo_fetch() {
+        let _serial = REDEEM_TEST_SERIAL.lock().await;
         let tmp = TempTestDir::new("delivery_rejects");
         let db = setup_linked_db(Some(&tmp.str_path()));
         let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
@@ -1514,6 +1708,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delivery_rejects_missing_or_invalid_destination_before_server_claim() {
+        let _serial = REDEEM_TEST_SERIAL.lock().await;
         let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
         let token = sample_token('e');
         let item = DeliveryItem {
@@ -1690,5 +1885,360 @@ mod tests {
         assert!(hash2.eq_ignore_ascii_case(&expected_hash));
         assert_eq!(engine.list_torrents().unwrap().len(), 1);
         assert_eq!(*transport.metainfo_calls.lock().unwrap(), vec![123]);
+    }
+
+    fn sample_item(token: &str, queue_id: u64, torrent_id: u64, name: &str) -> DeliveryItem {
+        DeliveryItem {
+            queue_id,
+            torrent_id,
+            request_token: token.to_string(),
+            status: Some("pending".to_string()),
+            name: Some(name.to_string()),
+            info_hash: None,
+            created_at: None,
+            expires_at: None,
+        }
+    }
+
+    const TEST_PASSKEY: &str = "0123456789abcdef0123456789abcdef";
+
+    fn set_download_dir(db: &Database, dir: &str) {
+        let settings_json = serde_json::json!({ "download_directory": dir }).to_string();
+        db.set_setting("user_settings_json", &settings_json)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_validate_destination_rejects_relative_without_creating_it() {
+        let rel = format!("nebulae_rel_probe_{}", std::process::id());
+        let db = setup_linked_db(Some(&rel));
+        let err = validate_configured_download_dir(&db).unwrap_err();
+        assert!(
+            err.contains("unavailable") && err.contains("absolute"),
+            "{err}"
+        );
+        assert!(
+            !Path::new(&rel).exists(),
+            "a relative destination must never be created against the working directory"
+        );
+    }
+
+    #[test]
+    fn test_validate_destination_returns_resolved_absolute_path_with_spaces_and_unicode() {
+        let tmp = TempTestDir::new("dest ünï");
+        let target = tmp.path.join("My Movies ★");
+        let db = setup_linked_db(Some(&target.to_string_lossy()));
+        let resolved = validate_configured_download_dir(&db).unwrap();
+        assert_eq!(PathBuf::from(&resolved), target);
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn test_failure_record_reports_once_and_backs_off() {
+        let db = setup_linked_db(Some(""));
+        let tok = sample_token('a');
+        assert!(record_delivery_failure(&db, &tok, "bad destination"));
+        assert!(!record_delivery_failure(&db, &tok, "bad destination"));
+        assert!(!record_delivery_failure(&db, &tok, "bad destination"));
+        assert!(
+            record_delivery_failure(&db, &tok, "different reason"),
+            "a different reason is surfaced"
+        );
+        assert!(!should_attempt_delivery(&db, &tok, false));
+        assert!(should_attempt_delivery(&db, &tok, true));
+
+        let mut ledger = load_failure_ledger(&db);
+        ledger.entries.get_mut(&tok).unwrap().last_attempt_at -= FAILURE_RETRY_MAX_SECS + 1;
+        save_failure_ledger(&db, &mut ledger);
+        assert!(should_attempt_delivery(&db, &tok, false), "backoff expires");
+
+        clear_delivery_failure(&db, &tok);
+        assert!(should_attempt_delivery(&db, &tok, false));
+        assert!(load_failure_ledger(&db).entries.is_empty());
+    }
+
+    #[test]
+    fn test_failure_backoff_grows_and_is_capped() {
+        assert_eq!(failure_backoff_secs(1), 60);
+        assert_eq!(failure_backoff_secs(2), 120);
+        assert_eq!(failure_backoff_secs(3), 240);
+        assert_eq!(failure_backoff_secs(50), FAILURE_RETRY_MAX_SECS);
+    }
+
+    #[tokio::test]
+    async fn test_poll_cycles_after_one_destination_failure_do_not_retry_or_renotify() {
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let tmp = TempTestDir::new("loop_file");
+        let file_path = tmp.path.join("occupied");
+        std::fs::write(&file_path, b"x").unwrap();
+        let db = setup_linked_db(Some(&file_path.to_string_lossy()));
+        let token = sample_token('c');
+        let item = sample_item(&token, 601, 5, "Loop.ISO");
+        let transport =
+            MockDeliveryTransport::success(item.clone(), make_valid_torrent_bytes("Loop.ISO", 512));
+        let device_id = get_or_create_device_id(&db);
+
+        for cycle in 0..25 {
+            let res = process_single_delivery_item(
+                None,
+                &engine,
+                &db,
+                &transport,
+                TEST_PASSKEY,
+                &device_id,
+                &item,
+            )
+            .await;
+            let err = res.unwrap_err();
+            if cycle == 0 {
+                assert!(err.contains("not a directory"), "{err}");
+            } else {
+                assert!(err.contains("waiting to retry"), "cycle {cycle}: {err}");
+            }
+        }
+
+        let record = load_failure_ledger(&db)
+            .entries
+            .get(&token)
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            record.attempts, 1,
+            "only the first poll may attempt delivery"
+        );
+        assert!(transport.ack_calls.lock().unwrap().is_empty());
+        assert!(transport.metainfo_calls.lock().unwrap().is_empty());
+        assert!(engine.list_torrents().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_correcting_destination_retries_immediately_and_adds_exactly_one_torrent() {
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let tmp = TempTestDir::new("loop_fix");
+        let file_path = tmp.path.join("occupied");
+        std::fs::write(&file_path, b"x").unwrap();
+        let good_dir = tmp.path.join("Downloads");
+        let db = setup_linked_db(Some(&file_path.to_string_lossy()));
+        let token = sample_token('d');
+        let metainfo = make_valid_torrent_bytes("Fixed.ISO", 1024);
+        let expected_hash = ParsedTorrent::parse_bytes(&metainfo).unwrap().info_hash;
+        let item = sample_item(&token, 602, 6, "Fixed.ISO");
+        let transport = MockDeliveryTransport::success(item.clone(), metainfo);
+        let device_id = get_or_create_device_id(&db);
+
+        assert!(process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item
+        )
+        .await
+        .is_err());
+
+        set_download_dir(&db, &good_dir.to_string_lossy());
+        let hash = process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item,
+        )
+        .await
+        .expect("changed destination must retry without waiting for backoff");
+        assert!(hash.eq_ignore_ascii_case(&expected_hash));
+        assert!(good_dir.is_dir());
+        assert_eq!(engine.list_torrents().unwrap().len(), 1);
+        assert_eq!(*transport.metainfo_calls.lock().unwrap(), vec![6]);
+        assert!(load_failure_ledger(&db).entries.is_empty());
+
+        // A later poll that still sees the item must not add a second copy.
+        process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item,
+        )
+        .await
+        .unwrap();
+        assert_eq!(engine.list_torrents().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_deliberate_retry_bypasses_backoff_and_succeeds_after_fix() {
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let tmp = TempTestDir::new("deliberate");
+        let file_path = tmp.path.join("occupied");
+        std::fs::write(&file_path, b"x").unwrap();
+        let db = setup_linked_db(Some(&file_path.to_string_lossy()));
+        let token = sample_token('e');
+        let item = sample_item(&token, 603, 7, "Retry.ISO");
+        let transport = MockDeliveryTransport::success(
+            item.clone(),
+            make_valid_torrent_bytes("Retry.ISO", 1024),
+        );
+        let device_id = get_or_create_device_id(&db);
+
+        let first = process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item,
+        )
+        .await
+        .unwrap_err();
+        assert!(first.contains("not a directory"));
+
+        let deliberate = process_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            deliberate.contains("not a directory"),
+            "deliberate retry must re-run validation, got: {deliberate}"
+        );
+        assert_eq!(load_failure_ledger(&db).entries[&token].attempts, 2);
+
+        // The same retry succeeds once the folder is corrected (no setting-change needed
+        // for the deliberate path, but the destination fingerprint is refreshed anyway).
+        std::fs::remove_file(&file_path).unwrap();
+        std::fs::create_dir_all(&file_path).unwrap();
+        let ok = process_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport,
+            TEST_PASSKEY,
+            &device_id,
+            &item,
+            true,
+        )
+        .await;
+        assert!(ok.is_ok(), "{ok:?}");
+        assert_eq!(engine.list_torrents().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_blocked_request_does_not_block_other_valid_requests() {
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let tmp = TempTestDir::new("blocked_other");
+        let db = setup_linked_db(Some(&tmp.str_path()));
+        let device_id = get_or_create_device_id(&db);
+
+        let tok_a = sample_token('1');
+        let item_a = sample_item(&tok_a, 701, 1, "A.ISO");
+        let transport_a =
+            MockDeliveryTransport::success(item_a.clone(), make_valid_torrent_bytes("A.ISO", 512));
+        *transport_a.claim_result.lock().unwrap() = Err((
+            403,
+            "This delivery request belongs to a different device or client.".into(),
+        ));
+        assert!(process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport_a,
+            TEST_PASSKEY,
+            &device_id,
+            &item_a
+        )
+        .await
+        .is_err());
+        assert!(process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport_a,
+            TEST_PASSKEY,
+            &device_id,
+            &item_a
+        )
+        .await
+        .unwrap_err()
+        .contains("waiting to retry"));
+
+        let tok_b = sample_token('2');
+        let item_b = sample_item(&tok_b, 702, 2, "B.ISO");
+        let transport_b =
+            MockDeliveryTransport::success(item_b.clone(), make_valid_torrent_bytes("B.ISO", 768));
+        process_single_delivery_item(
+            None,
+            &engine,
+            &db,
+            &transport_b,
+            TEST_PASSKEY,
+            &device_id,
+            &item_b,
+        )
+        .await
+        .expect("unrelated request must still be delivered");
+        assert_eq!(engine.list_torrents().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_uri_redeem_waiting_on_poll_returns_success_instead_of_replay_error() {
+        let _serial = REDEEM_TEST_SERIAL.lock().await;
+        let tmp = TempTestDir::new("race");
+        let db = setup_linked_db(Some(&tmp.str_path()));
+        let engine: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let token = sample_token('f');
+        let device_id = get_or_create_device_id(&db);
+        let scope = compute_account_scope(TEST_PASSKEY, &device_id);
+        let mut ledger = load_delivery_ledger(&db);
+        ledger.entries.insert(
+            token.clone(),
+            LocalDeliveryEntry {
+                account_scope: scope,
+                queue_id: 801,
+                torrent_id: 9,
+                status: LocalDeliveryStatus::Delivered {
+                    info_hash: "abc123".to_string(),
+                },
+                updated_at: now_unix_secs(),
+            },
+        );
+        save_delivery_ledger(&db, &mut ledger).unwrap();
+
+        let transport = Arc::new(MockDeliveryTransport::success(
+            sample_item(&token, 801, 9, "Race.ISO"),
+            make_valid_torrent_bytes("Race.ISO", 512),
+        ));
+
+        // The poll cycle holds the delivery lock while it finishes this request.
+        let guard = DELIVERY_MUTEX.lock().await;
+        let (db2, eng2, tr2, uri) = (
+            Arc::clone(&db),
+            Arc::clone(&engine),
+            Arc::clone(&transport),
+            format!("adc://delivery/{token}"),
+        );
+        let handle = tokio::spawn(async move {
+            redeem_delivery_with_transport(None, &eng2, &db2, tr2.as_ref(), &uri).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        drop(guard);
+
+        let res = handle.await.unwrap();
+        assert_eq!(res.unwrap(), "abc123");
+        assert!(transport.poll_calls.lock().unwrap().is_empty());
+        assert!(transport.metainfo_calls.lock().unwrap().is_empty());
     }
 }

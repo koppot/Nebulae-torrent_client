@@ -397,6 +397,7 @@ pub async fn add_torrent(
     engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     let engine = engine.inner().clone();
+    let download_dir = resolve_engine_download_dir(download_dir)?;
     tokio::task::spawn_blocking(move || {
         if let Some(raw) = bytes {
             if !raw.is_empty() {
@@ -416,6 +417,7 @@ pub async fn add_torrent_bytes(
     engine: State<'_, SharedEngine>,
 ) -> Result<String, String> {
     let engine = engine.inner().clone();
+    let download_dir = resolve_engine_download_dir(download_dir)?;
     tokio::task::spawn_blocking(move || {
         engine.add_torrent_from_bytes(&bytes, download_dir.as_deref())
     })
@@ -560,26 +562,21 @@ fn collect_disk_files(
 }
 
 fn expand_home_dir(raw: &str) -> Result<std::path::PathBuf, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    if raw.trim().is_empty() {
         return Err("No save destination set".to_string());
     }
-    let expanded = if trimmed == "~" {
-        dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?
-    } else if let Some(rest) = trimmed.strip_prefix("~/") {
-        dirs::home_dir()
-            .ok_or_else(|| "Cannot resolve home directory".to_string())?
-            .join(rest)
-    } else {
-        std::path::PathBuf::from(trimmed)
-    };
-    if !expanded.is_absolute() {
-        return Err(format!(
-            "Save destination '{}' is not an absolute folder",
-            trimmed
-        ));
+    crate::utils::paths::resolve_local_dir(raw).map_err(|e| format!("Save destination {e}"))
+}
+
+/// Resolves a caller-supplied engine download directory so `~` notation is
+/// expanded before the engine (which has no home-directory semantics) sees it.
+fn resolve_engine_download_dir(dir: Option<String>) -> Result<Option<String>, String> {
+    match dir.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(raw) => crate::utils::paths::resolve_local_dir(raw)
+            .map(|p| Some(p.to_string_lossy().to_string()))
+            .map_err(|e| format!("Download destination {e}")),
     }
-    Ok(expanded)
 }
 
 /// Resolves a relative path against the save destination, rejecting absolute

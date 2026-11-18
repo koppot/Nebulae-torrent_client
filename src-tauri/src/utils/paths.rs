@@ -71,6 +71,63 @@ impl AppPaths {
     }
 }
 
+/// Resolves a user-entered local folder to an absolute path. Supports `~`,
+/// `~/sub` and `~\\sub`; everything else must already be absolute so a
+/// relative value is never silently interpreted against the process working
+/// directory (which is `/` for a launched macOS app).
+pub fn resolve_local_dir_with_home(
+    raw: &str,
+    home: Option<&std::path::Path>,
+) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("No folder was provided".to_string());
+    }
+    let home_required = || home.ok_or_else(|| "Cannot resolve home directory".to_string());
+    let resolved = if trimmed == "~" {
+        home_required()?.to_path_buf()
+    } else if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        home_required()?.join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+    if !resolved.is_absolute() {
+        return Err(format!("'{trimmed}' is not an absolute folder path"));
+    }
+    Ok(resolved)
+}
+
+pub fn resolve_local_dir(raw: &str) -> Result<PathBuf, String> {
+    resolve_local_dir_with_home(raw, dirs::home_dir().as_deref())
+}
+
+/// Confirms `dir` accepts new files by creating and removing a probe file, so
+/// read-only mounts and permission failures surface before an engine add.
+pub fn ensure_writable_dir(dir: &std::path::Path) -> Result<(), String> {
+    let probe = dir.join(format!(".nebulae-write-test-{}", std::process::id()));
+    fs::File::create(&probe).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Resolves, creates if missing, and verifies a local download destination.
+pub fn prepare_local_download_dir(raw: &str) -> Result<PathBuf, String> {
+    let path = resolve_local_dir(raw)?;
+    if path.exists() {
+        if !path.is_dir() {
+            return Err(format!("'{}' is not a directory", path.display()));
+        }
+    } else {
+        fs::create_dir_all(&path)
+            .map_err(|e| format!("'{}' cannot be created: {e}", path.display()))?;
+    }
+    ensure_writable_dir(&path).map_err(|e| format!("'{}' is not writable: {e}", path.display()))?;
+    Ok(path)
+}
+
 /// Resolves the bundled application resource directory across all supported platforms,
 /// respecting Tauri's packaging conventions:
 /// - macOS: Contents/Resources
@@ -243,5 +300,66 @@ mod tests {
     fn test_normalize_source_path_quotes() {
         let p = normalize_source_path("\"/tmp/sample.torrent\"");
         assert_eq!(p, PathBuf::from("/tmp/sample.torrent"));
+    }
+
+    #[test]
+    fn test_resolve_local_dir_expands_home_notation() {
+        let home = std::env::temp_dir().join("home dir ünï");
+        let h = Some(home.as_path());
+        assert_eq!(resolve_local_dir_with_home("~", h).unwrap(), home);
+        assert_eq!(
+            resolve_local_dir_with_home("  ~/Downloads ", h).unwrap(),
+            home.join("Downloads")
+        );
+        assert_eq!(
+            resolve_local_dir_with_home("~\\Downloads\\Étoile", h).unwrap(),
+            home.join("Downloads\\Étoile")
+        );
+    }
+
+    #[test]
+    fn test_resolve_local_dir_preserves_absolute_and_rejects_invalid() {
+        let abs = std::env::temp_dir().join("My Downloads ★");
+        let abs_str = abs.to_string_lossy().to_string();
+        assert_eq!(resolve_local_dir_with_home(&abs_str, None).unwrap(), abs);
+        assert!(resolve_local_dir_with_home("", None).is_err());
+        assert!(resolve_local_dir_with_home("   ", None).is_err());
+        assert!(resolve_local_dir_with_home("Downloads", None).is_err());
+        assert!(resolve_local_dir_with_home("./Downloads", None).is_err());
+        assert!(resolve_local_dir_with_home("~/Downloads", None)
+            .unwrap_err()
+            .contains("home directory"));
+    }
+
+    #[test]
+    fn test_prepare_local_download_dir_creates_and_rejects_files() {
+        let base = std::env::temp_dir().join(format!("nebulae_paths_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let nested = base.join("a b").join("c");
+        let ok = prepare_local_download_dir(&nested.to_string_lossy()).unwrap();
+        assert!(ok.is_dir());
+
+        let file = base.join("occupied.txt");
+        fs::write(&file, b"x").unwrap();
+        let err = prepare_local_download_dir(&file.to_string_lossy()).unwrap_err();
+        assert!(err.contains("not a directory"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepare_local_download_dir_reports_unwritable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("nebulae_ro_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = prepare_local_download_dir(&base.to_string_lossy());
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::remove_dir_all(&base);
+        // Root ignores mode bits, so only assert when the probe is actually denied.
+        if let Err(e) = result {
+            assert!(e.contains("not writable"), "unexpected error: {e}");
+        }
     }
 }

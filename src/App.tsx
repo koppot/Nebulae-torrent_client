@@ -17,6 +17,13 @@ import { SimpleMediaView } from './components/media/SimpleMediaView';
 import { CompactBarView } from './components/compact/CompactBarView';
 import { RemoteServerView } from './components/server/RemoteServerView';
 import { SettingsModal } from './components/modals/SettingsModal';
+import {
+  addDeliveryFailure,
+  clearDismissalsForToken,
+  dismissalKey,
+  extractDeliveryTokenFromUri,
+  type DeliveryFailure,
+} from './lib/deliveryFailures';
 import { HelpModal } from './components/modals/HelpModal';
 import { BugReportModal } from './components/modals/BugReportModal';
 import { AddTorrentModal } from './components/modals/AddTorrentModal';
@@ -207,6 +214,8 @@ export const App: React.FC = () => {
   } | null>(null);
   const [isImportingMedia, setIsImportingMedia] = useState(false);
   const [openPathErrors, setOpenPathErrors] = useState<string[]>([]);
+  const [deliveryFailures, setDeliveryFailures] = useState<DeliveryFailure[]>([]);
+  const dismissedDeliveryFailuresRef = useRef(new Set<string>());
   const pendingMediaKeysRef = useRef(new Set<string>());
   const activeMediaKeyRef = useRef<string | null>(null);
   const openingDroppedMediaRef = useRef(false);
@@ -231,6 +240,32 @@ export const App: React.FC = () => {
     initialOffsetX: 0,
     initialOffsetY: 0,
   });
+
+  const dismissDeliveryFailures = useCallback(() => {
+    setDeliveryFailures((current) => {
+      for (const failure of current) dismissedDeliveryFailuresRef.current.add(dismissalKey(failure));
+      return [];
+    });
+  }, []);
+
+  const retryDeliveryFailure = useCallback(async (failure: DeliveryFailure) => {
+    if (!failure.token) return;
+    clearDismissalsForToken(dismissedDeliveryFailuresRef.current, failure.token);
+    setDeliveryFailures((current) => current.filter((f) => f.key !== failure.key));
+    try {
+      await invoke<string>('redeem_adc_delivery', { requestToken: failure.token });
+      await useTorrentStore.getState().fetchTorrents();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDeliveryFailures((current) =>
+        addDeliveryFailure(current, dismissedDeliveryFailuresRef.current, {
+          token: failure.token,
+          title: failure.title,
+          reason: msg,
+        }),
+      );
+    }
+  }, []);
 
   const dispatchOpenPaths = useCallback(async (paths: string[]) => {
     const torrentSources: string[] = [];
@@ -293,6 +328,9 @@ export const App: React.FC = () => {
     // Redeem opaque website-created delivery tokens (adc://delivery/<64-hex>).
     // Manual adc://torrent/<id> URIs remain in torrentSources and open AddTorrentModal.
     for (const uri of adcUris) {
+      const uriToken = extractDeliveryTokenFromUri(uri);
+      // A fresh click on the website is a deliberate retry, so earlier dismissals no longer apply.
+      if (uriToken) clearDismissalsForToken(dismissedDeliveryFailuresRef.current, uriToken);
       try {
         await invoke<string>('redeem_adc_delivery', { requestToken: uri });
         await useTorrentStore.getState().fetchTorrents();
@@ -304,7 +342,12 @@ export const App: React.FC = () => {
         invoke('log_frontend', {
           message: `[adc-delivery] Failed to redeem ${uri}: ${msg}`,
         }).catch(() => {});
-        setOpenPathErrors((current) => [...current, `ADC Delivery: ${msg}`].slice(-10));
+        setDeliveryFailures((current) =>
+          addDeliveryFailure(current, dismissedDeliveryFailuresRef.current, {
+            token: uriToken,
+            reason: msg,
+          }),
+        );
       }
     }
 
@@ -513,15 +556,19 @@ export const App: React.FC = () => {
       })
       .catch(() => {});
 
-    listen<{ title?: string; reason?: string }>('nebulae://adc-delivery-failed', (event) => {
-      const title = event.payload?.title?.trim();
-      const reason = event.payload?.reason?.trim() || 'ADC website delivery failed.';
-      const msg = title ? `ADC Delivery (${title}): ${reason}` : `ADC Delivery: ${reason}`;
-      setOpenPathErrors((current) => {
-        if (current.includes(msg)) return current;
-        return [...current, msg].slice(-10);
-      });
-    })
+    listen<{ request_token?: string | null; title?: string | null; reason?: string }>(
+      'nebulae://adc-delivery-failed',
+      (event) => {
+        const reason = event.payload?.reason?.trim() || 'ADC website delivery failed.';
+        setDeliveryFailures((current) =>
+          addDeliveryFailure(current, dismissedDeliveryFailuresRef.current, {
+            token: event.payload?.request_token,
+            title: event.payload?.title,
+            reason,
+          }),
+        );
+      },
+    )
       .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
@@ -901,6 +948,56 @@ export const App: React.FC = () => {
                 className="px-3 py-2 rounded-lg bg-[#a68b5b] hover:bg-[#b99d6b] text-xs font-semibold text-black disabled:opacity-50"
               >
                 {isImportingMedia ? 'Adding…' : 'Add to Library'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deliveryFailures.length > 0 && (
+        <div
+          role="alertdialog"
+          aria-labelledby="delivery-failure-title"
+          className="fixed inset-0 z-[131] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+        >
+          <div className="w-full max-w-md rounded-xl border border-[#463e31] bg-[#211f1c] p-5 shadow-2xl text-white">
+            <h3 id="delivery-failure-title" className="text-sm font-bold">
+              Website download could not be started
+            </h3>
+            <ul className="mt-3 space-y-3 text-xs text-[#d4c4a8]">
+              {deliveryFailures.map((failure) => (
+                <li key={failure.key} className="break-words">
+                  {failure.title && <div className="font-semibold text-white">{failure.title}</div>}
+                  <div>{failure.reason}</div>
+                  {failure.token && (
+                    <button
+                      type="button"
+                      onClick={() => void retryDeliveryFailure(failure)}
+                      className="mt-1.5 px-2.5 py-1 rounded-md border border-[#463e31] hover:bg-[#2c2924] text-[11px] font-semibold text-[#e8d9bb]"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  dismissDeliveryFailures();
+                  useUiStore.getState().openSettings('downloads');
+                }}
+                className="px-3 py-2 rounded-lg border border-[#463e31] hover:bg-[#2c2924] text-xs font-semibold text-[#e8d9bb]"
+              >
+                Open download settings
+              </button>
+              <button
+                type="button"
+                onClick={dismissDeliveryFailures}
+                className="px-3 py-2 rounded-lg bg-[#a68b5b] hover:bg-[#b99d6b] text-xs font-semibold text-black"
+              >
+                Dismiss
               </button>
             </div>
           </div>

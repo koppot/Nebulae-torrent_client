@@ -158,8 +158,10 @@ pub fn run() {
         s
     };
 
-    let download_dir = if !settings.download_directory.trim().is_empty() {
-        std::path::PathBuf::from(settings.download_directory.trim())
+    let download_dir = if let Ok(resolved) =
+        crate::utils::paths::resolve_local_dir(&settings.download_directory)
+    {
+        resolved
     } else {
         dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
     };
