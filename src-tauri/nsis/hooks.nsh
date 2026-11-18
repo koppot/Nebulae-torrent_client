@@ -56,6 +56,9 @@ ${UnStrLoc}
   Pop $R8
   ${If} $R8 == "Admin"
   ${OrIf} $R8 == "Power"
+    ; netsh add never replaces: every install/update would stack another identical rule.
+    nsExec::Exec `netsh.exe advfirewall firewall delete rule name="${RULENAME}" program="${EXEPATH}"`
+    Pop $R7
     nsExec::Exec `netsh.exe advfirewall firewall add rule name="${RULENAME}" dir=in action=allow program="${EXEPATH}" enable=yes`
     Pop $R7
     ${If} $R7 <> 0
