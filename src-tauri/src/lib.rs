@@ -347,6 +347,8 @@ pub fn run() {
     let db_for_rss = Arc::clone(&db);
     let db_for_stats_poller = Arc::clone(&db);
     let db_for_inbox_poller = Arc::clone(&db);
+    let engine_for_delivery_poller = Arc::clone(&engine);
+    let db_for_delivery_poller = Arc::clone(&db);
 
     let app = tauri::Builder::default()
         // Single instance (owner): double-clicking another .torrent must
@@ -494,6 +496,11 @@ pub fn run() {
             engine::rss::spawn_rss_loop(engine_for_rss, db_for_rss);
             commands::tracker::spawn_stats_poller(db_for_stats_poller);
             commands::inbox::spawn_inbox_poller(app.handle().clone(), db_for_inbox_poller);
+            commands::adc_device::spawn_delivery_poller(
+                app.handle().clone(),
+                engine_for_delivery_poller,
+                db_for_delivery_poller,
+            );
 
             #[cfg(desktop)]
             {
@@ -831,6 +838,9 @@ pub fn run() {
             commands::adc_download::set_adc_download_warning_suppressed,
             commands::adc_download::get_adc_client_targets,
             commands::adc_download::set_adc_client_targets,
+            // ADC Device Registration & Delivery
+            commands::adc_device::get_adc_device_info,
+            commands::adc_device::register_adc_device,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,

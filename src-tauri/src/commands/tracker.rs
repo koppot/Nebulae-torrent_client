@@ -412,6 +412,23 @@ pub async fn link_adc_account(
             Err(e) => tracing::error!("[tracker-sync] spawn_blocking: {e}"),
         }
     });
+
+    let db_for_device_reg = Arc::clone(&db);
+    tauri::async_runtime::spawn(async move {
+        match tokio::task::spawn_blocking(move || {
+            crate::commands::adc_device::register_device_sync(&db_for_device_reg)
+        })
+        .await
+        {
+            Ok(Ok(dev_id)) => {
+                tracing::info!(device_id = %dev_id, "[adc-device] immediate post-link device registration OK")
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("[adc-device] immediate post-link device registration failed: {e}")
+            }
+            Err(e) => tracing::error!("[adc-device] spawn_blocking join error: {e}"),
+        }
+    });
     Ok(profile)
 }
 
