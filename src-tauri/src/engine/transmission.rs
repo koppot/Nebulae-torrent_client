@@ -935,6 +935,27 @@ pub struct TransmissionTorrentEngine {
     is_shutting_down: Arc<AtomicBool>,
 }
 
+/// Applies the "Optional IP Address Binding" preference to the engine's bind
+/// addresses.  A family that is switched off is bound to loopback, so the daemon
+/// neither announces nor connects over it.  Trackers that only accept one access
+/// point per account see announces from a single address family this way.
+/// A VPN-derived bind address is never widened: only the wildcard addresses are
+/// narrowed.
+pub fn apply_address_family_preference(
+    preference: &str,
+    bind_ipv4: &str,
+    bind_ipv6: &str,
+) -> (String, String) {
+    let mut v4 = bind_ipv4.to_string();
+    let mut v6 = bind_ipv6.to_string();
+    match preference {
+        "All IPv4 addresses" if v6 == "::" => v6 = "::1".to_string(),
+        "All IPv6 addresses" if v4 == "0.0.0.0" => v4 = "127.0.0.1".to_string(),
+        _ => {}
+    }
+    (v4, v6)
+}
+
 /// Builds the transmission-daemon `settings.json` configuration structure with
 /// strict private tracker constraints (DHT, PEX, LPD hard-disabled at the session level)
 /// and settings mapped from Nebulae UserSettings.
@@ -1502,6 +1523,18 @@ impl TransmissionTorrentEngine {
             if initial_ks_active {
                 bind_ipv6 = "::1".to_string();
             }
+        }
+
+        let (bind_ipv4, bind_ipv6) = apply_address_family_preference(
+            &settings.optional_ip_address_binding,
+            &bind_ipv4,
+            &bind_ipv6,
+        );
+        if settings.optional_ip_address_binding != "All IPv4 and IPv6 addresses" {
+            info!(
+                "Address family preference '{}': engine binds {bind_ipv4} / {bind_ipv6}",
+                settings.optional_ip_address_binding
+            );
         }
 
         // 5. Build settings.json for Transmission with private-tracker constraints hard-off
@@ -3104,6 +3137,18 @@ impl TorrentEngine for TransmissionTorrentEngine {
         } else {
             ("0.0.0.0".to_string(), "::".to_string())
         };
+        let preference = self
+            .db
+            .get_setting("user_settings_json")
+            .ok()
+            .flatten()
+            .and_then(|raw| {
+                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
+            })
+            .map(|s| s.optional_ip_address_binding)
+            .unwrap_or_default();
+        let (bind_ip_v4, bind_ip_v6) =
+            apply_address_family_preference(&preference, &bind_ip_v4, &bind_ip_v6);
 
         let _ = self.rpc_client.session_set(json!({
             "bind-address-ipv4": bind_ip_v4,
@@ -4635,6 +4680,32 @@ mod tests {
         assert_eq!(settings["lpd-enabled"], false);
         assert_eq!(settings["encryption"], 1);
         assert_eq!(settings["utp-enabled"], true);
+    }
+
+    #[test]
+    fn address_family_preference_narrows_only_wildcard_binds() {
+        let both = "All IPv4 and IPv6 addresses";
+        assert_eq!(
+            apply_address_family_preference(both, "0.0.0.0", "::"),
+            ("0.0.0.0".to_string(), "::".to_string())
+        );
+        assert_eq!(
+            apply_address_family_preference("All IPv4 addresses", "0.0.0.0", "::"),
+            ("0.0.0.0".to_string(), "::1".to_string())
+        );
+        assert_eq!(
+            apply_address_family_preference("All IPv6 addresses", "0.0.0.0", "::"),
+            ("127.0.0.1".to_string(), "::".to_string())
+        );
+        // A tunnel address chosen by the VPN policy is never replaced by a wildcard.
+        assert_eq!(
+            apply_address_family_preference("All IPv6 addresses", "10.8.0.2", "fd00::2"),
+            ("10.8.0.2".to_string(), "fd00::2".to_string())
+        );
+        assert_eq!(
+            apply_address_family_preference("", "0.0.0.0", "::"),
+            ("0.0.0.0".to_string(), "::".to_string())
+        );
     }
 
     #[test]

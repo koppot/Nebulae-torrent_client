@@ -2173,6 +2173,11 @@ export const SettingsModal: React.FC = () => {
                         <option value="All IPv4 addresses">All IPv4 addresses</option>
                         <option value="All IPv6 addresses">All IPv6 addresses</option>
                       </select>
+                      <span className="block text-[11px] text-[#8c8c8c] mt-1">
+                        Choose a single address family for trackers that accept only one access point per
+                        account (for example "You can not seed from more than one client"). IPv4 only also turns
+                        off IPv6 peers. Applies after Nebulae restarts.
+                      </span>
                     </div>
                   </div>
                 </div>
