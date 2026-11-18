@@ -178,6 +178,10 @@ export async function submitReport(
       ? { kind: 'failed_before_receipt', message }
       : { kind: 'rejected', message, code: b.error };
   }
+  if (resp.status === 413) {
+    // Refused by the web server before PHP ran (HTML body): nothing was stored.
+    return { kind: 'rejected', message: 'The report is too large for the service. Remove some screenshots and try again.', code: 'too_large' };
+  }
   return {
     kind: 'unknown',
     message: `Unexpected answer from the report service (HTTP ${resp.status}). The report may or may not have arrived; sending again is safe.`,

@@ -95,6 +95,12 @@ test('an HTML 502 from a proxy is an unknown outcome, never a receipt', async ()
   assert.equal(out.kind, 'unknown');
 });
 
+test('an HTML 413 from the web server is a definite rejection', async () => {
+  const fetchImpl = asFetch(async () => new Response('<html>Request Entity Too Large</html>', { status: 413 }));
+  const out = await submitReport('https://x.test', buildPayload(fields, env, '', 'sid'), [], { fetchImpl, ...online });
+  assert.equal(out.kind, 'rejected');
+});
+
 test('a network error while online is unknown; offline is failed before receipt', async () => {
   const boom = asFetch(async () => {
     throw new TypeError('network');
