@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.8-dev] - 2026-11-17 (Development)
+## [0.2.8] - 2026-11-18
 
-> **Branch:** `dev/pre-0.2.8`
-> **Status:** Development candidate — not a public release
+### Added (since the first 0.2.8 candidates)
+- **Server tab**: the Manager always shows the local engine; the Server tab shows the same Manager UI against the connected Nebulae Server (Docker) with a connection banner. Add, pause, resume, remove, file priorities and sequential download act on the server.
+- **Docker image** (`server/docker`, `.github/workflows/server-image.yml`): versioned `nebulae-server` image with build/start/update/stop/backup/rollback documentation.
+- **Windows tray/taskbar**: Close keeps the taskbar button and tray icon when "close to tray" is on; Minimize follows the "minimize to tray" option.
+- **Address-family binding**: IPv4-only and IPv6-only incoming binding options are applied to the engine.
+
+### Fixed (since the first 0.2.8 candidates)
+- **TailNet on Windows**: our own tailscaled is now recognised after an app restart (the path filter no longer doubles backslashes), so it is adopted instead of the app waiting on an unmatched daemon.
+- **Website delivery**: a request interrupted while claimed is recovered after restart; requests that hit the tracker's 30 s download limit wait it out instead of failing; the info hash is computed from the original info dict bytes so torrents carrying extra keys (such as `source`) are confirmed in the engine instead of reported as failed.
+- **Windows speed band**: antialiased rendering and stable repeated toggling.
+- **Session log**: rotated at 20 MiB.
+- **Server**: file-priority validation message states the accepted values.
 
 ### Added
 - **ADC Website One-Click Torrent Addition**: Nebulae action button on torrent listing pages, weekly promotions section, and single-torrent detail pages. Dedicated column before the uploader cell. Authentic Nebulae artwork with transparent background and dark keyline. Accessible: aria-label, tooltip, focus-visible.
