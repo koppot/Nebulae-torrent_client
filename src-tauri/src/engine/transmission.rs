@@ -3694,8 +3694,17 @@ impl TorrentEngine for TransmissionTorrentEngine {
             return Ok(());
         }
 
+        // On Windows, Transmission expects backslashes in the rename path.
+        // The canonical_path is normalized to forward slashes for comparison,
+        // but the RPC call must use the platform's native separator.
+        let native_path = if cfg!(target_os = "windows") {
+            canonical_path.replace('/', "\\")
+        } else {
+            canonical_path.clone()
+        };
+
         self.rpc_client
-            .torrent_rename_path(&resolved_id, &canonical_path, trimmed_name)?;
+            .torrent_rename_path(&resolved_id, &native_path, trimmed_name)?;
 
         // If root folder was renamed, synchronize database and metadata cache
         if is_actually_root {
