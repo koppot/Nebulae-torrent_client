@@ -137,6 +137,8 @@ interface TorrentState {
   filesLoadingId: string | null;
   filesError: string | null;
   fetchTorrents: () => Promise<void>;
+  /** Drops the displayed list when the Manager/Server scope changes. */
+  clearTorrents: () => void;
   applyTorrentTelemetry: (incoming: TorrentItem[]) => void;
   fetchTorrentDetails: (id: string) => Promise<void>;
   setSelectedId: (id: string | null) => void;
@@ -271,6 +273,8 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       }));
     }
   },
+
+  clearTorrents: () => set({ torrents: [], selectedId: null, isLoading: false }),
 
   fetchTorrents: async () => {
     if (get().torrents.length === 0) {

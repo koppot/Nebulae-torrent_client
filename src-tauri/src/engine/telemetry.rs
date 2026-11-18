@@ -6,7 +6,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
+pub fn spawn_telemetry_loop(
+    app_handle: AppHandle,
+    engine: SharedEngine,
+    scoped: Arc<crate::engine::ScopedEngine>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -16,6 +20,7 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
             .checked_sub(Duration::from_secs(10))
             .unwrap_or_else(Instant::now);
         let mut last_rates: Option<(u64, u64)> = None;
+        let mut last_scope_remote = false;
 
         loop {
             interval.tick().await;
@@ -26,13 +31,38 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
 
             match poll_result {
                 Ok(Ok(torrents)) => {
-                    let has_changed = last_emitted_torrents.as_ref() != Some(&torrents);
+                    // Rates below always describe this computer; the list shown in the
+                    // window follows the active tab (Manager = local, Server = remote).
+                    let remote_scope = scoped.is_remote_active();
+                    let ui_torrents = if remote_scope {
+                        match scoped.remote_engine() {
+                            Some(remote) => {
+                                tokio::task::spawn_blocking(move || remote.list_torrents())
+                                    .await
+                                    .ok()
+                                    .and_then(|r| r.ok())
+                            }
+                            None => None,
+                        }
+                    } else {
+                        Some(torrents.clone())
+                    };
+                    if last_scope_remote != remote_scope {
+                        last_scope_remote = remote_scope;
+                        last_emitted_torrents = None;
+                    }
                     let heartbeat_due = last_emitted_at.elapsed() >= Duration::from_secs(5);
 
-                    if has_changed || heartbeat_due {
-                        let _ = app_handle.emit("nebulae://telemetry", &torrents);
-                        last_emitted_torrents = Some(torrents.clone());
-                        last_emitted_at = Instant::now();
+                    if let Some(ui) = ui_torrents {
+                        let has_changed = last_emitted_torrents.as_ref() != Some(&ui);
+                        if has_changed || heartbeat_due {
+                            let _ = app_handle.emit(
+                                "nebulae://telemetry",
+                                serde_json::json!({ "remote": remote_scope, "torrents": &ui }),
+                            );
+                            last_emitted_torrents = Some(ui);
+                            last_emitted_at = Instant::now();
+                        }
                     }
 
                     // Calculate aggregate transfer rates for macOS status bar and Windows toolbar

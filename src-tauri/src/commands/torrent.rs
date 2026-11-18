@@ -370,6 +370,29 @@ pub fn recommended_piece_size_bytes(total_bytes: u64) -> u32 {
     }
 }
 
+/// Switches which engine the Manager UI commands drive: the local engine (Manager tab) or the
+/// configured Nebulae Server (Server tab). Background work is unaffected.
+#[tauri::command]
+pub async fn set_engine_scope(
+    remote: bool,
+    scoped: State<'_, std::sync::Arc<crate::engine::ScopedEngine>>,
+    db: State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<(), String> {
+    if remote {
+        let settings = crate::commands::settings::load_user_settings_from_db(db.inner());
+        if !settings.rtorrent_server_enabled {
+            return Err(
+                "The Nebulae Server connection is turned off in Settings -> Server.".to_string(),
+            );
+        }
+        scoped.configure_remote(
+            &settings.rtorrent_server_url,
+            &settings.rtorrent_server_token,
+        )?;
+    }
+    scoped.set_remote_active(remote)
+}
+
 #[tauri::command]
 pub async fn list_torrents(engine: State<'_, SharedEngine>) -> Result<Vec<TorrentItem>, String> {
     let engine = engine.inner().clone();

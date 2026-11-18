@@ -1,5 +1,4 @@
 use crate::db::Database;
-use crate::engine::SharedEngine;
 use crate::qbit_import::locator::{DefaultLocator, LocatorTrait};
 use crate::qbit_import::reader::QbitReader;
 use crate::qbit_import::remover::QbitRemover;
@@ -91,7 +90,7 @@ pub fn qbit_check_running() -> QbitProcessCheck {
 pub async fn qbit_scan_torrents(
     dir: String,
     state: State<'_, QbitImportState>,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
 ) -> Result<ScanResult, String> {
     let locator = DefaultLocator::new();
     let data_dir = PathBuf::from(&dir);
@@ -120,7 +119,7 @@ pub async fn qbit_scan_torrents(
 
     // 4. Mark deduplication against existing Nebula torrents
     let existing_hashes: std::collections::HashSet<String> = match tokio::task::spawn_blocking({
-        let eng = engine.inner().clone();
+        let eng = engine.inner().0.clone();
         move || eng.list_torrents()
     })
     .await
@@ -211,7 +210,7 @@ pub async fn qbit_scan_torrents(
 pub async fn qbit_execute_import(
     options: ImportOptions,
     state: State<'_, QbitImportState>,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<AppPaths>>,
 ) -> Result<ImportSummaryReport, String> {
@@ -238,7 +237,7 @@ pub async fn qbit_execute_import(
 
     let backup_root = paths.base_data_dir.join("qbit-import-backups");
     let logs_dir = paths.logs_dir.clone();
-    let eng = engine.inner().clone();
+    let eng = engine.inner().0.clone();
     let db_clone = db.inner().clone();
 
     let (report, _) = tokio::task::spawn_blocking(move || {

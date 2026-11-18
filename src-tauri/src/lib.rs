@@ -21,7 +21,7 @@ pub mod webview_recovery;
 
 use commands::diagnostics::EngineInitState;
 use db::Database;
-use engine::{RemoteServerEngine, SharedEngine};
+use engine::SharedEngine;
 use std::sync::Arc;
 use tailscale::TsState;
 use utils::logger::SafeLogger;
@@ -198,26 +198,12 @@ pub fn run() {
         s
     };
 
-    let rtorrent_server_mode =
-        settings.rtorrent_server_enabled && !settings.rtorrent_server_url.trim().is_empty();
-
     let mut real_engine_opt: Option<SharedEngine> = None;
     let mut init_error: Option<String> = None;
 
-    let engine: SharedEngine = if rtorrent_server_mode {
-        SafeLogger::log_to_file(
-            &paths.logs_dir,
-            "INFO",
-            &format!(
-                "Nebulae starting in rtorrent server mode: {}",
-                settings.rtorrent_server_url.trim()
-            ),
-        );
-        Arc::new(RemoteServerEngine::new(
-            settings.rtorrent_server_url.clone(),
-            settings.rtorrent_server_token.clone(),
-        ))
-    } else {
+    // The local engine always runs: the Manager tab is the local installation.
+    // A configured Nebulae Server is reached through the Server tab (ScopedEngine).
+    let local_engine: SharedEngine = {
         // Initialize production Transmission engine.
         // Tier 1: Single bounded retry after 500ms backoff if initialization fails.
         // Transmission engine (default)
@@ -330,26 +316,26 @@ pub fn run() {
     let pending_payloads = commands::association::PendingOpenPayloads(initial_payloads.clone());
     // The GUI hides options the active engine cannot fulfill (e.g. features
     // rtorrent does not have) based on this session-wide mode.
-    let engine_mode = commands::settings::EngineMode(if rtorrent_server_mode {
-        "rtorrent_server".to_string()
-    } else {
-        "local".to_string()
-    });
+    let engine_mode = commands::settings::EngineMode("local".to_string());
 
-    let engine_for_seeding = Arc::clone(&engine);
+    let scoped_engine = Arc::new(engine::ScopedEngine::new(Arc::clone(&local_engine)));
+    let engine: SharedEngine = scoped_engine.clone();
+    let local_engine_state = engine::LocalEngine(Arc::clone(&local_engine));
+
+    let engine_for_seeding = Arc::clone(&local_engine);
     let db_for_seeding = Arc::clone(&db);
-    let engine_for_killswitch = Arc::clone(&engine);
+    let engine_for_killswitch = Arc::clone(&local_engine);
     let db_for_killswitch = Arc::clone(&db);
-    let engine_for_telemetry = Arc::clone(&engine);
-    let engine_for_peer_history = Arc::clone(&engine);
+    let engine_for_telemetry = Arc::clone(&local_engine);
+    let engine_for_peer_history = Arc::clone(&local_engine);
     let db_for_peer_history = Arc::clone(&db);
-    let engine_for_watcher = Arc::clone(&engine);
+    let engine_for_watcher = Arc::clone(&local_engine);
     let db_for_watcher = Arc::clone(&db);
-    let engine_for_rss = Arc::clone(&engine);
+    let engine_for_rss = Arc::clone(&local_engine);
     let db_for_rss = Arc::clone(&db);
     let db_for_stats_poller = Arc::clone(&db);
     let db_for_inbox_poller = Arc::clone(&db);
-    let engine_for_delivery_poller = Arc::clone(&engine);
+    let engine_for_delivery_poller = Arc::clone(&local_engine);
     let db_for_delivery_poller = Arc::clone(&db);
 
     let app = tauri::Builder::default()
@@ -398,6 +384,8 @@ pub fn run() {
         .manage(paths)
         .manage(db.clone())
         .manage(engine)
+        .manage(local_engine_state)
+        .manage(scoped_engine.clone())
         .manage(engine_init_state)
         .manage(engine_mode)
         .manage(pending_payloads)
@@ -489,7 +477,11 @@ pub fn run() {
 
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
-            engine::telemetry::spawn_telemetry_loop(app.handle().clone(), engine_for_telemetry);
+            engine::telemetry::spawn_telemetry_loop(
+                app.handle().clone(),
+                engine_for_telemetry,
+                scoped_engine.clone(),
+            );
             engine::telemetry::spawn_peer_history_loop(
                 engine_for_peer_history,
                 db_for_peer_history,
@@ -606,13 +598,13 @@ pub fn run() {
                         }
                     }
                     "pause-all" => {
-                        let engine = app.state::<SharedEngine>();
+                        let engine = app.state::<engine::LocalEngine>();
                         if let Err(e) = engine.pause_all() {
                             tracing::warn!("Tray pause-all failed: {e}");
                         }
                     }
                     "resume-all" => {
-                        let engine = app.state::<SharedEngine>();
+                        let engine = app.state::<engine::LocalEngine>();
                         if let Err(e) = engine.resume_all() {
                             tracing::warn!("Tray resume-all failed: {e}");
                         }
@@ -782,6 +774,7 @@ pub fn run() {
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
             commands::settings::get_engine_mode,
+            commands::torrent::set_engine_scope,
             commands::settings::get_app_platform,
             commands::settings::test_rtorrent_server_connection,
             commands::settings::get_engine_identity_info,

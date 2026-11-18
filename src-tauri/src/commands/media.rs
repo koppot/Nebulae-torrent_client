@@ -5361,7 +5361,7 @@ pub fn relink_external_media(
 /// Preserves info_hash, display_title, user_display_title, poster_path, and history.
 #[tauri::command]
 pub fn relink_torrent_media(
-    engine: tauri::State<'_, crate::engine::SharedEngine>,
+    engine: tauri::State<'_, crate::engine::LocalEngine>,
     _db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
     info_hash: String,
     new_path: String,

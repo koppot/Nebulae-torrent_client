@@ -6,7 +6,6 @@ use crate::commands::inbox::show_os_notification;
 use crate::db::Database;
 use crate::engine::metainfo::ParsedTorrent;
 use crate::engine::traits::TorrentEngine;
-use crate::engine::SharedEngine;
 #[cfg(not(test))]
 use crate::utils::keyring::{get_secret, passkey_secret_target};
 use serde::{Deserialize, Serialize};
@@ -1520,7 +1519,7 @@ async fn redeem_delivery_with_transport(
 pub async fn redeem_adc_delivery(
     app: tauri::AppHandle,
     request_token: String,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
     db: State<'_, Arc<Database>>,
 ) -> Result<String, String> {
     let client = reqwest::Client::builder()

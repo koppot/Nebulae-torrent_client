@@ -15,7 +15,7 @@ import { StatusBar } from './components/layout/StatusBar';
 import { TorrentManagerView } from './components/manager/TorrentManagerView';
 import { SimpleMediaView } from './components/media/SimpleMediaView';
 import { CompactBarView } from './components/compact/CompactBarView';
-import { RemoteServerView } from './components/server/RemoteServerView';
+import { ServerConnectionBanner } from './components/server/ServerConnectionBanner';
 import { SettingsModal } from './components/modals/SettingsModal';
 import {
   addDeliveryFailure,
@@ -49,8 +49,11 @@ export const App: React.FC = () => {
   const remoteServerEnabled = useSettingsStore((s) => s.settings.rtorrent_server_enabled);
   const remoteServerUrl = useSettingsStore((s) => s.settings.rtorrent_server_url);
   const remoteServerToken = useSettingsStore((s) => s.settings.rtorrent_server_token);
-  // When the running engine is the Nebulae Server, the Server tab shows the same Manager UI.
-  const engineIsRemote = useSettingsStore((s) => s.engineMode) === 'rtorrent_server';
+  // The Manager tab drives the local installation; the Server tab shows the same Manager UI
+  // bound to the configured Nebulae Server. The backend scope follows the active tab.
+  const desiredScope: 'local' | 'remote' = viewMode === 'server' ? 'remote' : 'local';
+  const [scope, setScope] = useState<'local' | 'remote'>('local');
+  const scopeRef = useRef<'local' | 'remote'>('local');
 
   // Apply the persisted preference at the document root so existing surfaces
   // can share one palette without changing their layout or behavior.
@@ -61,6 +64,28 @@ export const App: React.FC = () => {
     root.style.colorScheme = light ? 'light' : 'dark';
     root.classList.toggle('dark', !light);
   }, [theme]);
+
+  useEffect(() => {
+    if (desiredScope === scope) return;
+    let cancelled = false;
+    invoke('set_engine_scope', { remote: desiredScope === 'remote' })
+      .then(() => {
+        if (cancelled) return;
+        scopeRef.current = desiredScope;
+        useTorrentStore.getState().clearTorrents();
+        useSettingsStore.setState({
+          engineMode: desiredScope === 'remote' ? 'rtorrent_server' : 'local',
+        });
+        setScope(desiredScope);
+        void useTorrentStore.getState().fetchTorrents();
+      })
+      .catch(() => {
+        if (!cancelled) setViewMode('manager');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desiredScope, scope, setViewMode]);
 
   // Start or stop remote server polling whenever the connection settings change.
   useEffect(() => {
@@ -529,11 +554,16 @@ export const App: React.FC = () => {
 
     // Real-time 500ms push telemetry from Rust engine (sanitizes instantaneous
     // rates and preserves existing detail arrays like files and trackers)
-    listen<import('./types').TorrentItem[]>('nebulae://telemetry', (event) => {
-      if (event.payload) {
-        useTorrentStore.getState().applyTorrentTelemetry(event.payload);
-      }
-    })
+    listen<{ remote: boolean; torrents: import('./types').TorrentItem[] }>(
+      'nebulae://telemetry',
+      (event) => {
+        const payload = event.payload;
+        // Ignore a list that belongs to the other tab's engine (in flight during a tab switch).
+        if (payload?.torrents && payload.remote === (scopeRef.current === 'remote')) {
+          useTorrentStore.getState().applyTorrentTelemetry(payload.torrents);
+        }
+      },
+    )
       .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
@@ -825,12 +855,17 @@ export const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden">
         {viewMode === 'media' && <SimpleMediaView />}
         {viewMode === 'compact' && <CompactBarView />}
-        {viewMode === 'manager' && <TorrentManagerView />}
-        {viewMode === 'server' && (engineIsRemote ? <TorrentManagerView /> : <RemoteServerView />)}
+        {viewMode === 'manager' && scope === 'local' && <TorrentManagerView />}
+        {viewMode === 'server' && scope === 'remote' && (
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
+            <ServerConnectionBanner />
+            <TorrentManagerView />
+          </div>
+        )}
       </main>
 
       {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}
-      {(viewMode === 'manager' || (viewMode === 'server' && engineIsRemote)) && <StatusBar />}
+      {viewMode === 'manager' && <StatusBar />}
         </>
       )}
 

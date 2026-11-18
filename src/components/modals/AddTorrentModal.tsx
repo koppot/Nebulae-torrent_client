@@ -41,6 +41,10 @@ export const AddTorrentModal: React.FC = () => {
   // the destination starts empty (the server default) and is only sent when typed explicitly.
   const isRemoteEngine = engineMode === 'rtorrent_server';
   const [downloadDir, setDownloadDir] = useState(isRemoteEngine ? '' : settings.download_directory);
+  // The engine mode loads after this component mounts; never carry a local folder into a server add.
+  useEffect(() => {
+    if (isRemoteEngine) setDownloadDir((d) => (d === settings.download_directory ? '' : d));
+  }, [isRemoteEngine, settings.download_directory]);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [selectedFileSize, setSelectedFileSize] = useState<number | null>(null);
   const [selectedFileBytes, setSelectedFileBytes] = useState<number[] | null>(null);

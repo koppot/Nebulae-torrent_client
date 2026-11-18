@@ -63,7 +63,7 @@ export const SettingsModal: React.FC = () => {
     settingsTab: activeTab,
     setSettingsTab: setActiveTab,
   } = useUiStore();
-  const { settings: persistedSettings, saveSettings: storeSaveSettings, engineMode, platform } = useSettingsStore();
+  const { settings: persistedSettings, saveSettings: storeSaveSettings, platform } = useSettingsStore();
   const { selectDownloadDirectory } = useTorrentStore();
   const [pendingChanges, setPendingChanges] = useState<Partial<UserSettings>>({});
   const [isSaving, setIsSaving] = useState(false);
@@ -73,7 +73,6 @@ export const SettingsModal: React.FC = () => {
     ...pendingChanges,
   };
 
-  const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
   const speedDisplay = speedDisplayControl(
     platform,
     typeof navigator !== 'undefined' ? navigator.userAgent : '',
@@ -1371,7 +1370,7 @@ export const SettingsModal: React.FC = () => {
                 </div>
 
                 {/* Engine Identification */}
-                <div className={`p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-3 ${isRemoteServer ? 'opacity-50' : ''}`}>
+                <div className={`p-3.5 rounded-lg bg-[#1a1a1a] border border-[#333333] space-y-3`}>
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-1.5">
@@ -1382,7 +1381,7 @@ export const SettingsModal: React.FC = () => {
                         Configures tracker announce and peer handshake identification (User-Agent and Peer-ID prefix). Changes take effect on next engine restart.
                       </p>
                     </div>
-                    {!isRemoteServer && (
+                    {(
                       <button
                         type="button"
                         onClick={handleRestoreIdentityDefaults}
@@ -1395,14 +1394,7 @@ export const SettingsModal: React.FC = () => {
                     )}
                   </div>
 
-                  {isRemoteServer && (
-                    <div className="p-2.5 rounded bg-[#1f1f1f] border border-[#333333] text-xs text-[#a3a3a3] flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                      <span>Engine identification is disabled for a remote Nebulae Server. The remote daemon manages its own identity.</span>
-                    </div>
-                  )}
-
-                  {!isRemoteServer && identityInfo && !identityInfo.supports_runtime_overrides && (
+                  {identityInfo && !identityInfo.supports_runtime_overrides && (
                     <div className="p-2.5 rounded bg-[#2a1f1f] border border-[#552222] text-xs text-[#d4d4d4] flex items-start gap-2">
                       <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
                       <div>
@@ -1414,7 +1406,7 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   )}
 
-                  {!isRemoteServer && (
+                  {(
                     <>
                       {/* Active Identity Readout */}
                       <div className="p-2 rounded bg-[#161616] border border-[#2a2a2a] text-[11px] font-mono space-y-1">
@@ -1923,13 +1915,14 @@ export const SettingsModal: React.FC = () => {
                       className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
                     />
                     <span className="text-white font-medium">
-                      Drive torrents on a Nebulae Server (Transmission) instead of locally
+                      Connect to a Nebulae Server (Transmission)
                     </span>
                   </label>
                   <p className="text-[11px] text-[#a3a3a3] mb-3">
                     Connects this desktop app to a headless <span className="font-mono">nebulae-server</span> bridge
-                    running next to Transmission on your server (Unraid, TrueNAS, Docker). The engine choice applies the
-                    next time Nebulae starts.
+                    running next to Transmission on your server (Unraid, TrueNAS, Docker). Turning this on adds a Server
+                    tab that shows the server's torrents in the same layout as the Manager; the Manager tab keeps
+                    showing this computer's own torrents.
                   </p>
 
                   <div className="space-y-3 font-mono">

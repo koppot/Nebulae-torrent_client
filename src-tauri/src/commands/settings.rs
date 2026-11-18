@@ -428,7 +428,7 @@ pub fn save_user_settings(
     _app: tauri::AppHandle,
     mut settings: UserSettings,
     db: State<Arc<Database>>,
-    engine: State<crate::engine::SharedEngine>,
+    engine: State<crate::engine::LocalEngine>,
 ) -> Result<(), String> {
     if settings.engine.trim() == "librqbit" {
         settings.engine = "transmission".to_string();
@@ -658,7 +658,7 @@ pub fn test_rtorrent_server_connection(
 pub fn get_engine_identity_info(
     db: State<Arc<Database>>,
     app: tauri::AppHandle,
-    engine: State<crate::engine::SharedEngine>,
+    engine: State<crate::engine::LocalEngine>,
 ) -> Result<crate::engine::identity::EngineIdentityInfo, String> {
     use tauri::Manager;
     let settings = load_user_settings(db.clone())?;
@@ -697,8 +697,6 @@ pub fn get_engine_identity_info(
         Err(_) => (false, false),
     };
 
-    let is_remote = settings.rtorrent_server_enabled;
-
     let (configured_ua, configured_prefix) = match settings.engine_identity_profile.as_str() {
         "nebulae" => (nebulae_ua.clone(), nebulae_prefix.clone()),
         "custom" => (
@@ -724,14 +722,7 @@ pub fn get_engine_identity_info(
         .or_else(|| db.get_setting("spawned_engine_identity").ok().flatten())
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
 
-    let (active_profile, active_ua, active_prefix, status_message) = if is_remote {
-        (
-            "remote".to_string(),
-            "rTorrent/remote".to_string(),
-            "-RT----".to_string(),
-            "Remote rTorrent server is active. Engine identity is managed server-side and cannot be overridden locally.".to_string(),
-        )
-    } else if !supports_overrides {
+    let (active_profile, active_ua, active_prefix, status_message) = if !supports_overrides {
         (
             "transmission".to_string(),
             tr_ua.clone(),
@@ -774,8 +765,7 @@ pub fn get_engine_identity_info(
     };
 
     // Restart is required when configured profile or identity strings differ from the active running daemon
-    let restart_required = !is_remote
-        && supports_overrides
+    let restart_required = supports_overrides
         && (settings.engine_identity_profile != active_profile
             || configured_ua != active_ua
             || configured_prefix != active_prefix);
@@ -792,7 +782,7 @@ pub fn get_engine_identity_info(
         nebulae_version: app_version.to_string(),
         nebulae_user_agent: nebulae_ua,
         nebulae_peer_id_prefix: nebulae_prefix,
-        supports_runtime_overrides: supports_overrides && !is_remote,
+        supports_runtime_overrides: supports_overrides,
         restart_required,
         status_message,
         version_encoding_supported,

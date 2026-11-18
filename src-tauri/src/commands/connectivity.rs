@@ -1,5 +1,4 @@
 use crate::db::Database;
-use crate::engine::SharedEngine;
 use crate::models::connectivity::{ConnectivityReport, EngineIpv6Diagnostic, NatType, PortStatus};
 use crate::utils::network::AdcLink;
 use serde::Serialize;
@@ -123,7 +122,7 @@ async fn probe_tracker_reachability() -> bool {
 #[tauri::command]
 pub async fn run_connectivity_doctor_test(
     db: State<'_, Arc<Database>>,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
 ) -> Result<ConnectivityReport, String> {
     let listening_port = db
         .get_setting("user_settings_json")
@@ -280,7 +279,7 @@ pub async fn run_connectivity_doctor_test(
 
 #[tauri::command]
 pub fn get_engine_ipv6_diagnostic(
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
 ) -> Result<EngineIpv6Diagnostic, String> {
     engine.engine_ipv6_diagnostic()
 }
@@ -355,7 +354,7 @@ pub fn get_port_negotiation_result(
 #[tauri::command]
 pub async fn get_connectivity_certificate(
     db: State<'_, Arc<Database>>,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
 ) -> Result<String, String> {
     let report = run_connectivity_doctor_test(db, engine).await?;
     Ok(report.certificate_text)

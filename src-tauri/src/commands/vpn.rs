@@ -1,5 +1,4 @@
 use crate::db::Database;
-use crate::engine::SharedEngine;
 use crate::models::vpn::{ParsedWireGuardProfile, VpnMode, VpnProfile, VpnProtocol, VpnStatus};
 use chrono::Utc;
 use std::sync::Arc;
@@ -9,7 +8,7 @@ use uuid::Uuid;
 #[tauri::command]
 pub async fn get_vpn_status(
     db: State<'_, Arc<Database>>,
-    engine: State<'_, SharedEngine>,
+    engine: State<'_, crate::engine::LocalEngine>,
 ) -> Result<VpnStatus, String> {
     let mode_str = db
         .get_setting("vpn_mode")
