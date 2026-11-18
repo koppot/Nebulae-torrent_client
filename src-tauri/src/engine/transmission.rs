@@ -1927,11 +1927,12 @@ impl TransmissionTorrentEngine {
             warn!("[enforcement] could not start credential lookup: {error}");
         }
 
-        // 10. Load GeoLite2 resolver first so it can be passed to the eviction
-        //     task below (graceful degradation if .mmdb absent).
+        // 10. Load GeoIP resolver (searches user-data dir first, then bundled resources).
+        //     Graceful degradation: if no .mmdb files are found, falls back to LAN/Global.
         let geo_resolver = match resource_dir {
             Some(rdir) => {
-                match crate::utils::geo::GeoResolver::from_resource_dir(rdir) {
+                let data_dir = Some(paths.base_data_dir.as_path());
+                match crate::utils::geo::GeoResolver::load(rdir, data_dir) {
                     Ok(Some(resolver)) => {
                         // Set host egress IP for relative locality classification.
                         let host_ip = find_active_egress_vpn_interface()
@@ -1942,17 +1943,16 @@ impl TransmissionTorrentEngine {
                         } else {
                             resolver
                         };
-                        info!(
-                            "[geo] GeoLite2 resolver loaded — full locality classification active"
-                        );
+                        info!("[geo] GeoIP resolver loaded — full locality classification active");
                         Some(Arc::new(with_host))
                     }
                     Ok(None) => {
-                        info!("[geo] GeoLite2 .mmdb absent — locality classification: LAN/Global only");
+                        info!("[geo] No .mmdb databases found — locality classification: LAN/Global only. \
+                               Place GeoLite2-Country.mmdb in the application's geo/ directory to enable.");
                         None
                     }
                     Err(e) => {
-                        warn!("[geo] Failed to load GeoLite2 resolver: {e}");
+                        warn!("[geo] Failed to load GeoIP resolver: {e}");
                         None
                     }
                 }

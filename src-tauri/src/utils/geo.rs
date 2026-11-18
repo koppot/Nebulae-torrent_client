@@ -1,27 +1,38 @@
-//! Offline IP geolocation using bundled MaxMind GeoLite2 databases.
+//! Offline IP geolocation using MaxMind-format `.mmdb` databases.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! let geo = GeoResolver::from_resource_dir(&resource_dir)?;
+//! let geo = GeoResolver::load(&resource_dir, Some(&data_dir))?;
 //! let tier = geo.classify_locality("1.2.3.4", "203.0.113.10");
 //! let country = geo.country_code("1.2.3.4"); // e.g. Some("JP")
 //! let asn = geo.asn("1.2.3.4");              // e.g. Some(4134)
 //! ```
 //!
+//! # Database Sources
+//!
+//! The resolver accepts any MaxMind-format `.mmdb` file (GeoLite2, GeoIP2,
+//! or compatible third-party databases such as DB-IP). Databases can be:
+//! - Bundled in the application's `resources/geo/` directory, or
+//! - Placed by the user in `<app-data>/geo/` (e.g.
+//!   `%LOCALAPPDATA%\Nebulae\geo\` on Windows, `~/Library/Application
+//!   Support/Nebulae/geo/` on macOS) for replacement without rebuilding.
+//!
+//! The user-data location is searched first so user-supplied databases
+//! take precedence over bundled ones.
+//!
 //! # Privacy
 //!
 //! All lookups are entirely offline. No peer IPs are sent to any external
-//! service. The `.mmdb` files are bundled in the signed app archive and
-//! never updated remotely.
+//! service. The `.mmdb` files are loaded from local storage and never
+//! fetched or updated over the network at runtime.
 //!
 //! # Graceful Degradation
 //!
-//! If the `.mmdb` files are absent (a build that did not run the download
-//! script, or any release without a MaxMind licence key),
-//! `GeoResolver::from_resource_dir` returns `Ok(None)` and all callers fall
+//! If no `.mmdb` files are found in any search location,
+//! `GeoResolver::load` returns `Ok(None)` and all callers fall
 //! back to the two-tier LAN/Global classification already present in
-//! `get_peer_telemetry`. The files are never created or fetched at runtime.
+//! `get_peer_telemetry`.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -35,23 +46,28 @@ use crate::models::peering::LocalityTier;
 const COUNTRY_DB: &str = "GeoLite2-Country.mmdb";
 const ASN_DB: &str = "GeoLite2-ASN.mmdb";
 
-/// Folders that can hold the GeoLite2 files, in the order they are tried.
+/// Folders that can hold the `.mmdb` files, in priority order.
 ///
-/// `scripts/download_geo_db.sh` writes to `src-tauri/resources/geo`, and the
-/// macOS bundle keeps Tauri's `resources/**/*` under `<resource dir>/resources/`,
-/// so a packaged build has the files in `<resource dir>/resources/geo`. The flat
-/// `<resource dir>/geo` layout stays valid for a resource dir that already is the
-/// `resources` folder (`NEBULAE_RESOURCE_DIR`).
-fn geo_dir_candidates(resource_dir: &Path) -> [PathBuf; 2] {
-    [
-        resource_dir.join("resources").join("geo"),
-        resource_dir.join("geo"),
-    ]
+/// 1. User-data directory: `<app-data>/geo/` — user-supplied databases
+///    (e.g. `%LOCALAPPDATA%\Nebulae\geo\` on Windows). Searched first so
+///    users can replace databases without rebuilding the application.
+/// 2. Packaged resources: `<resource_dir>/resources/geo/` — bundled at build
+///    time by the staging script.
+/// 3. Flat layout: `<resource_dir>/geo/` — development convenience when
+///    `NEBULAE_RESOURCE_DIR` already points to the `resources` folder.
+fn geo_dir_candidates(resource_dir: &Path, data_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::with_capacity(3);
+    if let Some(dd) = data_dir {
+        dirs.push(dd.join("geo"));
+    }
+    dirs.push(resource_dir.join("resources").join("geo"));
+    dirs.push(resource_dir.join("geo"));
+    dirs
 }
 
 /// First candidate folder that holds the country database.
-fn locate_geo_dir(resource_dir: &Path) -> Option<PathBuf> {
-    geo_dir_candidates(resource_dir)
+fn locate_geo_dir(resource_dir: &Path, data_dir: Option<&Path>) -> Option<PathBuf> {
+    geo_dir_candidates(resource_dir, data_dir)
         .into_iter()
         .find(|dir| dir.join(COUNTRY_DB).is_file())
 }
@@ -67,19 +83,23 @@ pub struct GeoResolver {
 }
 
 impl GeoResolver {
-    /// Load the databases from `<resource_dir>/resources/geo/` (packaged app) or
-    /// `<resource_dir>/geo/`.
+    /// Load the databases from user-data or bundled resource directories.
     ///
-    /// Returns `Ok(None)` if `GeoLite2-Country.mmdb` is absent from both
-    /// (graceful degradation for builds without the DB).
-    pub fn from_resource_dir(resource_dir: &Path) -> Result<Option<Self>, String> {
-        let Some(geo_dir) = locate_geo_dir(resource_dir) else {
-            let [packaged, flat] = geo_dir_candidates(resource_dir);
+    /// Search order (first match wins):
+    /// 1. `<data_dir>/geo/` — user-supplied databases
+    /// 2. `<resource_dir>/resources/geo/` — bundled (packaged app)
+    /// 3. `<resource_dir>/geo/` — flat layout (dev builds)
+    ///
+    /// Returns `Ok(None)` if no `GeoLite2-Country.mmdb` (or compatible) is
+    /// found in any location (graceful degradation).
+    pub fn load(resource_dir: &Path, data_dir: Option<&Path>) -> Result<Option<Self>, String> {
+        let Some(geo_dir) = locate_geo_dir(resource_dir, data_dir) else {
+            let candidates = geo_dir_candidates(resource_dir, data_dir);
+            let paths: Vec<_> = candidates.iter().map(|p| p.display().to_string()).collect();
             info!(
-                "[geo] {COUNTRY_DB} not found in '{}' or '{}'. Run scripts/download_geo_db.sh \
-                 before building to bundle it.",
-                packaged.display(),
-                flat.display()
+                "[geo] {COUNTRY_DB} not found in any search location: {}. \
+                 Place GeoLite2-Country.mmdb (or compatible .mmdb) in one of these directories.",
+                paths.join(", ")
             );
             return Ok(None);
         };
@@ -87,16 +107,25 @@ impl GeoResolver {
         let country = Reader::open_readfile(geo_dir.join(COUNTRY_DB))
             .map_err(|e| format!("Failed to open {COUNTRY_DB}: {e}"))?;
 
+        info!("[geo] Loaded {COUNTRY_DB} from '{}'", geo_dir.display());
+
         let asn_path = geo_dir.join(ASN_DB);
         let asn = if asn_path.is_file() {
             match Reader::open_readfile(&asn_path) {
-                Ok(r) => Some(r),
+                Ok(r) => {
+                    info!("[geo] Loaded {ASN_DB} from '{}'", geo_dir.display());
+                    Some(r)
+                }
                 Err(e) => {
                     warn!("[geo] Failed to open {ASN_DB}: {e} — ASN lookup disabled");
                     None
                 }
             }
         } else {
+            info!(
+                "[geo] {ASN_DB} not present in '{}' — ASN lookup disabled",
+                geo_dir.display()
+            );
             None
         };
 
@@ -106,6 +135,11 @@ impl GeoResolver {
             host_country: None,
             host_asn: None,
         }))
+    }
+
+    /// Backward-compatible entry point; searches only bundled resource paths.
+    pub fn from_resource_dir(resource_dir: &Path) -> Result<Option<Self>, String> {
+        Self::load(resource_dir, None)
     }
 
     /// Set the host's egress IP so locality tiers (Asn, Country, Region)
@@ -237,7 +271,7 @@ mod tests {
         let resource_dir = scratch_dir("packaged");
         let geo = resource_dir.join("resources").join("geo");
         put_country_db(&geo);
-        assert_eq!(locate_geo_dir(&resource_dir), Some(geo));
+        assert_eq!(locate_geo_dir(&resource_dir, None), Some(geo));
         let _ = fs::remove_dir_all(&resource_dir);
     }
 
@@ -246,7 +280,7 @@ mod tests {
         let resource_dir = scratch_dir("flat");
         let geo = resource_dir.join("geo");
         put_country_db(&geo);
-        assert_eq!(locate_geo_dir(&resource_dir), Some(geo));
+        assert_eq!(locate_geo_dir(&resource_dir, None), Some(geo));
         let _ = fs::remove_dir_all(&resource_dir);
     }
 
@@ -256,8 +290,24 @@ mod tests {
         let packaged = resource_dir.join("resources").join("geo");
         put_country_db(&packaged);
         put_country_db(&resource_dir.join("geo"));
-        assert_eq!(locate_geo_dir(&resource_dir), Some(packaged));
+        assert_eq!(locate_geo_dir(&resource_dir, None), Some(packaged));
         let _ = fs::remove_dir_all(&resource_dir);
+    }
+
+    #[test]
+    fn user_data_dir_wins_over_bundled_resources() {
+        let resource_dir = scratch_dir("user-data");
+        let data_dir = scratch_dir("user-data-data");
+        let user_geo = data_dir.join("geo");
+        let bundled_geo = resource_dir.join("resources").join("geo");
+        put_country_db(&user_geo);
+        put_country_db(&bundled_geo);
+        assert_eq!(
+            locate_geo_dir(&resource_dir, Some(&data_dir)),
+            Some(user_geo)
+        );
+        let _ = fs::remove_dir_all(&resource_dir);
+        let _ = fs::remove_dir_all(&data_dir);
     }
 
     #[test]
@@ -267,7 +317,7 @@ mod tests {
         let geo = resource_dir.join("resources").join("geo");
         fs::create_dir_all(&geo).unwrap();
         fs::write(geo.join(".gitkeep"), b"").unwrap();
-        assert!(locate_geo_dir(&resource_dir).is_none());
+        assert!(locate_geo_dir(&resource_dir, None).is_none());
         assert!(matches!(
             GeoResolver::from_resource_dir(&resource_dir),
             Ok(None)

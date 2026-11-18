@@ -9,8 +9,9 @@ name: Windows Candidate Build
 #
 # This is an UNSIGNED test candidate: createUpdaterArtifacts is disabled because
 # Factory B holds no Tauri signing private key. It does NOT satisfy final-release
-# requirements. GeoLite2 databases are NOT staged (--require-geo not invoked), so
-# this build is explicitly INCOMPLETE and not release-ready (release blocker P-08).
+# requirements. GeoIP databases (.mmdb) are NOT staged in candidate builds
+# (awaiting user-supplied database files); they can be placed in the
+# application's data directory at runtime. See src-tauri/src/utils/geo.rs.
 #
 # Authorized by the owner: one scratch branch, one artifacts-only workflow.
 
