@@ -23,13 +23,13 @@ export function speedDisplayControl(platform: Platform, userAgent = ''): SpeedDi
             : 'unknown';
   if (resolved === 'windows' || resolved === 'unknown') {
     return {
-      label: 'Show taskbar speed overlay',
+      label: 'Show taskbar upload/download speeds',
       help: 'Shows live upload and download speeds next to the notification area on the Windows taskbar. Turning it off hides the overlay immediately and keeps it hidden, including in fullscreen and after restarts. Torrent activity and the tray icon are not affected.',
     };
   }
   if (resolved === 'macos') {
     return {
-      label: 'Show speeds in the menu bar',
+      label: 'Show menu bar upload/download speeds',
       help: 'Shows live upload and download speeds in the Nebulae menu bar icon. Turning it off restores the plain icon immediately and keeps it that way after restarts.',
     };
   }

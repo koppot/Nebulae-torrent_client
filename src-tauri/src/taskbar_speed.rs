@@ -114,7 +114,7 @@ mod windows_impl {
         SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP,
         WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_RBUTTONUP,
         WM_SETTINGCHANGE, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
@@ -244,7 +244,7 @@ mod windows_impl {
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
                 CLASS_NAME,
                 w!("Nebulae Toolbar Item"),
-                WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
+                WS_POPUP | WS_CLIPSIBLINGS,
                 p.x,
                 p.y,
                 p.w,
