@@ -60,6 +60,7 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
                     last_emitted_torrents = None;
                     last_rates = None;
                     // Clear stale rates on engine stop or failure
+                    status_bar::forget_rates();
                     status_bar::clear_status_bar(&app_handle);
                     crate::taskbar_speed::clear_taskbar_speed(&app_handle);
                 }

@@ -401,8 +401,8 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   </div>
 
-                  {speedDisplay && (
-                    <div className="mt-3 rounded-lg border border-[#333333] bg-[#171717] p-3">
+                  <div className="mt-3 space-y-2">
+                    {speedDisplay && (
                       <label className="flex items-start gap-2 cursor-pointer">
                         <input
                           type="checkbox"
@@ -421,13 +421,11 @@ export const SettingsModal: React.FC = () => {
                           className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                         />
                         <div>
-                          <span className="text-white font-semibold">{speedDisplay.label}</span>
+                          <span className="text-white font-medium">{speedDisplay.label}</span>
                           <span className="block text-[11px] text-[#8c8c8c] mt-0.5">{speedDisplay.help}</span>
                         </div>
                       </label>
-                    </div>
-                  )}
-                  <div className="mt-3 space-y-2">
+                    )}
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"

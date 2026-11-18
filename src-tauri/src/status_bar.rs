@@ -44,6 +44,11 @@ pub fn set_tray_id(tray_id: String) {
 pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate: u64) {
     #[cfg(target_os = "macos")]
     {
+        // Remembered even while the display is switched off so that turning it back
+        // on can draw the current rates without waiting for them to change.
+        if let Ok(mut last) = LAST_RATES.lock() {
+            *last = Some((upload_rate, download_rate));
+        }
         if !SPEED_DISPLAY_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
@@ -81,20 +86,7 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
             return;
         }
 
-        let up_line = crate::speed_format::format_stacked_line('▲', upload_rate);
-        let down_line = crate::speed_format::format_stacked_line('▼', download_rate);
-        let up_clean = up_line.replace(['▲', '▼'], "").trim().to_string();
-        let down_clean = down_line.replace(['▲', '▼'], "").trim().to_string();
-        let tooltip = format!("Nebulae — ▲ {}   ▼ {}", up_clean, down_clean);
-
-        let handle = app_handle.clone();
-        let tray_handle = app_handle.clone();
-        let _ = handle.run_on_main_thread(move || {
-            apply_status_bar_composite_image(&up_line, &down_line);
-            if let Some(tray) = tray_handle.tray_by_id(&tray_id) {
-                let _ = tray.set_tooltip(Some(&tooltip));
-            }
-        });
+        render_status_bar(app_handle, tray_id, upload_rate, download_rate);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -105,14 +97,133 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
     }
 }
 
+#[cfg(target_os = "macos")]
+fn render_status_bar(
+    app_handle: &AppHandle,
+    tray_id: String,
+    upload_rate: u64,
+    download_rate: u64,
+) {
+    let up_line = crate::speed_format::format_stacked_line('▲', upload_rate);
+    let down_line = crate::speed_format::format_stacked_line('▼', download_rate);
+    let up_clean = up_line.replace(['▲', '▼'], "").trim().to_string();
+    let down_clean = down_line.replace(['▲', '▼'], "").trim().to_string();
+    let tooltip = format!("Nebulae — ▲ {}   ▼ {}", up_clean, down_clean);
+
+    let handle = app_handle.clone();
+    let tray_handle = app_handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        // Re-checked here: a draw queued just before the user switched the display
+        // off must not land after the plain icon has been restored.
+        if !SPEED_DISPLAY_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        apply_status_bar_composite_image(&up_line, &down_line);
+        if let Some(tray) = tray_handle.tray_by_id(&tray_id) {
+            let _ = tray.set_tooltip(Some(&tooltip));
+        }
+    });
+}
+
 /// User preference (Settings > Appearance & Behavior): show the speed readout in the menu bar.
+#[cfg(target_os = "macos")]
 static SPEED_DISPLAY_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
+/// Latest aggregate rates seen by `update_status_bar`, whether or not it was drawn.
+#[cfg(target_os = "macos")]
+static LAST_RATES: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "macos")]
 pub fn set_speed_display_enabled(app_handle: &AppHandle, enabled: bool) {
     let was = SPEED_DISPLAY_ENABLED.swap(enabled, std::sync::atomic::Ordering::SeqCst);
-    if was && !enabled {
-        clear_status_bar(app_handle);
+    let rates = LAST_RATES.lock().ok().and_then(|r| *r);
+    match toggle_action(was, enabled, rates) {
+        ToggleAction::RestoreIcon => clear_status_bar(app_handle),
+        ToggleAction::Redraw(up, down) => {
+            // The telemetry loop only pushes rates when they change, so draw the current
+            // ones now (bypassing the update throttle) instead of waiting for a change.
+            let tray_id = STATUS_BAR_STATE
+                .get()
+                .and_then(|s| s.lock().ok())
+                .and_then(|s| s.tray_id.clone());
+            if let Some(tray_id) = tray_id {
+                render_status_bar(app_handle, tray_id, up, down);
+            }
+        }
+        ToggleAction::Nothing => {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq)]
+enum ToggleAction {
+    RestoreIcon,
+    Redraw(u64, u64),
+    Nothing,
+}
+
+#[cfg(target_os = "macos")]
+fn toggle_action(was: bool, now: bool, last_rates: Option<(u64, u64)>) -> ToggleAction {
+    match (was, now) {
+        (true, false) => ToggleAction::RestoreIcon,
+        (false, true) => last_rates
+            .map(|(up, down)| ToggleAction::Redraw(up, down))
+            .unwrap_or(ToggleAction::Nothing),
+        _ => ToggleAction::Nothing,
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turning_the_display_off_restores_the_plain_icon_once() {
+        assert_eq!(
+            toggle_action(true, false, Some((1, 2))),
+            ToggleAction::RestoreIcon
+        );
+        assert_eq!(
+            toggle_action(false, false, Some((1, 2))),
+            ToggleAction::Nothing
+        );
+    }
+
+    #[test]
+    fn turning_it_back_on_redraws_the_last_rates_even_if_unchanged() {
+        for _ in 0..3 {
+            assert_eq!(
+                toggle_action(true, false, Some((0, 0))),
+                ToggleAction::RestoreIcon
+            );
+            assert_eq!(
+                toggle_action(false, true, Some((0, 0))),
+                ToggleAction::Redraw(0, 0)
+            );
+        }
+        assert_eq!(
+            toggle_action(false, true, Some((5, 9))),
+            ToggleAction::Redraw(5, 9)
+        );
+    }
+
+    #[test]
+    fn saving_unrelated_settings_never_redraws_or_clears() {
+        assert_eq!(
+            toggle_action(true, true, Some((5, 9))),
+            ToggleAction::Nothing
+        );
+        assert_eq!(toggle_action(false, true, None), ToggleAction::Nothing);
+    }
+}
+
+/// Drop the remembered rates when the engine stops, so re-enabling the display
+/// afterwards does not redraw numbers from before the stop.
+pub fn forget_rates() {
+    #[cfg(target_os = "macos")]
+    if let Ok(mut last) = LAST_RATES.lock() {
+        *last = None;
     }
 }
 
