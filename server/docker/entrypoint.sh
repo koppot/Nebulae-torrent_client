@@ -31,8 +31,8 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     "rpc-whitelist-enabled": false,
     "peer-port": 51413,
     "port-forwarding-enabled": true,
-    "dht-enabled": true,
-    "pex-enabled": true,
+    "dht-enabled": false,
+    "pex-enabled": false,
     "lpd-enabled": false,
     "encryption": 1,
     "speed-limit-down-enabled": false,
@@ -55,7 +55,7 @@ chown -R nebulae:nebulae /data
 # ── Start Transmission daemon ──────────────────────────────────────────────
 
 TRANS_CONFIG_DIR="${TRANSMISSION_HOME}"
-TRANS_CMD="transmission-daemon --config-dir ${TRANS_CONFIG_DIR} --foreground --log-info"
+TRANS_CMD="transmission-daemon --config-dir ${TRANS_CONFIG_DIR} --foreground --log-level=info"
 
 echo "Starting Transmission daemon..."
 su -s /bin/sh nebulae -c "${TRANS_CMD}" &
@@ -80,5 +80,23 @@ done
 
 echo "Starting nebulae-server bridge..."
 export NEBULAE_TOKEN NEBULAE_PORT NEBULAE_BIND TRANSMISSION_RPC_URL
-exec su -s /bin/sh nebulae -c \
-    "exec /usr/local/bin/nebulae-server"
+su -s /bin/sh nebulae -c "exec /usr/local/bin/nebulae-server" &
+SERVER_PID=$!
+
+# Stop both processes on SIGTERM/SIGINT and wait for Transmission to exit so it
+# can write resume data (torrent state, locations, paused flags). The daemon is
+# not a direct child (it runs under su), so signal it by command line (its process name is truncated to 15 characters).
+shutdown() {
+    pkill -TERM -x nebulae-server 2>/dev/null
+    pkill -TERM -f '^transmission-daemon ' 2>/dev/null
+    wait "$TRANSMISSION_PID" 2>/dev/null
+    wait "$SERVER_PID" 2>/dev/null
+    exit 0
+}
+trap shutdown TERM INT
+
+wait "$SERVER_PID"
+STATUS=$?
+pkill -TERM -f '^transmission-daemon ' 2>/dev/null
+wait "$TRANSMISSION_PID" 2>/dev/null
+exit "$STATUS"

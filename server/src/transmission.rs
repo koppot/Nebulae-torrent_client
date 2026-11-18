@@ -138,6 +138,7 @@ impl TransmissionClient {
             "bandwidthPriority",
             "seedRatioLimit",
             "seedRatioMode",
+            "sequential_download",
             "sequentialDownload"
         ]);
 
@@ -365,7 +366,7 @@ impl TransmissionClient {
                 "torrent-get",
                 Some(json!({
                     "ids": [id],
-                    "fields": ["id", "sequentialDownload"],
+                    "fields": ["id", "sequential_download", "sequentialDownload"],
                 })),
             )
             .await?;
@@ -373,7 +374,10 @@ impl TransmissionClient {
             .get("torrents")
             .and_then(|t| t.as_array())
             .and_then(|arr| arr.first())
-            .and_then(|t| t.get("sequentialDownload"))
+            .and_then(|t| {
+                t.get("sequential_download")
+                    .or_else(|| t.get("sequentialDownload"))
+            })
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let next = !current;
@@ -381,7 +385,7 @@ impl TransmissionClient {
             "torrent-set",
             Some(json!({
                 "ids": [id],
-                "sequentialDownload": next,
+                "sequential_download": next,
             })),
         )
         .await?;
@@ -531,6 +535,7 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
                         0.0
                     };
                     let priority = s.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let wanted = s.get("wanted").and_then(|v| v.as_bool()).unwrap_or(true);
                     TorrentFileItem {
                         index: i as u32,
                         name: f
@@ -540,11 +545,14 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
                             .to_string(),
                         size_bytes: size,
                         progress,
-                        priority: match priority {
-                            -1 => 0, // low
-                            0 => 1,  // normal
-                            1 => 2,  // high
-                            _ => 1,
+                        // 0 = skip (unwanted), 1 = normal, 2 = high; matches set_file_priority.
+                        // Transmission's "low" has no counterpart and reports as normal.
+                        priority: if !wanted {
+                            0
+                        } else if priority >= 1 {
+                            2
+                        } else {
+                            1
                         },
                     }
                 })
@@ -655,7 +663,8 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
         piece_size,
         total_pieces: piece_count,
         sequential_download: t
-            .get("sequentialDownload")
+            .get("sequential_download")
+            .or_else(|| t.get("sequentialDownload"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         first_last_piece_prio: false,
@@ -666,4 +675,33 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
         download_limit_kib: dl_limit,
         upload_limit_kib: ul_limit,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_priority_read_matches_write_semantics_including_skipped_files() {
+        let t = json!({
+            "id": 1,
+            "name": "t",
+            "hashString": "abc",
+            "files": [
+                {"name": "t/a", "length": 10, "bytesCompleted": 0},
+                {"name": "t/b", "length": 10, "bytesCompleted": 0},
+                {"name": "t/c", "length": 10, "bytesCompleted": 0},
+                {"name": "t/d", "length": 10, "bytesCompleted": 0}
+            ],
+            "fileStats": [
+                {"wanted": true, "priority": 0},
+                {"wanted": true, "priority": 1},
+                {"wanted": false, "priority": 1},
+                {"wanted": true, "priority": -1}
+            ]
+        });
+        let item = parse_torrent(&t).expect("torrent parses");
+        let prios: Vec<u8> = item.files.iter().map(|f| f.priority).collect();
+        assert_eq!(prios, vec![1, 2, 0, 1]);
+    }
 }
