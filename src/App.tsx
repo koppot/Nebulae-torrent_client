@@ -49,6 +49,8 @@ export const App: React.FC = () => {
   const remoteServerEnabled = useSettingsStore((s) => s.settings.rtorrent_server_enabled);
   const remoteServerUrl = useSettingsStore((s) => s.settings.rtorrent_server_url);
   const remoteServerToken = useSettingsStore((s) => s.settings.rtorrent_server_token);
+  // When the running engine is the Nebulae Server, the Server tab shows the same Manager UI.
+  const engineIsRemote = useSettingsStore((s) => s.engineMode) === 'rtorrent_server';
 
   // Apply the persisted preference at the document root so existing surfaces
   // can share one palette without changing their layout or behavior.
@@ -824,11 +826,11 @@ export const App: React.FC = () => {
         {viewMode === 'media' && <SimpleMediaView />}
         {viewMode === 'compact' && <CompactBarView />}
         {viewMode === 'manager' && <TorrentManagerView />}
-        {viewMode === 'server' && <RemoteServerView />}
+        {viewMode === 'server' && (engineIsRemote ? <TorrentManagerView /> : <RemoteServerView />)}
       </main>
 
       {/* 4. Bottom Desktop Application Status Bar (Manager view only) */}
-      {viewMode === 'manager' && <StatusBar />}
+      {(viewMode === 'manager' || (viewMode === 'server' && engineIsRemote)) && <StatusBar />}
         </>
       )}
 
