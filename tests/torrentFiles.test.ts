@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   buildFileTree,
+  collectFileIndices,
+  nodePriority,
+  nodeSelection,
   createLatestGate,
   mergeFileStats,
   nodeCompletedBytes,
@@ -25,6 +28,26 @@ const aika = (p1: number, p2: number) => [
   file(2, 'AIKa (1997-1999)/AIKA_DISC_2.ISO', 5.27 * GIB, p2),
   file(3, 'AIKa (1997-1999)/AIKA_DISC_2.MDS', 8230, 1),
 ];
+
+test('folder selection and priority cover every file below it, collapsed or not', () => {
+  const files = [
+    file(0, 'Disc/BDMV/A.m2ts', 10, 0, 1),
+    file(1, 'Disc/BDMV/B.m2ts', 10, 0, 1),
+    file(2, 'Disc/CERTIFICATE/id.bdmv', 1, 0, 0),
+  ];
+  const tree = buildFileTree(files);
+  const disc = tree.children[0];
+  const bdmv = disc.children.find((c) => c.name === 'BDMV')!;
+  const cert = disc.children.find((c) => c.name === 'CERTIFICATE')!;
+  assert.deepEqual(collectFileIndices(disc).sort(), [0, 1, 2]);
+  assert.deepEqual(collectFileIndices(bdmv).sort(), [0, 1]);
+  assert.equal(nodeSelection(disc), 'some');
+  assert.equal(nodeSelection(bdmv), 'all');
+  assert.equal(nodeSelection(cert), 'none');
+  assert.equal(nodePriority(disc), 'mixed');
+  assert.equal(nodePriority(bdmv), 1);
+  assert.equal(nodePriority(cert), 0);
+});
 
 test('folder progress is completed bytes over total bytes, not an average of percentages', () => {
   const tree = buildFileTree(aika(0.28, 0.05));

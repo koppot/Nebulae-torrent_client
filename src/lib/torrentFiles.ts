@@ -97,6 +97,54 @@ export function nodeCompletedBytes(node: FileTreeNode): number {
   return done;
 }
 
+/** Indices of every file at or below the node. */
+export function collectFileIndices(node: FileTreeNode): number[] {
+  if (!node.isFolder) return node.file ? [node.file.index] : [];
+  return node.children.flatMap(collectFileIndices);
+}
+
+export type SelectionState = 'all' | 'some' | 'none';
+
+/** Whether the files below the node are selected for download (priority above
+ * zero): all of them, none of them, or a mix. */
+export function nodeSelection(node: FileTreeNode): SelectionState {
+  let wanted = 0;
+  let total = 0;
+  const walk = (n: FileTreeNode) => {
+    if (!n.isFolder) {
+      if (n.file) {
+        total += 1;
+        if (n.file.priority > 0) wanted += 1;
+      }
+      return;
+    }
+    n.children.forEach(walk);
+  };
+  walk(node);
+  if (total === 0 || wanted === 0) return 'none';
+  return wanted === total ? 'all' : 'some';
+}
+
+/** Priority shared by every file below the node (0 = do not download ... 3 =
+ * maximum), or 'mixed' when the files differ. */
+export function nodePriority(node: FileTreeNode): number | 'mixed' {
+  let seen: number | null = null;
+  let mixed = false;
+  const walk = (n: FileTreeNode) => {
+    if (mixed) return;
+    if (!n.isFolder) {
+      if (!n.file) return;
+      if (seen === null) seen = n.file.priority;
+      else if (seen !== n.file.priority) mixed = true;
+      return;
+    }
+    n.children.forEach(walk);
+  };
+  walk(node);
+  if (mixed) return 'mixed';
+  return seen ?? 1;
+}
+
 /** File progress as reported; folder progress is completed bytes over total
  * bytes of all descendant files (never an average of the children's percentages). */
 export function nodeProgress(node: FileTreeNode): number {

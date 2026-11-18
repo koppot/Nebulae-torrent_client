@@ -166,6 +166,7 @@ interface TorrentState {
   toggleSequential: (id: string) => Promise<boolean>;
   toggleFirstLast: (id: string) => Promise<boolean>;
   setFilePriority: (id: string, fileIndex: number, priority: number) => Promise<void>;
+  setFilesPriority: (id: string, fileIndices: number[], priority: number) => Promise<void>;
   renameTorrent: (id: string, newName: string) => Promise<void>;
   renameTorrentFile: (id: string, fileIndex: number, newFileName: string) => Promise<void>;
   renameTorrentFolder: (id: string, oldFolderPath: string, newFolderName: string) => Promise<void>;
@@ -565,6 +566,27 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           ? {
               ...t,
               files: t.files.map((f) => (f.index === fileIndex ? { ...f, priority } : f)),
+            }
+          : t
+      ),
+    });
+  },
+
+  setFilesPriority: async (id: string, fileIndices: number[], priority: number) => {
+    if (fileIndices.length === 0) return;
+    try {
+      await invoke('set_files_priority', { id, fileIndices, priority });
+    } catch (err) {
+      console.warn('set_files_priority failed:', err);
+    }
+    await get().fetchTorrents();
+    const changed = new Set(fileIndices);
+    set({
+      torrents: get().torrents.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              files: t.files.map((f) => (changed.has(f.index) ? { ...f, priority } : f)),
             }
           : t
       ),

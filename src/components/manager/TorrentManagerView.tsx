@@ -12,6 +12,10 @@ import {
   countFilesInNode,
   nodeMatchesFilter,
   nodeProgress,
+  nodeSelection,
+  nodePriority,
+  collectFileIndices,
+  SelectionState,
   progressPercent,
 } from '../../lib/torrentFiles';
 import { TorrentItem } from '../../types';
@@ -54,6 +58,32 @@ import {
   Loader2,
   Link,
 } from 'lucide-react';
+
+// Download selection for a file or a whole folder. The mixed state is shown
+// as indeterminate so a collapsed folder still tells which of its files will
+// be downloaded.
+const DownloadCheckbox: React.FC<{
+  state: SelectionState;
+  onChange: (wanted: boolean) => void;
+  label: string;
+}> = ({ state, onChange, label }) => {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'some';
+  }, [state]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={state === 'all'}
+      onChange={(e) => onChange(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      title={label}
+      aria-label={label}
+      className="w-3.5 h-3.5 flex-shrink-0 accent-[#e50914] cursor-pointer"
+    />
+  );
+};
 
 // Human delta for announce timestamps (unix seconds): "4m 12s", "2h 5m", "3d 4h".
 export const formatAnnounceDelta = (ts: number): string => {
@@ -119,7 +149,8 @@ const trackersAllFailingCheck = (t: TorrentItem): boolean =>
 // qBittorrent-style per-row download progress: a slim monochrome bar
 // (gray fill on a near-black track) with GB and percent next to it.
 // Folders aggregate their subtree by byte weight (see lib/torrentFiles).
-const ProgressBars = { track: '#111111', fill: '#9ca3af', fillDone: '#d4d4d4' };
+// The track must stand out from the #141414 row background even at 0%.
+const ProgressBars = { track: '#1f1f1f', trackBorder: '#ffffff', fill: '#c4c4c4', fillDone: '#ffffff' };
 
 const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
   progress,
@@ -130,8 +161,11 @@ const FileProgressBar: React.FC<{ progress: number; sizeBytes: number }> = ({
   return (
     <div className="flex items-center gap-2 flex-shrink-0" style={{ width: 180 }}>
       <div
-        className="flex-1 h-2 rounded-sm overflow-hidden"
-        style={{ backgroundColor: ProgressBars.track }}
+        className="flex-1 box-border h-2.5 rounded-sm overflow-hidden"
+        style={{
+          backgroundColor: ProgressBars.track,
+          border: `1px solid ${ProgressBars.trackBorder}`,
+        }}
       >
         <div
           className="h-full rounded-sm transition-[width] duration-500"
@@ -164,6 +198,7 @@ export const TorrentManagerView: React.FC = () => {
     renameTorrentFile,
     renameTorrentFolder,
     setFilePriority,
+    setFilesPriority,
     toggleSequential,
     setTorrentLimits,
     setLocation,
@@ -778,6 +813,13 @@ export const TorrentManagerView: React.FC = () => {
             }}
           >
             <div className="flex items-center gap-2 min-w-0">
+              <DownloadCheckbox
+                state={nodeSelection(node)}
+                label={`Download the files in "${node.name}"`}
+                onChange={(wanted) =>
+                  setFilesPriority(selectedTorrent!.id, collectFileIndices(node), wanted ? 1 : 0)
+                }
+              />
               <button
                 type="button"
                 onClick={() => toggleFolder(node.path)}
@@ -806,6 +848,26 @@ export const TorrentManagerView: React.FC = () => {
             <FileProgressBar progress={nodeProgress(node)} sizeBytes={node.size_bytes} />
 
             <div className="flex items-center gap-2 flex-shrink-0 opacity-80 group-hover:opacity-100 transition">
+              <select
+                value={nodePriority(node)}
+                onChange={(e) =>
+                  setFilesPriority(
+                    selectedTorrent!.id,
+                    collectFileIndices(node),
+                    Number(e.target.value),
+                  )
+                }
+                title={`Priority for every file in "${node.name}"`}
+                className="px-2 py-0.5 rounded bg-[#141414] border border-[#333333] text-[10px] text-white"
+              >
+                <option value="mixed" disabled>
+                  Mixed Priority
+                </option>
+                <option value={0}>Do Not Download</option>
+                <option value={1}>Normal Priority</option>
+                <option value={2}>High Priority</option>
+                <option value={3}>Maximum Priority</option>
+              </select>
               {!isRemoteServer && (
                 isTransmission || !node.path.includes('/') ? (
                   <button
@@ -855,6 +917,11 @@ export const TorrentManagerView: React.FC = () => {
         }}
       >
         <div className="flex items-center gap-2 min-w-0">
+          <DownloadCheckbox
+            state={file.priority > 0 ? 'all' : 'none'}
+            label={`Download "${node.name}"`}
+            onChange={(wanted) => setFilePriority(selectedTorrent!.id, file.index, wanted ? 1 : 0)}
+          />
           {getFileIcon(node.name)}
           <span className="text-white truncate max-w-md font-sans font-medium" title={file.name}>
             {node.name}
@@ -1686,6 +1753,13 @@ export const TorrentManagerView: React.FC = () => {
                             }}
                           >
                             <div className="min-w-0 flex items-center gap-2">
+                              <DownloadCheckbox
+                                state={file.priority > 0 ? 'all' : 'none'}
+                                label={`Download "${file.name}"`}
+                                onChange={(wanted) =>
+                                  setFilePriority(selectedTorrent.id, file.index, wanted ? 1 : 0)
+                                }
+                              />
                               {getFileIcon(file.name)}
                               <span className="text-white truncate max-w-md font-sans">
                                 {file.name}
