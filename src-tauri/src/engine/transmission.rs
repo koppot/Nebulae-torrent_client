@@ -599,8 +599,18 @@ impl TransmissionRpcClient {
         let args = ip_protocol
             .map(|p| json!({ "ip_protocol": p }))
             .unwrap_or_else(|| json!({}));
-        let res = self.request("port-test", Some(args))?;
-        Ok(parse_port_test_result(&res))
+        match self.request("port-test", Some(args)) {
+            Ok(res) => Ok(parse_port_test_result(&res)),
+            // Some Transmission 4.1.3 builds (notably the stock Windows MSI
+            // daemon) do not accept the ip_protocol parameter and reject the
+            // port-test RPC outright. Retry without it so we still get a
+            // verdict when possible.
+            Err(_) if ip_protocol.is_some() => {
+                let res = self.request("port-test", Some(json!({})))?;
+                Ok(parse_port_test_result(&res))
+            }
+            Err(e) => Err(e),
+        }
     }
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
         let fields = if ids.is_some() {
