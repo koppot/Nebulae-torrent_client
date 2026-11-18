@@ -914,6 +914,19 @@ pub async fn set_file_priority(
 }
 
 #[tauri::command]
+pub async fn set_files_priority(
+    id: String,
+    file_indices: Vec<u32>,
+    priority: u8,
+    engine: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.set_files_priority(&id, &file_indices, priority))
+        .await
+        .map_err(|e| format!("set_files_priority task failed: {e}"))?
+}
+
+#[tauri::command]
 pub async fn rename_torrent(
     id: String,
     new_name: String,

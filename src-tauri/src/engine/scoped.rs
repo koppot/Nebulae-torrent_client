@@ -193,6 +193,14 @@ impl TorrentEngine for ScopedEngine {
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String> {
         self.active().set_file_priority(id, file_index, priority)
     }
+    fn set_files_priority(
+        &self,
+        id: &str,
+        file_indices: &[u32],
+        priority: u8,
+    ) -> Result<(), String> {
+        self.active().set_files_priority(id, file_indices, priority)
+    }
     fn rename_torrent(&self, id: &str, new_name: &str) -> Result<(), String> {
         self.active().rename_torrent(id, new_name)
     }

@@ -813,6 +813,7 @@ pub fn run() {
             commands::torrent::toggle_torrent_super_seeding,
             commands::torrent::set_torrent_racing_mode,
             commands::torrent::set_file_priority,
+            commands::torrent::set_files_priority,
             commands::torrent::rename_torrent,
             commands::torrent::rename_torrent_file,
             commands::torrent::rename_torrent_folder,

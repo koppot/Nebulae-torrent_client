@@ -89,6 +89,19 @@ pub trait TorrentEngine: Send + Sync {
     fn toggle_first_last_piece_priority(&self, id: &str) -> Result<bool, String>;
     fn toggle_super_seeding(&self, id: &str) -> Result<bool, String>;
     fn set_file_priority(&self, id: &str, file_index: u32, priority: u8) -> Result<(), String>;
+    /// Applies one priority to many files (folder-level selection). Engines
+    /// with a batch API override this; the default loops over the files.
+    fn set_files_priority(
+        &self,
+        id: &str,
+        file_indices: &[u32],
+        priority: u8,
+    ) -> Result<(), String> {
+        for index in file_indices {
+            self.set_file_priority(id, *index, priority)?;
+        }
+        Ok(())
+    }
     fn rename_torrent(&self, id: &str, new_name: &str) -> Result<(), String>;
     fn rename_torrent_file(
         &self,
