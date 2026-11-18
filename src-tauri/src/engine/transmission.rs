@@ -603,10 +603,13 @@ impl TransmissionRpcClient {
             match self.request("port-test", Some(args)) {
                 Ok(res) => Ok(parse_port_test_result(&res)),
                 // Stock Transmission 4.1.3 (Windows MSI) returns "No Response (0)"
-                // when it tests the port and gets no reply. That IS a definitive
-                // result: the port is not reachable. Treat it as closed, not
-                // inconclusive, so the indicator shows "closed" instead of yellow.
-                Err(e) if e.contains("No Response") => Ok(Some(false)),
+                // when its port-test probe gets no reply. That is NOT a definitive
+                // closed result: Transmission cannot verify reachability through
+                // NAT, so "No Response" means the test was inconclusive. Treat it
+                // as unknown so the indicator does not falsely report "closed/unreachable"
+                // when the port may actually be open (verified independently via
+                // external reachability probe).
+                Err(e) if e.contains("No Response") => Ok(None),
                 // Some stock builds also reject the ip_protocol parameter
                 // outright. Retry without it so we still get a verdict.
                 Err(_) if proto.is_some() => {
