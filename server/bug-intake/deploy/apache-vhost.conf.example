@@ -37,6 +37,9 @@
         # Pass the Authorization (receipt token) header through to PHP-FPM; Apache strips it otherwise.
         CGIPassAuth On
         RewriteEngine On
+        # LimitRequestBody is not applied to bodies proxied to PHP-FPM here, so refuse oversized bodies up front (40 MiB).
+        RewriteCond expr "%{HTTP:Content-Length} -gt 41943040"
+        RewriteRule ^ - [R=413,L]
         RewriteCond %{REQUEST_FILENAME} !-f
         RewriteRule ^ /index.php [L]
     </Directory>
