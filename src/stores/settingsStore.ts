@@ -9,8 +9,11 @@ interface SettingsState {
   /** Session engine mode reported by the backend: 'local' (transmission)
    *  or 'rtorrent_server'. The GUI hides options the engine cannot fulfill. */
   engineMode: 'local' | 'rtorrent_server';
+  /** Host OS platform reported by backend: 'windows', 'macos', 'linux' */
+  platform: 'windows' | 'macos' | 'linux' | 'unknown';
   loadSettings: () => Promise<void>;
   fetchEngineMode: () => Promise<void>;
+  fetchPlatform: () => Promise<void>;
   saveSettings: (updated: Partial<UserSettings>) => Promise<void>;
   addRecentDirectory: (dir: string) => Promise<void>;
 }
@@ -169,6 +172,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isLoading: false,
   isLoaded: false,
   engineMode: 'local',
+  platform: 'unknown',
+
+  fetchPlatform: async () => {
+    try {
+      const p = await invoke<string>('get_app_platform');
+      if (p === 'windows' || p === 'macos' || p === 'linux') {
+        set({ platform: p });
+      }
+    } catch {
+      // Fallback to UA detection if invoke fails
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
+      if (ua.includes('windows')) set({ platform: 'windows' });
+      else if (ua.includes('mac')) set({ platform: 'macos' });
+      else if (ua.includes('linux')) set({ platform: 'linux' });
+    }
+  },
 
   fetchEngineMode: async () => {
     try {
@@ -183,6 +202,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   loadSettings: async () => {
     set({ isLoading: true });
+    get().fetchPlatform().catch(() => {});
     try {
       const data = await invoke<UserSettings>('load_user_settings');
       set({ settings: { ...defaultSettings, ...data }, isLoading: false, isLoaded: true });

@@ -455,7 +455,7 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
-                    {typeof navigator !== 'undefined' && /win/i.test(navigator.platform) && (
+                    {((platform === 'windows') || (platform === 'unknown' && typeof navigator !== 'undefined' && !/macintosh|mac os x|linux/i.test(navigator.userAgent))) && (
                       <label className="flex items-start gap-2 cursor-pointer">
                         <input
                           type="checkbox"
@@ -464,7 +464,11 @@ export const SettingsModal: React.FC = () => {
                             const val = e.target.checked;
                             saveSettings({ show_taskbar_speed_overlay: val });
                             // Apply immediately without waiting for Apply/Done
-                            try { await storeSaveSettings({ show_taskbar_speed_overlay: val }); } catch {}
+                            try {
+                              await storeSaveSettings({ show_taskbar_speed_overlay: val });
+                            } catch {
+                              // non-fatal
+                            }
                           }}
                           className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                         />

@@ -387,6 +387,22 @@ pub fn load_user_settings_from_db(db: &Database) -> UserSettings {
                 parsed.listening_port = 41413;
                 migrated = true;
             }
+
+            // One-time migration for minimize_to_tray:
+            // Prior to v0.2.8, minimize_to_tray defaulted to true, which caused
+            // minimizing the window to remove the Windows taskbar icon.
+            // If the user upgraded and hasn't explicitly set minimize_to_tray_migrated_v028,
+            // migrate minimize_to_tray to false so the taskbar button is preserved.
+            let migration_key = "minimize_to_tray_migrated_v028";
+            let already_migrated = db.get_setting(migration_key).ok().flatten().is_some();
+            if !already_migrated {
+                if parsed.minimize_to_tray {
+                    parsed.minimize_to_tray = false;
+                    migrated = true;
+                }
+                let _ = db.set_setting(migration_key, "true");
+            }
+
             // Persist the migration so every reader of the raw stored
             // settings (connectivity doctor, status bar) sees the same
             // values without each one re-deriving it.
@@ -445,6 +461,9 @@ pub fn save_user_settings(
         .map_err(|e| format!("Failed to save settings: {e}"))?;
 
     apply_autostart(settings.start_on_boot, settings.start_minimized)?;
+
+    // Mark minimize_to_tray as explicitly acknowledged/saved so future migrations do not override it
+    let _ = db.set_setting("minimize_to_tray_migrated_v028", "true");
 
     // Apply all session settings to the live engine immediately so the user
     // does not have to restart the daemon for changes to take effect.
@@ -564,6 +583,28 @@ pub struct EngineMode(pub String);
 #[tauri::command]
 pub fn get_engine_mode(mode: State<EngineMode>) -> String {
     mode.0.clone()
+}
+
+/// Returns the host operating system platform: `"windows"`, `"macos"`, or `"linux"`.
+/// Reliable backend-detected platform string for frontend UI branching without UA sniffing.
+#[tauri::command]
+pub fn get_app_platform() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "windows".to_string()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos".to_string()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux".to_string()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "unknown".to_string()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1010,6 +1051,42 @@ mod tests {
         assert_eq!(
             s.seeding_limit_action, "Remove",
             "Legacy 'Remove' stored in DB must load as 'Remove' without silent rewrite"
+        );
+    }
+
+    #[test]
+    fn test_minimize_to_tray_migration_resets_true_and_respects_explicit_override() {
+        use std::path::Path;
+        let db = Database::new(Path::new(":memory:")).expect("in-memory db");
+
+        // Case 1: Existing pre-0.2.8 install with minimize_to_tray: true saved, no migration flag
+        let old_settings = r#"{"minimize_to_tray": true, "engine": "transmission"}"#;
+        db.set_setting("user_settings_json", old_settings)
+            .expect("save old settings");
+
+        let loaded = load_user_settings_from_db(&db);
+        assert!(
+            !loaded.minimize_to_tray,
+            "Unmigrated minimize_to_tray: true must reset to false"
+        );
+        assert_eq!(
+            db.get_setting("minimize_to_tray_migrated_v028")
+                .unwrap()
+                .as_deref(),
+            Some("true"),
+            "Migration flag must be set"
+        );
+
+        // Case 2: User explicitly turns minimize_to_tray back on after migration
+        let mut user_choice = loaded.clone();
+        user_choice.minimize_to_tray = true;
+        let serialized = serde_json::to_string(&user_choice).unwrap();
+        db.set_setting("user_settings_json", &serialized).unwrap();
+
+        let reloaded = load_user_settings_from_db(&db);
+        assert!(
+            reloaded.minimize_to_tray,
+            "Explicit user choice must be preserved after migration"
         );
     }
 }

@@ -771,6 +771,7 @@ pub fn run() {
             commands::settings::load_user_settings,
             commands::settings::save_user_settings,
             commands::settings::get_engine_mode,
+            commands::settings::get_app_platform,
             commands::settings::test_rtorrent_server_connection,
             commands::settings::get_engine_identity_info,
             // Remote server proxy (token stays in Rust, never sent to WebView)
