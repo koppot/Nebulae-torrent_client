@@ -1,0 +1,53 @@
+# /etc/apache2/sites-available/nebulae-reports.conf (new file; no existing vhost is edited)
+# Enabled with: a2ensite nebulae-reports && apachectl configtest && systemctl reload apache2  (graceful, no restart)
+# Rollback:     a2dissite nebulae-reports && systemctl reload apache2
+
+<VirtualHost *:80>
+    ServerName nebulae-reports.asiandvdclub.org
+    DocumentRoot /var/www/nebulae-reports-acme
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge(/|$)
+    RewriteRule ^ https://nebulae-reports.asiandvdclub.org%{REQUEST_URI} [L,R=308]
+    ErrorLog ${APACHE_LOG_DIR}/nebulae-reports-http-error.log
+    CustomLog ${APACHE_LOG_DIR}/nebulae-reports-http-access.log combined
+</VirtualHost>
+
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName nebulae-reports.asiandvdclub.org
+    DocumentRoot /opt/nebulae-reports/public
+
+    # Public endpoint for the desktop client: no member client certificate (the ADC vhost is unchanged).
+    SSLVerifyClient none
+    SSLEngine on
+    SSLCertificateFile    /etc/ssl/nebulae-reports/fullchain.pem
+    SSLCertificateKeyFile /etc/ssl/nebulae-reports/privkey.pem
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+
+    # Resource limits specific to this vhost
+    LimitRequestBody 41943040
+    Timeout 120
+    RequestReadTimeout header=20-40,MinRate=500 body=20,MinRate=500
+
+    # Everything is routed to the single front controller. No other file in the tree is served.
+    <Directory /opt/nebulae-reports/public>
+        Require all granted
+        Options -Indexes -FollowSymLinks
+        AllowOverride None
+        RewriteEngine On
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteRule ^ /index.php [L]
+    </Directory>
+    <FilesMatch "\.php$">
+        # Dedicated PHP-FPM pool running as the nebulae-reports user (not www-data, not the tracker)
+        SetHandler "proxy:unix:/run/php/nebulae-reports.sock|fcgi://localhost"
+    </FilesMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Cache-Control "no-store"
+
+    # Access log without query strings, user agents or client identifiers beyond what Apache needs
+    ErrorLog ${APACHE_LOG_DIR}/nebulae-reports-error.log
+    CustomLog ${APACHE_LOG_DIR}/nebulae-reports-access.log "%t \"%m %U\" %>s %B"
+</VirtualHost>
+</IfModule>

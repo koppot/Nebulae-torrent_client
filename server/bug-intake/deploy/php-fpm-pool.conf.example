@@ -1,0 +1,29 @@
+; /etc/php/8.2/fpm/pool.d/nebulae-reports.conf (new file; the default www pool is untouched)
+[nebulae-reports]
+user = nebulae-reports
+group = nebulae-reports
+listen = /run/php/nebulae-reports.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = dynamic
+pm.max_children = 6
+pm.start_servers = 1
+pm.min_spare_servers = 1
+pm.max_spare_servers = 2
+pm.max_requests = 200
+request_terminate_timeout = 90s
+
+; the service can only see its own code, storage, config and a private temp dir
+php_admin_value[open_basedir] = /opt/nebulae-reports:/var/lib/nebulae-reports:/var/log/nebulae-reports:/etc/nebulae-reports:/var/lib/nebulae-reports/tmp
+php_admin_value[upload_tmp_dir] = /var/lib/nebulae-reports/tmp
+php_admin_value[sys_temp_dir] = /var/lib/nebulae-reports/tmp
+php_admin_value[upload_max_filesize] = 10M
+php_admin_value[post_max_size] = 40M
+php_admin_value[max_file_uploads] = 6
+php_admin_value[memory_limit] = 512M
+php_admin_value[max_execution_time] = 60
+php_admin_flag[display_errors] = off
+php_admin_flag[expose_php] = off
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,mail
+clear_env = yes

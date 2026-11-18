@@ -1,0 +1,5 @@
+# /etc/cron.d/nebulae-reports (new file)
+NEBULAE_REPORTS_ENV=/etc/nebulae-reports/env
+* * * * *    nebulae-reports /usr/bin/flock -n /run/lock/nebulae-reports-worker.lock /usr/bin/php /opt/nebulae-reports/bin/worker.php >> /var/log/nebulae-reports/worker.log 2>&1
+*/15 * * * * nebulae-reports /usr/bin/php /opt/nebulae-reports/bin/admin.php alert-check >> /var/log/nebulae-reports/alert.log 2>&1
+17 3 * * *   nebulae-reports /usr/bin/php /opt/nebulae-reports/bin/admin.php cleanup >> /var/log/nebulae-reports/cleanup.log 2>&1
