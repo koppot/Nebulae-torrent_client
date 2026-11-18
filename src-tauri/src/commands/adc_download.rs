@@ -102,9 +102,17 @@ pub fn fetch_adc_torrent_bytes_sync(torrent_id: u64, db: &Database) -> Result<Ve
         );
     }
 
-    let passkey = match get_secret(&passkey_secret_target()) {
-        Ok(pk) if !pk.trim().is_empty() => pk.trim().to_string(),
-        _ => {
+    let passkey = match get_secret(&passkey_secret_target())
+        .ok()
+        .filter(|pk| !pk.trim().is_empty())
+        .or_else(|| {
+            db.get_setting("adc_passkey")
+                .ok()
+                .flatten()
+                .filter(|pk| !pk.trim().is_empty())
+        }) {
+        Some(pk) => pk.trim().to_string(),
+        None => {
             return Err(
                 "ADC passkey is not available in Keychain. Please unlock or re-link your ADC account."
                     .to_string(),

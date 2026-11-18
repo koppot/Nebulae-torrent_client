@@ -118,6 +118,21 @@ pub fn get_or_create_device_id(db: &Database) -> String {
     new_id
 }
 
+/// Retrieve user's ADC passkey from platform Keychain with fallback to persisted setting.
+pub fn get_adc_passkey(db: &Database) -> Option<String> {
+    if let Ok(pk) = get_secret(&passkey_secret_target()) {
+        let trimmed = pk.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    db.get_setting("adc_passkey")
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Synchronously register this device with the ADC tracker API (`POST /api/nebulae/devices/register`).
 pub fn register_device_sync(db: &Database) -> Result<String, String> {
     let is_linked = db
@@ -132,11 +147,11 @@ pub fn register_device_sync(db: &Database) -> Result<String, String> {
         );
     }
 
-    let passkey = match get_secret(&passkey_secret_target()) {
-        Ok(pk) if !pk.trim().is_empty() => pk.trim().to_string(),
-        _ => {
+    let passkey = match get_adc_passkey(db) {
+        Some(pk) => pk,
+        None => {
             return Err(
-                "ADC passkey is not available in Keychain. Please re-link your ADC account."
+                "ADC passkey is not available. Please open Tracker Integration and link your ADC account."
                     .to_string(),
             );
         }
@@ -206,9 +221,9 @@ pub async fn poll_and_process_deliveries(
         return Ok(0);
     }
 
-    let passkey = match get_secret(&passkey_secret_target()) {
-        Ok(pk) if !pk.trim().is_empty() => pk.trim().to_string(),
-        _ => return Ok(0),
+    let passkey = match get_adc_passkey(db) {
+        Some(pk) => pk,
+        None => return Ok(0),
     };
 
     let device_id = get_or_create_device_id(db);
@@ -362,8 +377,8 @@ pub fn spawn_delivery_poller(
     db: Arc<Database>,
 ) {
     tauri::async_runtime::spawn(async move {
-        // Initial delay to avoid startup contention
-        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        // Short initial delay to let window and runtime initialize
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         let mut registered = false;
         let mut loop_tick: u64 = 0;
