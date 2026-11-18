@@ -621,7 +621,7 @@ pub fn miniaturize(app: &AppHandle) -> Result<(), String> {
             serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
         })
         .map(|s| s.minimize_to_tray)
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     if minimize_to_tray {
         if let Some(win) = app.get_webview_window("main") {
@@ -1212,7 +1212,7 @@ pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
     Err("main window not found".into())
 }
 
-/// Reads the `minimize_to_tray` user setting (defaults to true).
+/// Reads the `minimize_to_tray` user setting (defaults to false).
 fn minimize_to_tray_enabled(app: &AppHandle) -> bool {
     app.try_state::<std::sync::Arc<crate::db::Database>>()
         .and_then(|db| db.get_setting("user_settings_json").ok().flatten())
@@ -1220,7 +1220,7 @@ fn minimize_to_tray_enabled(app: &AppHandle) -> bool {
             serde_json::from_str::<crate::commands::settings::UserSettings>(&json).ok()
         })
         .map(|s| s.minimize_to_tray)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {

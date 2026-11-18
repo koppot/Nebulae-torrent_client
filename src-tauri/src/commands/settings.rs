@@ -218,7 +218,7 @@ impl Default for UserSettings {
             theme: "dark".to_string(),
             start_on_boot: false,
             start_minimized: false,
-            minimize_to_tray: true,
+            minimize_to_tray: false,
             close_to_tray: true,
             notify_on_download_finished: true,
             notify_on_torrent_added: true,
