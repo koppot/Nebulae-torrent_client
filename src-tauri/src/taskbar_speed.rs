@@ -72,6 +72,23 @@ pub(crate) fn band_layout(tray_h: i32) -> BandLayout {
     }
 }
 
+/// Left edge for the band inside the free span `[left_wall, right_wall]` of the
+/// taskbar (between the last task button and whatever occupies the right end),
+/// or `None` when the span cannot hold the whole band.  The band hugs the right
+/// wall so it sits next to the neighbouring control rather than floating.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn band_x_in_free_span(
+    left_wall: i32,
+    right_wall: i32,
+    band_w: i32,
+    padding: i32,
+) -> Option<i32> {
+    if right_wall - left_wall < band_w {
+        return None;
+    }
+    Some((right_wall - band_w - padding).max(left_wall))
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn init_taskbar_speed(_app: &tauri::AppHandle) {}
 
@@ -93,7 +110,7 @@ mod windows_impl {
     use std::sync::{Once, OnceLock};
     use std::time::Instant;
     use tauri::{AppHandle, Manager};
-    use windows::core::{w, BOOL, PCWSTR};
+    use windows::core::{w, Interface, BOOL, PCWSTR};
     use windows::Win32::Foundation::{
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
     };
@@ -104,27 +121,27 @@ mod windows_impl {
         CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, MONITORINFO,
         MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, TRANSPARENT,
     };
+    use windows::Win32::System::Com::{CoInitializeEx, IDispatch, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Accessibility::{
+        AccessibleChildren, AccessibleObjectFromWindow, IAccessible,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetForegroundWindow,
         GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
         IsWindowVisible, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW,
         SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, UpdateLayeredWindow,
-        HCURSOR, HICON, HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_HIDE,
-        SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP,
-        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_RBUTTONUP,
-        WM_SETTINGCHANGE, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        HCURSOR, HICON, HWND_TOPMOST, MF_STRING, MSG, OBJID_CLIENT, PM_REMOVE, SWP_NOACTIVATE,
+        SW_HIDE, SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA,
+        WM_APP, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP,
+        WM_RBUTTONUP, WM_SETTINGCHANGE, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
     /// Re-evaluates placement, fullscreen and free-space suppression on the band thread.
     const WM_REPOSITION_BAND: u32 = WM_APP + 2;
-    /// Minimum pixel gap between the app-button rebar right edge and the
-    /// notification-area left edge needed to show the speed band without
-    /// overlapping either neighbour.  Below this threshold the band is hidden.
-    const MIN_SAFE_GAP_PX: i32 = 80;
-
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
     static DOWN_RATE: AtomicU64 = AtomicU64::new(0);
     static BAND_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -234,6 +251,9 @@ mod windows_impl {
                 hIconSm: HICON(core::ptr::null_mut()),
             };
 
+            // The accessibility client calls used for placement need COM on this thread.
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
             let _ = RegisterClassExW(&wc);
 
             let p = calculate_taskbar_position();
@@ -289,9 +309,9 @@ mod windows_impl {
 
     /// Result of `calculate_taskbar_position`.
     ///
-    /// `hide_no_space` is set when the available gap between the app-button rebar
-    /// and the notification area is narrower than `MIN_SAFE_GAP_PX`, meaning the
-    /// band cannot be placed without overlapping adjacent taskbar controls.  The
+    /// `hide_no_space` is set when the free space between the last task button and
+    /// the right-hand taskbar controls cannot hold the band, meaning it cannot be
+    /// placed without overlapping adjacent taskbar controls.  The
     /// caller must hide the band in this case regardless of `OVERLAY_ENABLED`.
     struct BandPlacement {
         x: i32,
@@ -301,6 +321,52 @@ mod windows_impl {
         layout: super::BandLayout,
         /// True when the band must be suppressed due to insufficient taskbar space.
         hide_no_space: bool,
+    }
+
+    /// Right edge (screen px) of the last real task button, read from the taskbar's
+    /// accessibility tree.  The rebar and task-list windows are stretched to fill the
+    /// whole taskbar, so their rectangles say nothing about where buttons end.
+    /// Returns the task list's own left edge when it holds no buttons, and `None`
+    /// when the tree cannot be read.
+    fn task_buttons_right(tasklist: HWND, tasklist_rect: &RECT) -> Option<i32> {
+        unsafe {
+            let mut raw: *mut core::ffi::c_void = core::ptr::null_mut();
+            AccessibleObjectFromWindow(
+                tasklist,
+                OBJID_CLIENT.0 as u32,
+                &IAccessible::IID,
+                &mut raw,
+            )
+            .ok()?;
+            if raw.is_null() {
+                return None;
+            }
+            let acc = IAccessible::from_raw(raw);
+            let count = acc.accChildCount().ok()?;
+            if !(0..=512).contains(&count) {
+                return None;
+            }
+            let mut children = vec![VARIANT::default(); count as usize];
+            let mut got = 0i32;
+            AccessibleChildren(&acc, 0, &mut children, &mut got).ok()?;
+
+            let mut right = tasklist_rect.left;
+            for child in children.iter().take(got.max(0) as usize) {
+                let (mut x, mut y, mut w, mut h) = (0i32, 0i32, 0i32, 0i32);
+                let located = match IDispatch::try_from(child) {
+                    Ok(disp) => disp.cast::<IAccessible>().ok().and_then(|c| {
+                        c.accLocation(&mut x, &mut y, &mut w, &mut h, &VARIANT::from(0i32))
+                            .ok()
+                    }),
+                    Err(_) => acc.accLocation(&mut x, &mut y, &mut w, &mut h, child).ok(),
+                };
+                // Group/header entries report an empty rectangle.
+                if located.is_some() && w > 0 && h > 0 {
+                    right = right.max(x + w);
+                }
+            }
+            Some(right)
+        }
     }
 
     fn calculate_taskbar_position() -> BandPlacement {
@@ -326,11 +392,13 @@ mod windows_impl {
             let dpi_scale = (tray_h as f32 / 40.0).max(1.0);
             let layout = super::band_layout(tray_h);
             let band_w = layout.width;
+            let padding = (6.0 * dpi_scale).round() as i32;
 
             let h_rebar =
                 FindWindowExW(Some(h_tray), None, w!("ReBarWindow32"), PCWSTR::null()).ok();
 
-            // Right edge of the app-button rebar: the band must stay to the right of this.
+            // Right edge of the rebar: only a fallback, because the rebar spans all the
+            // way to the notification area whether or not it is full.
             let rebar_right = if let Some(rebar) = h_rebar {
                 let mut r = RECT::default();
                 if GetWindowRect(rebar, &mut r).is_ok() && r.right > tray_rect.left {
@@ -379,70 +447,67 @@ mod windows_impl {
                 false
             };
 
-            // The right wall for placement: left edge of TrayNotifyWnd, or tray right.
-            let right_wall = if notify_found && notify_rect.left > tray_rect.left + 50 {
+            // The right wall: left edge of TrayNotifyWnd, or tray right.
+            let mut right_wall = if notify_found && notify_rect.left > tray_rect.left + 50 {
                 notify_rect.left
             } else {
                 tray_rect.right
             };
 
-            // The left wall for placement: right edge of the rebar (app buttons),
-            // at minimum tray left + a small margin.
-            let left_wall = rebar_right.max(tray_rect.left + 20);
+            // A taskbar widget that sits against the notification area (TrafficMonitor)
+            // owns the space to its right, so the band goes on its left.
+            if let Some(tm) = tm_hwnd {
+                if IsWindowVisible(tm).as_bool() {
+                    let mut tm_rect = RECT::default();
+                    if GetWindowRect(tm, &mut tm_rect).is_ok()
+                        && tm_rect.left > tray_rect.left
+                        && tm_rect.left < right_wall
+                        && tm_rect.right >= right_wall - padding * 3
+                    {
+                        right_wall = tm_rect.left;
+                    }
+                }
+            }
 
-            // Available gap between the two occupied regions.
-            let available = right_wall - left_wall;
+            // The left wall: the end of the last task button.  Without a readable
+            // accessibility tree fall back to the task list's right edge, then the rebar's.
+            let tasklist = h_rebar.and_then(|rebar| {
+                let sw =
+                    FindWindowExW(Some(rebar), None, w!("MSTaskSwWClass"), PCWSTR::null()).ok()?;
+                FindWindowExW(Some(sw), None, w!("MSTaskListWClass"), PCWSTR::null()).ok()
+            });
+            let left_wall = match tasklist {
+                Some(tl) => {
+                    let mut tl_rect = RECT::default();
+                    if GetWindowRect(tl, &mut tl_rect).is_ok() {
+                        match task_buttons_right(tl, &tl_rect) {
+                            Some(r) => r + padding,
+                            None => tl_rect.right,
+                        }
+                    } else {
+                        rebar_right.max(tray_rect.left + 20)
+                    }
+                }
+                None => rebar_right.max(tray_rect.left + 20),
+            };
 
-            // Insufficient space — hide rather than overlap.
-            if available < MIN_SAFE_GAP_PX {
-                return BandPlacement {
+            match super::band_x_in_free_span(left_wall, right_wall, band_w, padding) {
+                Some(x) => BandPlacement {
+                    x,
+                    y: tray_rect.top,
+                    w: band_w,
+                    h: tray_h,
+                    layout,
+                    hide_no_space: false,
+                },
+                None => BandPlacement {
                     x: left_wall,
                     y: tray_rect.top,
                     w: band_w,
                     h: tray_h,
                     layout,
                     hide_no_space: true,
-                };
-            }
-
-            let padding = (6.0 * dpi_scale).round() as i32;
-            let mut target_x = 0;
-
-            // Priority 1: If TrafficMonitor is present and visibly shown, anchor to its left,
-            // but only if it is itself inside the available gap.
-            if let Some(tm) = tm_hwnd {
-                if IsWindowVisible(tm).as_bool() {
-                    let mut tm_rect = RECT::default();
-                    if GetWindowRect(tm, &mut tm_rect).is_ok()
-                        && tm_rect.left > left_wall + 100
-                        && tm_rect.left <= right_wall
-                    {
-                        target_x = tm_rect.left - band_w - padding;
-                    }
-                }
-            }
-
-            // Priority 2: Anchor immediately to the left of TrayNotifyWnd
-            if target_x == 0 && notify_found {
-                target_x = right_wall - band_w - padding;
-            }
-
-            // Priority 3: Right-align within the available gap
-            if target_x == 0 {
-                target_x = right_wall - band_w - (10.0 * dpi_scale).round() as i32;
-            }
-
-            // Clamp: must not cross into the rebar area on the left
-            // or into the notification area on the right.
-            target_x = target_x.max(left_wall).min(right_wall - band_w);
-
-            BandPlacement {
-                x: target_x,
-                y: tray_rect.top,
-                w: band_w,
-                h: tray_h,
-                layout,
-                hide_no_space: false,
+                },
             }
         }
     }
@@ -519,6 +584,14 @@ mod windows_impl {
             return; // No state change — nothing to do.
         }
         FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
+        tracing::info!(
+            hidden = want_hidden,
+            no_space = p.hide_no_space,
+            fullscreen = now_fullscreen,
+            x = p.x,
+            width = p.w,
+            "taskbar speed band visibility changed"
+        );
         unsafe {
             if want_hidden {
                 let _ = ShowWindow(hwnd, SW_HIDE);
@@ -884,6 +957,24 @@ mod layout_tests {
         assert_eq!(l80.pill_pad_x, l40.pill_pad_x * 2, "pill_pad_x");
         assert_eq!(l80.pill_pad_y, l40.pill_pad_y * 2, "pill_pad_y");
         assert!(l80.font_px > l40.font_px, "font_px must grow");
+    }
+
+    #[test]
+    fn free_span_requires_room_for_the_whole_band() {
+        use super::band_x_in_free_span;
+        // Windows 10 at 200%: last task button ends at 2071+12, TrafficMonitor starts at 2577.
+        let band_w = band_layout(80).width;
+        assert_eq!(band_w, 260);
+        assert_eq!(
+            band_x_in_free_span(2083, 2577, band_w, 12),
+            Some(2577 - 260 - 12)
+        );
+        // Exactly fitting: no padding available, hug the right wall without crossing the left.
+        assert_eq!(band_x_in_free_span(2317, 2577, band_w, 12), Some(2317));
+        // One pixel short: hidden rather than overlapping a task button.
+        assert_eq!(band_x_in_free_span(2318, 2577, band_w, 12), None);
+        // Taskbar full of buttons.
+        assert_eq!(band_x_in_free_span(2570, 2577, band_w, 12), None);
     }
 
     #[test]
