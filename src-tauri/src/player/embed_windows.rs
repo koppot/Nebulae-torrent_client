@@ -850,27 +850,39 @@ unsafe fn get_window_class_name(hwnd: HWND) -> String {
     }
 }
 
-/// Find VLC's event window inside the active session's child slot (or `parent`
-/// when running in fallback mode).
-/// `events.c` registers this HWND as `VLC video main %p` and creates it as a
-/// direct child of the HWND passed to `libvlc_media_player_set_hwnd`. Scoping
-/// the search to `ACTIVE_VIDEO_SLOT` guarantees mouse input is never delivered
-/// to a retiring session still tearing down on `vlc-teardown`.
-unsafe fn find_vlc_direct_child(container: HWND) -> Option<HWND> {
+/// Walk all descendant windows of `container` searching for VLC's event window.
+/// `events.c` registers this HWND with class starting with `VLC video main %p`
+/// (or `VLC video output %p` as fallback).
+/// Scoping the search to `container` (either the active session slot or the
+/// overlay surface) guarantees mouse input is never delivered to an inactive
+/// or retiring session.
+unsafe fn find_vlc_window_in_tree(container: HWND) -> Option<HWND> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_CHILD, GW_HWNDNEXT};
-    let mut child = GetWindow(container, GW_CHILD).ok()?;
-    while !child.is_invalid() {
-        let mut buf = [0u16; 128];
-        let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(child, &mut buf);
-        if len > 0 {
-            let name = String::from_utf16_lossy(&buf[..len as usize]);
-            if is_vlc_input_window_class(&name) {
-                return Some(child);
+    let mut stack = vec![container];
+    let mut fallback_output = None;
+
+    while let Some(current) = stack.pop() {
+        let mut child = match GetWindow(current, GW_CHILD) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        while !child.is_invalid() {
+            let mut buf = [0u16; 128];
+            let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(child, &mut buf);
+            if len > 0 {
+                let name = String::from_utf16_lossy(&buf[..len as usize]);
+                if is_vlc_input_window_class(&name) {
+                    return Some(child);
+                }
+                if name.starts_with("VLC video output") && fallback_output.is_none() {
+                    fallback_output = Some(child);
+                }
             }
+            stack.push(child);
+            child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
         }
-        child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
     }
-    None
+    fallback_output
 }
 
 unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
@@ -878,10 +890,12 @@ unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
     if slot_val != 0 {
         let slot_hwnd = HWND(slot_val as _);
         if IsWindow(Some(slot_hwnd)).as_bool() {
-            return find_vlc_direct_child(slot_hwnd);
+            if let Some(target) = find_vlc_window_in_tree(slot_hwnd) {
+                return Some(target);
+            }
         }
     }
-    find_vlc_direct_child(parent)
+    find_vlc_window_in_tree(parent)
 }
 
 fn is_vlc_input_window_class(name: &str) -> bool {
@@ -1547,7 +1561,19 @@ pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<InputDispos
     }
     use windows::Win32::Foundation::{HWND, WPARAM};
     let surface = HWND(hwnd_val as _);
-    let disp = unsafe { post_vlc_mouse_move(surface, WPARAM(0), mouse_point_lparam(x, y)) };
+
+    // Prefer the active per-session slot HWND as the source coordinate system,
+    // falling back to the parent container surface.
+    let source_hwnd = {
+        let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+        if slot_val != 0 && unsafe { IsWindow(Some(HWND(slot_val as _))).as_bool() } {
+            HWND(slot_val as _)
+        } else {
+            surface
+        }
+    };
+
+    let disp = unsafe { post_vlc_mouse_move(source_hwnd, WPARAM(0), mouse_point_lparam(x, y)) };
     Ok(disp)
 }
 
@@ -1561,7 +1587,19 @@ pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<InputDispo
     }
     use windows::Win32::Foundation::HWND;
     let surface = HWND(hwnd_val as _);
-    let disp = unsafe { post_vlc_mouse_click(surface, mouse_point_lparam(x, y)) };
+
+    // Prefer the active per-session slot HWND as the source coordinate system,
+    // falling back to the parent container surface.
+    let source_hwnd = {
+        let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+        if slot_val != 0 && unsafe { IsWindow(Some(HWND(slot_val as _))).as_bool() } {
+            HWND(slot_val as _)
+        } else {
+            surface
+        }
+    };
+
+    let disp = unsafe { post_vlc_mouse_click(source_hwnd, mouse_point_lparam(x, y)) };
     Ok(disp)
 }
 
