@@ -13,7 +13,7 @@ cd Nebulae-torrent_client
 export NEBULAE_TOKEN="your-secret-token"
 
 # 3. Start the server
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d
 
 # 4. Configure the Nebulae desktop client
 #    Settings → Server → Enable remote server

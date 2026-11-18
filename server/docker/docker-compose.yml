@@ -1,0 +1,32 @@
+services:
+  nebulae-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: nebulae-server:latest
+    container_name: nebulae-server
+    restart: unless-stopped
+    environment:
+      NEBULAE_TOKEN: "${NEBULAE_TOKEN}"
+      NEBULAE_PORT: "${NEBULAE_PORT:-9174}"
+      NEBULAE_BIND: "${NEBULAE_BIND:-0.0.0.0}"
+      TRANSMISSION_RPC_URL: "http://127.0.0.1:9091/transmission/rpc"
+    ports:
+      - "${NEBULAE_PORT:-9174}:9174"
+      - "51413:51413"
+      - "51413:51413/udp"
+    volumes:
+      - nebulae-downloads:/data/downloads
+      - nebulae-config:/data/config
+      - nebulae-watch:/data/watch
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-H", "Authorization: Bearer ${NEBULAE_TOKEN}", "http://localhost:9174/api/v1/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  nebulae-downloads:
+  nebulae-config:
+  nebulae-watch:

@@ -101,11 +101,27 @@ ${UnStrLoc}
   ; Register Capabilities for Default Programs / RegisteredApplications
   WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationName" "Nebulae"
   WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationDescription" "BitTorrent client by Asian DVD Club"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationName" "Nebulae"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities" "ApplicationDescription" "BitTorrent client by Asian DVD Club"
   WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".torrent" "Nebulae.torrent"
   WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".adc" "Nebulae.adc"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".iso" "Nebulae.iso"
+  WriteRegStr HKCU "Software\Nebulae\Capabilities\FileAssociations" ".img" "Nebulae.img"
   WriteRegStr HKCU "Software\Nebulae\Capabilities\URLAssociations" "magnet" "magnet"
   WriteRegStr HKCU "Software\Nebulae\Capabilities\URLAssociations" "adc" "adc"
   WriteRegStr HKCU "Software\RegisteredApplications" "Nebulae" "Software\Nebulae\Capabilities"
+
+  ; .iso disc image file type (Blu-ray/UHD/DVD ISO)
+  WriteRegStr HKCU "Software\Classes\Nebulae.iso" "" "Disc Image"
+  WriteRegStr HKCU "Software\Classes\Nebulae.iso\DefaultIcon" "" "$INSTDIR\nebulae.exe,0"
+  WriteRegStr HKCU "Software\Classes\Nebulae.iso\shell\open\command" "" '"$INSTDIR\nebulae.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\.iso\OpenWithProgids" "Nebulae.iso" ""
+
+  ; .img disc image file type
+  WriteRegStr HKCU "Software\Classes\Nebulae.img" "" "Disc Image"
+  WriteRegStr HKCU "Software\Classes\Nebulae.img\DefaultIcon" "" "$INSTDIR\nebulae.exe,0"
+  WriteRegStr HKCU "Software\Classes\Nebulae.img\shell\open\command" "" '"$INSTDIR\nebulae.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\.img\OpenWithProgids" "Nebulae.img" ""
 
   ; magnet: URL scheme (deep links are not part of the bundler's config here)
   WriteRegStr HKCU "Software\Classes\magnet" "" "URL:BitTorrent Magnet Link"
@@ -153,6 +169,12 @@ ${UnStrLoc}
 
     DeleteRegValue HKCU "Software\RegisteredApplications" "Nebulae"
     DeleteRegKey HKCU "Software\Nebulae\Capabilities"
+
+    ; Remove disc image ProgIDs written by this install
+    DeleteRegKey HKCU "Software\Classes\Nebulae.iso"
+    DeleteRegKey HKCU "Software\Classes\Nebulae.img"
+    DeleteRegValue HKCU "Software\Classes\.iso\OpenWithProgids" "Nebulae.iso"
+    DeleteRegValue HKCU "Software\Classes\.img\OpenWithProgids" "Nebulae.img"
 
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Torrent Client" "$INSTDIR\nebulae.exe"
     !insertmacro _NEBULAE_FWRULE_DELETE_IF_OURS "Nebulae Transmission Daemon" "$INSTDIR\resources\engine\transmission\transmission-daemon.exe"
