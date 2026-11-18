@@ -44,6 +44,7 @@ impl SafeLogger {
     pub fn init_tracing_with_file(logs_dir: Option<&Path>) {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         let file = logs_dir.and_then(|dir| {
+            Self::rotate_session_log(dir);
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -57,6 +58,16 @@ impl SafeLogger {
             .with_env_filter(filter)
             .with_writer(make)
             .try_init();
+    }
+
+    /// The session log is append-only, so it grows without bound across launches.
+    /// Keep one previous generation and start a fresh file once it passes the cap.
+    fn rotate_session_log(dir: &Path) {
+        const MAX_BYTES: u64 = 20 * 1024 * 1024;
+        let current = dir.join("nebulae_session.log");
+        if std::fs::metadata(&current).map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
+            let _ = std::fs::rename(&current, dir.join("nebulae_session.log.1"));
+        }
     }
 
     pub fn log_to_file(logs_dir: &Path, level: &str, message: &str) {
