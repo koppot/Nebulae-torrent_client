@@ -153,7 +153,7 @@ pub async fn run_connectivity_doctor_test(
     let vpn_bound = status.bound_interface.is_some();
     let vpn_adapter = status.bound_interface.clone();
 
-    let port_open_from_engine = engine.check_port_open();
+    let port_open_from_engine = engine.check_port_open(engine.port_protocol());
     let port_status = port_status_from_engine_test(port_open_from_engine);
     let port_open_evidence = port_open_from_engine.map(|_| "transmission-port-test".to_string());
 

@@ -430,6 +430,26 @@ fn check_move_preflight(
     Ok(())
 }
 
+/// Infer the address family the daemon is bound to from settings.json.
+/// Returns `Some("ipv4")` when IPv4-only (bind-address-ipv6 == "::1"), so
+/// port tests force ip_protocol=ipv4 instead of Transmission 4.1.3 probing
+/// IPv6 first and returning "No Response".
+fn infer_port_protocol(engine_dir: &Path) -> Option<&'static str> {
+    let text = std::fs::read_to_string(engine_dir.join("settings.json")).ok()?;
+    let bind_v6: Option<String> = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("bind-address-ipv6")
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+    if bind_v6.as_deref() == Some("::1") {
+        Some("ipv4")
+    } else {
+        None
+    }
+}
+
 impl TransmissionRpcClient {
     pub fn new(port: u16, username: &str, password: &str) -> Self {
         let auth = if !username.is_empty() || !password.is_empty() {
@@ -570,11 +590,18 @@ impl TransmissionRpcClient {
         self.request("session-stats", None)
     }
 
-    pub fn port_test(&self) -> Result<Option<bool>, String> {
-        let res = self.request("port-test", None)?;
+    /// Test the peer port with an optional address family. Transmission 4.1.3
+    /// probes IPv6 first when `ip_protocol` is omitted, so an engine bound to
+    /// IPv4 only (bind-address-ipv6 = ::1) would report "No Response" instead
+    /// of a definitive IPv4 result. Passing `ip_protocol` forces the family the
+    /// daemon is actually listening on.
+    pub fn port_test(&self, ip_protocol: Option<&str>) -> Result<Option<bool>, String> {
+        let args = ip_protocol
+            .map(|p| json!({ "ip_protocol": p }))
+            .unwrap_or_else(|| json!({}));
+        let res = self.request("port-test", Some(args))?;
         Ok(parse_port_test_result(&res))
     }
-
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
         let fields = if ids.is_some() {
             vec![
@@ -1293,7 +1320,7 @@ fn negotiate_reachable_port(
             // Give the daemon a moment to rebind before testing.
             std::thread::sleep(Duration::from_secs(2));
         }
-        match rpc.port_test() {
+        match rpc.port_test(infer_port_protocol(engine_dir)) {
             Ok(Some(true)) => {
                 info!("[port] negotiated: peer port {port} is externally reachable");
                 persist_negotiated_port(db, engine_dir, port);
@@ -3990,8 +4017,29 @@ impl TorrentEngine for TransmissionTorrentEngine {
         Ok(result)
     }
 
-    fn check_port_open(&self) -> Option<bool> {
-        self.rpc_client.port_test().ok().flatten()
+    fn check_port_open(&self, ip_protocol: Option<&'static str>) -> Option<bool> {
+        self.rpc_client.port_test(ip_protocol).ok().flatten()
+    }
+
+    /// Which address family the daemon is bound to, derived from settings.json.
+    /// Returns `Some("ipv4")` when the engine is IPv4-only
+    /// (bind-address-ipv6 == "::1"), so the port test forces ip_protocol=ipv4
+    /// instead of Transmission 4.1.3 probing IPv6 first.
+    fn port_protocol(&self) -> Option<&'static str> {
+        let settings_path = self.config_dir.join("settings.json");
+        let text = std::fs::read_to_string(&settings_path).ok()?;
+        let bind_v6: Option<String> = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v.get("bind-address-ipv6")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            });
+        if bind_v6.as_deref() == Some("::1") {
+            Some("ipv4")
+        } else {
+            None
+        }
     }
 
     fn peer_block_capability(&self) -> crate::models::peering::PeerBlockCapability {

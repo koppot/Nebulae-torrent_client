@@ -135,7 +135,16 @@ pub trait TorrentEngine: Send + Sync {
     ) -> Result<(), String> {
         Err("Manual peer blocking is not supported by this engine".to_string())
     }
-    fn check_port_open(&self) -> Option<bool> {
+    /// Whether the engine is bound to IPv4 only (bind-address-ipv6 == ::1).
+    /// When so, the port test must pass ip_protocol=ipv4 or Transmission 4.1.3
+    /// probes IPv6 first and returns "No Response" instead of a verdict.
+    fn port_protocol(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Test whether the engine's peer port is externally reachable.
+    /// `ip_protocol`, when set, forces Transmission to test that address family.
+    fn check_port_open(&self, _ip_protocol: Option<&'static str>) -> Option<bool> {
         None
     }
 

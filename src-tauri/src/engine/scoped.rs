@@ -248,8 +248,8 @@ impl TorrentEngine for ScopedEngine {
     }
 
     // Session configuration and network diagnostics describe this computer's engine.
-    fn check_port_open(&self) -> Option<bool> {
-        self.local.check_port_open()
+    fn check_port_open(&self, ip_protocol: Option<&'static str>) -> Option<bool> {
+        self.local.check_port_open(ip_protocol)
     }
     fn apply_peering_settings(
         &self,
