@@ -3,6 +3,7 @@ import { useUiStore } from '../../stores/uiStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { AdcClientPriorityPanel } from '../settings/AdcClientPriorityPanel';
+import { speedDisplayControl } from '../../lib/speedDisplay';
 import {
   DiagnosticSummary,
   AssociationStatus,
@@ -73,6 +74,10 @@ export const SettingsModal: React.FC = () => {
   };
 
   const isRemoteServer = engineMode === 'rtorrent_server' || settings.rtorrent_server_enabled;
+  const speedDisplay = speedDisplayControl(
+    platform,
+    typeof navigator !== 'undefined' ? navigator.userAgent : '',
+  );
 
 
   const [skipSplash, setSkipSplash] = useState(
@@ -396,6 +401,32 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   </div>
 
+                  {speedDisplay && (
+                    <div className="mt-3 rounded-lg border border-[#333333] bg-[#171717] p-3">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid="speed-overlay-toggle"
+                          checked={settings.show_taskbar_speed_overlay ?? true}
+                          onChange={async (e) => {
+                            const val = e.target.checked;
+                            saveSettings({ show_taskbar_speed_overlay: val });
+                            // Apply immediately without waiting for Apply/Done
+                            try {
+                              await storeSaveSettings({ show_taskbar_speed_overlay: val });
+                            } catch {
+                              // non-fatal
+                            }
+                          }}
+                          className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
+                        />
+                        <div>
+                          <span className="text-white font-semibold">{speedDisplay.label}</span>
+                          <span className="block text-[11px] text-[#8c8c8c] mt-0.5">{speedDisplay.help}</span>
+                        </div>
+                      </label>
+                    </div>
+                  )}
                   <div className="mt-3 space-y-2">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -455,31 +486,6 @@ export const SettingsModal: React.FC = () => {
                         </span>
                       </div>
                     </label>
-                    {((platform === 'windows') || (platform === 'unknown' && typeof navigator !== 'undefined' && !/macintosh|mac os x|linux/i.test(navigator.userAgent))) && (
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.show_taskbar_speed_overlay ?? true}
-                          onChange={async (e) => {
-                            const val = e.target.checked;
-                            saveSettings({ show_taskbar_speed_overlay: val });
-                            // Apply immediately without waiting for Apply/Done
-                            try {
-                              await storeSaveSettings({ show_taskbar_speed_overlay: val });
-                            } catch {
-                              // non-fatal
-                            }
-                          }}
-                          className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
-                        />
-                        <div>
-                          <span className="text-white font-medium">Show upload/download speeds on the Windows taskbar</span>
-                          <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
-                            Displays real-time aggregate upload and download transfer rates adjacent to the application icon on the Windows taskbar. Disabling hides the speed band without affecting torrent activity or the system tray icon.
-                          </span>
-                        </div>
-                      </label>
-                    )}
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
@@ -1394,7 +1400,7 @@ export const SettingsModal: React.FC = () => {
                   {isRemoteServer && (
                     <div className="p-2.5 rounded bg-[#1f1f1f] border border-[#333333] text-xs text-[#a3a3a3] flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                      <span>Engine identification is disabled for remote rTorrent. The remote daemon manages its own identity.</span>
+                      <span>Engine identification is disabled for a remote Nebulae Server. The remote daemon manages its own identity.</span>
                     </div>
                   )}
 
@@ -1904,12 +1910,12 @@ export const SettingsModal: React.FC = () => {
               </div>
             )}
 
-            {/* 8.5 rTORRENT SERVER */}
+            {/* 8.5 NEBULAE SERVER (settings key prefix rtorrent_server_* kept for compatibility) */}
             {activeTab === 'rtorrent' && (
               <div className="space-y-4">
                 <div>
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-mono">
-                    rTorrent Server (Nebulae Server Bridge)
+                    Nebulae Server (Transmission)
                   </h3>
                   <label className="flex items-center gap-2 cursor-pointer mb-3">
                     <input
@@ -1919,12 +1925,12 @@ export const SettingsModal: React.FC = () => {
                       className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
                     />
                     <span className="text-white font-medium">
-                      Drive torrents on a Nebulae Server (rtorrent) instead of locally
+                      Drive torrents on a Nebulae Server (Transmission) instead of locally
                     </span>
                   </label>
                   <p className="text-[11px] text-[#a3a3a3] mb-3">
                     Connects this desktop app to a headless <span className="font-mono">nebulae-server</span> bridge
-                    running next to rtorrent on your server (Unraid, TrueNAS, Docker). The engine choice applies the
+                    running next to Transmission on your server (Unraid, TrueNAS, Docker). The engine choice applies the
                     next time Nebulae starts.
                   </p>
 

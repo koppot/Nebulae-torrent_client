@@ -22,7 +22,7 @@ pub struct AdcClientTarget {
     pub name: String,
     pub priority: u32,
     pub enabled: bool,
-    pub client_type: String, // "local" | "remote_rtorrent" | "custom_agent"
+    pub client_type: String, // "local" | "remote_server" | "custom_agent"
 }
 
 /// Setting key for persisting multi-client target priorities.
@@ -244,6 +244,13 @@ pub fn fetch_adc_torrent_bytes_sync(torrent_id: u64, db: &Database) -> Result<Ve
         );
     }
 
+    if status.is_server_error() {
+        return Err(format!(
+            "AsianDVDClub server error (HTTP {}) while preparing the torrent. The request stays queued; retry shortly.",
+            status.as_u16()
+        ));
+    }
+
     if !status.is_success() {
         return Err(format!(
             "ADC tracker returned unexpected HTTP status {status}."
@@ -370,24 +377,85 @@ pub fn set_adc_download_warning_suppressed(
     .map_err(|e| e.to_string())
 }
 
+/// Id and type of the remote Nebulae Server (Transmission) delivery target.
+pub const REMOTE_SERVER_TARGET_ID: &str = "remote_server";
+pub const REMOTE_SERVER_TARGET_NAME: &str = "Remote server / seedbox (Transmission)";
+/// Earlier builds saved this target as "remote_rtorrent"; saved settings are migrated on read.
+const LEGACY_REMOTE_TARGET_ID: &str = "remote_rtorrent";
+
+fn default_local_target(priority: u32) -> AdcClientTarget {
+    AdcClientTarget {
+        id: "local".to_string(),
+        name: "Local Nebulae Engine".to_string(),
+        priority,
+        enabled: true,
+        client_type: "local".to_string(),
+    }
+}
+
+fn default_remote_target(priority: u32) -> AdcClientTarget {
+    AdcClientTarget {
+        id: REMOTE_SERVER_TARGET_ID.to_string(),
+        name: REMOTE_SERVER_TARGET_NAME.to_string(),
+        priority,
+        enabled: false,
+        client_type: REMOTE_SERVER_TARGET_ID.to_string(),
+    }
+}
+
 /// Returns default list of client targets when none have been configured.
 pub fn default_client_targets() -> Vec<AdcClientTarget> {
-    vec![
-        AdcClientTarget {
-            id: "local".to_string(),
-            name: "Local Nebulae Engine".to_string(),
-            priority: 1,
-            enabled: true,
-            client_type: "local".to_string(),
+    vec![default_local_target(1), default_remote_target(2)]
+}
+
+/// Brings saved targets up to date without losing the user's choices: the legacy
+/// "remote_rtorrent" entry becomes the Nebulae remote-server target (priority and
+/// enabled state kept), and a missing local or remote entry is added disabled/last.
+pub fn normalize_client_targets(targets: Vec<AdcClientTarget>) -> Vec<AdcClientTarget> {
+    let mut out: Vec<AdcClientTarget> = targets
+        .into_iter()
+        .map(|mut t| {
+            if t.id == LEGACY_REMOTE_TARGET_ID || t.client_type == LEGACY_REMOTE_TARGET_ID {
+                t.id = REMOTE_SERVER_TARGET_ID.to_string();
+                t.client_type = REMOTE_SERVER_TARGET_ID.to_string();
+            }
+            if t.client_type == REMOTE_SERVER_TARGET_ID {
+                t.name = REMOTE_SERVER_TARGET_NAME.to_string();
+            }
+            t
+        })
+        .collect();
+    out.sort_by_key(|t| t.priority);
+    let next = out.len() as u32 + 1;
+    if !out.iter().any(|t| t.client_type == "local") {
+        out.push(default_local_target(next));
+    }
+    let next = out.len() as u32 + 1;
+    if !out.iter().any(|t| t.client_type == REMOTE_SERVER_TARGET_ID) {
+        out.push(default_remote_target(next));
+    }
+    for (i, t) in out.iter_mut().enumerate() {
+        t.priority = i as u32 + 1;
+    }
+    out
+}
+
+/// Enabled delivery targets, highest priority first.
+pub fn enabled_delivery_targets(targets: &[AdcClientTarget]) -> Vec<AdcClientTarget> {
+    let mut v: Vec<AdcClientTarget> = targets.iter().filter(|t| t.enabled).cloned().collect();
+    v.sort_by_key(|t| t.priority);
+    v
+}
+
+/// Loads the saved targets (migrating legacy entries); defaults when nothing is saved.
+pub fn load_client_targets(db: &Database) -> Vec<AdcClientTarget> {
+    match db.get_setting(SETTING_ADC_CLIENT_TARGETS).unwrap_or(None) {
+        Some(json_str) => match serde_json::from_str::<Vec<AdcClientTarget>>(&json_str) {
+            Ok(saved) => normalize_client_targets(saved),
+            Err(_) => default_client_targets(),
         },
-        AdcClientTarget {
-            id: "remote_rtorrent".to_string(),
-            name: "Remote Seedbox (rTorrent)".to_string(),
-            priority: 2,
-            enabled: false,
-            client_type: "remote_rtorrent".to_string(),
-        },
-    ]
+        None => default_client_targets(),
+    }
 }
 
 /// Tauri command: Get configured client targets and priorities.
@@ -398,6 +466,7 @@ pub fn get_adc_client_targets(
     let raw = db.get_setting(SETTING_ADC_CLIENT_TARGETS).unwrap_or(None);
     match raw {
         Some(json_str) => serde_json::from_str::<Vec<AdcClientTarget>>(&json_str)
+            .map(normalize_client_targets)
             .map_err(|e| format!("Failed to parse client targets: {e}")),
         None => Ok(default_client_targets()),
     }
@@ -463,10 +532,56 @@ mod tests {
         assert_eq!(targets[0].id, "local");
         assert!(targets[0].enabled);
         assert_eq!(targets[0].priority, 1);
-        assert_eq!(targets[1].id, "remote_rtorrent");
+        assert_eq!(targets[1].id, REMOTE_SERVER_TARGET_ID);
         assert!(!targets[1].enabled);
     }
 
+    #[test]
+    fn legacy_remote_rtorrent_target_migrates_without_losing_choices() {
+        let saved = vec![
+            AdcClientTarget {
+                id: "remote_rtorrent".into(),
+                name: "Remote Seedbox (rTorrent)".into(),
+                priority: 1,
+                enabled: true,
+                client_type: "remote_rtorrent".into(),
+            },
+            AdcClientTarget {
+                id: "local".into(),
+                name: "Local Nebulae Engine".into(),
+                priority: 2,
+                enabled: false,
+                client_type: "local".into(),
+            },
+        ];
+        let out = normalize_client_targets(saved);
+        assert_eq!(out[0].id, REMOTE_SERVER_TARGET_ID);
+        assert_eq!(out[0].client_type, REMOTE_SERVER_TARGET_ID);
+        assert_eq!(out[0].name, REMOTE_SERVER_TARGET_NAME);
+        assert!(out[0].enabled);
+        assert_eq!(out[1].id, "local");
+        assert!(!out[1].enabled);
+        let order = enabled_delivery_targets(&out);
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0].id, REMOTE_SERVER_TARGET_ID);
+    }
+
+    #[test]
+    fn missing_targets_are_added_and_unrelated_types_kept() {
+        let out = normalize_client_targets(vec![AdcClientTarget {
+            id: "agent".into(),
+            name: "Custom".into(),
+            priority: 1,
+            enabled: true,
+            client_type: "custom_agent".into(),
+        }]);
+        assert_eq!(out.len(), 3);
+        assert!(out.iter().any(|t| t.client_type == "custom_agent"));
+        assert!(out.iter().any(|t| t.client_type == "local"));
+        assert!(out
+            .iter()
+            .any(|t| t.client_type == REMOTE_SERVER_TARGET_ID && !t.enabled));
+    }
     #[test]
     fn test_warning_suppression_and_client_targets_db() {
         let db = Database::new(Path::new(":memory:")).expect("in-memory test db");

@@ -44,6 +44,9 @@ pub fn set_tray_id(tray_id: String) {
 pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate: u64) {
     #[cfg(target_os = "macos")]
     {
+        if !SPEED_DISPLAY_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let tray_id_opt = {
             let s = STATUS_BAR_STATE.get();
             s.and_then(|s| s.lock().ok())
@@ -99,6 +102,17 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
         let _ = app_handle;
         let _upload_rate = upload_rate;
         let _download_rate = download_rate;
+    }
+}
+
+/// User preference (Settings > Appearance & Behavior): show the speed readout in the menu bar.
+static SPEED_DISPLAY_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_speed_display_enabled(app_handle: &AppHandle, enabled: bool) {
+    let was = SPEED_DISPLAY_ENABLED.swap(enabled, std::sync::atomic::Ordering::SeqCst);
+    if was && !enabled {
+        clear_status_bar(app_handle);
     }
 }
 

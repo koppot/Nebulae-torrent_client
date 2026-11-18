@@ -74,6 +74,7 @@ pub fn block_peer_ip(
     torrent_id: String,
     ip: String,
     port: u16,
+    connected: Option<bool>,
     db: State<Arc<Database>>,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
@@ -94,6 +95,11 @@ pub fn block_peer_ip(
     // Persist first so the background enforcer covers reconnects immediately.
     db.block_peer_ip(&ip, now)
         .map_err(|error| error.to_string())?;
+    // A saved (disconnected) peer has nothing to disconnect now; the persisted block is
+    // enforced by the background enforcer whenever that address connects to any torrent.
+    if connected == Some(false) {
+        return Ok(());
+    }
     if let Err(error) = engine.disconnect_peer_for_block(&torrent_id, &ip, port) {
         if !was_already_blocked {
             let _ = db.unblock_peer_ip(&ip);

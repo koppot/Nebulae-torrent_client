@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   addDeliveryFailure,
+  classifyDeliveryFailure,
   clearDismissalsForToken,
   dismissalKey,
   extractDeliveryTokenFromUri,
@@ -59,4 +60,20 @@ test('different requests are tracked independently', () => {
 test('extracts the opaque token from delivery URIs', () => {
   assert.equal(extractDeliveryTokenFromUri(`adc://delivery/${TOKEN.toUpperCase()}`), TOKEN);
   assert.equal(extractDeliveryTokenFromUri('adc://torrent/123'), undefined);
+});
+
+test('failures are classified so only relevant settings are offered', () => {
+  assert.equal(classifyDeliveryFailure(REASON), 'destination');
+  assert.equal(
+    classifyDeliveryFailure('Remote server is not reachable: connection refused'),
+    'remote',
+  );
+  assert.equal(
+    classifyDeliveryFailure(
+      'AsianDVDClub server error (HTTP 500) while preparing the torrent. The request stays queued; retry shortly.',
+    ),
+    'server',
+  );
+  assert.equal(classifyDeliveryFailure('Delivery poll network error: timed out'), 'server');
+  assert.equal(classifyDeliveryFailure('Delivery request has expired.'), 'other');
 });

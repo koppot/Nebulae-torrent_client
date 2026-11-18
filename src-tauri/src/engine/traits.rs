@@ -59,6 +59,11 @@ pub trait TorrentEngine: Send + Sync {
     fn engine_status(&self) -> EngineStatus;
     fn supports_hook(&self, hook: EngineHook) -> bool;
 
+    /// True when this engine drives a separate Nebulae Server instead of a local daemon.
+    fn is_remote(&self) -> bool {
+        false
+    }
+
     /// Graceful shutdown: stop the engine's owned subprocesses and prevent
     /// the supervisor/watchdog from respawning them. Called on app exit so
     /// a tray Quit never leaves an orphaned transmission-daemon behind

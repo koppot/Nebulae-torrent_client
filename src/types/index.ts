@@ -315,7 +315,7 @@ export interface UserSettings {
   embedded_tracker_enabled: boolean;
   embedded_tracker_port: number;
 
-  // 9. rTorrent Server (Nebulae Server bridge) — applies on app restart
+  // 9. Nebulae Server bridge (Transmission; key names kept for compatibility) — applies on app restart
   rtorrent_server_enabled: boolean;
   rtorrent_server_url: string;
   rtorrent_server_token: string;
@@ -546,7 +546,7 @@ export interface AdcClientTarget {
   name: string;
   priority: number;
   enabled: boolean;
-  client_type: string; // 'local' | 'remote_rtorrent' | 'custom_agent'
+  client_type: string; // 'local' | 'remote_server' | 'custom_agent'
 }
 
 /** ADC Private Messaging / Inbox notification types */

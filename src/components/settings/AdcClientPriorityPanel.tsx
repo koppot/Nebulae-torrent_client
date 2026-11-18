@@ -81,7 +81,7 @@ export const AdcClientPriorityPanel: React.FC = () => {
           </h4>
           <p className="text-[11px] text-[#a3a3a3] mt-0.5">
             Configure destination priority for torrents sent from AsianDVDClub one-click links.
-            If the primary client is offline or unavailable, the request cascades to the next enabled client.
+            If the primary client is offline or unavailable, the request cascades to the next enabled client. The Nebulae Server entry uses the address and token configured in Settings → Server.
           </p>
         </div>
       </div>
@@ -125,7 +125,11 @@ export const AdcClientPriorityPanel: React.FC = () => {
                     )}
                   </div>
                   <div className="text-[10px] text-[#737373] font-mono">
-                    Type: {target.client_type} · ID: {target.id}
+                    {isLocal
+                      ? 'This computer'
+                      : target.client_type === 'remote_server'
+                        ? 'Server address and token come from Settings → Server'
+                        : target.client_type}
                   </div>
                 </div>
               </div>

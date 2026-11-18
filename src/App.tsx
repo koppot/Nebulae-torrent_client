@@ -19,6 +19,7 @@ import { RemoteServerView } from './components/server/RemoteServerView';
 import { SettingsModal } from './components/modals/SettingsModal';
 import {
   addDeliveryFailure,
+  classifyDeliveryFailure,
   clearDismissalsForToken,
   dismissalKey,
   extractDeliveryTokenFromUri,
@@ -982,16 +983,30 @@ export const App: React.FC = () => {
               ))}
             </ul>
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  dismissDeliveryFailures();
-                  useUiStore.getState().openSettings('downloads');
-                }}
-                className="px-3 py-2 rounded-lg border border-[#463e31] hover:bg-[#2c2924] text-xs font-semibold text-[#e8d9bb]"
-              >
-                Open download settings
-              </button>
+              {deliveryFailures.some((f) => classifyDeliveryFailure(f.reason) === 'remote') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissDeliveryFailures();
+                    useUiStore.getState().openSettings('rtorrent');
+                  }}
+                  className="px-3 py-2 rounded-lg border border-[#463e31] hover:bg-[#2c2924] text-xs font-semibold text-[#e8d9bb]"
+                >
+                  Open server settings
+                </button>
+              )}
+              {deliveryFailures.some((f) => classifyDeliveryFailure(f.reason) === 'destination') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissDeliveryFailures();
+                    useUiStore.getState().openSettings('downloads');
+                  }}
+                  className="px-3 py-2 rounded-lg border border-[#463e31] hover:bg-[#2c2924] text-xs font-semibold text-[#e8d9bb]"
+                >
+                  Open download settings
+                </button>
+              )}
               <button
                 type="button"
                 onClick={dismissDeliveryFailures}

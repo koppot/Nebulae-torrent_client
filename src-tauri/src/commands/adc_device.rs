@@ -664,6 +664,104 @@ async fn engine_has_torrent(
     .map_err(|e| format!("Engine check join error: {e}"))?
 }
 
+struct DeliveryRoute {
+    engine: Option<Arc<dyn TorrentEngine>>,
+    remote: bool,
+}
+
+impl DeliveryRoute {
+    fn new(engine: Arc<dyn TorrentEngine>, remote: bool) -> Self {
+        Self {
+            engine: Some(engine),
+            remote,
+        }
+    }
+
+    fn engine(&self) -> &Arc<dyn TorrentEngine> {
+        self.engine
+            .as_ref()
+            .expect("route engine is set until drop")
+    }
+}
+
+impl Drop for DeliveryRoute {
+    /// The remote engine owns a blocking HTTP client, which must not be released
+    /// on an async worker thread.
+    fn drop(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || drop(engine));
+            }
+        }
+    }
+}
+
+/// Chooses where a website delivery is added, from the ADC one-click routing
+/// priorities (Settings -> BitTorrent). The remote target uses the Nebulae Server
+/// connection from Settings -> Server (Transmission behind nebulae-server) and does
+/// not require the app itself to run in Server mode. Unreachable or unconfigured
+/// targets cascade to the next enabled one.
+async fn resolve_delivery_route(
+    db: &Arc<Database>,
+    live: &Arc<dyn TorrentEngine>,
+) -> Result<DeliveryRoute, String> {
+    use crate::commands::adc_download::{
+        enabled_delivery_targets, load_client_targets, REMOTE_SERVER_TARGET_ID,
+    };
+
+    let order = enabled_delivery_targets(&load_client_targets(db));
+    if order.is_empty() {
+        return Ok(DeliveryRoute::new(Arc::clone(live), live.is_remote()));
+    }
+
+    let mut last_error: Option<String> = None;
+    for target in order {
+        match target.client_type.as_str() {
+            "local" => {
+                if live.is_remote() {
+                    last_error.get_or_insert_with(|| {
+                        "The local Manager engine is not running because Nebulae is in Server mode."
+                            .to_string()
+                    });
+                    continue;
+                }
+                return Ok(DeliveryRoute::new(Arc::clone(live), false));
+            }
+            t if t == REMOTE_SERVER_TARGET_ID => {
+                if live.is_remote() {
+                    return Ok(DeliveryRoute::new(Arc::clone(live), true));
+                }
+                let settings = crate::commands::settings::load_user_settings_from_db(db);
+                let url = settings.rtorrent_server_url.trim().to_string();
+                if url.is_empty() {
+                    last_error = Some(
+                        "Remote server delivery is selected but no Nebulae Server URL is configured (Settings -> Server)."
+                            .to_string(),
+                    );
+                    continue;
+                }
+                let token = settings.rtorrent_server_token.clone();
+                // The engine wraps a blocking HTTP client: build, probe and (on
+                // failure) release it off the async worker threads.
+                let probed = tokio::task::spawn_blocking(move || {
+                    let candidate: Arc<dyn TorrentEngine> =
+                        Arc::new(crate::engine::remote::RemoteServerEngine::new(url, token));
+                    candidate.list_torrents().map(|_| candidate)
+                })
+                .await
+                .map_err(|e| format!("Remote server check join error: {e}"))?;
+                match probed {
+                    Ok(candidate) => return Ok(DeliveryRoute::new(candidate, true)),
+                    Err(e) => {
+                        last_error = Some(format!("Remote server is not reachable: {e}"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "No enabled ADC delivery target is available.".to_string()))
+}
 async fn process_single_delivery_item(
     app: Option<&tauri::AppHandle>,
     engine: &Arc<dyn TorrentEngine>,
@@ -792,12 +890,26 @@ async fn process_delivery_item(
         return Err("Delivery is waiting to retry after an earlier failure.".to_string());
     }
 
-    // Validate configured default destination directory before claiming on server (D12 / D17 / D18).
-    let dest_dir = match validate_configured_download_dir(db) {
-        Ok(d) => d,
+    let route = match resolve_delivery_route(db, engine).await {
+        Ok(r) => r,
         Err(reason) => {
             fail(&reason);
             return Err(reason);
+        }
+    };
+    let engine = route.engine();
+
+    // Validate configured default destination directory before claiming on server (D12 / D17 / D18).
+    // A remote server owns its own filesystem, so it receives no local path and uses its default.
+    let dest_dir = if route.remote {
+        None
+    } else {
+        match validate_configured_download_dir(db) {
+            Ok(d) => Some(d),
+            Err(reason) => {
+                fail(&reason);
+                return Err(reason);
+            }
         }
     };
 
@@ -877,22 +989,36 @@ async fn process_delivery_item(
     let engine_ref = Arc::clone(engine);
     let dest_clone = dest_dir.clone();
     let expected_clone = expected_hash.clone();
+    let remote_target = route.remote;
     let add_res = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let added_hash = engine_ref.add_torrent_from_bytes(&raw_bytes, Some(&dest_clone))?;
-        if added_hash.trim().is_empty() {
+        let added_hash = engine_ref.add_torrent_from_bytes(&raw_bytes, dest_clone.as_deref())?;
+        // The Nebulae Server bridge does not return the new id, so it is identified by the
+        // metainfo hash and confirmed against the server's own torrent list.
+        if !remote_target && added_hash.trim().is_empty() {
             return Err("Torrent engine returned an empty torrent identifier.".to_string());
         }
-        let _ = engine_ref.resume_torrent(&added_hash);
-        let present = engine_ref.list_torrents()?.into_iter().any(|t| {
+        if !remote_target {
+            let _ = engine_ref.resume_torrent(&added_hash);
+        }
+        let matches = |t: &crate::commands::torrent::TorrentItem| {
             t.id.eq_ignore_ascii_case(&added_hash)
                 || t.info_hash.eq_ignore_ascii_case(&expected_clone)
-        });
-        if !present {
-            return Err(
-                "Engine did not report the added torrent in active session list.".to_string(),
-            );
+        };
+        let attempts = if remote_target { 20 } else { 1 };
+        for attempt in 0..attempts {
+            if engine_ref.list_torrents()?.iter().any(matches) {
+                return Ok(expected_clone);
+            }
+            if attempt + 1 < attempts {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
         }
-        Ok(expected_clone)
+        Err(if remote_target {
+            "Remote server accepted the torrent but did not list it yet; retry to confirm."
+                .to_string()
+        } else {
+            "Engine did not report the added torrent in active session list.".to_string()
+        })
     })
     .await
     .map_err(|e| format!("Thread join error while adding torrent: {e}"))?;
@@ -2240,5 +2366,98 @@ mod tests {
         assert_eq!(res.unwrap(), "abc123");
         assert!(transport.poll_calls.lock().unwrap().is_empty());
         assert!(transport.metainfo_calls.lock().unwrap().is_empty());
+    }
+
+    fn route_db(targets: serde_json::Value, server_url: &str) -> Arc<Database> {
+        let db = setup_linked_db(None);
+        db.set_setting("adc_client_targets", &targets.to_string())
+            .unwrap();
+        let settings = serde_json::json!({
+            "rtorrent_server_url": server_url,
+            "rtorrent_server_token": "test-token",
+        });
+        db.set_setting("user_settings_json", &settings.to_string())
+            .unwrap();
+        db
+    }
+
+    fn target(id: &str, priority: u32, enabled: bool, kind: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": id, "priority": priority, "enabled": enabled, "client_type": kind
+        })
+    }
+
+    #[tokio::test]
+    async fn test_route_defaults_to_local_engine() {
+        let db = setup_linked_db(None);
+        let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let route = resolve_delivery_route(&db, &live).await.unwrap();
+        assert!(!route.remote);
+    }
+
+    #[tokio::test]
+    async fn test_route_skips_remote_without_server_url_and_uses_local() {
+        let db = route_db(
+            serde_json::json!([
+                target("remote_server", 1, true, "remote_server"),
+                target("local", 2, true, "local"),
+            ]),
+            "",
+        );
+        let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let route = resolve_delivery_route(&db, &live).await.unwrap();
+        assert!(!route.remote);
+    }
+
+    #[tokio::test]
+    async fn test_route_remote_only_reports_missing_server_url() {
+        let db = route_db(
+            serde_json::json!([
+                target("local", 1, false, "local"),
+                target("remote_server", 2, true, "remote_server"),
+            ]),
+            "  ",
+        );
+        let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let err = resolve_delivery_route(&db, &live).await.err().unwrap();
+        assert!(err.contains("no Nebulae Server URL"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_route_unreachable_remote_cascades_to_local_or_reports() {
+        let targets = serde_json::json!([
+            target("remote_server", 1, true, "remote_server"),
+            target("local", 2, true, "local"),
+        ]);
+        let db = route_db(targets, "http://127.0.0.1:1");
+        let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        assert!(!resolve_delivery_route(&db, &live).await.unwrap().remote);
+
+        let remote_only = route_db(
+            serde_json::json!([
+                target("local", 1, false, "local"),
+                target("remote_server", 2, true, "remote_server"),
+            ]),
+            "http://127.0.0.1:1",
+        );
+        let err = resolve_delivery_route(&remote_only, &live)
+            .await
+            .err()
+            .unwrap();
+        assert!(err.contains("Remote server is not reachable"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_route_legacy_remote_rtorrent_target_is_honoured() {
+        let db = route_db(
+            serde_json::json!([
+                target("local", 1, false, "local"),
+                target("remote_rtorrent", 2, true, "remote_rtorrent"),
+            ]),
+            "",
+        );
+        let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
+        let err = resolve_delivery_route(&db, &live).await.err().unwrap();
+        assert!(err.contains("no Nebulae Server URL"), "{err}");
     }
 }

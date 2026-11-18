@@ -475,6 +475,9 @@ pub fn save_user_settings(
     #[cfg(target_os = "windows")]
     crate::taskbar_speed::set_taskbar_speed_enabled(&_app, settings.show_taskbar_speed_overlay);
 
+    #[cfg(target_os = "macos")]
+    crate::status_bar::set_speed_display_enabled(&_app, settings.show_taskbar_speed_overlay);
+
     Ok(())
 }
 

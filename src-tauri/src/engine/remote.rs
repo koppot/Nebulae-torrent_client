@@ -94,6 +94,10 @@ impl RemoteServerEngine {
 }
 
 impl TorrentEngine for RemoteServerEngine {
+    fn is_remote(&self) -> bool {
+        true
+    }
+
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String> {
         let items = self
             .send(reqwest::Method::GET, "/api/v1/torrents")?

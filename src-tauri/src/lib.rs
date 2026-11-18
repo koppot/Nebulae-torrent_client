@@ -683,6 +683,11 @@ pub fn run() {
                 status_bar::init_status_bar(app.handle());
                 // The tray ID is "nebulae-tray" as defined in the TrayIconBuilder
                 status_bar::set_tray_id("nebulae-tray".to_string());
+                if let Some(db) = app.try_state::<Arc<Database>>() {
+                    let enabled = commands::settings::load_user_settings_from_db(&db)
+                        .show_taskbar_speed_overlay;
+                    status_bar::set_speed_display_enabled(app.handle(), enabled);
+                }
                 crate::shutdown::install_macos_terminate_hook(app.handle().clone());
             }
 

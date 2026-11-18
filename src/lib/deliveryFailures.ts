@@ -5,6 +5,18 @@ export interface DeliveryFailure {
   reason: string;
 }
 
+/** Which settings, if any, can fix a failure; drives the dialog's actions. */
+export type DeliveryFailureKind = 'destination' | 'remote' | 'server' | 'other';
+
+export function classifyDeliveryFailure(reason: string): DeliveryFailureKind {
+  if (/download destination|destination .*unavailable/i.test(reason)) return 'destination';
+  if (/remote server|nebulae server/i.test(reason)) return 'remote';
+  if (/server error|HTTP 5\d\d|HTTP status 5\d\d|network error|timed out|rate limited/i.test(reason)) {
+    return 'server';
+  }
+  return 'other';
+}
+
 const TOKEN_RE = /[0-9a-f]{64}/i;
 
 export function extractDeliveryTokenFromUri(uri: string): string | undefined {

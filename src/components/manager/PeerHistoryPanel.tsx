@@ -25,6 +25,7 @@ import {
   normalizeProfileUrl,
 } from '../../utils/adcSwarmMembersIpc';
 import { useTrackerStore } from '../../stores/trackerStore';
+import { peerBlockAction, peerConnectionLabel } from '../../lib/peerBlocking';
 
 interface BlockedPeerIp {
   ip: string;
@@ -172,7 +173,8 @@ export const PeerHistoryPanel: React.FC<PeerHistoryPanelProps> = ({
 
   const blockedIps = useMemo(() => new Set(blockedPeers.map((peer) => peer.ip)), [blockedPeers]);
 
-  const block = async (peer: PeerTelemetry) => {
+  const block = async (row: HistoryRow) => {
+    const peer = { ip: row.ip, port: row.port };
     setBusyIp(peer.ip);
     setNotice(null);
     try {
@@ -180,6 +182,7 @@ export const PeerHistoryPanel: React.FC<PeerHistoryPanelProps> = ({
         torrentId,
         ip: peer.ip,
         port: peer.port,
+        connected: Boolean(row.live),
       });
       setNotice(`${peer.ip} blocked globally across torrents.`);
       await refresh();
@@ -280,6 +283,7 @@ export const PeerHistoryPanel: React.FC<PeerHistoryPanelProps> = ({
             <div className="space-y-1">
               {rows.map((row) => {
                 const isBlocked = blockedIps.has(row.ip);
+                const blockAction = peerBlockAction(row.ip, isBlocked, capability);
                 const member = row.member;
                 const savedEntry = row.history;
                 const username = member?.username ?? savedEntry?.adc_username;
@@ -339,16 +343,28 @@ export const PeerHistoryPanel: React.FC<PeerHistoryPanelProps> = ({
 
                       <div className="flex min-w-0 flex-col items-start gap-1">
                         <span className="truncate text-[10px] text-[#a3a3a3]">
-                          {row.live ? (isBlocked ? 'Blocked now' : 'Connected now') : 'Disconnected'}
+                          {peerConnectionLabel(Boolean(row.live), isBlocked)}
                         </span>
-                        {row.live && !isBlocked && (
+                        {blockAction.kind !== 'none' && (
                           <button
                             type="button"
-                            disabled={capability !== 'RepeatedDisconnect' || busyIp !== null}
-                            onClick={() => void block(row.live!)}
-                            className="rounded border border-[#444] px-1.5 py-0.5 text-[9px] text-[#cccccc] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                            data-testid={blockAction.kind === 'block' ? 'peer-block-button' : 'peer-unblock-button'}
+                            disabled={blockAction.disabled || busyIp !== null}
+                            title={blockAction.title}
+                            onClick={() =>
+                              void (blockAction.kind === 'block' ? block(row) : unblock(row.ip))
+                            }
+                            className={`rounded border px-2 py-0.5 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
+                              blockAction.kind === 'unblock'
+                                ? 'border-[#e50914] text-[#ff6b6b] hover:bg-[#e50914]/10'
+                                : 'border-[#555] text-[#e5e5e5] hover:text-white hover:border-[#888]'
+                            }`}
                           >
-                            {busyIp === row.ip ? 'Blocking…' : 'Block IP'}
+                            {busyIp === row.ip
+                              ? blockAction.kind === 'block'
+                                ? 'Blocking…'
+                                : 'Unblocking…'
+                              : blockAction.label}
                           </button>
                         )}
                       </div>

@@ -118,6 +118,8 @@ mod windows_impl {
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
+    /// Re-evaluates placement, fullscreen and free-space suppression on the band thread.
+    const WM_REPOSITION_BAND: u32 = WM_APP + 2;
     /// Minimum pixel gap between the app-button rebar right edge and the
     /// notification-area left edge needed to show the speed band without
     /// overlapping either neighbour.  Below this threshold the band is hidden.
@@ -167,11 +169,11 @@ mod windows_impl {
             let hwnd = HWND(hwnd_val as *mut _);
             unsafe {
                 if enabled {
-                    // Only show if not currently suppressed by a fullscreen window.
-                    if !FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed) {
-                        let _ = ShowWindow(hwnd, SW_SHOWNA);
-                        let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
-                    }
+                    // Start from "suppressed" and let the band thread decide: it shows the
+                    // band only when no fullscreen window covers its monitor and the taskbar
+                    // has room, so re-enabling never flashes the band over fullscreen content.
+                    FULLSCREEN_SUPPRESSED.store(true, Ordering::Relaxed);
+                    let _ = PostMessageW(Some(hwnd), WM_REPOSITION_BAND, WPARAM(0), LPARAM(0));
                 } else {
                     // User disabled: hide and clear any pending suppression state
                     // so the next enable starts clean.
@@ -536,6 +538,11 @@ mod windows_impl {
         match msg {
             WM_RENDER_BAND => {
                 render_band(hwnd);
+                LRESULT(0)
+            }
+            WM_REPOSITION_BAND => {
+                reposition_band(hwnd);
+                let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
