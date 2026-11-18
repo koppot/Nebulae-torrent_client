@@ -1,5 +1,4 @@
 use crate::db::{AdcInboxMessageRow, Database};
-use crate::utils::keyring::{get_secret, passkey_secret_target};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -72,9 +71,11 @@ struct ServerInboxMessage {
     pub sender_id: Option<u64>,
     pub sender_username: Option<String>,
     pub subject: Option<String>,
+    #[serde(alias = "body")]
     pub preview: Option<String>,
     pub added: Option<String>,
-    pub pm_unread: Option<i32>,
+    #[serde(alias = "is_unread")]
+    pub pm_unread: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,13 +143,10 @@ pub fn fetch_and_persist_inbox(
         return Ok(false);
     }
 
-    let passkey = match get_secret(&passkey_secret_target()) {
-        Ok(pk) => pk,
-        Err(error) => {
-            tracing::warn!(
-                status = error.adc_state(),
-                "[inbox-sync] ADC credential unavailable; skipping inbox fetch"
-            );
+    let passkey = match crate::commands::adc_device::get_adc_passkey(db) {
+        Some(pk) => pk,
+        None => {
+            tracing::warn!("[inbox-sync] ADC credential unavailable; skipping inbox fetch");
             return Ok(false);
         }
     };
@@ -202,6 +200,12 @@ pub fn fetch_and_persist_inbox(
 
     if let Some(msgs) = parsed.messages {
         for m in msgs {
+            let is_unread = match &m.pm_unread {
+                Some(serde_json::Value::Bool(b)) => *b,
+                Some(serde_json::Value::Number(n)) => n.as_i64().map(|v| v != 0).unwrap_or(true),
+                Some(serde_json::Value::String(s)) => s == "1" || s.eq_ignore_ascii_case("true"),
+                _ => true,
+            };
             rows.push(AdcInboxMessageRow {
                 id: m.id,
                 sender_id: m.sender_id.unwrap_or(0),
@@ -211,7 +215,7 @@ pub fn fetch_and_persist_inbox(
                 subject: m.subject.unwrap_or_else(|| "(No Subject)".to_string()),
                 preview: m.preview.unwrap_or_default(),
                 added_at: m.added.unwrap_or_default(),
-                pm_unread: m.pm_unread.unwrap_or(1) != 0,
+                pm_unread: is_unread,
                 fetched_at_epoch_ms: Utc::now().timestamp_millis(),
             });
         }
@@ -324,9 +328,10 @@ pub async fn mark_adc_inbox_read(
     db: State<'_, Arc<Database>>,
     message_id: u64,
 ) -> Result<AdcInboxMarkReadResult, String> {
-    let db_arc = Arc::clone(&db);
+    let db_for_mark = Arc::clone(&db);
+    let db_for_remote = Arc::clone(&db);
     let new_unread = tokio::task::spawn_blocking(move || {
-        db_arc
+        db_for_mark
             .mark_inbox_message_read(message_id)
             .map_err(|e| format!("mark message read: {e}"))
     })
@@ -341,9 +346,9 @@ pub async fn mark_adc_inbox_read(
     // Attempt remote sync in background
     tauri::async_runtime::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
-            let passkey = match get_secret(&passkey_secret_target()) {
-                Ok(pk) => pk,
-                Err(_) => return,
+            let passkey = match crate::commands::adc_device::get_adc_passkey(&db_for_remote) {
+                Some(pk) => pk,
+                None => return,
             };
             let client = match reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -394,7 +399,7 @@ pub async fn clear_adc_inbox(
 pub fn spawn_inbox_poller(app: tauri::AppHandle, db: Arc<Database>) {
     tauri::async_runtime::spawn(async move {
         // Initial delay to avoid startup contention
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         loop {
             let db_ref = Arc::clone(&db);

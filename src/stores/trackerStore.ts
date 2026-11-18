@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { AdcTrackerProfile, SeedTimeRecord } from '../types';
+import { useInboxStore } from './inboxStore';
 
 interface TrackerState {
   profile: AdcTrackerProfile | null;
@@ -67,6 +68,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
     // Trigger a live stats fetch shortly after linking so the panel shows real
     // numbers without waiting for the background 30-minute poll cycle.
     setTimeout(() => get().syncStats(), 2000);
+    useInboxStore.getState().syncInbox().catch(() => {});
     return res;
   },
 
@@ -80,6 +82,7 @@ export const useTrackerStore = create<TrackerState>((set, get) => ({
     await invoke('unlink_adc_account');
     await get().fetchProfile();
     get().markCredentialChanged();
+    useInboxStore.setState({ unreadCount: 0, messages: [], lastPolledAt: null });
   },
 
   markCredentialChanged: () =>
