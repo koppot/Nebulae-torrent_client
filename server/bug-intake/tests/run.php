@@ -299,6 +299,16 @@ T::eq(Maintenance::cleanup($c->db, $c->config, $c->vault)['orphans_removed'], 1,
 $c->db->run('UPDATE reports SET created_at = ?', [Db::now(-86400 * 400)]);
 T::eq(Maintenance::cleanup($c->db, $c->config, $c->vault)['reports_deleted'], 1, 'report row deleted after retention');
 
+// ---- Scoped worker ----
+$c = new Env();
+$a = $c->submit(Env::report());
+$b = $c->submit(Env::report());
+$c->makeDue();
+$c->outbox->runDue(20, [$a[1]['report_ref']]);
+T::eq((int) $c->db->one("SELECT COUNT(*) AS n FROM jobs j JOIN reports r ON r.id = j.report_id WHERE r.report_ref = ? AND j.state = 'done'", [$a[1]['report_ref']])['n'] > 0, true, 'scoped run delivers the selected report');
+T::eq((int) $c->db->one("SELECT COUNT(*) AS n FROM jobs j JOIN reports r ON r.id = j.report_id WHERE r.report_ref = ? AND j.state <> 'pending'", [$b[1]['report_ref']])['n'], 0, 'scoped run leaves other reports untouched');
+T::eq($c->outbox->runDue(20, [])['ran'], 0, 'empty scope runs nothing');
+
 // ---- Dead-letter retention ----
 $c = new Env();
 $c->submit(Env::report(), [Env::png()]);

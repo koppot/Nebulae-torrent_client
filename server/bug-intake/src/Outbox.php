@@ -22,13 +22,25 @@ final class Outbox
     ) {
     }
 
-    /** @return array{ran:int,done:int,failed:int} */
-    public function runDue(int $limit = 10): array
+    /**
+     * @param list<string>|null $onlyRefs when given, only jobs of these report references are considered
+     * @return array{ran:int,done:int,failed:int}
+     */
+    public function runDue(int $limit = 10, ?array $onlyRefs = null): array
     {
         $now = Db::now();
+        $scope = '';
+        $params = [$now, $now];
+        if ($onlyRefs !== null) {
+            if ($onlyRefs === []) {
+                return ['ran' => 0, 'done' => 0, 'failed' => 0];
+            }
+            $scope = ' AND report_id IN (SELECT id FROM reports WHERE report_ref IN (' . implode(',', array_fill(0, count($onlyRefs), '?')) . '))';
+            array_push($params, ...array_values($onlyRefs));
+        }
         $rows = $this->db->all(
-            "SELECT id FROM jobs WHERE state = 'pending' AND next_attempt_at <= ? AND (locked_until IS NULL OR locked_until < ?) ORDER BY next_attempt_at, id LIMIT " . (int) $limit,
-            [$now, $now]
+            "SELECT id FROM jobs WHERE state = 'pending' AND next_attempt_at <= ? AND (locked_until IS NULL OR locked_until < ?)" . $scope . " ORDER BY next_attempt_at, id LIMIT " . (int) $limit,
+            $params
         );
         $stats = ['ran' => 0, 'done' => 0, 'failed' => 0];
         foreach ($rows as $row) {
