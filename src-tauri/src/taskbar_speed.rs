@@ -112,11 +112,16 @@ mod windows_impl {
         SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, UpdateLayeredWindow,
         HCURSOR, HICON, HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_HIDE,
         SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP,
-        WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS,
-        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONUP, WM_RBUTTONUP,
+        WM_SETTINGCHANGE, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
+    /// Minimum pixel gap between the app-button rebar right edge and the
+    /// notification-area left edge needed to show the speed band without
+    /// overlapping either neighbour.  Below this threshold the band is hidden.
+    const MIN_SAFE_GAP_PX: i32 = 80;
 
     static UP_RATE: AtomicU64 = AtomicU64::new(0);
     static DOWN_RATE: AtomicU64 = AtomicU64::new(0);
@@ -229,19 +234,19 @@ mod windows_impl {
 
             let _ = RegisterClassExW(&wc);
 
-            let (init_x, init_y, init_w, init_h, layout) = calculate_taskbar_position();
-            BAND_W.store(layout.width, Ordering::Relaxed);
-            BAND_H.store(layout.height, Ordering::Relaxed);
+            let p = calculate_taskbar_position();
+            BAND_W.store(p.layout.width, Ordering::Relaxed);
+            BAND_H.store(p.layout.height, Ordering::Relaxed);
 
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_LAYERED,
                 CLASS_NAME,
                 w!("Nebulae Toolbar Item"),
                 WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
-                init_x,
-                init_y,
-                init_w,
-                init_h,
+                p.x,
+                p.y,
+                p.w,
+                p.h,
                 None,
                 None,
                 Some(hinstance),
@@ -251,7 +256,8 @@ mod windows_impl {
             if let Ok(hwnd) = hwnd {
                 BAND_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
                 render_band(hwnd);
-                if OVERLAY_ENABLED.load(Ordering::Relaxed) {
+                // Only show at startup if overlay is enabled AND there is room.
+                if OVERLAY_ENABLED.load(Ordering::Relaxed) && !p.hide_no_space {
                     let _ = ShowWindow(hwnd, SW_SHOWNA);
                 } else {
                     let _ = ShowWindow(hwnd, SW_HIDE);
@@ -279,13 +285,36 @@ mod windows_impl {
         }
     }
 
-    fn calculate_taskbar_position() -> (i32, i32, i32, i32, super::BandLayout) {
+    /// Result of `calculate_taskbar_position`.
+    ///
+    /// `hide_no_space` is set when the available gap between the app-button rebar
+    /// and the notification area is narrower than `MIN_SAFE_GAP_PX`, meaning the
+    /// band cannot be placed without overlapping adjacent taskbar controls.  The
+    /// caller must hide the band in this case regardless of `OVERLAY_ENABLED`.
+    struct BandPlacement {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        layout: super::BandLayout,
+        /// True when the band must be suppressed due to insufficient taskbar space.
+        hide_no_space: bool,
+    }
+
+    fn calculate_taskbar_position() -> BandPlacement {
         unsafe {
             let h_tray = match FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()) {
                 Ok(h) => h,
                 Err(_) => {
                     let l = super::band_layout(40);
-                    return (100, 1000, l.width, l.height, l);
+                    return BandPlacement {
+                        x: 100,
+                        y: 1000,
+                        w: l.width,
+                        h: l.height,
+                        layout: l,
+                        hide_no_space: false,
+                    };
                 }
             };
 
@@ -298,6 +327,18 @@ mod windows_impl {
 
             let h_rebar =
                 FindWindowExW(Some(h_tray), None, w!("ReBarWindow32"), PCWSTR::null()).ok();
+
+            // Right edge of the app-button rebar: the band must stay to the right of this.
+            let rebar_right = if let Some(rebar) = h_rebar {
+                let mut r = RECT::default();
+                if GetWindowRect(rebar, &mut r).is_ok() && r.right > tray_rect.left {
+                    r.right
+                } else {
+                    tray_rect.left
+                }
+            } else {
+                tray_rect.left
+            };
 
             // Locate TrafficMonitor (#32770) within ReBarWindow32 or Shell_TrayWnd
             let mut tm_hwnd = None;
@@ -326,7 +367,7 @@ mod windows_impl {
                 }
             }
 
-            // Locate TrayNotifyWnd (notification area / system tray on right)
+            // Locate TrayNotifyWnd (notification area / clock / system icons on the right)
             let h_notify =
                 FindWindowExW(Some(h_tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok();
             let mut notify_rect = RECT::default();
@@ -336,36 +377,71 @@ mod windows_impl {
                 false
             };
 
+            // The right wall for placement: left edge of TrayNotifyWnd, or tray right.
+            let right_wall = if notify_found && notify_rect.left > tray_rect.left + 50 {
+                notify_rect.left
+            } else {
+                tray_rect.right
+            };
+
+            // The left wall for placement: right edge of the rebar (app buttons),
+            // at minimum tray left + a small margin.
+            let left_wall = rebar_right.max(tray_rect.left + 20);
+
+            // Available gap between the two occupied regions.
+            let available = right_wall - left_wall;
+
+            // Insufficient space — hide rather than overlap.
+            if available < MIN_SAFE_GAP_PX {
+                return BandPlacement {
+                    x: left_wall,
+                    y: tray_rect.top,
+                    w: band_w,
+                    h: tray_h,
+                    layout,
+                    hide_no_space: true,
+                };
+            }
+
             let padding = (6.0 * dpi_scale).round() as i32;
             let mut target_x = 0;
 
-            // Priority 1: If TrafficMonitor is present and visibly shown, anchor to its left
+            // Priority 1: If TrafficMonitor is present and visibly shown, anchor to its left,
+            // but only if it is itself inside the available gap.
             if let Some(tm) = tm_hwnd {
                 if IsWindowVisible(tm).as_bool() {
                     let mut tm_rect = RECT::default();
                     if GetWindowRect(tm, &mut tm_rect).is_ok()
-                        && tm_rect.left > tray_rect.left + 100
+                        && tm_rect.left > left_wall + 100
+                        && tm_rect.left <= right_wall
                     {
                         target_x = tm_rect.left - band_w - padding;
                     }
                 }
             }
 
-            // Priority 2: Anchor immediately to the left of TrayNotifyWnd (notification area / system icons)
-            if target_x == 0 && notify_found && notify_rect.left > tray_rect.left + 100 {
-                target_x = notify_rect.left - band_w - padding;
+            // Priority 2: Anchor immediately to the left of TrayNotifyWnd
+            if target_x == 0 && notify_found {
+                target_x = right_wall - band_w - padding;
             }
 
-            // Priority 3: Fallback inside tray bounds right-aligned
+            // Priority 3: Right-align within the available gap
             if target_x == 0 {
-                target_x = tray_rect.right - band_w - (10.0 * dpi_scale).round() as i32;
+                target_x = right_wall - band_w - (10.0 * dpi_scale).round() as i32;
             }
 
-            if target_x < tray_rect.left + 50 {
-                target_x = tray_rect.left + 50;
-            }
+            // Clamp: must not cross into the rebar area on the left
+            // or into the notification area on the right.
+            target_x = target_x.max(left_wall).min(right_wall - band_w);
 
-            (target_x, tray_rect.top, band_w, tray_h, layout)
+            BandPlacement {
+                x: target_x,
+                y: tray_rect.top,
+                w: band_w,
+                h: tray_h,
+                layout,
+                hide_no_space: false,
+            }
         }
     }
 
@@ -420,31 +496,33 @@ mod windows_impl {
     }
 
     fn reposition_band(hwnd: HWND) {
-        let (x, y, w, h, layout) = calculate_taskbar_position();
+        let p = calculate_taskbar_position();
         unsafe {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), p.x, p.y, p.w, p.h, SWP_NOACTIVATE);
         }
-        BAND_W.store(layout.width, Ordering::Relaxed);
-        BAND_H.store(layout.height, Ordering::Relaxed);
+        BAND_W.store(p.layout.width, Ordering::Relaxed);
+        BAND_H.store(p.layout.height, Ordering::Relaxed);
 
-        // Suppress the overlay while a fullscreen application covers the band's
-        // monitor.  Never suppress if the user disabled the overlay entirely.
         if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
             return;
         }
-        let was_suppressed = FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed);
+
+        // The band must be hidden when it has no room to fit without overlapping controls,
+        // or when a fullscreen window covers its monitor.
         let now_fullscreen = foreground_is_fullscreen_on_band_monitor(hwnd);
-        if now_fullscreen == was_suppressed {
+        let want_hidden = p.hide_no_space || now_fullscreen;
+        let was_suppressed = FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed);
+
+        if want_hidden == was_suppressed {
             return; // No state change — nothing to do.
         }
-        FULLSCREEN_SUPPRESSED.store(now_fullscreen, Ordering::Relaxed);
+        FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
         unsafe {
-            if now_fullscreen {
-                // Hide without taking focus.
+            if want_hidden {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             } else {
-                // Restore without taking focus or activating Nebulae.
                 let _ = ShowWindow(hwnd, SW_SHOWNA);
+                let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -481,6 +559,15 @@ mod windows_impl {
             WM_DESTROY => {
                 let _ = PostQuitMessage(0);
                 LRESULT(0)
+            }
+            // Reposition immediately on display resolution change, DPI change, or
+            // taskbar-layout change (e.g. auto-hide toggle, taskbar moved to side).
+            // These events arrive on the band's own message queue because the window
+            // is a top-level HWND; we do not need to register for them separately.
+            WM_DISPLAYCHANGE | WM_DPICHANGED | WM_SETTINGCHANGE => {
+                reposition_band(hwnd);
+                let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
+                DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }

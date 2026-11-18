@@ -33,12 +33,10 @@ interface Poll {
   chapter: number;
   chapter_count: number;
   at_menu: boolean;
-  /** True when the loaded disc exposes at least one BD-J or HDMV
-   *  interactive title (INPUT_TITLE_INTERACTIVE — set on all HDMV BD
-   *  titles).  Approximately equivalent to "this is a Blu-ray disc".
-   *  Used to gate the Popup button, which is additionally gated by
-   *  !at_menu (popup is a feature-playback overlay, not a main-menu
-   *  feature).  Always false for DVD and plain files. */
+  /** True for Blu-ray discs with no authored Top Menu (popup-only discs,
+   *  BDMV/index.bdmv id_ref == 0xFFFF).  False for discs with a real Top
+   *  Menu, for DVD, and for plain files.  Gated additionally by !at_menu:
+   *  the BD popup is a feature-playback overlay, not a main-menu feature. */
   has_popup_menu: boolean;
 }
 
@@ -1551,13 +1549,13 @@ export default function PlayerOverlay() {
           )}
 
           {/* Popup: toggles the BD popup-menu overlay (BD_VK_POPUP / mode 5).
-              Shown only during feature playback on a disc that exposes at
-              least one interactive (HDMV/BD-J) title — i.e. Blu-ray discs.
+              Shown only during feature playback on a Blu-ray disc that has no
+              authored Top Menu (BDMV/index.bdmv id_ref == 0xFFFF): these are
+              popup-only discs where the popup button is the primary in-feature
+              navigation tool.  Discs with a real Top Menu suppress the button
+              because their popup overlay is not the primary navigation path.
               Hidden when at_menu=true: popup is a feature-playback overlay,
-              not a top-menu feature, so invoking it from the main menu is
-              meaningless and confusing (reproduces as a spurious button on
-              discs such as Fuuka Disc 1 that have HDMV titles but no popup
-              menu support during main-menu display). */}
+              not a top-menu feature. */}
           {player.isDisc && poll.has_popup_menu && !poll.at_menu && (
             <button
               type="button"

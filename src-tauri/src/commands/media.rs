@@ -2804,12 +2804,11 @@ pub struct PlayerPoll {
     // Whether the current title is an interactive menu (INPUT_TITLE_MENU flag).
     // Prefer this over checking `title == 0` for menu detection.
     pub at_menu: bool,
-    // True when the loaded disc exposes at least one BD-J or HDMV-interactive
-    // title (INPUT_TITLE_INTERACTIVE flag).  On Blu-ray, VLC sets this flag on
-    // every HDMV title with movie objects, so this is approximately equivalent
-    // to "this is a Blu-ray disc".  Always false for DVD and plain files.
-    // The frontend additionally gates the Popup button with !at_menu because
-    // BD popup is a feature-playback overlay, not a top-menu feature.
+    // True when the current disc is a Blu-ray that has no authored Top Menu
+    // (BDMV/index.bdmv id_ref == 0xFFFF): a popup-only disc where the BD
+    // popup button is meaningful during feature playback.  False for discs
+    // with a real Top Menu (which use menu navigation instead), and for DVD
+    // and plain files.  The frontend additionally gates with !at_menu.
     pub has_popup_menu: bool,
 }
 
@@ -3194,19 +3193,21 @@ pub fn player_poll(
         );
     }
 
-    // Determine whether the loaded disc exposes any BD-J / HDMV popup-capable
-    // title (INPUT_TITLE_INTERACTIVE).  We read the title list on every poll
-    // tick because VLC may not populate it until the demuxer has fully started.
-    // The result is cheap: it only allocates when titles are available.
-    let has_popup_menu = unsafe {
-        engine::snapshot_titles(&lib, mp)
-            .map(|(snaps, _)| {
-                snaps
-                    .iter()
-                    .any(|t| (t.flags & engine::INPUT_TITLE_INTERACTIVE) != 0)
-            })
-            .unwrap_or(false)
-    };
+    // Determine whether the current disc supports BD popup menus.
+    //
+    // VLC's bluray demux sets INPUT_TITLE_INTERACTIVE on every HDMV title that
+    // has movie objects — effectively every Blu-ray — so it cannot distinguish
+    // popup-capable from non-popup discs.  The correct disc-level signal is
+    // `BDMV/index.bdmv`: discs with no authored Top Menu (id_ref == 0xFFFF)
+    // are popup-only discs where the popup button is meaningful during feature
+    // playback.  Discs with a real Top Menu use it for menu navigation instead;
+    // their popup button is suppressed.
+    //
+    // `current_disc_has_top_menu()` reads the atomic set at open time by
+    // `preload_disc_state`; it is `Some(false)` for popup-only Blu-rays,
+    // `Some(true)` for discs with a Top Menu, and `None` for DVD / plain files.
+    let has_popup_menu =
+        engine::current_session_is_bluray() && engine::current_disc_has_top_menu() == Some(false);
 
     Ok(PlayerPoll {
         time_ms,

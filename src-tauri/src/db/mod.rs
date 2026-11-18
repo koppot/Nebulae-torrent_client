@@ -1550,10 +1550,33 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         {
+            // Upsert strategy: when a row already exists locally with pm_unread=0
+            // (the user read it in Nebulae and the ACK to ADC may still be in flight
+            // or ADC's read-state has not propagated yet), do NOT overwrite the local
+            // read state with the server-supplied value.  Only update pm_unread when
+            // the row is new, or when the server explicitly says it is still unread
+            // AND we do not already have it marked read locally.
+            //
+            // SQL: on conflict (id), update pm_unread only if the existing row is
+            // already unread (pm_unread = 1).  If the row is locally read (pm_unread = 0),
+            // leave it read regardless of what the server says.
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO adc_inbox_messages (
+                "INSERT INTO adc_inbox_messages (
                     id, sender_id, sender_username, subject, preview, added_at, pm_unread, fetched_at_epoch_ms
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ON CONFLICT(id) DO UPDATE SET
+                    sender_id            = excluded.sender_id,
+                    sender_username      = excluded.sender_username,
+                    subject              = excluded.subject,
+                    preview              = excluded.preview,
+                    added_at             = excluded.added_at,
+                    fetched_at_epoch_ms  = excluded.fetched_at_epoch_ms,
+                    -- Preserve local read state: only flip to unread if currently unread;
+                    -- never flip from 0→1 (would un-read a message the user already read).
+                    pm_unread = CASE
+                        WHEN adc_inbox_messages.pm_unread = 0 THEN 0
+                        ELSE excluded.pm_unread
+                    END",
             )?;
             for msg in messages {
                 stmt.execute(params![
@@ -1569,9 +1592,19 @@ impl Database {
             }
         }
         let now = chrono::Utc::now().timestamp_millis();
+        // Recount unread from the actual DB state after the upsert, rather than
+        // using the server-supplied total_unread, because the upsert preserves
+        // locally-read rows and the two counts may differ.
+        let actual_unread: u32 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM adc_inbox_messages WHERE pm_unread = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(total_unread);
         tx.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_unread_count', ?1)",
-            params![total_unread.to_string()],
+            params![actual_unread.to_string()],
         )?;
         tx.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_last_polled_at', ?1)",

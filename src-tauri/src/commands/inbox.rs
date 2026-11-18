@@ -249,9 +249,11 @@ pub fn fetch_and_persist_inbox(
         for m in msgs {
             let server_unread = match &m.pm_unread {
                 Some(serde_json::Value::Bool(b)) => *b,
-                Some(serde_json::Value::Number(n)) => n.as_i64().map(|v| v != 0).unwrap_or(true),
+                Some(serde_json::Value::Number(n)) => n.as_i64().map(|v| v != 0).unwrap_or(false),
                 Some(serde_json::Value::String(s)) => s == "1" || s.eq_ignore_ascii_case("true"),
-                _ => true,
+                // A missing or null pm_unread field means the server did not assert unread;
+                // treat as read rather than assuming unread.
+                _ => false,
             };
             // If the user already marked this message read locally and sync is pending/retrying, preserve read state
             let is_unread = if current_pending.contains(&m.id) {
@@ -274,14 +276,37 @@ pub fn fetch_and_persist_inbox(
         }
     }
 
-    // Persist to local database
+    // Persist to local database, preserving any locally-read state.
     db.save_inbox_messages(&rows, total_unread)
         .map_err(|e| format!("DB save inbox: {e}"))?;
 
-    // Notifications check
+    // Notifications check.
+    //
+    // `last_notified_id` tracks the highest message ID that has already triggered
+    // an OS notification in this client.  On first run it is 0, which would cause
+    // every existing unread message to fire a notification — including messages the
+    // user read on ADC or another client long ago.
+    //
+    // Guard: if this is the very first poll (last_notified_id == 0 and the DB had
+    // no rows before this fetch), seed the watermark to the current maximum known
+    // ID so that pre-existing messages are silently ingested without notification.
+    // Only messages whose ID exceeds the watermark AND whose server-reported
+    // pm_unread is true are eligible for notification.
     let settings = crate::commands::settings::load_user_settings_from_db(db);
-    let last_notified_id = db.get_inbox_last_notified_id().unwrap_or(0);
+    let raw_last_notified = db.get_inbox_last_notified_id().unwrap_or(0);
 
+    let last_notified_id = if raw_last_notified == 0 && !rows.is_empty() {
+        // First-ever fetch: set the watermark to the highest ID seen so far.
+        // This suppresses spurious notifications for pre-existing messages.
+        let seed_id = rows.iter().map(|m| m.id).max().unwrap_or(0);
+        let _ = db.set_inbox_last_notified_id(seed_id);
+        seed_id
+    } else {
+        raw_last_notified
+    };
+
+    // Only notify for messages that are both unread on ADC and genuinely newer
+    // than any message this client has already notified about.
     let new_unread: Vec<&AdcInboxMessageRow> = rows
         .iter()
         .filter(|m| m.pm_unread && m.id > last_notified_id)
