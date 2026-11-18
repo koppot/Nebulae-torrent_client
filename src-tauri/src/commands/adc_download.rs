@@ -122,6 +122,10 @@ pub fn classify_adc_uri(uri: &str) -> Result<AdcUriKind, String> {
     Ok(AdcUriKind::ManualTorrentId(parsed_id))
 }
 
+/// Message for the tracker's one-download-per-30-seconds-per-account limit (HTTP 429).
+pub const DOWNLOAD_RATE_LIMIT_MSG: &str =
+    "ADC download rate limit reached. Please wait a moment before retrying.";
+
 /// Parse a manual `adc://` or `adc:` torrent reference to extract the positive torrent ID.
 ///
 /// Delivery request tokens (`adc://delivery/<token>`, `adc://request/<token>`) are
@@ -193,9 +197,7 @@ pub fn fetch_adc_torrent_bytes_sync(torrent_id: u64, db: &Database) -> Result<Ve
     let status = resp.status();
 
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err(
-            "ADC download rate limit reached. Please wait a moment before retrying.".to_string(),
-        );
+        return Err(DOWNLOAD_RATE_LIMIT_MSG.to_string());
     }
 
     if status == reqwest::StatusCode::NOT_FOUND {

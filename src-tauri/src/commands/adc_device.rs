@@ -1,5 +1,6 @@
 use crate::commands::adc_download::{
     classify_adc_uri, fetch_adc_torrent_bytes, is_valid_delivery_token, AdcUriKind,
+    DOWNLOAD_RATE_LIMIT_MSG,
 };
 #[cfg(not(test))]
 use crate::commands::inbox::show_os_notification;
@@ -27,6 +28,8 @@ const MAX_LEDGER_ENTRIES: usize = 500;
 /// reported once and retried with backoff instead of on every poll.
 pub const SETTING_ADC_DELIVERY_FAILURES: &str = "adc_delivery_failures_json";
 const MAX_FAILURE_ENTRIES: usize = 100;
+const RATE_LIMIT_WAIT_SECS: u64 = 31;
+const RATE_LIMIT_MAX_WAITS: u32 = 3;
 const FAILURE_RETRY_BASE_SECS: i64 = 60;
 const FAILURE_RETRY_MAX_SECS: i64 = 900;
 
@@ -643,7 +646,37 @@ impl DeliveryTransport for LiveDeliveryTransport {
         torrent_id: u64,
         db: Arc<Database>,
     ) -> DeliveryFuture<'a, Result<Vec<u8>, String>> {
-        Box::pin(async move { fetch_adc_torrent_bytes(torrent_id, db).await })
+        Box::pin(async move {
+            fetch_waiting_out_rate_limit(
+                || fetch_adc_torrent_bytes(torrent_id, Arc::clone(&db)),
+                std::time::Duration::from_secs(RATE_LIMIT_WAIT_SECS),
+                RATE_LIMIT_MAX_WAITS,
+            )
+            .await
+        })
+    }
+}
+
+/// Several queued requests (or two devices on one account) land inside the tracker's
+/// 30 s download window; wait it out instead of failing the request.
+async fn fetch_waiting_out_rate_limit<F, Fut>(
+    mut fetch: F,
+    wait: std::time::Duration,
+    max_waits: u32,
+) -> Result<Vec<u8>, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, String>>,
+{
+    let mut waits = 0;
+    loop {
+        match fetch().await {
+            Err(e) if e == DOWNLOAD_RATE_LIMIT_MSG && waits < max_waits => {
+                waits += 1;
+                tokio::time::sleep(wait).await;
+            }
+            other => return other,
+        }
     }
 }
 
@@ -1694,6 +1727,57 @@ mod tests {
             let res = self.metainfo_result.lock().unwrap().clone();
             Box::pin(async move { res })
         }
+    }
+
+    #[tokio::test]
+    async fn test_rate_limited_download_waits_and_retries_then_succeeds() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let out = fetch_waiting_out_rate_limit(
+            || {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if n < 2 {
+                        Err(DOWNLOAD_RATE_LIMIT_MSG.to_string())
+                    } else {
+                        Ok(vec![1, 2, 3])
+                    }
+                }
+            },
+            std::time::Duration::from_millis(1),
+            3,
+        )
+        .await;
+        assert_eq!(out, Ok(vec![1, 2, 3]));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_gives_up_after_max_waits_and_other_errors_do_not_wait() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let out = fetch_waiting_out_rate_limit(
+            || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Err(DOWNLOAD_RATE_LIMIT_MSG.to_string()) }
+            },
+            std::time::Duration::from_millis(1),
+            2,
+        )
+        .await;
+        assert_eq!(out, Err(DOWNLOAD_RATE_LIMIT_MSG.to_string()));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let out = fetch_waiting_out_rate_limit(
+            || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Err("Torrent #1 was not found on AsianDVDClub.".to_string()) }
+            },
+            std::time::Duration::from_millis(1),
+            3,
+        )
+        .await;
+        assert!(out.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
