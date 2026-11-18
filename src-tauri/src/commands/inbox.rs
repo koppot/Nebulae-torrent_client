@@ -129,6 +129,34 @@ pub fn show_os_notification(title: &str, body: &str) {
     }
 }
 
+pub fn get_pending_reads(db: &Database) -> Vec<u64> {
+    db.get_setting("adc_inbox_pending_reads")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<Vec<u64>>(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn add_pending_read(db: &Database, message_id: u64) {
+    let mut list = get_pending_reads(db);
+    if !list.contains(&message_id) {
+        list.push(message_id);
+        let _ = db.set_setting(
+            "adc_inbox_pending_reads",
+            &serde_json::to_string(&list).unwrap_or_default(),
+        );
+    }
+}
+
+pub fn remove_pending_read(db: &Database, message_id: u64) {
+    let mut list = get_pending_reads(db);
+    list.retain(|&id| id != message_id);
+    let _ = db.set_setting(
+        "adc_inbox_pending_reads",
+        &serde_json::to_string(&list).unwrap_or_default(),
+    );
+}
+
 pub fn fetch_and_persist_inbox(
     app: Option<&tauri::AppHandle>,
     db: &Database,
@@ -159,6 +187,24 @@ pub fn fetch_and_persist_inbox(
         .user_agent("Nebulae/0.2.7")
         .build()
         .map_err(|e| format!("HTTP client build: {e}"))?;
+
+    // Retry any pending un-synced read operations from earlier attempts (H14)
+    let pending_reads = get_pending_reads(db);
+    for pending_id in &pending_reads {
+        let ack_payload = serde_json::json!({
+            "passkey": passkey.trim(),
+            "message_id": pending_id,
+        });
+        if let Ok(ack_resp) = client
+            .post("https://asiandvdclub.org/api/nebulae/inbox/mark_read")
+            .json(&ack_payload)
+            .send()
+        {
+            if ack_resp.status().is_success() {
+                remove_pending_read(db, *pending_id);
+            }
+        }
+    }
 
     let payload = serde_json::json!({
         "passkey": passkey.trim(),
@@ -197,14 +243,21 @@ pub fn fetch_and_persist_inbox(
 
     let total_unread = parsed.unread_count.unwrap_or(0);
     let mut rows: Vec<AdcInboxMessageRow> = Vec::new();
+    let current_pending = get_pending_reads(db);
 
     if let Some(msgs) = parsed.messages {
         for m in msgs {
-            let is_unread = match &m.pm_unread {
+            let server_unread = match &m.pm_unread {
                 Some(serde_json::Value::Bool(b)) => *b,
                 Some(serde_json::Value::Number(n)) => n.as_i64().map(|v| v != 0).unwrap_or(true),
                 Some(serde_json::Value::String(s)) => s == "1" || s.eq_ignore_ascii_case("true"),
                 _ => true,
+            };
+            // If the user already marked this message read locally and sync is pending/retrying, preserve read state
+            let is_unread = if current_pending.contains(&m.id) {
+                false
+            } else {
+                server_unread
             };
             rows.push(AdcInboxMessageRow {
                 id: m.id,
@@ -343,6 +396,8 @@ pub async fn mark_adc_inbox_read(
         let _ = app.emit("nebulae://adc-inbox-updated", &summary);
     }
 
+    add_pending_read(&db, message_id);
+
     // Attempt remote sync in background
     tauri::async_runtime::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
@@ -363,7 +418,11 @@ pub async fn mark_adc_inbox_read(
                 "passkey": passkey.trim(),
                 "message_id": message_id,
             });
-            let _ = client.post(url).json(&payload).send();
+            if let Ok(res) = client.post(url).json(&payload).send() {
+                if res.status().is_success() {
+                    remove_pending_read(&db_for_remote, message_id);
+                }
+            }
         })
         .await;
     });
@@ -409,15 +468,24 @@ pub fn spawn_inbox_poller(app: tauri::AppHandle, db: Arc<Database>) {
             })
             .await;
 
-            match result {
-                Ok(Ok(true)) => tracing::info!("[inbox-poller] inbox refresh OK"),
-                Ok(Ok(false)) => {} // Silent
-                Ok(Err(e)) => tracing::warn!("[inbox-poller] fetch failed: {e}"),
-                Err(e) => tracing::error!("[inbox-poller] thread join error: {e}"),
-            }
+            let poll_interval = match result {
+                Ok(Ok(true)) => {
+                    tracing::info!("[inbox-poller] inbox refresh OK");
+                    std::time::Duration::from_secs(300)
+                }
+                Ok(Ok(false)) => std::time::Duration::from_secs(300),
+                Ok(Err(e)) => {
+                    tracing::warn!("[inbox-poller] fetch failed: {e}; retrying in 60s");
+                    std::time::Duration::from_secs(60)
+                }
+                Err(e) => {
+                    tracing::error!("[inbox-poller] thread join error: {e}");
+                    std::time::Duration::from_secs(60)
+                }
+            };
 
-            // Sleep 5 minutes between polls
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            // Sleep until next poll or recovery retry
+            tokio::time::sleep(poll_interval).await;
         }
     });
 }

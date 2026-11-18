@@ -209,7 +209,8 @@ export const BugReportModal: React.FC = () => {
           <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="leading-relaxed">
             <span className="font-semibold text-white">Public Issue Tracker:</span> Submitting
-            this report opens an issue on GitHub (<code className="text-amber-300">koppot/Nebulae-torrent_client</code>).
+            this report generates a prefilled issue form on GitHub in your web browser (<code className="text-amber-300">koppot/Nebulae-torrent_client</code>).
+            Zero embedded tokens or automated background posts occur.
             Automated privacy redaction removes passkeys, tokens, tracker URLs, personal file paths,
             and public IPs. You can review the exact text before opening.
           </div>

@@ -183,7 +183,11 @@ export const InboxPopover: React.FC<InboxPopoverProps> = ({ onClose }) => {
 
       {/* Footer */}
       <div className="px-3 py-2 bg-[#141414] border-t border-[#262626] flex items-center justify-between text-[11px] text-[#737373]">
-        <span>Click message to open on ADC</span>
+        <span>
+          {unreadCount > messages.length
+            ? `Showing recent ${messages.length} of ${unreadCount} unread`
+            : "Click message to open on ADC"}
+        </span>
         <button
           type="button"
           onClick={handleOpenAdcInbox}

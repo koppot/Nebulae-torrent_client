@@ -1653,6 +1653,10 @@ impl Database {
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_last_notified_id', '0')",
             [],
         )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('adc_inbox_pending_reads', '[]')",
+            [],
+        )?;
         Ok(())
     }
 
