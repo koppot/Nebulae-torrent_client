@@ -243,6 +243,52 @@ pub fn sanitize_diagnostic_text(text: &str) -> String {
     s
 }
 
+/// Human-readable OS release (e.g. "14.5" or "Microsoft Windows [Version 10.0.19045.5555]").
+fn os_version_string() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::utils::process::create_hidden_command("cmd")
+            .args(["/C", "ver"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "unknown".to_string()
+    }
+}
+
+/// Issue-body section naming how many screenshots the reporter still has to
+/// attach by hand: GitHub's prefilled-issue link cannot carry files.
+fn screenshot_section(count: u32) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let noun = if count == 1 {
+        "screenshot"
+    } else {
+        "screenshots"
+    };
+    format!(
+        "### Screenshots\n{count} {noun} from the reporter to be attached to this issue (paste or drag into this comment before submitting).\n\n"
+    )
+}
+
 #[tauri::command]
 pub fn generate_bug_report_bundle(
     paths: State<Arc<AppPaths>>,
@@ -251,7 +297,9 @@ pub fn generate_bug_report_bundle(
     category: String,
     context_error: Option<String>,
     include_logs: bool,
+    screenshot_count: Option<u32>,
 ) -> Result<BugReportBundle, String> {
+    let screenshots = screenshot_section(screenshot_count.unwrap_or(0));
     let clean_title = sanitize_diagnostic_text(&title);
     let clean_desc = sanitize_diagnostic_text(&description);
     let clean_err = context_error.as_deref().map(sanitize_diagnostic_text);
@@ -280,9 +328,17 @@ pub fn generate_bug_report_bundle(
         markdown.push_str(&format!("### Observed Error\n```text\n{err}\n```\n\n"));
     }
 
+    markdown.push_str(&screenshots);
+
     markdown.push_str(&format!(
-        "### Environment\n- **App Version:** {}\n- **OS:** {} ({})\n- **Engine Status:** {}\n- **Database:** {}\n\n",
-        summary.version, summary.os, summary.arch, summary.engine_status, summary.database_status
+        "### Environment\n- **App Version:** {} (build {})\n- **OS:** {} {} ({})\n- **Engine Status:** {}\n- **Database:** {}\n\n",
+        summary.version,
+        env!("NEBULAE_BUILD_ID"),
+        summary.os,
+        os_version_string(),
+        summary.arch,
+        summary.engine_status,
+        summary.database_status
     ));
 
     if include_logs {
@@ -307,7 +363,7 @@ pub fn generate_bug_report_bundle(
     let github_issue_url = if full_url.len() > 3500 {
         is_url_truncated = true;
         let truncated_body = format!(
-            "### Bug Summary\n**Category:** {category}\n**Fingerprint:** `{fingerprint}`\n\n### Description\n{clean_desc}\n\n*Note: Complete diagnostic bundle exceeds URL limits and was copied to your clipboard. Please paste below:*\n\n```text\n[Paste copied diagnostics here]\n```"
+            "### Bug Summary\n**Category:** {category}\n**Fingerprint:** `{fingerprint}`\n\n### Description\n{clean_desc}\n\n{screenshots}*Note: Complete diagnostic bundle exceeds URL limits and was copied to your clipboard. Please paste below:*\n\n```text\n[Paste copied diagnostics here]\n```"
         );
         format!(
             "{}?title={}&body={}",
@@ -357,6 +413,13 @@ pub fn clear_bug_report_draft(db: State<Arc<Database>>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_section_is_empty_without_screenshots_and_pluralises() {
+        assert_eq!(screenshot_section(0), "");
+        assert!(screenshot_section(1).contains("1 screenshot from the reporter"));
+        assert!(screenshot_section(3).contains("3 screenshots from the reporter"));
+    }
 
     #[test]
     fn test_validate_external_url_valid() {

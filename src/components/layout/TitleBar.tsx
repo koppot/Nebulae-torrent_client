@@ -32,6 +32,7 @@ import {
   Disc,
   FolderInput,
   Server as ServerIcon,
+  Bug,
 } from 'lucide-react';
 import { useRemoteServerStore } from '../../stores/remoteServerStore';
 
@@ -41,6 +42,7 @@ export const TitleBar: React.FC = () => {
     setViewMode,
     setShowSettings,
     setShowHelp,
+    setShowBugReport,
     setShowAddTorrent,
     setShowCreateTorrent,
     setShowConnectivityDoctor,
@@ -341,6 +343,22 @@ export const TitleBar: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* Report a Bug: reachable from every view, Media included, and opens
+            the same dialog as Help and Settings. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowBugReport(true);
+            }}
+            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-[#1f1f1f] text-[#a3a3a3] hover:text-white text-[11px] font-medium transition"
+            title="Report a bug or send feedback (opens a prefilled GitHub issue you review first)"
+            aria-label="Report a Bug"
+          >
+            <Bug className="w-3.5 h-3.5 text-[#e50914]" />
+            <span>Report a Bug</span>
+          </button>
 
           {/* ADC Private Messages Inbox */}
           <InboxToolbarButton />

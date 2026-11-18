@@ -12,7 +12,35 @@ import {
   ChevronUp,
   FileText,
   Trash2,
+  ImagePlus,
 } from 'lucide-react';
+import {
+  MAX_SCREENSHOTS,
+  SCREENSHOT_EXTENSIONS,
+  SCREENSHOT_LIMITS_TEXT,
+  checkScreenshots,
+  formatMegabytes,
+} from '../../lib/bugReportAttachments';
+
+interface Screenshot {
+  id: string;
+  file: File;
+  url: string;
+}
+
+async function imageToPngBlob(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas is unavailable');
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode image'))), 'image/png'),
+  );
+}
 
 interface BugReportBundle {
   title: string;
@@ -51,6 +79,68 @@ export const BugReportModal: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+
+  const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+  const [screenshotErrors, setScreenshotErrors] = useState<string[]>([]);
+  const [step, setStep] = useState<'compose' | 'finish'>('compose');
+  const [copiedShot, setCopiedShot] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const screenshotsRef = useRef<Screenshot[]>([]);
+  screenshotsRef.current = screenshots;
+
+  useEffect(
+    () => () => {
+      screenshotsRef.current.forEach((s) => URL.revokeObjectURL(s.url));
+    },
+    [],
+  );
+
+  const handlePickScreenshots = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const chosen = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (chosen.length === 0) return;
+    const { accepted, errors } = checkScreenshots(screenshots.length, chosen);
+    setScreenshotErrors(errors);
+    if (accepted.length > 0) {
+      setScreenshots((prev) => [
+        ...prev,
+        ...accepted.map((file) => ({
+          id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
+          file,
+          url: URL.createObjectURL(file),
+        })),
+      ]);
+    }
+  };
+
+  const removeScreenshot = (id: string) => {
+    setScreenshots((prev) => {
+      const gone = prev.find((s) => s.id === id);
+      if (gone) URL.revokeObjectURL(gone.url);
+      return prev.filter((s) => s.id !== id);
+    });
+    setScreenshotErrors([]);
+  };
+
+  const resetScreenshots = () => {
+    screenshotsRef.current.forEach((s) => URL.revokeObjectURL(s.url));
+    setScreenshots([]);
+    setScreenshotErrors([]);
+    setCopiedShot(null);
+  };
+
+  const handleCopyScreenshot = async (shot: Screenshot) => {
+    try {
+      const png = await imageToPngBlob(shot.file);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      setCopiedShot(shot.id);
+      setTimeout(() => setCopiedShot((cur) => (cur === shot.id ? null : cur)), 2500);
+    } catch (err) {
+      setStatusNotice(
+        `Could not copy the image (${String(err)}). Drag the original file from your computer into the GitHub comment box instead.`,
+      );
+    }
+  };
 
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -108,12 +198,13 @@ export const BugReportModal: React.FC = () => {
       category,
       contextError: bugReportContext?.error || null,
       includeLogs,
+      screenshotCount: screenshots.length,
     })
       .then((bundle) => {
         setPreviewBundle(bundle);
       })
       .catch(() => {});
-  }, [title, category, description, includeLogs, bugReportContext, showBugReport]);
+  }, [title, category, description, includeLogs, bugReportContext, showBugReport, screenshots.length]);
 
   const handleCopyMarkdown = async () => {
     if (!previewBundle) return;
@@ -130,6 +221,7 @@ export const BugReportModal: React.FC = () => {
     setTitle('');
     setDescription('');
     setCategory('Playback & Media Center');
+    resetScreenshots();
     await invoke('clear_bug_report_draft').catch(() => {});
   };
 
@@ -150,6 +242,7 @@ export const BugReportModal: React.FC = () => {
         category,
         contextError: bugReportContext?.error || null,
         includeLogs,
+        screenshotCount: screenshots.length,
       });
 
       // Always copy full markdown to clipboard so the user has the complete trace
@@ -160,13 +253,22 @@ export const BugReportModal: React.FC = () => {
       // Open prefilled GitHub issue URL in default browser
       await invoke('open_external_link', { url: bundle.github_issue_url });
 
-      // Clear draft upon successful launch
-      await invoke('clear_bug_report_draft').catch(() => {});
+      // The draft is kept: the browser may open to an offline error page, and the
+      // report must survive that. "Done" / "Discard Draft" clear it explicitly.
+
+      if (screenshots.length > 0) {
+        // GitHub's prefilled-issue link cannot carry files: hand the user to the
+        // browser form and keep this dialog (and the report) open for the last step.
+        setSubmitting(false);
+        setStep('finish');
+        setStatusNotice(null);
+        return;
+      }
 
       setStatusNotice(
         bundle.is_url_truncated
-          ? 'GitHub issue opened in your browser. The full diagnostic log was copied to your clipboard!'
-          : 'GitHub issue opened in your browser.',
+          ? 'GitHub issue opened in your browser. The full diagnostic log was copied to your clipboard! Your report stays saved here as a draft until you discard it.'
+          : 'GitHub issue opened in your browser. Your report stays saved here as a draft until you discard it.',
       );
 
       setTimeout(() => {
@@ -216,7 +318,53 @@ export const BugReportModal: React.FC = () => {
           </div>
         </div>
 
+        {step === 'finish' && (
+          <div className="flex-1 p-5 overflow-y-auto space-y-4 text-xs" data-testid="bug-report-finish">
+            <div className="p-3 rounded-lg bg-[#1e293b] border border-[#38bdf8] text-sky-100 leading-relaxed">
+              <p className="font-semibold text-white mb-1">GitHub opened in your browser. One step is left.</p>
+              <p>
+                Your screenshots are <span className="font-semibold">not attached automatically</span> and
+                have not been uploaded anywhere. GitHub issue links cannot carry files, so attach them
+                yourself in the GitHub comment box before pressing &quot;Submit new issue&quot;:
+              </p>
+              <ol className="list-decimal ml-5 mt-2 space-y-0.5">
+                <li>Click &quot;Copy image&quot; below, then paste (Ctrl/Cmd+V) into the GitHub comment box.</li>
+                <li>Or drag the original image file from your computer into the comment box.</li>
+                <li>Check that every image appears in the preview, then submit.</li>
+              </ol>
+              <p className="mt-2 text-sky-200/80">
+                If the comment box shows only a short note, the full diagnostic text is on your clipboard
+                (use &quot;Copy report text&quot; to copy it again; it replaces a copied image).
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {screenshots.map((shot, i) => (
+                <div key={shot.id} className="border border-[#2d2d2d] rounded-lg overflow-hidden bg-[#181818]">
+                  <img src={shot.url} alt={`Screenshot ${i + 1}`} className="w-full h-24 object-cover bg-black" />
+                  <div className="p-2 space-y-1.5">
+                    <div className="text-[10px] text-[#a3a3a3] truncate" title={shot.file.name}>
+                      Screenshot {i + 1} · {formatMegabytes(shot.file.size)}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyScreenshot(shot)}
+                      className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-[#262626] hover:bg-[#333333] text-white text-[11px] transition"
+                    >
+                      {copiedShot === shot.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedShot === shot.id ? 'Copied' : 'Copy image'}</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {statusNotice && (
+              <div className="p-2.5 rounded bg-[#1e293b] border border-[#38bdf8] text-sky-200 text-xs">{statusNotice}</div>
+            )}
+          </div>
+        )}
+
         {/* Body Form */}
+        {step === 'compose' && (
         <form onSubmit={handleSubmit} className="flex-1 p-5 overflow-y-auto space-y-4 text-xs">
           {/* Status Message */}
           {statusNotice && (
@@ -293,6 +441,71 @@ export const BugReportModal: React.FC = () => {
             />
           </div>
 
+          {/* Screenshots (optional) */}
+          <div className="p-3 bg-[#1a1a1a] border border-[#2d2d2d] rounded-lg space-y-2" data-testid="bug-report-screenshots">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-white font-medium">Screenshots (optional)</span>
+                <span className="block text-[11px] text-[#737373]">
+                  {SCREENSHOT_LIMITS_TEXT}. Nothing is captured or uploaded by Nebulae.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={screenshots.length >= MAX_SCREENSHOTS}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#262626] hover:bg-[#333333] text-white text-xs font-medium transition disabled:opacity-40"
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+                <span>Add screenshots…</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={SCREENSHOT_EXTENSIONS.map((e) => `.${e}`).join(',')}
+                onChange={handlePickScreenshots}
+                className="hidden"
+                data-testid="bug-report-file-input"
+              />
+            </div>
+            <div className="text-[11px] text-amber-200/90 leading-relaxed">
+              Review every screenshot before you attach it: images can show passkeys, tokens, usernames,
+              private file paths or other personal details. Screenshots are{' '}
+              <span className="font-semibold">not covered by the automatic text redaction</span>, and they are{' '}
+              <span className="font-semibold">not attached automatically</span>: after GitHub opens you
+              add them to the issue yourself, and nothing is sent until you submit it there.
+            </div>
+            {screenshotErrors.length > 0 && (
+              <ul className="text-[11px] text-red-300 list-disc ml-4 space-y-0.5" role="alert">
+                {screenshotErrors.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            )}
+            {screenshots.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                {screenshots.map((shot, i) => (
+                  <div key={shot.id} className="relative border border-[#2d2d2d] rounded overflow-hidden bg-black">
+                    <img src={shot.url} alt={`Screenshot ${i + 1} preview`} className="w-full h-16 object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeScreenshot(shot.id)}
+                      className="absolute top-0.5 right-0.5 p-0.5 rounded bg-black/70 text-white hover:bg-[#e50914] transition"
+                      aria-label={`Remove screenshot ${i + 1}`}
+                      title="Remove this screenshot"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                    <div className="px-1 py-0.5 text-[9px] text-[#a3a3a3] truncate" title={shot.file.name}>
+                      {shot.file.name} · {formatMegabytes(shot.file.size)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Log Bundle Toggle */}
           <div className="p-3 bg-[#1a1a1a] border border-[#2d2d2d] rounded-lg flex items-center justify-between">
             <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -345,8 +558,46 @@ export const BugReportModal: React.FC = () => {
             )}
           </div>
         </form>
+        )}
+
+        {step === 'finish' && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
+            <button
+              type="button"
+              onClick={() => setStep('compose')}
+              className="px-3 py-1.5 rounded hover:bg-[#262626] text-[#a3a3a3] hover:text-white text-xs transition"
+            >
+              Back to report
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyMarkdown}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#262626] hover:bg-[#333333] text-white text-xs font-medium transition"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copied ? 'Copied!' : 'Copy report text'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetScreenshots();
+                  setTitle('');
+                  setDescription('');
+                  setStep('compose');
+                  void invoke('clear_bug_report_draft').catch(() => {});
+                  setShowBugReport(false);
+                }}
+                className="px-4 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-semibold transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Footer Actions */}
+        {step === 'compose' && (
         <div className="flex items-center justify-between px-5 py-3 border-t border-[#333333] bg-[#1f1f1f]">
           <button
             type="button"
@@ -380,6 +631,7 @@ export const BugReportModal: React.FC = () => {
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
