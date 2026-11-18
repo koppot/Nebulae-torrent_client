@@ -1,0 +1,18 @@
+[package]
+name = "nebulae-server"
+version = "0.1.0"
+edition = "2021"
+description = "Headless Nebulae server: wraps Transmission RPC behind a token-authenticated REST API for remote management from the Nebulae desktop client."
+publish = false
+
+[dependencies]
+actix-web = "4"
+actix-rt = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
