@@ -2804,6 +2804,11 @@ pub struct PlayerPoll {
     // Whether the current title is an interactive menu (INPUT_TITLE_MENU flag).
     // Prefer this over checking `title == 0` for menu detection.
     pub at_menu: bool,
+    // True when the loaded disc exposes at least one BD-J or HDMV-popup title
+    // (INPUT_TITLE_INTERACTIVE flag).  DVD-Video and plain files are always
+    // false.  Used by the frontend to show the Popup button only for discs
+    // that actually support one.
+    pub has_popup_menu: bool,
 }
 
 fn framing_sample_path(gen: usize) -> PathBuf {
@@ -3107,6 +3112,7 @@ pub fn player_poll(
             chapter: 0,
             chapter_count: 0,
             at_menu: false,
+            has_popup_menu: false,
         });
     }
     let lib = loaded_lib(&state)?;
@@ -3186,6 +3192,20 @@ pub fn player_poll(
         );
     }
 
+    // Determine whether the loaded disc exposes any BD-J / HDMV popup-capable
+    // title (INPUT_TITLE_INTERACTIVE).  We read the title list on every poll
+    // tick because VLC may not populate it until the demuxer has fully started.
+    // The result is cheap: it only allocates when titles are available.
+    let has_popup_menu = unsafe {
+        engine::snapshot_titles(&lib, mp)
+            .map(|(snaps, _)| {
+                snaps
+                    .iter()
+                    .any(|t| (t.flags & engine::INPUT_TITLE_INTERACTIVE) != 0)
+            })
+            .unwrap_or(false)
+    };
+
     Ok(PlayerPoll {
         time_ms,
         length_ms,
@@ -3195,6 +3215,7 @@ pub fn player_poll(
         chapter,
         chapter_count,
         at_menu,
+        has_popup_menu,
     })
 }
 

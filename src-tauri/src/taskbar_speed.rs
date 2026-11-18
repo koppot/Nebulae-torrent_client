@@ -98,21 +98,22 @@ mod windows_impl {
         COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
     };
     use windows::Win32::Graphics::Gdi::{
-        CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush, GetDC, ReleaseDC,
-        SelectObject, SetBkMode, SetTextColor, TextOutW, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-        DEFAULT_CHARSET, DIB_RGB_COLORS, OUT_DEFAULT_PRECIS, TRANSPARENT,
+        CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GdiFlush, GetDC, GetMonitorInfoW,
+        MonitorFromWindow, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW,
+        AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, MONITORINFO,
+        MONITOR_DEFAULTTONULL, OUT_DEFAULT_PRECIS, TRANSPARENT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-        DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect,
-        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-        PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
-        SetWindowPos, ShowWindow, TrackPopupMenu, UpdateLayeredWindow, HCURSOR, HICON,
-        HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_HIDE, SW_RESTORE, SW_SHOWNA,
-        TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_COMMAND, WM_DESTROY,
-        WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetForegroundWindow,
+        GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW,
+        SetForegroundWindow, SetWindowPos, ShowWindow, TrackPopupMenu, UpdateLayeredWindow,
+        HCURSOR, HICON, HWND_TOPMOST, MF_STRING, MSG, PM_REMOVE, SWP_NOACTIVATE, SW_HIDE,
+        SW_RESTORE, SW_SHOWNA, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP,
+        WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSEXW, WS_CLIPSIBLINGS,
+        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
     const WM_RENDER_BAND: u32 = WM_APP + 1;
@@ -125,6 +126,10 @@ mod windows_impl {
     static INIT_ONCE: Once = Once::new();
     static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
     static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(true);
+    /// Set to true while a fullscreen window covers the band's monitor.
+    /// Independent of OVERLAY_ENABLED — the band is hidden when either is
+    /// true, but only OVERLAY_ENABLED reflects the user's Settings choice.
+    static FULLSCREEN_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
     const CLASS_NAME: PCWSTR = w!("NebulaeToolbarBand");
 
@@ -151,23 +156,22 @@ mod windows_impl {
 
     pub fn set_taskbar_speed_enabled(app: &AppHandle, enabled: bool) {
         init_taskbar_speed(app);
-        let prev = OVERLAY_ENABLED.swap(enabled, Ordering::SeqCst);
+        let _prev = OVERLAY_ENABLED.swap(enabled, Ordering::SeqCst);
         let hwnd_val = BAND_HWND.load(Ordering::Relaxed);
         if hwnd_val != 0 {
             let hwnd = HWND(hwnd_val as *mut _);
             unsafe {
                 if enabled {
-                    let _ = ShowWindow(hwnd, SW_SHOWNA);
-                    let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
+                    // Only show if not currently suppressed by a fullscreen window.
+                    if !FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed) {
+                        let _ = ShowWindow(hwnd, SW_SHOWNA);
+                        let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
+                    }
                 } else {
+                    // User disabled: hide and clear any pending suppression state
+                    // so the next enable starts clean.
+                    FULLSCREEN_SUPPRESSED.store(false, Ordering::Relaxed);
                     let _ = ShowWindow(hwnd, SW_HIDE);
-                }
-            }
-        } else if enabled && !prev {
-            let hwnd_val = BAND_HWND.load(Ordering::Relaxed);
-            if hwnd_val != 0 {
-                unsafe {
-                    let _ = ShowWindow(HWND(hwnd_val as *mut _), SW_SHOWNA);
                 }
             }
         }
@@ -178,7 +182,8 @@ mod windows_impl {
         let prev_up = UP_RATE.swap(up, Ordering::Relaxed);
         let prev_down = DOWN_RATE.swap(down, Ordering::Relaxed);
 
-        if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
+        if !OVERLAY_ENABLED.load(Ordering::Relaxed) || FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed)
+        {
             return;
         }
 
@@ -364,6 +369,56 @@ mod windows_impl {
         }
     }
 
+    /// Return true if the foreground window on the same monitor as `band_hwnd`
+    /// covers the full monitor work area (i.e. is running exclusive fullscreen).
+    ///
+    /// Uses GetForegroundWindow + MonitorFromWindow + GetMonitorInfoW so the
+    /// check is confined to the monitor the band lives on; fullscreen windows
+    /// on other monitors do not suppress the band.
+    fn foreground_is_fullscreen_on_band_monitor(band_hwnd: HWND) -> bool {
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() {
+                return false;
+            }
+            // Skip our own window.
+            if fg == band_hwnd {
+                return false;
+            }
+            // Monitor the band is on.
+            let band_mon = MonitorFromWindow(band_hwnd, MONITOR_DEFAULTTONULL);
+            if band_mon.is_invalid() {
+                return false;
+            }
+            // Monitor the foreground window is on.
+            let fg_mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONULL);
+            if fg_mon.is_invalid() || fg_mon != band_mon {
+                // Fullscreen on a different monitor — do not suppress.
+                return false;
+            }
+            // Get the monitor's full screen rect (not the work area).
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(band_mon, &mut mi).is_err() {
+                return false;
+            }
+            // Get the foreground window's rect.
+            let mut fg_rect = RECT::default();
+            if GetWindowRect(fg, &mut fg_rect).is_err() {
+                return false;
+            }
+            // The window is fullscreen when it fills the entire monitor rect
+            // (not just the work area).  A ±2 px tolerance handles rounding.
+            let mon = mi.rcMonitor;
+            fg_rect.left <= mon.left + 2
+                && fg_rect.top <= mon.top + 2
+                && fg_rect.right >= mon.right - 2
+                && fg_rect.bottom >= mon.bottom - 2
+        }
+    }
+
     fn reposition_band(hwnd: HWND) {
         let (x, y, w, h, layout) = calculate_taskbar_position();
         unsafe {
@@ -371,6 +426,27 @@ mod windows_impl {
         }
         BAND_W.store(layout.width, Ordering::Relaxed);
         BAND_H.store(layout.height, Ordering::Relaxed);
+
+        // Suppress the overlay while a fullscreen application covers the band's
+        // monitor.  Never suppress if the user disabled the overlay entirely.
+        if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let was_suppressed = FULLSCREEN_SUPPRESSED.load(Ordering::Relaxed);
+        let now_fullscreen = foreground_is_fullscreen_on_band_monitor(hwnd);
+        if now_fullscreen == was_suppressed {
+            return; // No state change — nothing to do.
+        }
+        FULLSCREEN_SUPPRESSED.store(now_fullscreen, Ordering::Relaxed);
+        unsafe {
+            if now_fullscreen {
+                // Hide without taking focus.
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            } else {
+                // Restore without taking focus or activating Nebulae.
+                let _ = ShowWindow(hwnd, SW_SHOWNA);
+            }
+        }
     }
 
     unsafe extern "system" fn band_wndproc(

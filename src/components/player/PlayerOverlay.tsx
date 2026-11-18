@@ -33,6 +33,10 @@ interface Poll {
   chapter: number;
   chapter_count: number;
   at_menu: boolean;
+  /** True when the loaded disc exposes at least one BD-J or HDMV popup-capable
+   *  title (INPUT_TITLE_INTERACTIVE).  Populated by player_poll; false for DVD
+   *  and plain files.  Used to gate the Popup button. */
+  has_popup_menu: boolean;
 }
 
 /**
@@ -160,6 +164,7 @@ export default function PlayerOverlay() {
     chapter: 0,
     chapter_count: 0,
     at_menu: false,
+    has_popup_menu: false,
   });
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
@@ -716,7 +721,10 @@ export default function PlayerOverlay() {
         case 'P': {
           // Toggle Blu-ray Popup Menu (BD_VK_POPUP = libvlc_navigate_popup = 5)
           // without leaving or restarting the current feature title.
-          if (player.isDisc) {
+          // Guard with has_popup_menu: sending the command to a disc that does
+          // not support popup menus (DVD, popup-free Blu-ray) is a no-op in
+          // VLC but produces a confusing UX.  Match the button's visibility.
+          if (player.isDisc && pollRef.current.has_popup_menu) {
             nav(5);
           }
           break;
@@ -1538,7 +1546,7 @@ export default function PlayerOverlay() {
             </button>
           )}
 
-          {player.isDisc && !/video_ts/i.test(player.resolvedPath) && (
+          {player.isDisc && poll.has_popup_menu && (
             <button
               type="button"
               onClick={() => {
