@@ -143,6 +143,63 @@ pub struct RawFile {
     pub path: Vec<String>,
 }
 
+/// Returns the end offset of the bencoded value starting at `pos`.
+fn bencode_value_end(b: &[u8], pos: usize, depth: u32) -> Option<usize> {
+    if depth > 64 {
+        return None;
+    }
+    match *b.get(pos)? {
+        b'i' => {
+            let end = b[pos..].iter().position(|&c| c == b'e')?;
+            Some(pos + end + 1)
+        }
+        b'l' => {
+            let mut p = pos + 1;
+            while *b.get(p)? != b'e' {
+                p = bencode_value_end(b, p, depth + 1)?;
+            }
+            Some(p + 1)
+        }
+        b'd' => {
+            let mut p = pos + 1;
+            while *b.get(p)? != b'e' {
+                p = bencode_value_end(b, p, depth + 1)?;
+                p = bencode_value_end(b, p, depth + 1)?;
+            }
+            Some(p + 1)
+        }
+        b'0'..=b'9' => {
+            let colon = b[pos..].iter().position(|&c| c == b':')?;
+            let len: usize = std::str::from_utf8(&b[pos..pos + colon])
+                .ok()?
+                .parse()
+                .ok()?;
+            let end = pos.checked_add(colon + 1)?.checked_add(len)?;
+            (end <= b.len()).then_some(end)
+        }
+        _ => None,
+    }
+}
+
+/// Original bytes of the top-level "info" value of a .torrent file.
+fn raw_info_slice(bytes: &[u8]) -> Option<&[u8]> {
+    if *bytes.first()? != b'd' {
+        return None;
+    }
+    let mut p = 1;
+    while *bytes.get(p)? != b'e' {
+        let key_end = bencode_value_end(bytes, p, 0)?;
+        let colon = bytes[p..key_end].iter().position(|&c| c == b':')?;
+        let key = &bytes[p + colon + 1..key_end];
+        let val_end = bencode_value_end(bytes, key_end, 0)?;
+        if key == b"info" {
+            return Some(&bytes[key_end..val_end]);
+        }
+        p = val_end;
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedTorrent {
     pub name: String,
@@ -170,9 +227,13 @@ impl ParsedTorrent {
         let metainfo: RawMetainfo = serde_bencode::from_bytes(bytes)
             .map_err(|e| format!("Failed to decode bencode torrent metainfo: {e}"))?;
 
-        // Compute info_hash: SHA1 of bencoded 'info' dict
-        let info_bytes = serde_bencode::to_bytes(&metainfo.info)
-            .map_err(|e| format!("Failed to re-encode info dict for hash calculation: {e}"))?;
+        // The info hash covers the original bytes of the 'info' dict. Re-encoding the typed
+        // struct drops keys it does not model (e.g. "source"), which yields a different hash.
+        let info_bytes = match raw_info_slice(bytes) {
+            Some(raw) => raw.to_vec(),
+            None => serde_bencode::to_bytes(&metainfo.info)
+                .map_err(|e| format!("Failed to re-encode info dict for hash calculation: {e}"))?,
+        };
 
         let mut hasher = Sha1::new();
         hasher.update(&info_bytes);
@@ -594,6 +655,20 @@ pub fn build_torrent_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_hash_covers_original_bytes_including_unmodelled_keys() {
+        let mut info = b"d6:lengthi5e4:name1:a12:piece lengthi16384e6:pieces20:".to_vec();
+        info.extend_from_slice(&[b'a'; 20]);
+        info.extend_from_slice(b"7:privatei1e6:source3:ADCe");
+        let mut torrent = b"d8:announce3:foo4:info".to_vec();
+        torrent.extend_from_slice(&info);
+        torrent.push(b'e');
+
+        let expected = hex::encode(Sha1::digest(&info));
+        let parsed = ParsedTorrent::parse_bytes(&torrent).expect("parse");
+        assert_eq!(parsed.info_hash, expected);
+    }
 
     #[test]
     fn test_path_hygiene_normalization_and_case() {
