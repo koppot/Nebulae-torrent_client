@@ -96,7 +96,7 @@ export const App: React.FC = () => {
     }
   }, [remoteServerEnabled, remoteServerUrl, remoteServerToken]);
 
-  // Handle nebulae:open-settings events dispatched by child components (e.g. RemoteServerView).
+  // Handle nebulae:open-settings events dispatched by child components (e.g. the Server tab banner).
   const { setShowSettings: openSettingsModal, setSettingsTab: openSettingsTab } = useUiStore();
   useEffect(() => {
     const handler = (e: Event) => {

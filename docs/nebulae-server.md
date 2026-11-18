@@ -3,9 +3,11 @@
 The Nebulae desktop app can drive a headless torrent engine running on a remote host or NAS instead of locally:
 
 1. **Settings → Server**
-2. Enable *Drive torrents on a Nebulae Server instead of locally*
+2. Enable *Connect to a Nebulae Server (Transmission)*
 3. Enter the server address (`http://<server-ip>:9174`) and the bearer API token (`NEBULAE_TOKEN`)
-4. Click **Test connection**, then restart the app
+4. Click **Test connection**. A **Server** tab appears next to Manager; no restart is needed.
+
+The **Manager** tab always shows this computer's own torrents. The **Server** tab shows the same interface bound to the server, with a connection banner above it. Adding a torrent there uses the server's default download folder (or a server path you type), never a folder from this computer.
 
 ## Architecture & Bridge Repositories
 
@@ -100,7 +102,7 @@ For host paths set `DOWNLOAD_DIR` / `WATCH_DIR` and `PUID` / `PGID` to the ownin
 
 ### Connect the desktop client
 
-Settings → **Server** → enable *Drive torrents on a Nebulae Server instead of locally* → URL `http://<host>:9174` and the token → **Test connection** → restart the app. The client then lists, adds, pauses/resumes, re-prioritizes files, relocates and sets sequential mode on the remote engine.
+Settings → **Server** → enable *Connect to a Nebulae Server (Transmission)* → URL `http://<host>:9174` and the token → **Test connection**. The **Server** tab then lists, adds, pauses/resumes, re-prioritizes files, relocates and sets sequential mode on the remote engine, using the same layout as Manager.
 
 ### Update, stop, back up, roll back
 
@@ -145,9 +147,9 @@ Previous Nebulae releases supported rTorrent over SCGI as a remote engine. The c
 
 4. **In Nebulae Settings → Server:**
    - Disable any existing rTorrent SCGI URL.
-   - Enable *Drive torrents on a Nebulae Server instead of locally*.
+   - Enable *Connect to a Nebulae Server (Transmission)*.
    - Enter `http://<server-ip>:9174` and your `NEBULAE_TOKEN`.
-   - Click **Test connection**, then restart the app.
+   - Click **Test connection**.
 
 5. **Peer port:** Open port `51413` (TCP + UDP) on your firewall/router, or change `peer-port` in `/data/config/settings.json` and the published ports to match.
 
