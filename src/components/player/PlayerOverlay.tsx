@@ -33,9 +33,12 @@ interface Poll {
   chapter: number;
   chapter_count: number;
   at_menu: boolean;
-  /** True when the loaded disc exposes at least one BD-J or HDMV popup-capable
-   *  title (INPUT_TITLE_INTERACTIVE).  Populated by player_poll; false for DVD
-   *  and plain files.  Used to gate the Popup button. */
+  /** True when the loaded disc exposes at least one BD-J or HDMV
+   *  interactive title (INPUT_TITLE_INTERACTIVE — set on all HDMV BD
+   *  titles).  Approximately equivalent to "this is a Blu-ray disc".
+   *  Used to gate the Popup button, which is additionally gated by
+   *  !at_menu (popup is a feature-playback overlay, not a main-menu
+   *  feature).  Always false for DVD and plain files. */
   has_popup_menu: boolean;
 }
 
@@ -721,10 +724,10 @@ export default function PlayerOverlay() {
         case 'P': {
           // Toggle Blu-ray Popup Menu (BD_VK_POPUP = libvlc_navigate_popup = 5)
           // without leaving or restarting the current feature title.
-          // Guard with has_popup_menu: sending the command to a disc that does
-          // not support popup menus (DVD, popup-free Blu-ray) is a no-op in
-          // VLC but produces a confusing UX.  Match the button's visibility.
-          if (player.isDisc && pollRef.current.has_popup_menu) {
+          // Guard with has_popup_menu && !at_menu: popup is a feature-playback
+          // overlay — sending it at the top menu is meaningless and confusing.
+          // Match the button's visibility rule exactly.
+          if (player.isDisc && pollRef.current.has_popup_menu && !pollRef.current.at_menu) {
             nav(5);
           }
           break;
@@ -1516,11 +1519,12 @@ export default function PlayerOverlay() {
           )}
 
           {/* Menu: leaves the feature and re-opens the disc's interactive
-              menu, in the same gray as the rest of the bar. Always available
-              while a disc plays: dvdnav builds report title_count 0, so the
-              button must not depend on it; the engine falls back to
+              menu.  Hidden while the menu is already active (at_menu=true)
+              so it does not appear redundantly when the player is at the
+              disc's top-level menu.  dvdnav builds report title_count 0,
+              so the button must not depend on it; the engine falls back to
               restarting the disc when set_title(0) is ignored. */}
-          {player.isDisc && (
+          {player.isDisc && !poll.at_menu && (
             <button
               type="button"
               onClick={() => {
@@ -1546,7 +1550,15 @@ export default function PlayerOverlay() {
             </button>
           )}
 
-          {player.isDisc && poll.has_popup_menu && (
+          {/* Popup: toggles the BD popup-menu overlay (BD_VK_POPUP / mode 5).
+              Shown only during feature playback on a disc that exposes at
+              least one interactive (HDMV/BD-J) title — i.e. Blu-ray discs.
+              Hidden when at_menu=true: popup is a feature-playback overlay,
+              not a top-menu feature, so invoking it from the main menu is
+              meaningless and confusing (reproduces as a spurious button on
+              discs such as Fuuka Disc 1 that have HDMV titles but no popup
+              menu support during main-menu display). */}
+          {player.isDisc && poll.has_popup_menu && !poll.at_menu && (
             <button
               type="button"
               onClick={() => {

@@ -54,11 +54,11 @@ chown -R nebulae:nebulae /data
 
 # ── Start Transmission daemon ──────────────────────────────────────────────
 
+TRANS_CONFIG_DIR="${TRANSMISSION_HOME}"
+TRANS_CMD="transmission-daemon --config-dir ${TRANS_CONFIG_DIR} --foreground --log-info"
+
 echo "Starting Transmission daemon..."
-su nebulae -c "transmission-daemon \
-    --config-dir '${TRANSMISSION_HOME}' \
-    --foreground \
-    --log-level=info" &
+su -s /bin/sh nebulae -c "${TRANS_CMD}" &
 
 TRANSMISSION_PID=$!
 
@@ -79,8 +79,6 @@ done
 # ── Start nebulae-server bridge ────────────────────────────────────────────
 
 echo "Starting nebulae-server bridge..."
-exec su nebulae -c "NEBULAE_TOKEN='${NEBULAE_TOKEN}' \
-    NEBULAE_PORT='${NEBULAE_PORT:-9174}' \
-    NEBULAE_BIND='${NEBULAE_BIND:-0.0.0.0}' \
-    TRANSMISSION_RPC_URL='${TRANSMISSION_RPC_URL:-http://127.0.0.1:9091/transmission/rpc}' \
-    /usr/local/bin/nebulae-server"
+export NEBULAE_TOKEN NEBULAE_PORT NEBULAE_BIND TRANSMISSION_RPC_URL
+exec su -s /bin/sh nebulae -c \
+    "exec /usr/local/bin/nebulae-server"

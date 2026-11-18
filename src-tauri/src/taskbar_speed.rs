@@ -401,7 +401,7 @@ mod windows_impl {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
             };
-            if GetMonitorInfoW(band_mon, &mut mi).is_err() {
+            if !GetMonitorInfoW(band_mon, &mut mi).as_bool() {
                 return false;
             }
             // Get the foreground window's rect.

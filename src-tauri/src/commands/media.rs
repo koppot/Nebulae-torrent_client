@@ -2804,10 +2804,12 @@ pub struct PlayerPoll {
     // Whether the current title is an interactive menu (INPUT_TITLE_MENU flag).
     // Prefer this over checking `title == 0` for menu detection.
     pub at_menu: bool,
-    // True when the loaded disc exposes at least one BD-J or HDMV-popup title
-    // (INPUT_TITLE_INTERACTIVE flag).  DVD-Video and plain files are always
-    // false.  Used by the frontend to show the Popup button only for discs
-    // that actually support one.
+    // True when the loaded disc exposes at least one BD-J or HDMV-interactive
+    // title (INPUT_TITLE_INTERACTIVE flag).  On Blu-ray, VLC sets this flag on
+    // every HDMV title with movie objects, so this is approximately equivalent
+    // to "this is a Blu-ray disc".  Always false for DVD and plain files.
+    // The frontend additionally gates the Popup button with !at_menu because
+    // BD popup is a feature-playback overlay, not a top-menu feature.
     pub has_popup_menu: bool,
 }
 
