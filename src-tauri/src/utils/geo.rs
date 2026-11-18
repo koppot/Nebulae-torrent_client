@@ -350,4 +350,145 @@ mod tests {
         assert!(!is_local_ip("8.8.8.8"));
         assert!(!is_local_ip("203.0.113.1"));
     }
+
+    // ── Integration tests using the real bundled .mmdb databases ────────────
+    //
+    // These tests require the actual GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb
+    // files in src-tauri/resources/geo/. They are excluded when databases are
+    // absent (CI candidate builds without --geo-dir).
+
+    fn repo_resource_dir() -> Option<PathBuf> {
+        // Walk up from the test binary's CARGO_MANIFEST_DIR to find
+        // src-tauri/resources/geo/GeoLite2-Country.mmdb.
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let geo = manifest.join("resources").join("geo");
+        if geo.join(COUNTRY_DB).is_file() {
+            Some(manifest.clone())
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn live_databases_load_successfully() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present in resources/geo/");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .expect("GeoResolver::from_resource_dir returned Err")
+            .expect("GeoResolver::from_resource_dir returned Ok(None)");
+        // Both databases should be loaded.
+        assert!(
+            resolver.asn.is_some(),
+            "ASN database should be loaded alongside Country"
+        );
+    }
+
+    #[test]
+    fn live_country_lookup_ipv4() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .unwrap()
+            .unwrap();
+
+        // Google DNS — should resolve to US.
+        let country = resolver.country_code("8.8.8.8");
+        assert_eq!(country.as_deref(), Some("US"), "8.8.8.8 should be US");
+
+        // Cloudflare 1.1.1.1 uses anycast and some GeoLite2 vintages omit it.
+        // Use a well-known Japanese IP instead (NTT).
+        let ntt = resolver.country_code("210.171.224.1");
+        assert_eq!(ntt.as_deref(), Some("JP"), "210.171.224.1 should be JP");
+    }
+
+    #[test]
+    fn live_country_lookup_ipv6() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .unwrap()
+            .unwrap();
+
+        // Google Public DNS IPv6.
+        let country = resolver.country_code("2001:4860:4860::8888");
+        assert_eq!(
+            country.as_deref(),
+            Some("US"),
+            "2001:4860:4860::8888 should be US"
+        );
+    }
+
+    #[test]
+    fn live_asn_lookup() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .unwrap()
+            .unwrap();
+
+        // Google DNS — AS15169.
+        let asn = resolver.asn("8.8.8.8");
+        assert_eq!(asn, Some(15169), "8.8.8.8 should be AS15169 (Google)");
+    }
+
+    #[test]
+    fn live_unknown_address_returns_none() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .unwrap()
+            .unwrap();
+
+        // RFC-5737 documentation range — not allocated to any country.
+        let country = resolver.country_code("192.0.2.1");
+        // May or may not resolve depending on the database, but must not panic.
+        let _ = country;
+
+        // Invalid IP string — must return None, not panic.
+        assert_eq!(resolver.country_code("not-an-ip"), None);
+        assert_eq!(resolver.asn("not-an-ip"), None);
+    }
+
+    #[test]
+    fn live_locality_classification() {
+        let Some(resource_dir) = repo_resource_dir() else {
+            eprintln!("SKIP: GeoLite2 databases not present");
+            return;
+        };
+        let resolver = GeoResolver::from_resource_dir(&resource_dir)
+            .unwrap()
+            .unwrap()
+            .with_host_ip("8.8.8.8"); // Pretend host is in US/AS15169.
+
+        // Same ASN peer (Google DNS secondary).
+        assert_eq!(
+            resolver.classify_locality("8.8.4.4"),
+            LocalityTier::Asn,
+            "Same-ASN peer should be Asn tier"
+        );
+
+        // LAN peer.
+        assert_eq!(
+            resolver.classify_locality("192.168.1.1"),
+            LocalityTier::Lan,
+            "RFC-1918 should be Lan tier"
+        );
+
+        // Invalid IP.
+        assert_eq!(
+            resolver.classify_locality("garbage"),
+            LocalityTier::Global,
+            "Unparseable IP should fall back to Global"
+        );
+    }
 }

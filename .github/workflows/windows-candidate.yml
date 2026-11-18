@@ -9,9 +9,9 @@ name: Windows Candidate Build
 #
 # This is an UNSIGNED test candidate: createUpdaterArtifacts is disabled because
 # Factory B holds no Tauri signing private key. It does NOT satisfy final-release
-# requirements. GeoIP databases (.mmdb) are NOT staged in candidate builds
-# (awaiting user-supplied database files); they can be placed in the
-# application's data directory at runtime. See src-tauri/src/utils/geo.rs.
+# requirements. GeoIP databases (.mmdb) should be staged via --geo-dir pointing
+# to the nebulae-cache/geo/ directory. If omitted, the application falls back to
+# user-data directory databases at runtime. See src-tauri/src/utils/geo.rs.
 #
 # Authorized by the owner: one scratch branch, one artifacts-only workflow.
 
@@ -25,6 +25,16 @@ on:
         default: ''
       require_patched:
         description: 'Enforce modified VLC requirement (--require-patched, fails build if stock VLC staged)'
+        required: false
+        type: boolean
+        default: false
+      geo_dir:
+        description: 'Directory containing GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb for bundling (uses build cache if empty)'
+        required: false
+        type: string
+        default: ''
+      require_geo:
+        description: 'Fail the build if GeoIP databases are not available (release builds should enable this)'
         required: false
         type: boolean
         default: false
@@ -109,6 +119,27 @@ jobs:
 
           if [ "${{ inputs.require_patched }}" = "true" ]; then
             STAGE_ARGS+=(--require-patched)
+          fi
+
+          # Stage GeoIP databases if available.
+          GEO_SOURCE=""
+          if [ -n "${{ inputs.geo_dir }}" ]; then
+            GEO_SOURCE="${{ inputs.geo_dir }}"
+          elif [ -f "$NEBULAE_CACHE/geo/GeoLite2-Country.mmdb" ]; then
+            GEO_SOURCE="$NEBULAE_CACHE/geo"
+          elif [ -f "src-tauri/resources/geo/GeoLite2-Country.mmdb" ]; then
+            GEO_SOURCE="src-tauri/resources/geo"
+          fi
+
+          if [ -n "$GEO_SOURCE" ]; then
+            echo "==> Staging GeoIP databases from $GEO_SOURCE"
+            STAGE_ARGS+=(--geo-dir "$GEO_SOURCE")
+          else
+            echo "==> No GeoIP databases found in cache or resources."
+          fi
+
+          if [ "${{ inputs.require_geo }}" = "true" ]; then
+            STAGE_ARGS+=(--require-geo)
           fi
 
           python3 scripts/windows/stage_runtime.py "${STAGE_ARGS[@]}"

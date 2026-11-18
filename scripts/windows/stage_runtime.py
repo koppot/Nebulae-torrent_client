@@ -744,9 +744,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.require_geo:
         fail("--require-geo: GeoLite2 databases not provided (--geo-dir); a release build cannot omit them")
     if not (geo_out / "GeoLite2-Country.mmdb").is_file():
-        warnings.append("resources/geo holds no GeoLite2-Country.mmdb (a MaxMind licence key is required at build time)")
+        warnings.append("resources/geo holds no GeoLite2-Country.mmdb — pass --geo-dir or place databases in the build cache")
     if not (geo_out / "GeoLite2-ASN.mmdb").is_file():
-        warnings.append("resources/geo holds no GeoLite2-ASN.mmdb (a MaxMind licence key is required at build time)")
+        warnings.append("resources/geo holds no GeoLite2-ASN.mmdb — pass --geo-dir or place databases in the build cache")
     if not args.exe:
         warnings.append("no --exe given: the audit covers resources only, not nebulae.exe")
 
