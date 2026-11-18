@@ -3195,19 +3195,20 @@ pub fn player_poll(
 
     // Determine whether the current disc supports BD popup menus.
     //
-    // VLC's bluray demux sets INPUT_TITLE_INTERACTIVE on every HDMV title that
-    // has movie objects — effectively every Blu-ray — so it cannot distinguish
-    // popup-capable from non-popup discs.  The correct disc-level signal is
-    // `BDMV/index.bdmv`: discs with no authored Top Menu (id_ref == 0xFFFF)
-    // are popup-only discs where the popup button is meaningful during feature
-    // playback.  Discs with a real Top Menu use it for menu navigation instead;
-    // their popup button is suppressed.
-    //
-    // `current_disc_has_top_menu()` reads the atomic set at open time by
-    // `preload_disc_state`; it is `Some(false)` for popup-only Blu-rays,
-    // `Some(true)` for discs with a Top Menu, and `None` for DVD / plain files.
-    let has_popup_menu =
-        engine::current_session_is_bluray() && engine::current_disc_has_top_menu() == Some(false);
+    // VLC's bluray demux sets INPUT_TITLE_INTERACTIVE on nearly every Blu-ray
+    // title, so it cannot tell whether a pop-up menu exists. The authoritative
+    // signal is the playing playlist: an MPLS that lists an Interactive
+    // Graphics stream has a pop-up menu. When the playlist id or MPLS is
+    // unavailable (older VLC runtime, ISO), fall back to the disc-level
+    // heuristic: a disc with no authored Top Menu is pop-up-only.
+    let has_popup_menu = engine::current_session_is_bluray() && {
+        let playlist_id = lib
+            .libvlc_media_player_get_bluray_playlist_id
+            .map(|f| unsafe { f(mp as *mut c_void) });
+        playlist_id
+            .and_then(engine::current_playlist_has_popup)
+            .unwrap_or_else(|| engine::current_disc_has_top_menu() == Some(false))
+    };
 
     Ok(PlayerPoll {
         time_ms,

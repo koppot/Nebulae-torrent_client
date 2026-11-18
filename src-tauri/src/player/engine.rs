@@ -167,6 +167,29 @@ static CURRENT_DISC_TOP_MENU_SUPPORTED: std::sync::atomic::AtomicI8 =
 static CURRENT_SESSION_IS_BLURAY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Source path of the active session plus the last per-playlist pop-up lookup,
+/// so the 250 ms poll does not re-read the MPLS from disk.
+type PopupLookup = Option<(i32, Option<bool>)>;
+static CURRENT_DISC_SOURCE: std::sync::Mutex<Option<(String, PopupLookup)>> =
+    std::sync::Mutex::new(None);
+
+/// Whether playlist `playlist_id` of the active Blu-ray carries an IG (pop-up
+/// menu) stream. `None` when it cannot be determined (ISO, unknown id, no BDMV).
+pub fn current_playlist_has_popup(playlist_id: i32) -> Option<bool> {
+    let mut guard = CURRENT_DISC_SOURCE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    let (path, cache) = guard.as_mut()?;
+    if let Some((id, v)) = cache {
+        if *id == playlist_id {
+            return *v;
+        }
+    }
+    let v = crate::player::bluray_meta::playlist_has_ig_stream(path, playlist_id);
+    *cache = Some((playlist_id, v));
+    v
+}
+
 /// Whether the active VLC session opened a Blu-ray disc/ISO (false for DVD and plain files).
 pub fn current_session_is_bluray() -> bool {
     CURRENT_SESSION_IS_BLURAY.load(std::sync::atomic::Ordering::SeqCst)
@@ -1301,6 +1324,9 @@ impl VlcSession {
             is_bluray_media_path(path),
             std::sync::atomic::Ordering::SeqCst,
         );
+        *CURRENT_DISC_SOURCE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some((path.to_string(), None));
         let mut args = vec![
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate

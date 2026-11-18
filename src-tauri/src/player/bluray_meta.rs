@@ -1177,6 +1177,71 @@ pub fn is_disc_top_menu_supported(disc_path: &str) -> Option<bool> {
     parse_index_bdmv_top_menu_supported(&bytes, Some(&bdmv_dir))
 }
 
+/// Whether the MPLS playlist `playlist_id` under `disc_path` declares an
+/// Interactive Graphics stream in any PlayItem's STN table. Feature playlists
+/// carry an IG stream only when the disc authored a pop-up menu for them, so
+/// this is the per-playlist signal for "the Pop-up Menu button does something".
+///
+/// Returns `None` when the playlist cannot be located or parsed.
+pub fn playlist_has_ig_stream(disc_path: &str, playlist_id: i32) -> Option<bool> {
+    if playlist_id < 0 {
+        return None;
+    }
+    let bdmv_dir = resolve_bdmv_dir(disc_path)?;
+    let name = format!("{playlist_id:05}.mpls");
+    let bytes = ["PLAYLIST", "playlist"]
+        .into_iter()
+        .flat_map(|dir| {
+            [name.clone(), name.to_ascii_uppercase()].map(|n| bdmv_dir.join(dir).join(n))
+        })
+        .find(|p| p.is_file())
+        .and_then(|p| std::fs::read(p).ok())?;
+    mpls_has_ig_stream(&bytes)
+}
+
+fn mpls_has_ig_stream(d: &[u8]) -> Option<bool> {
+    if d.len() < 40
+        || !(d.starts_with(b"MPLS")
+            || d.starts_with(b"1000")
+            || d.starts_with(b"2000")
+            || d.starts_with(b"3000"))
+    {
+        return None;
+    }
+    let pl_start = u32::from_be_bytes([d[8], d[9], d[10], d[11]]) as usize;
+    let p = pl_start.checked_add(6)?;
+    if p + 4 > d.len() {
+        return None;
+    }
+    let nitems = u16::from_be_bytes([d[p], d[p + 1]]) as usize;
+    let mut pos = p + 4;
+    let mut parsed_any = false;
+    for _ in 0..nitems {
+        if pos + 2 > d.len() {
+            break;
+        }
+        let item_len = u16::from_be_bytes([d[pos], d[pos + 1]]) as usize;
+        if pos + 2 + item_len > d.len() {
+            break;
+        }
+        let item = &d[pos + 2..pos + 2 + item_len];
+        pos += 2 + item_len;
+        if item.len() < 34 {
+            continue;
+        }
+        let stn_len = u16::from_be_bytes([item[32], item[33]]) as usize;
+        if 34 + stn_len > item.len() || stn_len < 14 {
+            continue;
+        }
+        parsed_any = true;
+        // STN: length(2, stripped above) reserved(2) video audio pg ig ...
+        if item[34 + 5] > 0 {
+            return Some(true);
+        }
+    }
+    parsed_any.then_some(false)
+}
+
 fn parse_index_bdmv_top_menu_supported(bytes: &[u8], bdmv_dir: Option<&Path>) -> Option<bool> {
     // Header (index_parse.c:_parse_header):
     //   0..4:  "INDX"
@@ -1240,6 +1305,51 @@ fn parse_index_bdmv_top_menu_supported(bytes: &[u8], bdmv_dir: Option<&Path>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_ig_mpls(num_ig_per_item: &[u8]) -> Vec<u8> {
+        let mut items = Vec::new();
+        for ig in num_ig_per_item {
+            let mut item = vec![0u8; 34 + 14];
+            item[32..34].copy_from_slice(&14u16.to_be_bytes());
+            item[34 + 2] = 1; // one video entry is declared but absent; the ig byte is what matters
+            item[34 + 5] = *ig;
+            items.extend_from_slice(&(item.len() as u16).to_be_bytes());
+            items.extend_from_slice(&item);
+        }
+        let mut d = vec![0u8; 40];
+        d[0..8].copy_from_slice(b"MPLS0200");
+        d[8..12].copy_from_slice(&40u32.to_be_bytes());
+        let mut pl = vec![0u8; 6];
+        pl.extend_from_slice(&(num_ig_per_item.len() as u16).to_be_bytes());
+        pl.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(&pl);
+        d.extend_from_slice(&items);
+        d
+    }
+
+    #[test]
+    fn mpls_ig_stream_detection() {
+        assert_eq!(mpls_has_ig_stream(&synthetic_ig_mpls(&[0])), Some(false));
+        assert_eq!(mpls_has_ig_stream(&synthetic_ig_mpls(&[0, 1])), Some(true));
+        assert_eq!(mpls_has_ig_stream(&synthetic_ig_mpls(&[2])), Some(true));
+        assert_eq!(mpls_has_ig_stream(b"not a playlist"), None);
+        assert_eq!(mpls_has_ig_stream(&synthetic_ig_mpls(&[])), None);
+    }
+
+    #[test]
+    fn playlist_ig_stream_reads_playlist_file() {
+        let dir = std::env::temp_dir().join(format!("nebulae-mpls-{}", std::process::id()));
+        let pl = dir.join("BDMV").join("PLAYLIST");
+        std::fs::create_dir_all(&pl).unwrap();
+        std::fs::write(pl.join("00002.mpls"), synthetic_ig_mpls(&[0])).unwrap();
+        std::fs::write(pl.join("00003.mpls"), synthetic_ig_mpls(&[1])).unwrap();
+        let disc = dir.to_str().unwrap();
+        assert_eq!(playlist_has_ig_stream(disc, 2), Some(false));
+        assert_eq!(playlist_has_ig_stream(disc, 3), Some(true));
+        assert_eq!(playlist_has_ig_stream(disc, 9), None);
+        assert_eq!(playlist_has_ig_stream(disc, -1), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_bluray_91_days_metadata_probe() {
