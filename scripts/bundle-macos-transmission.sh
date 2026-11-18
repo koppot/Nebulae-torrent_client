@@ -193,6 +193,12 @@ if [ -n "$SIGNING_IDENTITY" ]; then
 fi
 python3 "$SCRIPT_DIR/relocate-macos-dylibs.py" "${RELOCATE_ARGS[@]}" "$TARGET_DIR/transmission-daemon"
 
+# Libraries built from source by build-macos-deps-11.sh are not Homebrew kegs,
+# so relocate-macos-dylibs.py has no license files for them; ship the texts of
+# the LGPL libraries it builds (libiconv, libintl).
+mkdir -p "$TARGET_DIR/licenses"
+cp -R "$SCRIPT_DIR/third-party-licenses/macos-deps/." "$TARGET_DIR/licenses/"
+
 # macOS Finder litter must never reach the app bundle.
 find "$TARGET_DIR" -name .DS_Store -delete
 
