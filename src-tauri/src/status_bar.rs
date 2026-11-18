@@ -83,6 +83,8 @@ pub fn update_status_bar(app_handle: &AppHandle, upload_rate: u64, download_rate
         };
 
         if !should_update {
+            // A dropped update leaves the image stale; let ensure_displayed redraw it.
+            DRAWN.store(false, std::sync::atomic::Ordering::SeqCst);
             return;
         }
 
@@ -118,7 +120,8 @@ fn render_status_bar(
         if !SPEED_DISPLAY_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        apply_status_bar_composite_image(&up_line, &down_line);
+        let drawn = apply_status_bar_composite_image(&up_line, &down_line);
+        DRAWN.store(drawn, std::sync::atomic::Ordering::SeqCst);
         if let Some(tray) = tray_handle.tray_by_id(&tray_id) {
             let _ = tray.set_tooltip(Some(&tooltip));
         }
@@ -129,6 +132,11 @@ fn render_status_bar(
 #[cfg(target_os = "macos")]
 static SPEED_DISPLAY_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
+
+/// True while the menu bar image reflects the latest rates; cleared when a draw
+/// is skipped, fails (status item not ready yet) or the plain icon is restored.
+#[cfg(target_os = "macos")]
+static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Latest aggregate rates seen by `update_status_bar`, whether or not it was drawn.
 #[cfg(target_os = "macos")]
@@ -227,10 +235,38 @@ pub fn forget_rates() {
     }
 }
 
+/// Called on every telemetry tick: the rates are only pushed when they change, so a
+/// draw that was throttled, raced the status item's creation at startup, or was
+/// dropped otherwise is retried here until the display shows the current rates.
+pub fn ensure_displayed(app_handle: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        if !SPEED_DISPLAY_ENABLED.load(std::sync::atomic::Ordering::SeqCst)
+            || DRAWN.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let rates = LAST_RATES.lock().ok().and_then(|r| *r);
+        let tray_id = STATUS_BAR_STATE
+            .get()
+            .and_then(|s| s.lock().ok())
+            .and_then(|s| s.tray_id.clone());
+        if let (Some((up, down)), Some(tray_id)) = (rates, tray_id) {
+            render_status_bar(app_handle, tray_id, up, down);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_handle;
+    }
+}
+
 /// Clear the status bar - restores default brand icon on idle or engine stop
 pub fn clear_status_bar(app_handle: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
+        DRAWN.store(false, std::sync::atomic::Ordering::SeqCst);
         let handle = app_handle.clone();
         let _ = handle.run_on_main_thread(move || {
             reset_status_bar_brand_icon();
@@ -306,43 +342,43 @@ unsafe fn get_status_bar_button() -> Option<*mut objc2::runtime::AnyObject> {
 /// Render a composite NSImage containing the brand icon and two stacked rate lines,
 /// and apply it to the NSStatusBarButton with zero clipping and native San Francisco typography.
 #[cfg(target_os = "macos")]
-fn apply_status_bar_composite_image(up_line: &str, down_line: &str) {
+fn apply_status_bar_composite_image(up_line: &str, down_line: &str) -> bool {
     use objc2::runtime::{AnyClass, AnyObject};
     use std::ffi::CString;
 
     unsafe {
         let button = match get_status_bar_button() {
             Some(btn) => btn,
-            None => return,
+            None => return false,
         };
 
         let img_class = match AnyClass::get(c"NSImage") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let data_class = match AnyClass::get(c"NSData") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let str_class = match AnyClass::get(c"NSString") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let font_class = match AnyClass::get(c"NSFont") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let color_class = match AnyClass::get(c"NSColor") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let style_class = match AnyClass::get(c"NSMutableParagraphStyle") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
         let attr_str_class = match AnyClass::get(c"NSMutableAttributedString") {
             Some(cls) => cls,
-            None => return,
+            None => return false,
         };
 
         static BRAND_ICON: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -392,23 +428,35 @@ fn apply_status_bar_composite_image(up_line: &str, down_line: &str) {
             Some(attr)
         };
 
-        let up_attr = match make_attr_str(up_line) {
-            Some(a) => a,
-            None => return,
+        // The formatter pads values with figure spaces so the digits keep a stable
+        // column. Drawing that padding verbatim leaves a wide empty gap after the
+        // icon at low rates, so size the image to the actual text and right-align
+        // both lines to a shared edge (the arrows stay in one column).
+        let trim = |s: &str| {
+            s.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{2007}')
+                .to_string()
         };
-        let down_attr = match make_attr_str(down_line) {
+        let up_attr = match make_attr_str(&trim(up_line)) {
             Some(a) => a,
-            None => return,
+            None => return false,
         };
+        let down_attr = match make_attr_str(&trim(down_line)) {
+            Some(a) => a,
+            None => return false,
+        };
+        let up_size: objc2_foundation::NSSize = objc2::msg_send![up_attr, size];
+        let down_size: objc2_foundation::NSSize = objc2::msg_send![down_attr, size];
+        const TEXT_LEFT: f64 = 21.0;
+        let text_block = up_size.width.max(down_size.width).ceil();
 
-        let total_width = 89.0f64;
+        let total_width = TEXT_LEFT + text_block + 1.0;
         let total_height = 22.0f64;
 
         let img: *mut AnyObject = objc2::msg_send![img_class, alloc];
         let img_size = objc2_foundation::NSSize::new(total_width, total_height);
         let img: *mut AnyObject = objc2::msg_send![img, initWithSize: img_size];
         if img.is_null() {
-            return;
+            return false;
         }
 
         let _: () = objc2::msg_send![img, lockFocus];
@@ -419,10 +467,10 @@ fn apply_status_bar_composite_image(up_line: &str, down_line: &str) {
         );
         let _: () = objc2::msg_send![brand_icon_ptr, drawInRect: icon_rect];
 
-        let up_pt = objc2_foundation::NSPoint::new(21.0, 11.8);
+        let up_pt = objc2_foundation::NSPoint::new(TEXT_LEFT + text_block - up_size.width, 11.8);
         let _: () = objc2::msg_send![up_attr, drawAtPoint: up_pt];
 
-        let down_pt = objc2_foundation::NSPoint::new(21.0, 2.0);
+        let down_pt = objc2_foundation::NSPoint::new(TEXT_LEFT + text_block - down_size.width, 2.0);
         let _: () = objc2::msg_send![down_attr, drawAtPoint: down_pt];
 
         let _: () = objc2::msg_send![img, unlockFocus];
@@ -432,6 +480,7 @@ fn apply_status_bar_composite_image(up_line: &str, down_line: &str) {
         let empty_str: *mut AnyObject =
             objc2::msg_send![str_class, stringWithUTF8String: c"".as_ptr()];
         let _: () = objc2::msg_send![button, setTitle: empty_str];
+        true
     }
 }
 

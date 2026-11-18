@@ -55,6 +55,7 @@ pub fn spawn_telemetry_loop(app_handle: AppHandle, engine: SharedEngine) {
                             download_rate,
                         );
                     }
+                    status_bar::ensure_displayed(&app_handle);
                 }
                 Ok(Err(_)) | Err(_) => {
                     last_emitted_torrents = None;

@@ -602,7 +602,15 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
         {
             let mut guard = state.child.lock().unwrap();
             let exited = match guard.as_mut() {
-                Some(child) => child.try_wait().ok().flatten().is_some(),
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        // The exit status is the only evidence of why a running
+                        // tailscaled disappeared (signal vs. error exit).
+                        tracing::warn!("[tailscale] tailscaled exit status: {status}");
+                        true
+                    }
+                    _ => false,
+                },
                 None => {
                     if adopted_logged {
                         if cli_on(&paths, &["status", "--json"], Duration::from_secs(3)).is_ok() {
