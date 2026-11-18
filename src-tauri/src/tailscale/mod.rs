@@ -368,14 +368,24 @@ fn daemon_cmdline_marker(paths: &Paths) -> String {
 
 /// Escape PowerShell `-like` wildcard characters so a literal path can be
 /// embedded in a `-like '*pattern*'` match without `*`, `?` or `[`
-/// changing the semantics.
+/// changing the semantics.  Backslash is an ordinary character in `-like` (the
+/// escape character is the backtick), so path separators must stay single or the
+/// pattern never matches a real command line.  A quote is doubled because the
+/// pattern sits inside a single-quoted PowerShell string.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn escape_like_wildcards(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('`', "``")
-        .replace('*', "[*]")
-        .replace('?', "[?]")
-        .replace('[', "[[]")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '`' => out.push_str("``"),
+            '*' => out.push_str("[*]"),
+            '?' => out.push_str("[?]"),
+            '[' => out.push_str("[[]"),
+            '\'' => out.push_str("''"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// PIDs of tailscaled processes whose command line carries OUR state dir
@@ -1542,6 +1552,16 @@ mod tests {
     }
 
     /// Unowned paths return empty PIDs list.
+    #[test]
+    fn like_escape_keeps_path_separators_single() {
+        assert_eq!(
+            escape_like_wildcards(r"C:\Users\a b\Nebulae\internal\tailscale"),
+            r"C:\Users\a b\Nebulae\internal\tailscale"
+        );
+        assert_eq!(escape_like_wildcards("a*b?c[d"), "a[*]b[?]c[[]d");
+        assert_eq!(escape_like_wildcards("O'Neil"), "O''Neil");
+    }
+
     #[test]
     fn find_owned_daemon_pids_unowned_returns_empty() {
         let dir = temp_dir("nebulae-ts-unowned-fake-dir-12345");
