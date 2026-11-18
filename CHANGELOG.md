@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.8-dev] - 2026-11-17 (Development)
+
+> **Branch:** `dev/pre-0.2.8`
+> **Status:** Development candidate — not a public release
+
+### Added
+- **ADC Website One-Click Torrent Addition**: Nebulae action button on torrent listing pages, weekly promotions section, and single-torrent detail pages. Dedicated column before the uploader cell. Authentic Nebulae artwork with transparent background and dark keyline. Accessible: aria-label, tooltip, focus-visible.
+- **ADC Device Registration and Delivery Polling**: Clients register with the ADC server on startup and after account linking. Background polling fetches pending website deliveries and auto-adds torrents without an Add Torrent dialog. Delivery acknowledgement and queue expiration (24-hour TTL with opaque 256-bit tokens).
+- **ADC Inbox Notifications**: Private message inbox with toolbar badge, popover preview, and background polling (5-minute intervals, 60-second recovery). Durable offline read-sync retry queue in SQLite. Pagination footer when >20 unread. Account-scoped caches with wipe on unlink. No private message content in logs. OS notifications dispatched <50ms after fetch.
+- **Bug Report System**: Browser-based GitHub issue pre-fill with zero embedded tokens. Multi-pass PII scrubbing (secrets, URLs, paths, IPs). Offline draft persistence in SQLite. Recovery screen integration for fatal errors. SHA-256 fingerprint deduplication. Public disclosure banner.
+- **GeoIP Database Support**: Bundled GeoLite2-Country and GeoLite2-ASN databases. File-mapped reader with zero network I/O. IPv4 and IPv6 lookups. User-data directory override (`65cad4f`). 14 integration tests. CI staging workflow with `--geo-dir` and `--require-geo` inputs.
+- **Headless Server (nebulae-server)**: Transmission-backed headless bridge with REST API, Docker/docker-compose deployment, bearer token auth, persistent volume mounts, and migration documentation.
+- **Windows NSIS Default Programs Registration**: File associations (`.torrent`, `.adc`) and URL associations (`magnet`, `adc`) registered in `HKCU\Software\Nebulae\Capabilities` for Windows 10/11 Default Apps. Uninstaller cleanup included.
+- **ADC Upload Content Validation**: Server-side detection of `desktop.ini`, `.DS_Store`, `Thumbs.db`, `__MACOSX`, `._*` resource forks, dot-prefixed junk directories (`.AppleDouble`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`), and AACS encryption artifacts. Exact path feedback with actionable warnings.
+- **Delivery Security Hardening (E10-E15)**: Opaque 256-bit delivery tokens with 24-hour expiry. Device-specific claiming (poll and ack filter by exact `device_id`). Device deregistration cancels pending deliveries. CSRF protection, rate limiting, and device ownership enforcement.
+- **Seedbox Outreach Preparation**: Compatibility checklist and provider outreach document for 7 seedbox providers.
+
+### Fixed
+- **Windows Minimize/Restore**: Changed `minimize_to_tray` default to `false`. One-time migration resets existing installations. `win.minimize()` retains taskbar button. Speed overlay click restores through Tauri API (not raw `ShowWindow`) to keep Tao window flags synchronized. Root cause: raw Win32 `ShowWindow(SW_RESTORE)` bypassed Tao `WindowFlags::VISIBLE`, desynchronizing subsequent minimize/hide/focus handlers.
+- **Windows Speed Overlay**: Checkbox moved to "Appearance & Behavior" tab for discoverability. Immediate toggle (no Apply/Done required). Right-side taskbar placement anchored to notification area, separated from application launcher icon. Duplicate overlay prevention via `INIT_ONCE`.
+- **Windows Disc Menu Mouse Navigation**: Coordinate mapping with letterbox, resize, fullscreen, and DPI scaling correction. Recursive HWND search targeting `ACTIVE_VIDEO_SLOT`. Per-session `NebulaeVideoSlot` lifecycle with bind/unbind/retire. Keyboard navigation (arrow keys + Enter), wheel scroll (300ms throttle), and direct pointer hit-testing preserved. D-pad removed in favor of unified navigation. `menuReturnGuardRef` prevents feature restart from Menu/Popup actions.
+- **ADC Inbox PDO HY093**: Separated `:uid` and `:sender_uid` parameters in `announce.php` to fix duplicate binding error.
+- **ADC Inbox SQLite Passkey Fallback**: Keychain credential retrieval falls back to SQLite-stored passkey when keychain is unavailable.
+- **Port Status Diagnostic Alignment**: `REPORT_FRESH_MS` aligned with 10-minute poll interval to prevent stale cache display. External probe timeouts classified as `PortStatus::Unknown` rather than `Closed`.
+- **Website Delivery Status Differentiation**: Server distinguishes `client_update_required` (linked with old client) from `no_registered_device` (never linked). Torrent/listing pages show "Update Required" toast with download link when client lacks delivery code.
+
+### Changed
+- **Settings Tab**: Renamed to "Appearance & Behavior" for discoverability.
+- **Responsiveness**: SQLite writes offloaded to `spawn_blocking`. Poster fetcher debounced. Transmission RPC calls made asynchronous. Overlay redraws throttled with `requestAnimationFrame`.
+- **Peer Information Panel**: ADC member usernames with profile links, hover tooltips (ratio, stats, client ID, BP), historical identity badges, and session-level peer blocking via connection teardown.
+- **Themes**: Light and ADC beige themes verified across all components including new Inbox and Delivery views.
+- **Networking**: Folder rename preserves torrent state and seeding. IPv6 dual-stack socket bind. UPnP/NAT-PMP lease auto-refresh. RTT probing enabled by default.
+- **Packaging**: Verified 375 MB installed footprint (nebulae.exe 34MB, VLC 140MB, JRE 146MB, engine 54MB). 366 functional VLC plugins retained; unused locale translations stripped. Zero Qt dependencies in Transmission daemon. WebView2 COM loader statically linked with offline installer.
+
+### Runtime Verification Pending
+- Disc menu mouse navigation on physical Blu-ray/UHD Blu-ray/DVD media with Windows D3D11 GPU
+- Minimize/restore/speed overlay visual behavior on Windows taskbar
+- IPv6 incoming peer connections (socket bind verified, actual peer RUNTIME PENDING)
+- BD-J Java runtime with Oracle JRE on Windows
+- 4K HDR display tone-mapping
+
 ## [0.2.5] - Unreleased (Pending)
 
 ### Added
