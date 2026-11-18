@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
 import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, openInPlayer, type PlayerOpenInfo } from './lib/playerStore';
-import { FileWithPath } from './types';
+import { FileWithPath, InspectTorrentResult } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
@@ -234,6 +234,7 @@ export const App: React.FC = () => {
 
   const dispatchOpenPaths = useCallback(async (paths: string[]) => {
     const torrentSources: string[] = [];
+    const adcUris: string[] = [];
     const unsupported: string[] = [];
     const now = Date.now();
 
@@ -241,8 +242,16 @@ export const App: React.FC = () => {
       const source = normalizeOpenPath(rawPath.trim());
       if (!source) continue;
       const sourceName = source.split(/[?#]/, 1)[0].split(/[\\/]/).pop() || source;
+
+      // D12: adc:// URIs from website delivery bypass the Add Torrent dialog.
+      // They are resolved and auto-added directly to the engine.
+      if (/^adc:/i.test(source)) {
+        adcUris.push(source);
+        continue;
+      }
+
       if (
-        /^(magnet|adc|https?|base64|data):/i.test(source) ||
+        /^(magnet|https?|base64|data):/i.test(source) ||
         /\.(torrent|adc)$/i.test(sourceName)
       ) {
         torrentSources.push(source);
@@ -276,6 +285,32 @@ export const App: React.FC = () => {
     for (const [path, timestamp] of recentPathDispatchRef.current) {
       if (now - timestamp >= 5000) recentPathDispatchRef.current.delete(path);
     }
+
+    // D12: Auto-resolve and auto-add adc:// URIs without showing the modal.
+    // Website-initiated protocol handler invocations bypass the Add Torrent dialog.
+    for (const uri of adcUris) {
+      try {
+        const result = await invoke<InspectTorrentResult>('resolve_adc_torrent', { uri });
+        if (result.metainfo_bytes && result.metainfo_bytes.length > 0) {
+          await invoke<string>('add_torrent', {
+            source: uri,
+            downloadDir: null,
+            bytes: result.metainfo_bytes,
+          });
+          invoke('log_frontend', {
+            message: `[adc-uri] Auto-added torrent from ${uri}: ${result.name || 'unknown'}`,
+          }).catch(() => {});
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        invoke('log_frontend', {
+          message: `[adc-uri] Failed to auto-add torrent from ${uri}: ${msg}`,
+        }).catch(() => {});
+        // Fall back to the modal so the user sees the error and can retry
+        useUiStore.getState().openAddTorrentWithSources([uri]);
+      }
+    }
+
     if (torrentSources.length > 0) {
       useUiStore.getState().openAddTorrentWithSources(torrentSources);
     }
