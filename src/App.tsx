@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUiStore, ManagerTab } from './stores/uiStore';
 import { usePlayerStore, playerStore, noteEngineGen, isStaleEngineGen, openInPlayer, type PlayerOpenInfo } from './lib/playerStore';
-import { FileWithPath, InspectTorrentResult } from './types';
+import { FileWithPath } from './types';
 import { useSettingsStore } from './stores/settingsStore';
 import { useTorrentStore } from './stores/torrentStore';
 import { useConnectivityStore } from './stores/connectivityStore';
@@ -243,10 +243,14 @@ export const App: React.FC = () => {
       if (!source) continue;
       const sourceName = source.split(/[?#]/, 1)[0].split(/[\\/]/).pop() || source;
 
-      // D12: adc:// URIs from website delivery bypass the Add Torrent dialog.
-      // They are resolved and auto-added directly to the engine.
+      // Separate manual adc:// references from opaque website delivery tokens (E11 / G13 / D12).
+      // Only authenticated, account/device-bound website delivery tokens bypass AddTorrentModal.
       if (/^adc:/i.test(source)) {
-        adcUris.push(source);
+        if (/^adc:(?:\/\/)?(?:delivery|request)(?:\/|\?|$)/i.test(source)) {
+          adcUris.push(source);
+        } else {
+          torrentSources.push(source);
+        }
         continue;
       }
 
@@ -286,28 +290,21 @@ export const App: React.FC = () => {
       if (now - timestamp >= 5000) recentPathDispatchRef.current.delete(path);
     }
 
-    // D12: Auto-resolve and auto-add adc:// URIs without showing the modal.
-    // Website-initiated protocol handler invocations bypass the Add Torrent dialog.
+    // Redeem opaque website-created delivery tokens (adc://delivery/<64-hex>).
+    // Manual adc://torrent/<id> URIs remain in torrentSources and open AddTorrentModal.
     for (const uri of adcUris) {
       try {
-        const result = await invoke<InspectTorrentResult>('resolve_adc_torrent', { uri });
-        if (result.metainfo_bytes && result.metainfo_bytes.length > 0) {
-          await invoke<string>('add_torrent', {
-            source: uri,
-            downloadDir: null,
-            bytes: result.metainfo_bytes,
-          });
-          invoke('log_frontend', {
-            message: `[adc-uri] Auto-added torrent from ${uri}: ${result.name || 'unknown'}`,
-          }).catch(() => {});
-        }
+        await invoke<string>('redeem_adc_delivery', { requestToken: uri });
+        await useTorrentStore.getState().fetchTorrents();
+        invoke('log_frontend', {
+          message: `[adc-delivery] Redeemed website delivery URI ${uri}`,
+        }).catch(() => {});
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         invoke('log_frontend', {
-          message: `[adc-uri] Failed to auto-add torrent from ${uri}: ${msg}`,
+          message: `[adc-delivery] Failed to redeem ${uri}: ${msg}`,
         }).catch(() => {});
-        // Fall back to the modal so the user sees the error and can retry
-        useUiStore.getState().openAddTorrentWithSources([uri]);
+        setOpenPathErrors((current) => [...current, `ADC Delivery: ${msg}`].slice(-10));
       }
     }
 
@@ -514,6 +511,24 @@ export const App: React.FC = () => {
           })
           .catch(() => {});
       })
+      .catch(() => {});
+
+    listen<{ title?: string; reason?: string }>('nebulae://adc-delivery-failed', (event) => {
+      const title = event.payload?.title?.trim();
+      const reason = event.payload?.reason?.trim() || 'ADC website delivery failed.';
+      const msg = title ? `ADC Delivery (${title}): ${reason}` : `ADC Delivery: ${reason}`;
+      setOpenPathErrors((current) => {
+        if (current.includes(msg)) return current;
+        return [...current, msg].slice(-10);
+      });
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen('nebulae://adc-torrent-added', () => {
+      void useTorrentStore.getState().fetchTorrents();
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
       .catch(() => {});
 
     // Tray menu actions that open specific windows

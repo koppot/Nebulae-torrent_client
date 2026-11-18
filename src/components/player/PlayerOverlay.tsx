@@ -1567,6 +1567,39 @@ export default function PlayerOverlay() {
             </button>
           )}
 
+          {/* Keep explicit navigation controls available alongside mouse and keyboard input. */}
+          {player.isDisc && poll.at_menu && (
+            <div
+              className="shrink-0 flex items-center gap-0.5"
+              title="Disc menu navigation — arrow keys work too, Enter selects"
+            >
+              {([
+                ['◀', 3, 'Menu: left'],
+                ['▲', 1, 'Menu: up'],
+                ['▼', 2, 'Menu: down'],
+                ['▶', 4, 'Menu: right'],
+              ] as const).map(([glyph, mode, tip]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => invoke('player_menu_navigate', { mode, gen: player.gen }).catch(() => {})}
+                  className="w-7 h-7 rounded-md border border-white/70 text-white hover:bg-[#262626] hover:text-white transition text-[11px] leading-none"
+                  title={tip}
+                >
+                  {glyph}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => invoke('player_menu_navigate', { mode: 0, gen: player.gen }).catch(() => {})}
+                className="h-7 px-2.5 rounded-md border border-[#e50914]/60 text-[10px] font-semibold uppercase tracking-wider text-white bg-[#e50914]/20 hover:bg-[#e50914]/40 transition"
+                title="Activate the highlighted menu entry (Enter)"
+              >
+                Select
+              </button>
+            </div>
+          )}
+
           {/* Skip controls: single arrows switch chapters (seeking to the
               chapter's real time offset — set_chapter is unreliable on
               Blu-ray), double arrows switch feature titles with menu and

@@ -1106,7 +1106,10 @@ fn start_playback_inner(
                                     let count = unsafe {
                                         (lib.libvlc_media_player_get_title_count)(mp as *mut c_void)
                                     };
-                                    if count > 0 {
+                                    if count > 0
+                                        && unsafe { engine::snapshot_titles(&lib, mp) }
+                                            .is_some_and(|(t, _)| !t.is_empty())
+                                    {
                                         ready = true;
                                         break;
                                     }
@@ -1185,7 +1188,7 @@ fn start_playback_inner(
                                     return;
                                 }
 
-                                let has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+                                let mut has_menu = unsafe { engine::has_menu_title(&lib, mp) };
 
                                 // Outcome B: Only for discs WITHOUT an authored menu (e.g. episodic discs without a top menu).
                                 // If the disc has an authored menu, we must never abort menu navigation early.
@@ -1207,10 +1210,12 @@ fn start_playback_inner(
                                 let nav_menu = {
                                     let lib_clone = lib.clone();
                                     move || unsafe {
-                                        if let Some(navigate_menu) =
-                                            lib_clone.libvlc_media_player_navigate_menu
-                                        {
-                                            navigate_menu(mp as *mut c_void);
+                                        if engine::current_disc_has_top_menu() != Some(false) {
+                                            if let Some(navigate_menu) =
+                                                lib_clone.libvlc_media_player_navigate_menu
+                                            {
+                                                navigate_menu(mp as *mut c_void);
+                                            }
                                         }
                                         if let Some(mt) = engine::find_menu_title(&lib_clone, mp) {
                                             (lib_clone.libvlc_media_player_set_title)(
@@ -1283,6 +1288,9 @@ fn start_playback_inner(
                                         return;
                                     }
 
+                                    if !has_menu {
+                                        has_menu = unsafe { engine::has_menu_title(&lib, mp) };
+                                    }
                                     let kind = unsafe { engine::current_title_kind(&lib, mp) };
                                     if logged_kind != Some(kind) {
                                         tracing::info!(

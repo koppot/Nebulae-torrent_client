@@ -919,6 +919,105 @@ pub(crate) fn unpack_mouse_lparam(lparam: isize) -> (i16, i16) {
     (x, y)
 }
 
+static BLURAY_PLUGIN_SCALES_UHD_MOUSE: OnceLock<bool> = OnceLock::new();
+
+fn bluray_plugin_scales_uhd_mouse() -> bool {
+    *BLURAY_PLUGIN_SCALES_UHD_MOUSE.get_or_init(|| {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(plugin_dir) = std::env::var("VLC_PLUGIN_PATH") {
+            let base = std::path::PathBuf::from(plugin_dir);
+            candidates.push(base.join("access").join("liblibbluray_plugin.dll"));
+            candidates.push(base.join("liblibbluray_plugin.dll"));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join("resources/vlc/plugins/access/liblibbluray_plugin.dll"));
+                candidates.push(dir.join("vlc/plugins/access/liblibbluray_plugin.dll"));
+            }
+        }
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(&path) {
+                let scaled = crate::player::engine::dll_contains_uhd_mouse_scaling(&bytes);
+                tracing::info!(
+                    path = %path.display(),
+                    dll_scales_uhd = scaled,
+                    "[menu-input] Inspected liblibbluray_plugin.dll for UHD mouse scaling"
+                );
+                return scaled;
+            }
+        }
+        false
+    })
+}
+
+fn should_scale_uhd_bluray_mouse() -> bool {
+    let is_hdr = overlay_app_handle()
+        .and_then(|app| app.try_state::<crate::player::PlayerState>())
+        .map(|state| state.is_hdr.load(Ordering::SeqCst))
+        .unwrap_or(false);
+    is_hdr
+        && crate::player::engine::current_session_is_bluray()
+        && !bluray_plugin_scales_uhd_mouse()
+}
+
+pub(crate) fn scale_uhd_bluray_menu_point(
+    pt_x: i32,
+    pt_y: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> (i32, i32) {
+    crate::player::engine::scale_uhd_bluray_menu_point(pt_x, pt_y, left, top, right, bottom)
+}
+
+unsafe fn find_vlc_video_output_rect_in_target(target: HWND) -> Option<RECT> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindow, GW_CHILD, GW_HWNDNEXT,
+    };
+    let mut stack = vec![target];
+    while let Some(current) = stack.pop() {
+        let mut child = match GetWindow(current, GW_CHILD) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        while !child.is_invalid() {
+            let mut buf = [0u16; 128];
+            let len = GetClassNameW(child, &mut buf);
+            if len > 0 {
+                let name = String::from_utf16_lossy(&buf[..len as usize]);
+                if name.starts_with("VLC video output") {
+                    let mut cr = RECT::default();
+                    if GetClientRect(child, &mut cr).is_ok() {
+                        let mut corners = [
+                            POINT {
+                                x: cr.left,
+                                y: cr.top,
+                            },
+                            POINT {
+                                x: cr.right,
+                                y: cr.bottom,
+                            },
+                        ];
+                        let _ = MapWindowPoints(Some(child), Some(target), &mut corners);
+                        if corners[1].x > corners[0].x && corners[1].y > corners[0].y {
+                            return Some(RECT {
+                                left: corners[0].x,
+                                top: corners[0].y,
+                                right: corners[1].x,
+                                bottom: corners[1].y,
+                            });
+                        }
+                    }
+                }
+            }
+            stack.push(child);
+            child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+        }
+    }
+    None
+}
+
 /// Translate a mouse point from the overlay's client area to VLC's main window.
 /// Rejects coordinates that fall outside the target window's client bounds.
 unsafe fn map_mouse_lparam(
@@ -945,6 +1044,19 @@ unsafe fn map_mouse_lparam(
         target_rect.bottom,
     ) {
         return Err(InputDisposition::OutsideTarget);
+    }
+    if should_scale_uhd_bluray_mouse() {
+        let active_rect = find_vlc_video_output_rect_in_target(target).unwrap_or(target_rect);
+        let (sx, sy) = scale_uhd_bluray_menu_point(
+            pt.x,
+            pt.y,
+            active_rect.left,
+            active_rect.top,
+            active_rect.right,
+            active_rect.bottom,
+        );
+        pt.x = sx;
+        pt.y = sy;
     }
     let mapped = LPARAM(((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize);
     Ok((mapped, pt, target_rect))
@@ -1799,5 +1911,24 @@ mod tests {
 
         RETIRED_VIDEO_SLOTS.lock().unwrap().clear();
         VIDEO_HWND.store(0, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn uhd_bluray_menu_point_scales_half_relative_to_active_rect() {
+        // Full 1920x1080 client rect -> halved so VLC's 3840x2160 multiplier maps to 1920x1080.
+        assert_eq!(
+            scale_uhd_bluray_menu_point(960, 540, 0, 0, 1920, 1080),
+            (480, 270)
+        );
+        // Letterboxed VLC video output inside larger window: preserve video origin offset.
+        assert_eq!(
+            scale_uhd_bluray_menu_point(900, 500, 100, 50, 1700, 950),
+            (500, 275)
+        );
+        // Degenerate/empty rect leaves coordinates untouched.
+        assert_eq!(
+            scale_uhd_bluray_menu_point(123, 456, 0, 0, 0, 0),
+            (123, 456)
+        );
     }
 }

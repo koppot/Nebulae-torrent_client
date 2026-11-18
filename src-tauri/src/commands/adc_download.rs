@@ -32,18 +32,27 @@ pub const SETTING_ADC_CLIENT_TARGETS: &str = "adc_client_targets";
 pub const SETTING_ADC_SUPPRESS_DEFAULT_DOWNLOAD_WARNING: &str =
     "adc_suppress_default_download_warning";
 
-/// Parse a custom `adc://` or `adc:` URI to extract the positive torrent ID.
-///
-/// Supported formats:
-/// - `adc://torrent/<id>`
-/// - `adc://download/<id>`
-/// - `adc:torrent/<id>`
-/// - `adc:download/<id>`
-/// - `adc://<id>`
-/// - `adc:<id>`
-///
-/// Also trims trailing slashes, fragments (`#...`), and query parameters (`?...`).
-pub fn parse_adc_uri(uri: &str) -> Result<u64, String> {
+/// Strict separation of `adc:` protocol invocations (E11 / G13 / D12 / D13):
+/// - `ManualTorrentId`: user-initiated manual references (`adc://torrent/<id>`,
+///   `adc://download/<id>`, `adc://<id>`) that MUST go through `AddTorrentModal`
+///   for preview and explicit user confirmation.
+/// - `DeliveryRequestToken`: opaque 64-hex website-created delivery tokens
+///   (`adc://delivery/<token>`, `adc://request/<token>`) redeemed through the
+///   authenticated member/device-bound queue before automatic download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdcUriKind {
+    ManualTorrentId(u64),
+    DeliveryRequestToken(String),
+}
+
+/// Validate that a token is an opaque 64-character hexadecimal delivery token.
+pub fn is_valid_delivery_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Classify a custom `adc://` or `adc:` URI into either a manual torrent
+/// reference or an opaque website delivery request token.
+pub fn classify_adc_uri(uri: &str) -> Result<AdcUriKind, String> {
     let trimmed = uri.trim();
     let lower = trimmed.to_ascii_lowercase();
 
@@ -58,31 +67,72 @@ pub fn parse_adc_uri(uri: &str) -> Result<u64, String> {
         &trimmed[4..]
     };
 
-    // Strip any fragment (#...) and query parameters (?...)
-    let clean_path = without_scheme
-        .split('#')
-        .next()
-        .unwrap_or("")
-        .split('?')
-        .next()
-        .unwrap_or("")
-        .trim_matches('/');
+    // Split fragment and query string while keeping query parameters available for token fallback.
+    let without_fragment = without_scheme.split('#').next().unwrap_or("");
+    let mut path_and_query = without_fragment.splitn(2, '?');
+    let clean_path = path_and_query.next().unwrap_or("").trim_matches('/');
+    let query_str = path_and_query.next().unwrap_or("");
 
     let segments: Vec<&str> = clean_path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if let Some(&first) = segments.first() {
+        let kind_lower = first.to_ascii_lowercase();
+        if kind_lower == "delivery" || kind_lower == "request" {
+            let candidate = if segments.len() >= 2 {
+                segments[1].trim()
+            } else {
+                query_str
+                    .split('&')
+                    .filter_map(|pair| pair.split_once('='))
+                    .find(|(k, _)| {
+                        k.eq_ignore_ascii_case("token") || k.eq_ignore_ascii_case("request_token")
+                    })
+                    .map(|(_, v)| v.trim())
+                    .unwrap_or("")
+            };
+            if is_valid_delivery_token(candidate) {
+                return Ok(AdcUriKind::DeliveryRequestToken(
+                    candidate.to_ascii_lowercase(),
+                ));
+            }
+            return Err(format!(
+                "Invalid ADC delivery request URI '{trimmed}': expected a 64-character hex request token."
+            ));
+        }
+    }
 
     let id_str = match segments.as_slice() {
         ["torrent", id, ..] | ["download", id, ..] => *id,
         [id] => *id,
         _ => {
             return Err(format!(
-                "Invalid ADC torrent URI format '{trimmed}'. Expected adc://torrent/<id> or adc://download/<id>"
+                "Invalid ADC torrent URI format '{trimmed}'. Expected adc://torrent/<id>, adc://download/<id>, or adc://delivery/<token>"
             ));
         }
     };
 
-    id_str.parse::<u64>().map_err(|_| {
+    let parsed_id = id_str.parse::<u64>().map_err(|_| {
         format!("Invalid torrent ID '{id_str}' in ADC URI '{trimmed}'. Must be a positive integer.")
-    })
+    })?;
+    if parsed_id == 0 {
+        return Err(format!(
+            "Invalid torrent ID '{id_str}' in ADC URI '{trimmed}'. Must be greater than zero."
+        ));
+    }
+    Ok(AdcUriKind::ManualTorrentId(parsed_id))
+}
+
+/// Parse a manual `adc://` or `adc:` torrent reference to extract the positive torrent ID.
+///
+/// Delivery request tokens (`adc://delivery/<token>`, `adc://request/<token>`) are
+/// explicitly rejected here so they cannot be conflated with manual torrent references.
+pub fn parse_adc_uri(uri: &str) -> Result<u64, String> {
+    match classify_adc_uri(uri)? {
+        AdcUriKind::ManualTorrentId(id) => Ok(id),
+        AdcUriKind::DeliveryRequestToken(_) => Err(
+            "Website delivery request URIs must be redeemed via the authenticated delivery flow, not resolved as bare torrent IDs.".to_string(),
+        ),
+    }
 }
 
 /// Fetch personalized `.torrent` bencoded metainfo bytes from AsianDVDClub.
@@ -460,5 +510,38 @@ mod tests {
         let result = fetch_adc_torrent_bytes_sync(12345, &db);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("ADC account is not linked"));
+    }
+
+    #[test]
+    fn test_classify_adc_uri_separates_manual_and_delivery_requests() {
+        let tok = "A1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0";
+        assert_eq!(tok.len(), 64);
+
+        assert_eq!(
+            classify_adc_uri("adc://torrent/12345").unwrap(),
+            AdcUriKind::ManualTorrentId(12345)
+        );
+        assert_eq!(
+            classify_adc_uri("adc://download/98765").unwrap(),
+            AdcUriKind::ManualTorrentId(98765)
+        );
+        assert_eq!(
+            classify_adc_uri(&format!("adc://delivery/{tok}")).unwrap(),
+            AdcUriKind::DeliveryRequestToken(tok.to_ascii_lowercase())
+        );
+        assert_eq!(
+            classify_adc_uri(&format!("adc://request/{tok}/?foo=bar")).unwrap(),
+            AdcUriKind::DeliveryRequestToken(tok.to_ascii_lowercase())
+        );
+        assert_eq!(
+            classify_adc_uri(&format!("adc://delivery?token={tok}")).unwrap(),
+            AdcUriKind::DeliveryRequestToken(tok.to_ascii_lowercase())
+        );
+
+        // parse_adc_uri must reject delivery request tokens so manual preview never conflates paths
+        assert!(parse_adc_uri(&format!("adc://delivery/{tok}")).is_err());
+        assert!(classify_adc_uri("adc://delivery/not-64-hex").is_err());
+        assert!(classify_adc_uri("adc://request/12345").is_err());
+        assert!(classify_adc_uri("adc://torrent/0").is_err());
     }
 }

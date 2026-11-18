@@ -78,10 +78,10 @@ diff -ruN a/modules/access/bluray.c b/modules/access/bluray.c
      var_Create( p_demux->p_input, "bluray-playlist-id", VLC_VAR_INTEGER );
      var_SetInteger( p_demux->p_input, "bluray-playlist-id", -1 );
  
-+    /* Expose the graphics controller's interactive-menu-visible state for
-+     * libvlc_media_player_get_bluray_menu_open(); set on BD_EVENT_MENU. */
++    /* Expose the graphics controller's interactive-menu-visible state (-1 until
++     * BD_EVENT_MENU fires so non-Blu-ray probe bailouts do not poison dvdnav). */
 +    var_Create( p_demux->p_input, "bluray-menu-open", VLC_VAR_INTEGER );
-+    var_SetInteger( p_demux->p_input, "bluray-menu-open", 0 );
++    var_SetInteger( p_demux->p_input, "bluray-menu-open", -1 );
 +
      var_AddCallback( p_demux->p_input, "intf-event", onIntfEvent, p_demux );
  

@@ -453,6 +453,7 @@ pub async fn unlink_adc_account(db: State<'_, Arc<Database>>) -> Result<(), Stri
         db.set_setting("adc_masked_passkey", "")
             .map_err(|e| e.to_string())?;
         let _ = db.clear_inbox_cache();
+        crate::commands::adc_device::clear_delivery_ledger(&db);
         // Do not inspect or erase the legacy adc_passkey setting here. It may
         // contain the only pre-Keychain copy; migration/deletion needs approval.
         Ok(())

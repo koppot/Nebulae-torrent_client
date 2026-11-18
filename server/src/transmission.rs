@@ -57,7 +57,10 @@ impl TransmissionClient {
                 req = req.basic_auth(user, Some(pass));
             }
 
-            let response = req.send().await.map_err(|e| format!("Transmission RPC error: {e}"))?;
+            let response = req
+                .send()
+                .await
+                .map_err(|e| format!("Transmission RPC error: {e}"))?;
 
             if response.status().as_u16() == 409 {
                 // Extract new session ID from the 409 response.
@@ -80,7 +83,10 @@ impl TransmissionClient {
                 return Err(format!("Transmission RPC HTTP {status}: {body_text}"));
             }
 
-            let result: Value = response.json().await.map_err(|e| format!("parse error: {e}"))?;
+            let result: Value = response
+                .json()
+                .await
+                .map_err(|e| format!("parse error: {e}"))?;
 
             if result.get("result").and_then(|r| r.as_str()) != Some("success") {
                 let msg = result
@@ -99,15 +105,39 @@ impl TransmissionClient {
     /// List all torrents with full details.
     pub async fn list_torrents(&self) -> Result<Vec<ApiTorrentItem>, String> {
         let fields = json!([
-            "id", "name", "hashString", "totalSize", "downloadedEver",
-            "uploadedEver", "rateDownload", "rateUpload", "percentDone",
-            "status", "eta", "peersGettingFromUs", "peersSendingToUs",
-            "uploadRatio", "downloadDir", "addedDate", "doneDate",
-            "comment", "creator", "pieceSize", "pieceCount",
-            "isPrivate", "labels",
-            "files", "fileStats", "trackerStats",
-            "downloadLimit", "downloadLimited", "uploadLimit", "uploadLimited",
-            "bandwidthPriority", "seedRatioLimit", "seedRatioMode",
+            "id",
+            "name",
+            "hashString",
+            "totalSize",
+            "downloadedEver",
+            "uploadedEver",
+            "rateDownload",
+            "rateUpload",
+            "percentDone",
+            "status",
+            "eta",
+            "peersGettingFromUs",
+            "peersSendingToUs",
+            "uploadRatio",
+            "downloadDir",
+            "addedDate",
+            "doneDate",
+            "comment",
+            "creator",
+            "pieceSize",
+            "pieceCount",
+            "isPrivate",
+            "labels",
+            "files",
+            "fileStats",
+            "trackerStats",
+            "downloadLimit",
+            "downloadLimited",
+            "uploadLimit",
+            "uploadLimited",
+            "bandwidthPriority",
+            "seedRatioLimit",
+            "seedRatioMode",
             "sequentialDownload"
         ]);
 
@@ -137,7 +167,10 @@ impl TransmissionClient {
     ) -> Result<String, String> {
         let mut args = json!({});
 
-        if source.starts_with("magnet:") || source.starts_with("http://") || source.starts_with("https://") {
+        if source.starts_with("magnet:")
+            || source.starts_with("http://")
+            || source.starts_with("https://")
+        {
             args["filename"] = json!(source);
         } else {
             // Assume base64-encoded metainfo.
@@ -171,14 +204,16 @@ impl TransmissionClient {
     /// Pause a torrent by info hash.
     pub async fn pause_torrent(&self, hash: &str) -> Result<(), String> {
         let id = self.resolve_id(hash).await?;
-        self.rpc("torrent-stop", Some(json!({ "ids": [id] }))).await?;
+        self.rpc("torrent-stop", Some(json!({ "ids": [id] })))
+            .await?;
         Ok(())
     }
 
     /// Resume a torrent by info hash.
     pub async fn resume_torrent(&self, hash: &str) -> Result<(), String> {
         let id = self.resolve_id(hash).await?;
-        self.rpc("torrent-start", Some(json!({ "ids": [id] }))).await?;
+        self.rpc("torrent-start", Some(json!({ "ids": [id] })))
+            .await?;
         Ok(())
     }
 
@@ -211,14 +246,16 @@ impl TransmissionClient {
     /// Force reannounce a torrent.
     pub async fn reannounce(&self, hash: &str) -> Result<(), String> {
         let id = self.resolve_id(hash).await?;
-        self.rpc("torrent-reannounce", Some(json!({ "ids": [id] }))).await?;
+        self.rpc("torrent-reannounce", Some(json!({ "ids": [id] })))
+            .await?;
         Ok(())
     }
 
     /// Force recheck a torrent.
     pub async fn recheck(&self, hash: &str) -> Result<(), String> {
         let id = self.resolve_id(hash).await?;
-        self.rpc("torrent-verify", Some(json!({ "ids": [id] }))).await?;
+        self.rpc("torrent-verify", Some(json!({ "ids": [id] })))
+            .await?;
         Ok(())
     }
 
@@ -256,6 +293,99 @@ impl TransmissionClient {
 
         self.rpc("torrent-set", Some(args)).await?;
         Ok(())
+    }
+
+    /// Move a torrent's download location via Transmission RPC `torrent-set-location`.
+    pub async fn set_location(&self, hash: &str, location: &str) -> Result<(), String> {
+        let id = self.resolve_id(hash).await?;
+        self.rpc(
+            "torrent-set-location",
+            Some(json!({
+                "ids": [id],
+                "location": location,
+                "move": true,
+            })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Assign or clear a category label on a torrent via Transmission `labels`.
+    pub async fn set_category(&self, hash: &str, category: &str) -> Result<(), String> {
+        let id = self.resolve_id(hash).await?;
+        let labels: Vec<String> = if category.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![category.trim().to_string()]
+        };
+        self.rpc(
+            "torrent-set",
+            Some(json!({
+                "ids": [id],
+                "labels": labels,
+            })),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Set a single file's download priority (`0` = skip, `1` = normal, `2`/`3` = high).
+    pub async fn set_file_priority(
+        &self,
+        hash: &str,
+        file_index: u32,
+        priority: u8,
+    ) -> Result<(), String> {
+        let id = self.resolve_id(hash).await?;
+        let args = if priority == 0 {
+            json!({
+                "ids": [id],
+                "files-unwanted": [file_index],
+            })
+        } else {
+            let bucket = match priority {
+                2 | 3 => "priority-high",
+                _ => "priority-normal",
+            };
+            let mut map = serde_json::Map::new();
+            map.insert("ids".to_string(), json!([id]));
+            map.insert("files-wanted".to_string(), json!([file_index]));
+            map.insert(bucket.to_string(), json!([file_index]));
+            Value::Object(map)
+        };
+        self.rpc("torrent-set", Some(args)).await?;
+        Ok(())
+    }
+
+    /// Toggle Transmission's sequential-download mode for a torrent and return the new state.
+    pub async fn toggle_sequential(&self, hash: &str) -> Result<bool, String> {
+        let id = self.resolve_id(hash).await?;
+        let args = self
+            .rpc(
+                "torrent-get",
+                Some(json!({
+                    "ids": [id],
+                    "fields": ["id", "sequentialDownload"],
+                })),
+            )
+            .await?;
+        let current = args
+            .get("torrents")
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|t| t.get("sequentialDownload"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let next = !current;
+        self.rpc(
+            "torrent-set",
+            Some(json!({
+                "ids": [id],
+                "sequentialDownload": next,
+            })),
+        )
+        .await?;
+        Ok(next)
     }
 
     /// Resolve an info hash to Transmission's internal numeric ID.
@@ -321,19 +451,40 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
     let name = t.get("name")?.as_str().unwrap_or("").to_string();
     let hash = t.get("hashString")?.as_str().unwrap_or("").to_string();
     let total_size = t.get("totalSize").and_then(|v| v.as_u64()).unwrap_or(0);
-    let downloaded = t.get("downloadedEver").and_then(|v| v.as_u64()).unwrap_or(0);
+    let downloaded = t
+        .get("downloadedEver")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let uploaded = t.get("uploadedEver").and_then(|v| v.as_u64()).unwrap_or(0);
     let dl_rate = t.get("rateDownload").and_then(|v| v.as_u64()).unwrap_or(0);
     let ul_rate = t.get("rateUpload").and_then(|v| v.as_u64()).unwrap_or(0);
     let percent = t.get("percentDone").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let status_code = t.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
-    let eta = t.get("eta").and_then(|v| v.as_i64()).and_then(|e| if e > 0 { Some(e as u64) } else { None });
+    let eta =
+        t.get("eta")
+            .and_then(|v| v.as_i64())
+            .and_then(|e| if e > 0 { Some(e as u64) } else { None });
     let ratio = t.get("uploadRatio").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-    let save_path = t.get("downloadDir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let save_path = t
+        .get("downloadDir")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let added = t.get("addedDate").and_then(|v| v.as_u64()).unwrap_or(0);
-    let done = t.get("doneDate").and_then(|v| v.as_u64()).and_then(|d| if d > 0 { Some(d) } else { None });
-    let comment = t.get("comment").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let creator = t.get("creator").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let done =
+        t.get("doneDate")
+            .and_then(|v| v.as_u64())
+            .and_then(|d| if d > 0 { Some(d) } else { None });
+    let comment = t
+        .get("comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let creator = t
+        .get("creator")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let piece_size = t.get("pieceSize").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let piece_count = t.get("pieceCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let labels: Vec<String> = t
@@ -370,12 +521,23 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
                 .enumerate()
                 .map(|(i, (f, s))| {
                     let size = f.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let completed = f.get("bytesCompleted").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let progress = if size > 0 { completed as f32 / size as f32 } else { 0.0 };
+                    let completed = f
+                        .get("bytesCompleted")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let progress = if size > 0 {
+                        completed as f32 / size as f32
+                    } else {
+                        0.0
+                    };
                     let priority = s.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
                     TorrentFileItem {
                         index: i as u32,
-                        name: f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        name: f
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         size_bytes: size,
                         progress,
                         priority: match priority {
@@ -398,9 +560,19 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
         .map(|arr| {
             arr.iter()
                 .map(|ts| {
-                    let announce = ts.get("announce").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let has_announced = ts.get("hasAnnounced").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let last_result = ts.get("lastAnnounceResult").and_then(|v| v.as_str()).unwrap_or("");
+                    let announce = ts
+                        .get("announce")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let has_announced = ts
+                        .get("hasAnnounced")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let last_result = ts
+                        .get("lastAnnounceResult")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let status_str = if !has_announced {
                         "Not contacted yet"
                     } else if last_result == "Success" || last_result.is_empty() {
@@ -415,7 +587,10 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
                         status: status_str.to_string(),
                         seeds: ts.get("seederCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                         peers: ts.get("leecherCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-                        downloaded: ts.get("downloadCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                        downloaded: ts
+                            .get("downloadCount")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
                         message: ts
                             .get("lastAnnounceResult")
                             .and_then(|v| v.as_str())
@@ -428,13 +603,19 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
         .unwrap_or_default();
 
     // Speed limits.
-    let dl_limited = t.get("downloadLimited").and_then(|v| v.as_bool()).unwrap_or(false);
+    let dl_limited = t
+        .get("downloadLimited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let dl_limit = if dl_limited {
         t.get("downloadLimit").and_then(|v| v.as_u64()).unwrap_or(0) as u32
     } else {
         0
     };
-    let ul_limited = t.get("uploadLimited").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ul_limited = t
+        .get("uploadLimited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let ul_limit = if ul_limited {
         t.get("uploadLimit").and_then(|v| v.as_u64()).unwrap_or(0) as u32
     } else {
@@ -473,7 +654,10 @@ fn parse_torrent(t: &Value) -> Option<ApiTorrentItem> {
         created_by: creator,
         piece_size,
         total_pieces: piece_count,
-        sequential_download: t.get("sequentialDownload").and_then(|v| v.as_bool()).unwrap_or(false),
+        sequential_download: t
+            .get("sequentialDownload")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         first_last_piece_prio: false,
         super_seeding: false,
         tags: labels,

@@ -164,6 +164,45 @@ pub const INPUT_TITLE_INTERACTIVE: u32 = 0x02;
 static CURRENT_DISC_TOP_MENU_SUPPORTED: std::sync::atomic::AtomicI8 =
     std::sync::atomic::AtomicI8::new(-1);
 
+static CURRENT_SESSION_IS_BLURAY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the active VLC session opened a Blu-ray disc/ISO (false for DVD and plain files).
+pub fn current_session_is_bluray() -> bool {
+    CURRENT_SESSION_IS_BLURAY.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Detect whether `path` is a Blu-ray disc folder (`BDMV`) or Blu-ray ISO image,
+/// distinguishing DVD `.iso` images (`DVDVIDEO-VMG`) from Blu-ray `.iso` images.
+pub fn is_bluray_media_path(path: &str) -> bool {
+    if crate::player::bluray_meta::is_disc_top_menu_supported(path).is_some() {
+        return true;
+    }
+    let p = std::path::Path::new(path);
+    if p.join("BDMV").exists() || p.join("bdmv").exists() {
+        return true;
+    }
+    if p.is_file() && path.to_ascii_lowercase().ends_with(".iso") {
+        if let Ok(file) = std::fs::File::open(p) {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            if file.take(8 * 1024 * 1024).read_to_end(&mut buf).is_ok() {
+                if buf.windows(12).any(|w| w == b"DVDVIDEO-VMG") {
+                    return false;
+                }
+                if buf
+                    .windows(8)
+                    .any(|w| w == b"INDX0100" || w == b"INDX0200" || w == b"INDX0300")
+                    || buf.windows(4).any(|w| w == b"BDMV")
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn current_disc_has_top_menu() -> Option<bool> {
     match CURRENT_DISC_TOP_MENU_SUPPORTED.load(std::sync::atomic::Ordering::SeqCst) {
         1 => Some(true),
@@ -182,7 +221,19 @@ pub fn resolve_menu_title_visibility(
     top_menu_supported: Option<bool>,
 ) -> bool {
     let kind = classify_current_title(titles, current);
-    match bluray_open {
+    // If libVLC reports a DVD menu title ("DVD Menu"), never let a poisoned
+    // `bluray-menu-open = 0` from blurayOpen() probe bailout suppress DVD menus.
+    let has_dvd_menu_title = titles.iter().any(|t| {
+        t.name.as_deref().is_some_and(|n| {
+            n.eq_ignore_ascii_case("DVD Menu") || n.to_ascii_lowercase().contains("dvd menu")
+        })
+    });
+    let effective_bluray_open = if has_dvd_menu_title {
+        None
+    } else {
+        bluray_open
+    };
+    match effective_bluray_open {
         // Patched Blu-ray ground truth (`BD_EVENT_MENU` = 1): covers Title 0
         // Top Menus, Title 1..N interactive root menus, and in-feature Popup
         // Menus (`BD_VK_POPUP`), while excluding First Play studio intros.
@@ -207,9 +258,6 @@ pub fn resolve_menu_title_visibility(
 pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
     let m = mp as *mut c_void;
     let bluray_open = bluray_menu_open(lib, mp);
-    if bluray_open == Some(false) {
-        return false;
-    }
     let mut titles_ptr: *mut *mut VlcTitleDescription = std::ptr::null_mut();
     // libvlc_media_player_get_full_title_descriptions fills titles pointer
     // and returns the entry count (NOT NULL-terminated; <= 0 on none/error).
@@ -255,12 +303,56 @@ pub unsafe fn is_menu_title(lib: &VlcLib, mp: usize) -> bool {
 /// # Safety
 /// Caller must ensure `mp` is a valid pointer to a live libVLC media player.
 pub unsafe fn bluray_menu_open(lib: &VlcLib, mp: usize) -> Option<bool> {
+    if !current_session_is_bluray() {
+        return None;
+    }
     let f = lib.libvlc_media_player_get_bluray_menu_open?;
     match f(mp as *mut c_void) {
         1 => Some(true),
         0 => Some(false),
         _ => None,
     }
+}
+
+/// Scale Windows mouse coordinates for 4K UHD Blu-ray interactive menus when the
+/// bundled `liblibbluray_plugin.dll` lacks `3840x2160 -> 1920x1080` scaling:
+/// VLC's `events.c` maps coordinates out of `active_rect` into `3840x2160`,
+/// whereas libbluray's IG overlay expects `1920x1080`, so halving relative to
+/// `active_rect` restores 1:1 hotspot alignment across any DPI or window size.
+pub fn scale_uhd_bluray_menu_point(
+    pt_x: i32,
+    pt_y: i32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> (i32, i32) {
+    if right <= left || bottom <= top {
+        return (pt_x, pt_y);
+    }
+    let width = right - left;
+    let height = bottom - top;
+    let rel_x = (pt_x - left).clamp(0, width);
+    let rel_y = (pt_y - top).clamp(0, height);
+    (left + rel_x / 2, top + rel_y / 2)
+}
+
+/// Inspect raw `liblibbluray_plugin.dll` bytes to detect whether Hunk 2 of
+/// `bluray-menu-first.patch` (`vid_w = 3840; vid_h = 2160;`) is compiled in,
+/// preventing double-scaling once the rebuilt Windows DLL ships.
+pub fn dll_contains_uhd_mouse_scaling(bytes: &[u8]) -> bool {
+    let w_bytes = 3840u32.to_le_bytes();
+    let h_bytes = 2160u32.to_le_bytes();
+    for (idx, win) in bytes.windows(4).enumerate() {
+        if win == w_bytes {
+            let start = idx.saturating_sub(128);
+            let end = (idx + 132).min(bytes.len());
+            if bytes[start..end].windows(4).any(|w| w == h_bytes) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Return the 0-based index of the first title marked with INPUT_TITLE_MENU, if any.
@@ -1205,6 +1297,10 @@ impl VlcSession {
             }
         };
         CURRENT_DISC_TOP_MENU_SUPPORTED.store(top_menu_state, std::sync::atomic::Ordering::SeqCst);
+        CURRENT_SESSION_IS_BLURAY.store(
+            is_bluray_media_path(path),
+            std::sync::atomic::Ordering::SeqCst,
+        );
         let mut args = vec![
             CString::new("--deinterlace=-1").unwrap(), // automatic: only when the stream is interlaced
             CString::new("--deinterlace-mode=yadif2x").unwrap(), // high-quality double-rate
@@ -1736,5 +1832,74 @@ mod tests {
             None,
             Some(false)
         ));
+    }
+
+    #[test]
+    fn dvd_menu_visibility_ignores_poisoned_bluray_menu_open() {
+        let dvd_titles = vec![
+            TitleSnapshot {
+                duration_ms: 300_000,
+                flags: 0x03,
+                name: Some("DVD Menu".to_string()),
+            },
+            TitleSnapshot {
+                duration_ms: 1_500_000,
+                flags: 0x00,
+                name: Some("Title 1".to_string()),
+            },
+        ];
+
+        assert!(resolve_menu_title_visibility(
+            &dvd_titles,
+            0,
+            Some(false),
+            None
+        ));
+        assert!(!resolve_menu_title_visibility(
+            &dvd_titles,
+            1,
+            Some(false),
+            None
+        ));
+    }
+
+    #[test]
+    fn uhd_bluray_menu_point_scaling_and_dll_detection() {
+        assert_eq!(
+            scale_uhd_bluray_menu_point(960, 540, 0, 0, 1920, 1080),
+            (480, 270)
+        );
+        assert_eq!(
+            scale_uhd_bluray_menu_point(900, 500, 100, 50, 1700, 950),
+            (500, 275)
+        );
+        assert_eq!(scale_uhd_bluray_menu_point(10, 20, 0, 0, 0, 0), (10, 20));
+
+        assert!(!dll_contains_uhd_mouse_scaling(&[]));
+
+        let mut patched = vec![0u8; 64];
+        patched[8..12].copy_from_slice(&3840u32.to_le_bytes());
+        patched[24..28].copy_from_slice(&2160u32.to_le_bytes());
+        assert!(dll_contains_uhd_mouse_scaling(&patched));
+
+        let mut too_far = vec![0u8; 512];
+        too_far[8..12].copy_from_slice(&3840u32.to_le_bytes());
+        too_far[400..404].copy_from_slice(&2160u32.to_le_bytes());
+        assert!(!dll_contains_uhd_mouse_scaling(&too_far));
+    }
+
+    #[test]
+    fn iso_magic_distinguishes_dvd_and_bluray_paths() {
+        let dir = std::env::temp_dir().join(format!("nebulae_iso_detect_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let dvd_iso = dir.join("DVD_DISC.ISO");
+        let bd_iso = dir.join("UHD_DISC.iso");
+        std::fs::write(&dvd_iso, b"header...DVDVIDEO-VMG...footer").unwrap();
+        std::fs::write(&bd_iso, b"header...INDX0300...footer").unwrap();
+
+        assert!(!is_bluray_media_path(&dvd_iso.to_string_lossy()));
+        assert!(is_bluray_media_path(&bd_iso.to_string_lossy()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

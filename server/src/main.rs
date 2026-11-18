@@ -9,7 +9,7 @@
 
 mod transmission;
 
-use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +30,11 @@ struct Cli {
     token: String,
 
     /// Transmission RPC URL (usually http://127.0.0.1:9091/transmission/rpc).
-    #[arg(long, default_value = "http://127.0.0.1:9091/transmission/rpc", env = "TRANSMISSION_RPC_URL")]
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:9091/transmission/rpc",
+        env = "TRANSMISSION_RPC_URL"
+    )]
     transmission_url: String,
 
     /// Transmission RPC username (optional).
@@ -79,7 +83,10 @@ struct StatusResponse {
     name: String,
     version: String,
     engine: String,
+    active_torrents: usize,
+    paused_torrents: usize,
     kill_switch_engaged: bool,
+    bound_interface: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +152,7 @@ struct KillSwitchResponse {
 
 #[derive(Deserialize)]
 struct KillSwitchRequest {
+    #[serde(alias = "enable")]
     engaged: bool,
 }
 
@@ -157,31 +165,63 @@ struct LimitsRequest {
 
 #[derive(Deserialize)]
 struct AddTorrentRequest {
-    source: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    source_b64: Option<String>,
     download_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LocationRequest {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct CategoryRequest {
+    category: String,
+}
+
+#[derive(Deserialize)]
+struct FilePriorityRequest {
+    file_index: u32,
+    priority: u8,
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────
 
-async fn get_status(
-    req: HttpRequest,
-    state: web::Data<Arc<AppState>>,
-) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+async fn get_status(req: HttpRequest, state: web::Data<Arc<AppState>>) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
+
+    let (active_torrents, paused_torrents) = match state.transmission.list_torrents().await {
+        Ok(list) => {
+            let paused = list.iter().filter(|t| t.status == "Paused").count();
+            let active = list.len().saturating_sub(paused);
+            (active, paused)
+        }
+        Err(e) => {
+            warn!("get_status list_torrents failed: {e}");
+            (0, 0)
+        }
+    };
 
     HttpResponse::Ok().json(StatusResponse {
         name: "nebulae-server".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         engine: "transmission".to_string(),
+        active_torrents,
+        paused_torrents,
         kill_switch_engaged: state.kill_switch.load(Ordering::Relaxed),
+        bound_interface: None,
     })
 }
 
-async fn list_torrents(
-    req: HttpRequest,
-    state: web::Data<Arc<AppState>>,
-) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+async fn list_torrents(req: HttpRequest, state: web::Data<Arc<AppState>>) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
 
     match state.transmission.list_torrents().await {
         Ok(torrents) => {
@@ -195,14 +235,33 @@ async fn list_torrents(
     }
 }
 
+fn resolve_add_torrent_source(req: &AddTorrentRequest) -> Option<&str> {
+    req.source_b64
+        .as_deref()
+        .or(req.source.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
 async fn add_torrent(
     req: HttpRequest,
     state: web::Data<Arc<AppState>>,
     body: web::Json<AddTorrentRequest>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
 
-    match state.transmission.add_torrent(&body.source, body.download_dir.as_deref()).await {
+    let Some(source) = resolve_add_torrent_source(&body) else {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({ "error": "Missing source or source_b64" }));
+    };
+
+    match state
+        .transmission
+        .add_torrent(source, body.download_dir.as_deref())
+        .await
+    {
         Ok(hash) => HttpResponse::Ok().json(serde_json::json!({ "info_hash": hash })),
         Err(e) => {
             warn!("add_torrent failed: {e}");
@@ -216,7 +275,9 @@ async fn pause_torrent(
     state: web::Data<Arc<AppState>>,
     path: web::Path<String>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
 
     match state.transmission.pause_torrent(&id).await {
@@ -230,7 +291,9 @@ async fn resume_torrent(
     state: web::Data<Arc<AppState>>,
     path: web::Path<String>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
 
     match state.transmission.resume_torrent(&id).await {
@@ -239,11 +302,10 @@ async fn resume_torrent(
     }
 }
 
-async fn pause_all(
-    req: HttpRequest,
-    state: web::Data<Arc<AppState>>,
-) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+async fn pause_all(req: HttpRequest, state: web::Data<Arc<AppState>>) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
 
     match state.transmission.pause_all().await {
         Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
@@ -251,11 +313,10 @@ async fn pause_all(
     }
 }
 
-async fn resume_all(
-    req: HttpRequest,
-    state: web::Data<Arc<AppState>>,
-) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+async fn resume_all(req: HttpRequest, state: web::Data<Arc<AppState>>) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
 
     match state.transmission.resume_all().await {
         Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
@@ -269,7 +330,9 @@ async fn remove_torrent(
     path: web::Path<String>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
     let delete_files = query.get("delete_files").map_or(false, |v| v == "true");
 
@@ -284,7 +347,9 @@ async fn kill_switch(
     state: web::Data<Arc<AppState>>,
     body: web::Json<KillSwitchRequest>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
 
     if body.engaged {
         state.kill_switch.store(true, Ordering::SeqCst);
@@ -304,7 +369,9 @@ async fn reannounce_torrent(
     state: web::Data<Arc<AppState>>,
     path: web::Path<String>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
 
     match state.transmission.reannounce(&id).await {
@@ -318,7 +385,9 @@ async fn recheck_torrent(
     state: web::Data<Arc<AppState>>,
     path: web::Path<String>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
 
     match state.transmission.recheck(&id).await {
@@ -333,11 +402,90 @@ async fn set_torrent_limits(
     path: web::Path<String>,
     body: web::Json<LimitsRequest>,
 ) -> HttpResponse {
-    if let Err(e) = check_auth(&req, &state) { return e; }
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
     let id = path.into_inner();
 
-    match state.transmission.set_limits(&id, body.dl_kib, body.ul_kib, body.ratio_limit).await {
+    match state
+        .transmission
+        .set_limits(&id, body.dl_kib, body.ul_kib, body.ratio_limit)
+        .await
+    {
         Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e })),
+    }
+}
+
+async fn set_torrent_location(
+    req: HttpRequest,
+    state: web::Data<Arc<AppState>>,
+    path: web::Path<String>,
+    body: web::Json<LocationRequest>,
+) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
+    let id = path.into_inner();
+
+    match state.transmission.set_location(&id, &body.path).await {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e })),
+    }
+}
+
+async fn set_torrent_category(
+    req: HttpRequest,
+    state: web::Data<Arc<AppState>>,
+    path: web::Path<String>,
+    body: web::Json<CategoryRequest>,
+) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
+    let id = path.into_inner();
+
+    match state.transmission.set_category(&id, &body.category).await {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e })),
+    }
+}
+
+async fn set_torrent_file_priority(
+    req: HttpRequest,
+    state: web::Data<Arc<AppState>>,
+    path: web::Path<String>,
+    body: web::Json<FilePriorityRequest>,
+) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
+    let id = path.into_inner();
+
+    match state
+        .transmission
+        .set_file_priority(&id, body.file_index, body.priority)
+        .await
+    {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "ok": true })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e })),
+    }
+}
+
+async fn toggle_torrent_sequential(
+    req: HttpRequest,
+    state: web::Data<Arc<AppState>>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Err(e) = check_auth(&req, &state) {
+        return e;
+    }
+    let id = path.into_inner();
+
+    match state.transmission.toggle_sequential(&id).await {
+        Ok(sequential_download) => HttpResponse::Ok().json(serde_json::json!({
+            "sequential_download": sequential_download
+        })),
         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e })),
     }
 }
@@ -357,8 +505,16 @@ async fn main() -> std::io::Result<()> {
 
     let transmission = transmission::TransmissionClient::new(
         &cli.transmission_url,
-        if cli.transmission_user.is_empty() { None } else { Some(&cli.transmission_user) },
-        if cli.transmission_pass.is_empty() { None } else { Some(&cli.transmission_pass) },
+        if cli.transmission_user.is_empty() {
+            None
+        } else {
+            Some(&cli.transmission_user)
+        },
+        if cli.transmission_pass.is_empty() {
+            None
+        } else {
+            Some(&cli.transmission_pass)
+        },
     );
 
     let state = Arc::new(AppState {
@@ -382,11 +538,39 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/torrents", web::get().to(list_torrents))
             .route("/api/v1/torrents", web::post().to(add_torrent))
             .route("/api/v1/torrents/{id}/pause", web::post().to(pause_torrent))
-            .route("/api/v1/torrents/{id}/resume", web::post().to(resume_torrent))
+            .route(
+                "/api/v1/torrents/{id}/resume",
+                web::post().to(resume_torrent),
+            )
             .route("/api/v1/torrents/{id}", web::delete().to(remove_torrent))
-            .route("/api/v1/torrents/{id}/reannounce", web::post().to(reannounce_torrent))
-            .route("/api/v1/torrents/{id}/recheck", web::post().to(recheck_torrent))
-            .route("/api/v1/torrents/{id}/limits", web::post().to(set_torrent_limits))
+            .route(
+                "/api/v1/torrents/{id}/reannounce",
+                web::post().to(reannounce_torrent),
+            )
+            .route(
+                "/api/v1/torrents/{id}/recheck",
+                web::post().to(recheck_torrent),
+            )
+            .route(
+                "/api/v1/torrents/{id}/limits",
+                web::post().to(set_torrent_limits),
+            )
+            .route(
+                "/api/v1/torrents/{id}/location",
+                web::post().to(set_torrent_location),
+            )
+            .route(
+                "/api/v1/torrents/{id}/category",
+                web::post().to(set_torrent_category),
+            )
+            .route(
+                "/api/v1/torrents/{id}/file-priority",
+                web::post().to(set_torrent_file_priority),
+            )
+            .route(
+                "/api/v1/torrents/{id}/sequential",
+                web::post().to(toggle_torrent_sequential),
+            )
             .route("/api/v1/torrents/pause-all", web::post().to(pause_all))
             .route("/api/v1/torrents/resume-all", web::post().to(resume_all))
             .route("/api/v1/kill-switch", web::post().to(kill_switch))
@@ -394,4 +578,66 @@ async fn main() -> std::io::Result<()> {
     .bind((cli.bind.as_str(), cli.port))?
     .run()
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_torrent_request_accepts_source_and_source_b64() {
+        let req_source: AddTorrentRequest =
+            serde_json::from_str(r#"{"source":"magnet:?xt=urn:btih:abc","download_dir":"/dl"}"#)
+                .expect("deserialize source request");
+        assert_eq!(
+            resolve_add_torrent_source(&req_source),
+            Some("magnet:?xt=urn:btih:abc")
+        );
+        assert_eq!(req_source.download_dir.as_deref(), Some("/dl"));
+
+        let req_b64: AddTorrentRequest =
+            serde_json::from_str(r#"{"source_b64":"ZDg6YW5ub3VuY2U=","download_dir":null}"#)
+                .expect("deserialize source_b64 request");
+        assert_eq!(
+            resolve_add_torrent_source(&req_b64),
+            Some("ZDg6YW5ub3VuY2U=")
+        );
+
+        let req_empty: AddTorrentRequest =
+            serde_json::from_str(r#"{"source":"   "}"#).expect("deserialize empty source");
+        assert_eq!(resolve_add_torrent_source(&req_empty), None);
+    }
+
+    #[test]
+    fn kill_switch_request_accepts_engaged_and_enable_alias() {
+        let engaged: KillSwitchRequest =
+            serde_json::from_str(r#"{"engaged":true}"#).expect("engaged");
+        assert!(engaged.engaged);
+
+        let enable_alias: KillSwitchRequest =
+            serde_json::from_str(r#"{"enable":true}"#).expect("enable alias");
+        assert!(enable_alias.engaged);
+
+        let disable_alias: KillSwitchRequest =
+            serde_json::from_str(r#"{"enable":false}"#).expect("disable alias");
+        assert!(!disable_alias.engaged);
+    }
+
+    #[test]
+    fn status_response_serializes_engine_status_contract() {
+        let status = StatusResponse {
+            name: "nebulae-server".to_string(),
+            version: "0.1.0".to_string(),
+            engine: "transmission".to_string(),
+            active_torrents: 3,
+            paused_torrents: 2,
+            kill_switch_engaged: true,
+            bound_interface: Some("wg0".to_string()),
+        };
+        let value = serde_json::to_value(&status).expect("serialize StatusResponse");
+        assert_eq!(value["active_torrents"], 3);
+        assert_eq!(value["paused_torrents"], 2);
+        assert_eq!(value["kill_switch_engaged"], true);
+        assert_eq!(value["bound_interface"], "wg0");
+    }
 }

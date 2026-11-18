@@ -842,6 +842,7 @@ pub fn run() {
             // ADC Device Registration & Delivery
             commands::adc_device::get_adc_device_info,
             commands::adc_device::register_adc_device,
+            commands::adc_device::redeem_adc_delivery,
             // Smart Peering
             commands::peering::get_peering_settings,
             commands::peering::save_peering_settings,
