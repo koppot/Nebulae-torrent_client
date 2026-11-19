@@ -56,7 +56,19 @@ if (-not (Test-Path $tarball)) {
 }
 $srcDir = Join-Path $StagingAbs "transmission-$Version"
 Remove-Item -Recurse -Force $srcDir -ErrorAction SilentlyContinue
-Invoke-Checked "tar extraction" { tar -xJf $tarball -C $StagingAbs }
+# bsdtar delegates .xz to an external xz that Windows does not ship; Git for
+# Windows has one. Only that single executable is used, because its usr\bin
+# also holds a link.exe that would shadow the MSVC linker if put on PATH.
+$xz = Get-Command xz -ErrorAction SilentlyContinue
+if ($xz) { $xzExe = $xz.Source } else {
+    $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
+    $xzExe = Join-Path $gitRoot "usr\bin\xz.exe"
+    if (-not (Test-Path $xzExe)) { throw "xz not found; install xz or Git for Windows" }
+}
+$tarPlain = Join-Path $StagingAbs "transmission-$Version.tar"
+Invoke-Checked "xz decompress" { & $xzExe -dkf $tarball }
+Invoke-Checked "tar extraction" { tar -xf $tarPlain -C $StagingAbs }
+Remove-Item -Force $tarPlain -ErrorAction SilentlyContinue
 
 $patch = Join-Path $RepoRoot "scripts\patches\transmission-$Version-identity-override.patch"
 if (-not (Test-Path $patch)) { throw "patch not found: $patch" }
