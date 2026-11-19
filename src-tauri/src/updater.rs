@@ -188,12 +188,14 @@ async fn run_single_silent_update_check(handle: &tauri::AppHandle, db: &Arc<crat
             if let Ok(mut lock) = state.0.lock() {
                 *lock = Some((update, bytes));
                 info!("Silent update staged in memory. Will apply automatically on app quit.");
-                #[cfg(feature = "test-updater")]
-                if std::env::var("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED").as_deref() == Ok("1") {
-                    info!("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED active: exiting cleanly on Windows to trigger staged installer.");
-                    apply_staged_update_if_present(handle);
-                    handle.exit(0);
-                }
+            }
+            // The guard above must be released first: apply_staged_update_if_present
+            // locks the same mutex.
+            #[cfg(feature = "test-updater")]
+            if std::env::var("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED").as_deref() == Ok("1") {
+                info!("NEBULAE_UPDATER_TEST_QUIT_ON_STAGED active: exiting cleanly on Windows to trigger staged installer.");
+                apply_staged_update_if_present(handle);
+                handle.exit(0);
             }
         }
     }
