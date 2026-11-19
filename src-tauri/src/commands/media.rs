@@ -3692,8 +3692,18 @@ pub fn player_set_track(
     unsafe {
         let m = mp as *mut c_void;
         match kind.as_str() {
-            "subtitle" => (lib.libvlc_video_set_spu)(m, id),
-            "audio" => (lib.libvlc_audio_set_track)(m, id),
+            "subtitle" => {
+                let ret = (lib.libvlc_video_set_spu)(m, id);
+                if ret != 0 {
+                    tracing::warn!("[player] libvlc_video_set_spu({id}) failed with code {ret}");
+                }
+            }
+            "audio" => {
+                let ret = (lib.libvlc_audio_set_track)(m, id);
+                if ret != 0 {
+                    tracing::warn!("[player] libvlc_audio_set_track({id}) failed with code {ret}");
+                }
+            }
             _ => return Err(format!("unknown track kind: {kind}")),
         }
     }

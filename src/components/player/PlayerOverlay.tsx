@@ -1026,17 +1026,17 @@ export default function PlayerOverlay() {
     if (!player.open || (poll.at_menu && player.isDisc)) return;
     let alive = true;
     const fetchSubs = () => {
-      invoke<{ id: number; name: string }[]>('player_list_tracks', { kind: 'subtitle' })
+      invoke<{ id: number; name: string; active: boolean }[]>('player_list_tracks', { kind: 'subtitle' })
         .then((tracks) => {
           if (alive && tracks && tracks.length > 0) {
-            setSubTracks(tracks.map((t) => ({ ...t, active: false })));
+            setSubTracks(tracks);
           }
         })
         .catch(() => {});
     };
     fetchSubs();
     const iv = window.setInterval(() => {
-      if (alive && subTracks.length === 0 && poll.playing && !poll.at_menu) {
+      if (alive && !subTracks.some((x) => x.id >= 0) && poll.playing && !poll.at_menu) {
         fetchSubs();
       }
     }, 1000);
@@ -1857,22 +1857,42 @@ export default function PlayerOverlay() {
               {subTracks.filter((x) => x.id >= 0).length === 0 && (
                 <span className="block px-2 py-1 text-xs text-white/60">No subtitle tracks</span>
               )}
-              {subTracks.filter((x) => x.id >= 0).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => {
-                    invoke('player_set_track', { kind: 'subtitle', id: t.id }).catch(() => {});
-                    setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
-                    setShowSubs(false);
-                  }}
-                  className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
-                    t.active ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white hover:bg-white/10'
-                  }`}
-                >
-                  {trackLabel('subtitle', subTracks.filter((x) => x.id >= 0).indexOf(t), t)}
-                </button>
-              ))}
+              {subTracks.filter((x) => x.id >= 0).length > 0 && (
+                <>
+                  <button
+                    key="sub-off"
+                    type="button"
+                    onClick={() => {
+                      invoke('player_set_track', { kind: 'subtitle', id: -1 }).catch(() => {});
+                      setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === -1 })));
+                      setShowSubs(false);
+                    }}
+                    className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
+                      subTracks.find((x) => x.id === -1)?.active || !subTracks.some((x) => x.id >= 0 && x.active)
+                        ? 'bg-white/15 text-white'
+                        : 'text-white/60 hover:text-white hover:bg-white/10'
+                    }`}
+                  >
+                    Off
+                  </button>
+                  {subTracks.filter((x) => x.id >= 0).map((t, idx) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        invoke('player_set_track', { kind: 'subtitle', id: t.id }).catch(() => {});
+                        setSubTracks((ts) => ts.map((x) => ({ ...x, active: x.id === t.id })));
+                        setShowSubs(false);
+                      }}
+                      className={`whitespace-nowrap text-left px-1.5 py-1 rounded text-xs font-medium transition ${
+                        t.active ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      {trackLabel('subtitle', idx, t)}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>
