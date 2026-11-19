@@ -96,12 +96,12 @@ pub struct VlcLib {
     // Subtitle / audio track enumeration and selection (track popovers).
     pub libvlc_video_get_spu_count: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
-    pub libvlc_video_set_spu: unsafe extern "C" fn(*mut c_void, c_int),
+    pub libvlc_video_set_spu: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     pub libvlc_video_get_spu_description:
         unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_audio_get_track_count: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub libvlc_audio_get_track: unsafe extern "C" fn(*mut c_void) -> c_int,
-    pub libvlc_audio_set_track: unsafe extern "C" fn(*mut c_void, c_int),
+    pub libvlc_audio_set_track: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     pub libvlc_audio_get_track_description:
         unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription,
     pub libvlc_track_description_list_release: unsafe extern "C" fn(*mut VlcTrackDescription),
@@ -1211,11 +1211,11 @@ impl VlcLib {
             libvlc_chapter_descriptions_release: sym!("libvlc_chapter_descriptions_release": unsafe extern "C" fn(*mut *mut VlcChapterDescription, c_int)),
             libvlc_video_get_spu_count: sym!("libvlc_video_get_spu_count": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_video_get_spu: sym!("libvlc_video_get_spu": unsafe extern "C" fn(*mut c_void) -> c_int),
-            libvlc_video_set_spu: sym!("libvlc_video_set_spu": unsafe extern "C" fn(*mut c_void, c_int)),
+            libvlc_video_set_spu: sym!("libvlc_video_set_spu": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_video_get_spu_description: sym!("libvlc_video_get_spu_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_audio_get_track_count: sym!("libvlc_audio_get_track_count": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_audio_get_track: sym!("libvlc_audio_get_track": unsafe extern "C" fn(*mut c_void) -> c_int),
-            libvlc_audio_set_track: sym!("libvlc_audio_set_track": unsafe extern "C" fn(*mut c_void, c_int)),
+            libvlc_audio_set_track: sym!("libvlc_audio_set_track": unsafe extern "C" fn(*mut c_void, c_int) -> c_int),
             libvlc_audio_get_track_description: sym!("libvlc_audio_get_track_description": unsafe extern "C" fn(*mut c_void) -> *mut VlcTrackDescription),
             libvlc_track_description_list_release: sym!("libvlc_track_description_list_release": unsafe extern "C" fn(*mut VlcTrackDescription)),
             libvlc_video_get_size: sym_opt!("libvlc_video_get_size": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *mut std::ffi::c_uint, *mut std::ffi::c_uint) -> c_int),
