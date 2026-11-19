@@ -82,6 +82,13 @@ export const ConnectivityDoctorModal: React.FC = () => {
                   {report ? report.port_status : (isRunningTest ? 'Testing' : 'Untested')}
                 </span>
               </div>
+              {report && (report.port_open_ipv4 != null || report.port_open_ipv6 != null) && (
+                <div className="mt-1 text-[10px] text-[#a3a3a3] font-mono">
+                  IPv4 {report.port_open_ipv4 == null ? '—' : report.port_open_ipv4 ? 'open' : 'closed'}
+                  {' · '}
+                  IPv6 {report.port_open_ipv6 == null ? '—' : report.port_open_ipv6 ? 'open' : 'closed'}
+                </div>
+              )}
             </div>
 
             <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f]">

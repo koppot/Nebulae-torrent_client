@@ -1,4 +1,4 @@
-export type PortStatus = 'Open' | 'Closed' | 'Unknown' | 'Stealth' | 'Testing' | 'Checking';
+export type PortStatus = 'Open' | 'Partial' | 'Closed' | 'Unknown' | 'Stealth' | 'Testing' | 'Checking';
 
 export type NatType = 'FullCone' | 'RestrictedCone' | 'PortRestricted' | 'Symmetric' | 'Unknown';
 
@@ -20,6 +20,9 @@ export interface ConnectivityReport {
   outbound_connections: number | null;
   /** The engine's explicit port-test result, or null when no verdict was available. */
   port_open_evidence?: string | null;
+  /** Per-family engine port-test verdicts; absent when not tested or inconclusive. */
+  port_open_ipv4?: boolean | null;
+  port_open_ipv6?: boolean | null;
   certificate_text: string;
   plain_language_findings: string[];
   suggested_fixes: string[];

@@ -633,6 +633,14 @@ impl TransmissionRpcClient {
         // so we still get a verdict when possible.
         try_with(None)
     }
+    /// Strict single-family port test: the verdict is `None` unless the daemon
+    /// answered the explicitly requested address family with a boolean.
+    pub fn port_test_family(&self, ip_protocol: &str) -> Option<bool> {
+        self.request("port-test", Some(json!({ "ip_protocol": ip_protocol })))
+            .ok()
+            .and_then(|res| parse_port_test_result(&res))
+    }
+
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
         let fields = if ids.is_some() {
             vec![
@@ -1351,7 +1359,15 @@ fn negotiate_reachable_port(
             // Give the daemon a moment to rebind before testing.
             std::thread::sleep(Duration::from_secs(2));
         }
-        match rpc.port_test(infer_port_protocol(engine_dir)) {
+        // An unqualified test probes IPv6 first, so a dual-stack host with a
+        // closed IPv4 forward would be declared reachable. Judge candidates by
+        // IPv4 (the family a router forward actually affects) and only use the
+        // unqualified test when the daemon cannot answer a per-family request.
+        let verdict = match rpc.port_test_family("ipv4") {
+            Some(v) => Ok(Some(v)),
+            None => rpc.port_test(infer_port_protocol(engine_dir)),
+        };
+        match verdict {
             Ok(Some(true)) => {
                 info!("[port] negotiated: peer port {port} is externally reachable");
                 persist_negotiated_port(db, engine_dir, port);
@@ -4068,18 +4084,19 @@ impl TorrentEngine for TransmissionTorrentEngine {
     fn port_protocol(&self) -> Option<&'static str> {
         let settings_path = self.config_dir.join("settings.json");
         let text = std::fs::read_to_string(&settings_path).ok()?;
-        let bind_v6: Option<String> = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| {
-                v.get("bind-address-ipv6")
-                    .and_then(Value::as_str)
-                    .map(String::from)
-            });
-        if bind_v6.as_deref() == Some("::1") {
+        let settings = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+        let bind = |key: &str| settings.get(key).and_then(Value::as_str).map(String::from);
+        if bind("bind-address-ipv6").as_deref() == Some("::1") {
             Some("ipv4")
+        } else if bind("bind-address-ipv4").as_deref() == Some("127.0.0.1") {
+            Some("ipv6")
         } else {
             None
         }
+    }
+
+    fn check_port_family(&self, ip_protocol: &'static str) -> Option<bool> {
+        self.rpc_client.port_test_family(ip_protocol)
     }
 
     fn peer_block_capability(&self) -> crate::models::peering::PeerBlockCapability {

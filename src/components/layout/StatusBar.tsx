@@ -146,6 +146,7 @@ export const StatusBar: React.FC = () => {
   const portState = reportFresh ? (report?.port_status ?? 'Unknown') : '—';
   const isPortOpen = portState === 'Open';
   const isPortClosed = portState === 'Closed';
+  const isPortPartial = portState === 'Partial';
 
   // Connectivity dot: an authoritative fresh doctor report wins; otherwise
   // fall back to live swarm activity so a healthy seeding torrent never
@@ -155,7 +156,7 @@ export const StatusBar: React.FC = () => {
       (t.status === 'Seeding' || t.status === 'Downloading') &&
       (t.peers > 0 || t.trackers?.some((tr) => tr.status === 'Working') || (t.seeds ?? 0) > 0)
   );
-  const connected = isPortOpen || swarmActive;
+  const connected = isPortOpen || isPortPartial || swarmActive;
 
   return (
     <footer className="min-h-[24px] h-auto py-1 px-3 bg-[#141414] border-t border-[#262626] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] font-mono text-[#a3a3a3] select-none z-30">
@@ -197,7 +198,9 @@ export const StatusBar: React.FC = () => {
             reportFresh
               ? portState === 'Open'
                 ? 'engine port test reports reachable'
-                : isPortClosed
+                : isPortPartial
+                  ? 'reachable over IPv6 only; IPv4 port is closed — click for port help'
+                  : isPortClosed
                   ? 'engine port test reports closed — click for port help'
                   : 'reachability unknown — click for diagnostics'
               : 'not checked recently — click for diagnostics'
@@ -209,6 +212,8 @@ export const StatusBar: React.FC = () => {
                 ? 'bg-[#333333]'
                 : portState === 'Open'
                   ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]'
+                : isPortPartial
+                  ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.5)]'
                 : isPortClosed
                   ? 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]'
                   : 'bg-amber-500'

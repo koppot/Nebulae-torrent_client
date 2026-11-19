@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum PortStatus {
     Open,
+    /// IPv6 is reachable from the internet but IPv4 is not.
+    Partial,
     Closed,
     Unknown,
     Stealth,
@@ -61,6 +63,12 @@ pub struct ConnectivityReport {
     /// `port-is-open` boolean. Local bind attempts and peer counts do not
     /// establish external reachability.
     pub port_open_evidence: Option<String>,
+    /// Per-address-family verdicts from the engine's port test; `None` when
+    /// that family was not tested or the test was inconclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_open_ipv4: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_open_ipv6: Option<bool>,
     pub certificate_text: String,
     pub plain_language_findings: Vec<String>,
     pub suggested_fixes: Vec<String>,
@@ -77,11 +85,13 @@ impl ConnectivityReport {
     ) -> String {
         let connectable_str = match port_status {
             PortStatus::Open => "Yes",
+            PortStatus::Partial => "IPv6 only",
             PortStatus::Closed => "No",
             PortStatus::Stealth | PortStatus::Testing | PortStatus::Unknown => "Unknown",
         };
         let port_str = match port_status {
             PortStatus::Open => format!("Port {port} Reachable"),
+            PortStatus::Partial => format!("Port {port} Reachable over IPv6, closed over IPv4"),
             PortStatus::Closed => format!("Port {port} Closed/Firewalled"),
             PortStatus::Unknown => format!("Port {port} Reachability Unknown"),
             PortStatus::Stealth => format!("Port {port} Stealth/Blocked"),
@@ -127,6 +137,23 @@ mod tests {
         assert_eq!(
             cert,
             "ADC Connectable: Yes — Port 41413 Reachable — IPv6 Ready — Tracker Healthy — VPN Bound (utun3)"
+        );
+    }
+
+    #[test]
+    fn partial_port_status_is_reported_as_ipv6_only() {
+        let cert = ConnectivityReport::generate_certificate(
+            41413,
+            PortStatus::Partial,
+            true,
+            true,
+            false,
+            None,
+        );
+
+        assert_eq!(
+            cert,
+            "ADC Connectable: IPv6 only — Port 41413 Reachable over IPv6, closed over IPv4 — IPv6 Ready — Tracker Healthy — Direct Connection"
         );
     }
 

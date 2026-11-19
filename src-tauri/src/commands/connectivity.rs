@@ -13,6 +13,18 @@ fn port_status_from_engine_test(result: Option<bool>) -> PortStatus {
     }
 }
 
+/// Combines the per-family engine verdicts into one indicator state. A closed
+/// IPv4 port with an open IPv6 port is `Partial`: IPv6 peers can reach this
+/// client, but the IPv4 swarm (and an IPv4 tracker check) cannot.
+fn combine_port_families(v4: Option<bool>, v6: Option<bool>) -> PortStatus {
+    match (v4, v6) {
+        (Some(true), _) => PortStatus::Open,
+        (Some(false), Some(true)) => PortStatus::Partial,
+        (Some(false), _) => PortStatus::Closed,
+        (None, _) => PortStatus::Unknown,
+    }
+}
+
 async fn probe_upnp() -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(1500), async {
         let socket = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
@@ -153,9 +165,30 @@ pub async fn run_connectivity_doctor_test(
     let vpn_bound = status.bound_interface.is_some();
     let vpn_adapter = status.bound_interface.clone();
 
-    let port_open_from_engine = engine.check_port_open(engine.port_protocol());
-    let port_status = port_status_from_engine_test(port_open_from_engine);
-    let port_open_evidence = port_open_from_engine.map(|_| "transmission-port-test".to_string());
+    let (port_open_ipv4, port_open_ipv6, port_status, port_answered) = match engine.port_protocol()
+    {
+        Some("ipv4") => {
+            let r = engine.check_port_open(Some("ipv4"));
+            (r, None, port_status_from_engine_test(r), r.is_some())
+        }
+        Some(_) => {
+            let r = engine.check_port_open(Some("ipv6"));
+            (None, r, port_status_from_engine_test(r), r.is_some())
+        }
+        None => {
+            let v4 = engine.check_port_family("ipv4");
+            let v6 = engine.check_port_family("ipv6");
+            if v4.is_none() && v6.is_none() {
+                // A daemon that rejects ip_protocol can only give an
+                // unqualified verdict; it says nothing about which family.
+                let r = engine.check_port_open(None);
+                (None, None, port_status_from_engine_test(r), r.is_some())
+            } else {
+                (v4, v6, combine_port_families(v4, v6), true)
+            }
+        }
+    };
+    let port_open_evidence = port_answered.then(|| "transmission-port-test".to_string());
 
     let certificate_text = ConnectivityReport::generate_certificate(
         listening_port,
@@ -170,6 +203,10 @@ pub async fn run_connectivity_doctor_test(
     if port_status == PortStatus::Open {
         plain_language_findings.push(format!(
             "Transmission's port test reports incoming port {listening_port} as reachable."
+        ));
+    } else if port_status == PortStatus::Partial {
+        plain_language_findings.push(format!(
+            "Incoming port {listening_port} is reachable over IPv6 but closed over IPv4. IPv6 peers can connect; IPv4 peers cannot."
         ));
     } else if port_status == PortStatus::Closed {
         plain_language_findings.push(format!(
@@ -237,7 +274,11 @@ pub async fn run_connectivity_doctor_test(
     }
 
     let mut suggested_fixes = Vec::new();
-    if port_status == PortStatus::Closed {
+    if port_status == PortStatus::Partial {
+        suggested_fixes.push(format!(
+            "Forward TCP and UDP port {listening_port} to this computer on your router (or enable UPnP/NAT-PMP) so IPv4 peers can reach you; IPv6 already works."
+        ));
+    } else if port_status == PortStatus::Closed {
         suggested_fixes.push(format!(
             "The engine reports the incoming port closed. Check your router's TCP/UDP forwarding rule for port {listening_port}, the target device address, and any upstream NAT or firewall."
         ));
@@ -271,6 +312,8 @@ pub async fn run_connectivity_doctor_test(
         inbound_connections: None,
         outbound_connections: None,
         port_open_evidence,
+        port_open_ipv4,
+        port_open_ipv6,
         certificate_text,
         plain_language_findings,
         suggested_fixes,
@@ -372,6 +415,25 @@ mod port_status_tests {
             PortStatus::Closed
         );
         assert_eq!(port_status_from_engine_test(None), PortStatus::Unknown);
+    }
+
+    #[test]
+    fn family_verdicts_never_report_open_from_ipv6_alone() {
+        assert_eq!(
+            combine_port_families(Some(true), Some(false)),
+            PortStatus::Open
+        );
+        assert_eq!(
+            combine_port_families(Some(false), Some(true)),
+            PortStatus::Partial
+        );
+        assert_eq!(
+            combine_port_families(Some(false), Some(false)),
+            PortStatus::Closed
+        );
+        assert_eq!(combine_port_families(Some(false), None), PortStatus::Closed);
+        assert_eq!(combine_port_families(None, Some(true)), PortStatus::Unknown);
+        assert_eq!(combine_port_families(None, None), PortStatus::Unknown);
     }
 
     #[test]

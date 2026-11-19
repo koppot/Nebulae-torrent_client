@@ -148,6 +148,13 @@ pub trait TorrentEngine: Send + Sync {
         None
     }
 
+    /// Tests exactly one address family. Unlike `check_port_open`, a failed or
+    /// inconclusive family test never falls back to an unqualified probe, which
+    /// on a dual-stack engine would report whichever family answered first.
+    fn check_port_family(&self, _ip_protocol: &'static str) -> Option<bool> {
+        None
+    }
+
     /// Push peer limit settings to the engine session.
     ///
     /// Called whenever `PeeringSettings` are saved. Engines that do not

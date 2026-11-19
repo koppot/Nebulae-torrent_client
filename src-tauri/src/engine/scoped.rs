@@ -251,6 +251,12 @@ impl TorrentEngine for ScopedEngine {
     fn check_port_open(&self, ip_protocol: Option<&'static str>) -> Option<bool> {
         self.local.check_port_open(ip_protocol)
     }
+    fn check_port_family(&self, ip_protocol: &'static str) -> Option<bool> {
+        self.local.check_port_family(ip_protocol)
+    }
+    fn port_protocol(&self) -> Option<&'static str> {
+        self.local.port_protocol()
+    }
     fn apply_peering_settings(
         &self,
         settings: &crate::models::peering::PeeringSettings,
