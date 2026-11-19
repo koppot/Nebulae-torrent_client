@@ -56,17 +56,27 @@ if (-not (Test-Path $tarball)) {
 }
 $srcDir = Join-Path $StagingAbs "transmission-$Version"
 Remove-Item -Recurse -Force $srcDir -ErrorAction SilentlyContinue
-# bsdtar delegates .xz to an external xz that Windows does not ship; Git for
-# Windows has one. Only that single executable is used, because its usr\bin
-# also holds a link.exe that would shadow the MSVC linker if put on PATH.
-$xz = Get-Command xz -ErrorAction SilentlyContinue
-if ($xz) { $xzExe = $xz.Source } else {
-    $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
-    $xzExe = Join-Path $gitRoot "usr\bin\xz.exe"
-    if (-not (Test-Path $xzExe)) { throw "xz not found; install xz or Git for Windows" }
-}
+# bsdtar delegates .xz to an external xz that Windows does not ship. Use an
+# xz on PATH, the one in Git for Windows, or 7-Zip. Only a single executable is
+# used, because Git's usr\bin also holds a link.exe that would shadow the MSVC
+# linker if it were put on PATH.
 $tarPlain = Join-Path $StagingAbs "transmission-$Version.tar"
-Invoke-Checked "xz decompress" { & $xzExe -dkf $tarball }
+Remove-Item -Force $tarPlain -ErrorAction SilentlyContinue
+$xzExe = $null
+$cmd = Get-Command xz -ErrorAction SilentlyContinue
+if ($cmd) { $xzExe = $cmd.Source } else {
+    $gitRoot = Split-Path (Split-Path (Get-Command git).Source)
+    $candidate = Join-Path $gitRoot "usr\bin\xz.exe"
+    if (Test-Path $candidate) { $xzExe = $candidate }
+}
+if ($xzExe) {
+    Invoke-Checked "xz decompress" { & $xzExe -dkf $tarball }
+} else {
+    $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+    $sevenZipExe = if ($sevenZip) { $sevenZip.Source } else { Join-Path $env:ProgramFiles "7-Zip\7z.exe" }
+    if (-not (Test-Path $sevenZipExe)) { throw "no xz or 7-Zip available to decompress $tarball" }
+    Invoke-Checked "7z decompress" { & $sevenZipExe x -y "-o$StagingAbs" $tarball }
+}
 Invoke-Checked "tar extraction" { tar -xf $tarPlain -C $StagingAbs }
 Remove-Item -Force $tarPlain -ErrorAction SilentlyContinue
 
