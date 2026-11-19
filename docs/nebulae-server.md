@@ -1,6 +1,6 @@
 # Nebulae Server (Docker) and the desktop client
 
-This is the authoritative guide for running **Nebulae Server** (`ghcr.io/koppot/nebulae-server`) and connecting the Nebulae desktop app to it. Shorter summaries elsewhere (README, GitHub Wiki, release notes, website) link here.
+Nebulae Server is a complete headless deployment powered by Nebulae Core, Nebulae’s bundled torrent engine. The Docker image includes the required server components; no separate torrent-engine installation is needed. Control it from the Nebulae desktop app’s Server tab. Shorter summaries elsewhere (README, GitHub Wiki, release notes, website) link here.
 
 Current published image: **`ghcr.io/koppot/nebulae-server:0.2.8`** (also `:latest`), index digest `sha256:4ae899a02f5c6be283d91d7d717f7eee3feaa4c54322c8757b28b1e96009ab63`, platform **linux/amd64 only**.
 
@@ -18,14 +18,15 @@ Current published image: **`ghcr.io/koppot/nebulae-server:0.2.8`** (also `:lates
 8. [Troubleshooting](#8-troubleshooting)
 9. [What was verified, and what was not](#9-what-was-verified-and-what-was-not)
 10. [Bridge API reference](#supported-bridge-api-endpoints-apiv1)
-11. [Migrating from rTorrent](#migrating-from-rtorrent-scgi-to-transmission-nebulae-server)
+11. [Migrating from rTorrent](#migrating-from-rtorrent-to-nebulae-server)
+12. [Advanced Implementation Reference](#advanced-implementation-reference)
 
 ## 1. Architecture: what runs where
 
-**Inside the container** (one process tree, started by `tini`):
+Inside the container, Nebulae Core handles downloads and seeding. Nebulae Server provides the authenticated API used by the desktop client. Both components are included and started automatically inside the container.
 
-- **Transmission 4.1.3** (`transmission-daemon`, with the Nebulae identity-override patch). This is the torrent engine. Its JSON-RPC port 9091 listens on `127.0.0.1` inside the container only and is never published.
-- **The Nebulae bridge** (`nebulae-server`, Rust). An authenticated REST API on port **9174** that translates `/api/v1/*` calls into Transmission RPC. Every call needs `Authorization: Bearer <NEBULAE_TOKEN>`.
+- **Nebulae Core:** The bundled torrent engine. Its internal engine RPC port 9091 listens on `127.0.0.1` inside the container only and is container loopback only; do not expose.
+- **Nebulae Server:** An authenticated REST API on port **9174** that interfaces with the engine. Every call requires `Authorization: Bearer <NEBULAE_TOKEN>`.
 
 There is no web UI. The only client is the Nebulae desktop app.
 
@@ -33,7 +34,7 @@ There is no web UI. The only client is the Nebulae desktop app.
 
 | | **Manager** tab | **Server** tab |
 |---|---|---|
-| Engine | The local engine inside the desktop app | The Transmission daemon in the container |
+| Engine | Nebulae Core on this computer | Nebulae Core inside the server container |
 | Who downloads, seeds and stores | This computer | **The server.** Data lands in the container's `/data/downloads` (your host folder or volume) |
 | Shows | This computer's torrents | The server's torrents, in the same layout, under a connection banner |
 | Appears when | Always | After you enable and configure *Settings → Server* |
@@ -122,11 +123,11 @@ The image itself defines no Docker health check; the Compose file adds one. With
 |---|---|---|
 | `9174/tcp` | Authenticated REST API (desktop app) | Your LAN/VPN only, see [section 5](#5-network-and-security) |
 | `51413/tcp` + `51413/udp` | BitTorrent peers | Forward on your router if you want inbound peers |
-| `9091` | Transmission RPC | **Never.** Not published, loopback inside the container |
+| `9091` | Internal engine RPC | **Never.** Container loopback only; do not expose |
 
 | Container path | Holds | Back up? |
 |---|---|---|
-| `/data/config` | Transmission `settings.json`, torrent list (`torrents/`), resume data (`resume/`), `peer-id-suffix` | **Yes** |
+| `/data/config` | Nebulae Core settings and torrent state (`settings.json`, `torrents/`, `resume/`, `peer-id-suffix`) | **Yes** |
 | `/data/downloads` | Downloads and `.incomplete` | Your data; back up separately |
 | `/data/watch` | Optional drop folder for `.torrent` files | No |
 
@@ -163,7 +164,7 @@ Use Docker Desktop with the WSL 2 backend and run the same `docker compose` comm
 
 ### macOS (Docker Desktop)
 
-Same commands (verified on Docker Desktop with Compose). On Apple Silicon the image runs under emulation: Docker prints a "requested image's platform (linux/amd64) does not match the detected host platform" warning, which is harmless (or add `--platform linux/amd64` / `platform: linux/amd64`). Host folders work; set `PUID`/`PGID` to your macOS user (`id -u`, usually 501, and `id -g`). Named volumes live in Docker Desktop's virtual disk, which has a size limit: **when that disk is full, Transmission fails with "No space left on device"** (see troubleshooting).
+Same commands (verified on Docker Desktop with Compose). On Apple Silicon the image runs under emulation: Docker prints a "requested image's platform (linux/amd64) does not match the detected host platform" warning, which is harmless (or add `--platform linux/amd64` / `platform: linux/amd64`). Host folders work; set `PUID`/`PGID` to your macOS user (`id -u`, usually 501, and `id -g`). Named volumes live in Docker Desktop's virtual disk, which has a size limit: **when that disk is full, the engine fails with "No space left on device"** (see troubleshooting).
 
 ### Unraid and other NAS
 
@@ -185,7 +186,7 @@ Synology, QNAP, TrueNAS and ARM NAS devices are not tested. A native ARM host wo
 Works the same on Windows, macOS and Linux (release **v0.2.8** or newer).
 
 1. Open **Settings → Server**.
-2. Tick **Connect to a Nebulae Server (Transmission)**.
+2. Tick **Connect to a Nebulae Server (Transmission)** (the current UI label in the released application, connecting to the bundled Nebulae Core server).
 3. **Server address:** `http://<server-ip>:9174` (for example `http://192.168.1.50:9174` or `http://tower.local:9174`). `https://…` also works behind a reverse proxy. If you changed `NEBULAE_HOST_PORT`, use that port.
 4. **API token:** the `NEBULAE_TOKEN` value. (The field's grey placeholder still reads `NEBULAE_SERVER_TOKEN` from the old beta; it is the same field.)
 5. Click **Test connection**. Success reads "Connected…", and a **Server** tab appears next to **Manager**. No restart is needed.
@@ -204,7 +205,7 @@ The Manager tab never changes: it keeps showing this computer's torrents.
 - **Default, trusted LAN:** plain HTTP to `http://<server-ip>:9174` with the bearer token. The token travels unencrypted on that connection, so keep it on a network you trust.
 - **Remote access, preferred:** put the server and your desktop on a VPN or tailnet and use the server's tailnet address (for example `http://100.x.y.z:9174`). This changes nothing in an existing TailNet setup; Nebulae Server is just another reachable host.
 - **Remote access over the internet:** terminate TLS in a reverse proxy in front of 9174 and bind the container's API to localhost (`127.0.0.1:9174:9174` in the ports mapping). Illustrative Caddy example (not verified here): `nebulae.example.com { reverse_proxy 127.0.0.1:9174 }`. Then use `https://nebulae.example.com` in the app.
-- **Never** publish port 9174 to the internet unprotected, and **never** publish or proxy Transmission's port 9091 (it has no password; it is loopback-only by design).
+- **Never** publish port 9174 to the internet unprotected, and **never** publish or proxy internal engine RPC port 9091 (it is container loopback only; do not expose).
 - Forward only the peer port (51413 TCP+UDP) on your router.
 - Rotate the token by editing `.env` and running `docker compose up -d` (the container is recreated, torrents are kept), then update the token in Settings → Server.
 
@@ -213,7 +214,7 @@ The Manager tab never changes: it keeps showing this computer's torrents.
 - **Public trackers / magnets with tracker URLs:** add them in the Server tab. DHT/PEX/LPD are off by default on the server, so the torrent needs working trackers.
 - **Private trackers:** use the personalized `.torrent` from the tracker. The passkey inside it is a **secret**: it is stored in the server's `/data/config/torrents/`, so protect the config volume and its backups, and never post screenshots or logs containing announce URLs.
 - **Tracker client rules apply.** Many private trackers restrict which clients, IPs or simultaneous sessions are allowed. The server is a different client and IP from your desktop. Do not run the **same private torrent** on the desktop (Manager tab) and on the server at the same time. Nebulae Server keeps a stable peer-id suffix across container recreation so a restart is not seen as a second client.
-- **ADC website one-click delivery:** the desktop app redeems the website's delivery request, fetches the personalized `.torrent` using your ADC passkey from the OS keychain, and hands it to the engine chosen under *Settings → BitTorrent → ADC One-Click Client Routing*. The list contains **Local Nebulae Engine** and **Remote server / seedbox (Transmission)**, in priority order; if the first is unavailable the next enabled one is used (the remote entry needs *Settings → Server* configured and reachable). Local delivery is skipped while the app is in Server mode.
+- **ADC website one-click delivery:** the desktop app redeems the website's delivery request and sends the torrent to the destination selected in ADC One-Click Client Routing: local Nebulae Core or a configured Nebulae Server. The list contains **Local Nebulae Engine** and **Remote server / seedbox (Transmission)**, in priority order (the remote entry's label in the released application includes '(Transmission)' to identify the bundled engine server; it connects to your configured Nebulae Server). If the first is unavailable the next enabled one is used (the remote entry needs *Settings → Server* configured and reachable). Local delivery is skipped while the app is in Server mode.
 - **A connected server does not by itself prove website routing.** After a one-click request, confirm the torrent appeared in the Server tab and not in Manager. This guide does not claim that any specific tracker has been tested with the published image; try one small torrent first.
 
 ## 7. Operate
@@ -222,7 +223,7 @@ The Manager tab never changes: it keeps showing this computer's torrents.
 docker compose ps                         # status and health
 docker compose logs -f --tail=100         # logs (docker logs -f nebulae-server for docker run)
 docker inspect -f '{{.State.Health.Status}}' nebulae-server     # Compose only
-docker compose stop                       # graceful: Transmission flushes resume data first
+docker compose stop                       # graceful: Nebulae Core saves torrent state before stopping
 docker compose down                       # remove container + network, KEEP volumes and folders
 docker compose up -d                      # start again; torrents are still there
 ```
@@ -241,7 +242,7 @@ Compose prefixes volume names with the project (folder) name, for example `nebul
 
 **Remove without losing data:** `docker compose down` keeps named volumes and host folders. `docker compose down -v` **deletes the named volumes** (config, resume state and, by default, downloads); only run it when you mean it. Removing the image (`docker rmi`) never deletes volumes.
 
-**Version and build identity:** `GET /api/v1/status` reports the bridge `version`, the live Transmission `engine_version` and the `build_id` commit. Image labels: `docker image inspect <image> --format '{{json .Config.Labels}}'` (source repository, version, revision, Transmission version and patch).
+**Version and build identity:** `GET /api/v1/status` reports the bridge `version`, the live bundled engine version (`engine_version`), and the `build_id` commit. Image labels: `docker image inspect <image> --format '{{json .Config.Labels}}'` (source repository, version, revision, engine version and patch).
 
 **Build from source** (repository root):
 
@@ -310,33 +311,33 @@ All endpoints require `Authorization: Bearer <NEBULAE_TOKEN>`:
 
 ---
 
-## Migrating from rTorrent (SCGI) to Transmission (nebulae-server)
+## Migrating from rTorrent to Nebulae Server
 
-Previous Nebulae releases supported rTorrent over SCGI as a remote engine. The current release replaces that path with `nebulae-server` backed by Transmission. The client Settings UI fields are unchanged (URL and token); only the server side changes.
+The current server deployment uses Nebulae Core through Nebulae Server’s authenticated API. Previous Nebulae releases supported rTorrent over SCGI as a remote engine. The client Settings UI fields are unchanged (URL and token); only the server side changes.
 
 ### Key differences
 
-| Behaviour | rTorrent / SCGI | nebulae-server / Transmission |
+| Behaviour | rTorrent / SCGI | Nebulae Server / Nebulae Core |
 |---|---|---|
 | Protocol | XML-RPC over SCGI | JSON-RPC (`POST /transmission/rpc`) via authenticated REST bridge |
 | Auth | None / SSH tunnel | Bearer token (`NEBULAE_TOKEN`) |
 | Sequential download | Not supported | Supported — `torrent-set sequentialDownload` |
 | File priority values | 0 / 1 / 2 | 0 (skip) / 1 (normal) / 2 (high) — same semantics |
-| Category/label | XMLRPC custom tag | Transmission label field |
+| Category/label | XMLRPC custom tag | Engine label field |
 | Peer port | Configured in rTorrent config | `peer-port` in `/data/config/settings.json` (default 51413) |
 
 ### Migration steps
 
 1. **Export active torrents from rTorrent.**  
-   The simplest path is to copy the `.torrent` files and resume data from your rTorrent session directory. Transmission reads standard `.torrent` files but does not import rTorrent's `.rtorrent` resume metadata — torrents will recheck on first start.
+   The simplest path is to copy the `.torrent` files and resume data from your rTorrent session directory. The engine reads standard `.torrent` files but does not import rTorrent's `.rtorrent` resume metadata — torrents will recheck on first start.
 
 2. **Install and start `nebulae-server`** using the Docker steps above.
 
-3. **Place your `.torrent` files in `/data/watch`** (or add them through Nebulae after connecting). Transmission will begin rechecking them against the files in `/data/downloads`.
+3. **Place your `.torrent` files in `/data/watch`** (or add them through Nebulae after connecting). The engine will begin rechecking them against the files in `/data/downloads`.
 
 4. **In Nebulae Settings → Server:**
    - Disable any existing rTorrent SCGI URL.
-   - Enable *Connect to a Nebulae Server (Transmission)*.
+   - Enable *Connect to a Nebulae Server (Transmission)* (the UI label in the released application, connecting to the bundled Nebulae Core server).
    - Enter `http://<server-ip>:9174` and your `NEBULAE_TOKEN`.
    - Click **Test connection**.
 
@@ -345,4 +346,17 @@ Previous Nebulae releases supported rTorrent over SCGI as a remote engine. The c
 ### Not supported after migration
 
 - rTorrent-specific per-tracker scrape intervals and custom XMLRPC commands are not exposed by `nebulae-server`.
-- Super-seeding toggle — Transmission does not support super-seeding; the UI control returns an error when connected to a remote server.
+- Super-seeding toggle — the bundled engine does not support super-seeding; the UI control returns an error when connected to a remote server.
+
+---
+
+## Advanced Implementation Reference
+
+> [!NOTE]
+> **Technical Identifiers & Attribution**
+> Some internal identifiers retain upstream names for protocol and file-format compatibility. They refer to components included with Nebulae, not separate installations:
+> - The underlying bundled torrent engine executable is based on patched Transmission 4.1.3 (`transmission-daemon`), compiled with Nebulae's identity and keepalive patches.
+> - Internal RPC communication uses the standard `/transmission/rpc` endpoint on container loopback (`127.0.0.1:9091`).
+> - Environment variables `TRANSMISSION_RPC_URL`, `TRANSMISSION_USER`, and `TRANSMISSION_PASS` are read by the bridge for engine connection configuration.
+> - Status JSON response reports `"engine": "transmission"` for client compatibility.
+> - Source licenses, patch disclosures, and third-party notices are maintained in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) and `patches/`.

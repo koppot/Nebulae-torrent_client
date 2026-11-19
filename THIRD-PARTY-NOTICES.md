@@ -45,7 +45,7 @@ All paths are relative to `Nebulae.app/Contents/Resources/resources/`.
 
 Nebulae executes `transmission-daemon` strictly as an independent, detached sidecar process via standard operating system process launch APIs (`std::process::Command` / `Child`). Nebulae communicates with it exclusively over its JSON-RPC HTTP interface bound to `127.0.0.1` only. Nebulae does not statically or dynamically link to any Transmission library or call Transmission C/C++ runtime internals from the main `nebulae` binary. The `transmission-daemon` binary and its runtime libraries are distributed alongside Nebulae as an independent aggregation.
 
-Source code corresponding to the distributed `transmission-daemon` binary is the upstream tarball named above plus the patch above. The pinned source tarball SHA-256 is recorded in this file and in `AGENT-COORDINATION.md`.
+Source code corresponding to the distributed `transmission-daemon` binary is the upstream tarball named above plus the patch above. The pinned source tarball SHA-256 is recorded in this file.
 
 ### Private-tracker compliance
 

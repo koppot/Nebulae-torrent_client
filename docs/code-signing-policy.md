@@ -2,7 +2,7 @@
 
 > **Status: SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.**
 >
-> The application (submitted 2026-10-14, see [signpath-application.md](signpath-application.md)) was declined; no signing provider is active, no certificate has been issued, and nothing in current releases is signed. This page describes the provider-neutral policy that will govern signed releases under whichever signing provider is onboarded in the future. It does not imply that SignPath or SignPath Foundation currently sponsors, endorses, or signs this project. The prepared SignPath integration is preserved but inactive: [signpath-ci-integration.md](signpath-ci-integration.md).
+> The application (submitted 2026-10-14) was declined; no signing provider is active, no certificate has been issued, and nothing in current releases is signed. This page describes the provider-neutral policy that will govern signed releases under whichever signing provider is onboarded in the future. It does not imply that SignPath or SignPath Foundation currently sponsors, endorses, or signs this project.
 
 ## Project identity
 

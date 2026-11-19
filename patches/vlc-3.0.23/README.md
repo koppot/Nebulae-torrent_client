@@ -187,8 +187,7 @@ not part of the five-patch order. Applies to the pristine 3.0.23 tarball with
 `d3d11-patched-sources.sha256`. `scripts/windows/build-d3d11-plugin.sh` applies
 it, builds only `libdirect3d11_plugin.dll` with MinGW-w64 against the stock
 `libvlccore.dll`, and the result is pinned in `scripts/windows/d3d11-plugin.lock.json`.
-See `docs/windows/MODIFIED-VLC-RUNTIME-SPEC-0.2.4.md` §5.3 and
-`docs/windows/UHD-HDR-SDR-VALIDATION.md`.
+See internal engineering specification for Windows UHD HDR-to-SDR runtime details.
 
 ## Applying the patches
 

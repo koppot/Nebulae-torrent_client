@@ -109,8 +109,7 @@ the profile directory on disk are never touched.
   existing socket); no duplicates are possible (single supervisor).
 - **Linux**: `PR_SET_PDEATHSIG` reaps the daemon if the app dies hard.
 - **All platforms**: userspace networking only — no TUN device, no
-  system routes/DNS changes, system Tailscale untouched. Transmission
+  system routes/DNS changes, system Tailscale untouched. Nebulae Core
   cannot bind to the tailnet; torrent peer routing is out of scope until
   a TUN-based design is proven with a real two-member transfer.
-- Enrollment requires the ADC Headscale server to be deployed (docs/
-  adc-server-setup.md; not deployed yet).
+- Enrollment requires the ADC Headscale server to be deployed (not deployed yet).

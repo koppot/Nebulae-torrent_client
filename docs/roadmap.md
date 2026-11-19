@@ -52,6 +52,7 @@ This document outlines the phased development plan for **Nebulae** (Torrent Clie
 ## Phase 4: Local Media Library & Playback Station
 - [x] Local media metadata extraction (parse video release titles without cloud mandates).
 - [x] Embedded video frame thumbnail generator & optical disc artwork scanner (`get_media_thumbnail`, `scan_disc_artwork`).
-- [x] Local streaming launcher: stream/play media in default system players (VLC, IINA, mpv) with hidden command execution (`launch_media_player`, `launch_disc_player`).
+- [x] Nebulae Cinema: integrated optical disc cinema engine for native DVD, Blu-ray, and 4K UHD interactive menu playback.
+- [x] Optional external player launcher: optional handoff to launch media in user-selected external players (such as VLC, IINA, mpv).
 - [x] Automatic series, episode & multi-disc boxset aggregator (`SimpleMediaView` boxset carousels).
 - [x] Disk space cleaner and completed media organizer (`clean_cache_files`, `organize_completed_media`, `get_volume_disk_space`).

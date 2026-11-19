@@ -41,7 +41,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
    - [Uninstalling on Linux](#uninstalling-on-linux)
 6. [Isolated Internal Storage & Diagnostics](#5-isolated-internal-storage--diagnostics)
 7. [Optical Disc Cinema & Media Playback](#6-optical-disc-cinema--media-playback)
-   - [Zero-Dependency Bundled Player](#zero-dependency-bundled-player)
+   - [Nebulae Cinema — Included Media and Disc Playback](#nebulae-cinema--included-media-and-disc-playback)
    - [UHD Blu-ray & Commercial Discs (AACS Limitation)](#uhd-blu-ray--commercial-discs-aacs-limitation)
    - [Java Runtime & BD-J Navigation](#java-runtime--bd-j-navigation)
 
@@ -51,6 +51,7 @@ This guide provides step-by-step, beginner-friendly instructions for installing,
 
 - **Product Name**: **Nebulae**
 - **Product Subtitle**: **Torrent Client by Asian DVD Club**
+- **Included Core Components**: Nebulae desktop packages include **Nebulae Core** for downloads and seeding and **Nebulae Cinema** for integrated media and disc playback. You do not need to install Transmission or VLC separately.
 - **Executable Name**: **`nebulae`** (`nebulae.exe` on Windows)
 - **macOS Application Bundle**: **`Nebulae.app`**
 - **Installers & Disk Images**:
@@ -415,12 +416,13 @@ To maintain a clean and reliable interface, Nebulae strictly isolates technical 
 
 Nebulae includes a dedicated media station mode designed specifically for Asian DVD Club's optical archive library, featuring interactive menu playback for DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD Blu-ray releases.
 
-### Zero-Dependency Bundled Player
+### Nebulae Cinema — Included Media and Disc Playback
 
-Beginning with the optical disc player bundle update, every platform ships a fully self-contained player:
-- **No manual player installation required:** Nebulae packages an embedded, isolated `mpv` player engine compiled with `libdvdnav` and `libbluray`. This applies to **all** platforms — Windows (NSIS), macOS (DMG), Linux (`.deb`, `.rpm`, AppImage). Users do not need to install VLC, system mpv, or any third-party software on a clean machine to play disc structures with interactive menus. The `.deb`/`.rpm` packages no longer depend on the distribution's `mpv` package either.
-- **Self-contained library tree:** on macOS and Linux the bundled player carries its complete non-system shared-library tree inside the package, with load paths rewritten so it uses only its own libraries. On Linux the only remaining host requirement is the platform's C runtime (glibc 2.35 or newer, i.e. Ubuntu 22.04+/Debian 12+ era systems).
-- **Probe Order:** When launching disc playback, Nebulae probes the bundled isolated player first, followed by system `mpv`, VLC, and IINA (on macOS), before falling back to the operating system's default media player.
+Nebulae desktop packages include **Nebulae Core** for downloads and seeding and **Nebulae Cinema** for integrated media and disc playback. You do not need to install Transmission or VLC separately.
+
+- **Integrated Optical Playback:** Nebulae Cinema provides native interactive menu playback for DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD releases on all supported platforms (Windows, macOS, and Linux). On a clean operating system, interactive disc menus work out of the box with zero third-party player dependencies.
+- **Self-Contained Runtime:** Nebulae carries the required playback libraries directly inside the desktop application package. On Linux, the only host requirement is the platform C runtime (glibc 2.35 or newer, covering Ubuntu 22.04+, Debian 12+, and equivalent modern distributions).
+- **Optional External Players:** If you prefer using a standalone external player (such as external VLC, mpv, or IINA), you can launch titles in your external player from the release cards or context menu. This optional handoff is completely separate from Nebulae Cinema's integrated in-app playback.
 - **Player Status:** Current player detection and capability details can be inspected at any time in **Settings → Media**.
 
 ### First Launch on macOS (Gatekeeper)

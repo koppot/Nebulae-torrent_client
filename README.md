@@ -25,6 +25,8 @@
 
 **Nebulae** is a modern, privacy-focused peer-to-peer file-transfer client designed for communities, archives, and organizations sharing content with permission.
 
+Nebulae desktop packages include **Nebulae Core** for downloads and seeding and **Nebulae Cinema** for integrated media and disc playback. You do not need to install Transmission or VLC separately.
+
 It combines a clean, media-friendly interface inspired by Asian DVD Club's visual styling with advanced connectivity diagnostics, Smart Peering telemetry, isolated VPN socket binding, and community torrent-management tools.
 
 ### Designed for Communities
@@ -44,12 +46,14 @@ Nebulae does not host, index, search, recommend, or distribute content.
 ## Core Features
 
 - **Dual UI Modes**:
-  - **Simple Media Mode**: Netflix-style shelves (*Active Downloads*, *Recently Added*, *Completed*, *Seeding*, *Ready to Watch*), poster-style media cards, and single-click playback.
-  - **Torrent Manager Mode**: Power-user table view with status filters, categories, search, and a deep tabbed inspector (*Files*, *Trackers*, *Peers*, *Speed*, *Log*).
+  - **Simple Media Mode**: Netflix-style shelves (*Active Downloads*, *Recently Added*, *Completed*, *Seeding*, *Ready to Watch*), poster-style media cards, and single-click playback powered by **Nebulae Cinema**.
+  - **Torrent Manager Mode**: Power-user table view with status filters, categories, search, and a deep tabbed inspector (*Files*, *Trackers*, *Peers*, *Speed*, *Log*) powered by **Nebulae Core**.
+- **Nebulae Cinema**: Integrated media and disc playback system supporting interactive DVD (`VIDEO_TS`, ISO), Blu-ray (`BDMV`, ISO), and 4K UHD menus with no separate media player installation required.
+- **Nebulae Core Torrent Engine**: Reliable downloading and seeding engine with private swarm safeguards (automatic permanent disable of DHT, PEX, and LSD on private swarms).
 - **Smart Peering Engine**: Passive latency, throughput, and reciprocity telemetry with rolling quality scoring and 5 selectable peering modes (*Balanced*, *Speed First*, *Latency First*, *Local First*, *Privacy First*).
 - **Connectivity Doctor**: Detects listening port reachability, UPnP/NAT-PMP/PCP availability, dual-stack IPv4/IPv6 health, and DNS latency with guided router port-forwarding instructions.
 - **VPN for ADC Only**: Supports importing WireGuard (`.conf`) and OpenVPN (`.ovpn`) profiles. Binds torrent engine sockets directly to the VPN interface without redirecting your browser or system applications. Includes an integrated Kill Switch that pauses transfers if the VPN drops.
-- **AsianDVDClub Community Framework**: Passkey masking and OS Keychain storage, ratio dashboard, Seed Time Shield, and private torrent safeguards (automatic permanent disable of DHT, PEX, and LSD on private swarms).
+- **AsianDVDClub Community Framework**: Passkey masking and OS Keychain storage, ratio dashboard, Seed Time Shield, and private torrent safeguards.
 - **Cinematic Startup Splash**: Archive splash screen displaying initialization progress and a community invitation to visit `asiandvdclub.org`.
 
 ---
@@ -78,7 +82,7 @@ Detailed installation instructions covering Windows SmartScreen, macOS Gatekeepe
 
 ## Nebulae Server (Docker)
 
-Run the torrent engine on a NAS, home server or seedbox and drive it from the desktop app's **Server** tab. The server downloads, seeds and stores on its own machine; the desktop app is the remote control. Image: `ghcr.io/koppot/nebulae-server:0.2.8` (linux/amd64).
+Nebulae Server is a complete headless deployment powered by Nebulae Core, Nebulae’s bundled torrent engine. The Docker image includes the required server components; no separate torrent-engine installation is needed. Run the server on a NAS, home server or seedbox and control it from the desktop app's **Server** tab. Image: `ghcr.io/koppot/nebulae-server:0.2.8` (linux/amd64).
 
 ```bash
 export NEBULAE_TOKEN="$(openssl rand -hex 32)"
@@ -88,7 +92,7 @@ docker run -d --name nebulae-server --restart unless-stopped --platform linux/am
   ghcr.io/koppot/nebulae-server:0.2.8
 ```
 
-Then in the desktop app: **Settings → Server** → *Connect to a Nebulae Server (Transmission)* → `http://<server-ip>:9174` + token → **Test connection**.
+Then in the desktop app: **Settings → Server** → check **Connect to a Nebulae Server (Transmission)** (this is the UI label in the released application, connecting to the bundled Nebulae Core server) → `http://<server-ip>:9174` + token → **Test connection**.
 
 📖 **[Full guide: architecture, Compose, platforms, security, trackers, troubleshooting (docs/nebulae-server.md)](docs/nebulae-server.md)**
 
@@ -98,7 +102,7 @@ Then in the desktop app: **Settings → Server** → *Connect to a Nebulae Serve
 
 > **SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.**
 
-Windows artifacts in current releases are **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher on first run. No certificate has been issued, and no signing provider is active. The prepared SignPath integration is preserved but inactive (`docs/signpath-ci-integration.md`), and the [code signing policy](docs/code-signing-policy.md) states the provider-neutral rules that will govern signed releases under whichever provider is onboarded in the future.
+Windows artifacts in current releases are **unsigned** beta builds; SmartScreen will warn about an unrecognized publisher on first run. No certificate has been issued, and no signing provider is active. The [code signing policy](docs/code-signing-policy.md) states the provider-neutral rules that will govern signed releases under whichever provider is onboarded in the future.
 
 - Full policy (roles, approvers, verifiable-build rules, per-release manual approval): **[docs/code-signing-policy.md](docs/code-signing-policy.md)**
 - Privacy policy: **[docs/privacy.md](docs/privacy.md)**

@@ -130,7 +130,7 @@ To prevent state corruption and race conditions, storage responsibilities are cl
 The `TorrentEngine` trait in `src-tauri/src/engine/traits.rs` is extended additively. `MockTorrentEngine` is preserved under a debug/test flag (`#[cfg(test)]`) to provide deterministic unit and regression testing for UI components, while production application wiring in `src-tauri/src/lib.rs` executes the real engine.
 
 ### 4.8. Fallback Engine Policy: `libtorrent-rasterbar`
-If `librqbit` fails to meet the Phase 1 Benchmark Gate criteria (as defined in `docs/engine-benchmarks.md`) or if upstream maintenance ceases, the designated fallback engine is **`libtorrent-rasterbar`** (Arvid Norberg).
+If `librqbit` fails to meet Phase 1 performance criteria or if upstream maintenance ceases, the designated fallback engine is **`libtorrent-rasterbar`** (Arvid Norberg).
 - **License**: BSD-3-Clause (fully permissive, MIT-compatible, and SignPath Foundation compliant).
 - **Build Model**: Must be compiled from source directly within CI workflows to satisfy SignPath Foundation's requirement that no unverified third-party binaries or pre-compiled C++ sidecars are packaged.
 - **Known Engineering Cost**:
@@ -149,6 +149,6 @@ Nebulae prioritizes upstream collaboration with the `librqbit` maintainers (`ika
 3. **Phase 5 Network Interface Binding**:
    - Upstream engagement for `SO_BINDTODEVICE` (Linux), `IP_BOUND_IF` (macOS), and `IP_UNICAST_IF` (Windows) will be initiated prior to Phase 5 implementation.
 4. **SignPath Reputation Evidence**:
-   - Active upstream contributions, issue discussions, and PR tracking are documented as legitimate open-source participation records in `docs/signpath-application.md`.
+   - Active upstream contributions, issue discussions, and PR tracking are maintained as part of open-source project participation.
 
 

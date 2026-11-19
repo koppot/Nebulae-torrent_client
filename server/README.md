@@ -1,6 +1,6 @@
 # nebulae-server — Headless Server
 
-A standalone REST API bridge that wraps a local Transmission daemon, designed to run on a NAS, VPS, or seedbox. The Nebulae desktop client connects to it via the **Server** tab in Settings.
+Nebulae Server runs Nebulae Core on a NAS, home server, VPS or seedbox. The Docker image includes the required server components. Connect from the Nebulae desktop app’s Server settings.
 
 ## Quick Start (Docker)
 
@@ -53,21 +53,24 @@ All endpoints require `Authorization: Bearer <token>` header.
 | `POST` | `/api/v1/torrents/resume-all` | Resume all torrents |
 | `POST` | `/api/v1/kill-switch` | Engage/reset kill switch |
 
-## Standalone (without Docker)
+## Developer source build — manual component setup
+
+> [!NOTE]
+> This section is for developers building and running the standalone bridge binary directly from source outside of Docker. For normal production and user deployments, use the self-contained Docker image described above, which includes all required components automatically.
 
 ```bash
 # Build
 cd server
 cargo build --release
 
-# Run (requires Transmission daemon running separately)
+# Run (developer mode: requires an underlying engine daemon running separately)
 ./target/release/nebulae-server \
     --token "your-secret-token" \
     --transmission-url "http://127.0.0.1:9091/transmission/rpc" \
     --port 9174
 ```
 
-## Migration from Existing Transmission
+## Migration from an existing external Transmission daemon (Optional)
 
 If you have an existing Transmission installation with data you want to manage through Nebulae:
 

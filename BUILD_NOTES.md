@@ -1,5 +1,9 @@
 # Nebulae Build Notes — VLC Runtime & Navigation Extension
 
+> [!NOTE]
+> **Component Architecture Mapping**
+> Nebulae desktop distributions package **Nebulae Core** (the bundled torrent engine, based on patched Transmission) and **Nebulae Cinema** (the integrated media and optical disc playback system, based on a modified VLC 3.0.23 runtime). This document provides developer and build instructions for compiling, patching, and staging these runtime components.
+
 ## Overview
 
 The macOS (Apple silicon) app bundles a **hybrid VLC 3.0.23 runtime**, the libraries that libbluray needs, and a Transmission daemon with its libraries. Repository scripts build or stage every one of them. The three macOS workflow legs (`release.yml`, `candidate-build.yml`, `build-test.yml`) call those same scripts, so a local build and a CI build produce the same payload.
@@ -225,8 +229,6 @@ curl -sL https://github.com/koppot/Nebulae-torrent_client/releases/latest/downlo
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-## Where playback-repair details live
+## Where patch and verification details live
 
-Build instructions stop here on purpose. The defect analysis, per-defect
-root causes, and the change/provenance ledger for the 2026-10-20/21 macOS
-playback repair are in `docs/` (see `macos-playback-repair-ledger.md`).
+Detailed notes on each patch, the smoke test, and build verification are maintained in `patches/vlc-3.0.23/README.md`.

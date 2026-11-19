@@ -21,7 +21,7 @@ CLI always passes `--socket <our socket>`.
   (127.0.0.1:1055) — `adc_private_probe` does a real HTTPS request there and
   reports reachable only on a real response.
 - Torrent peer transport over the tailnet is NOT supported yet. Userspace
-  networking is not a bindable OS tunnel; binding Transmission to the
+  networking is not a bindable OS tunnel; binding Nebulae Core to the
   tailnet IP requires a TUN-based daemon (root/admin) and must be proven
   with a real two-member transfer before being claimed. The bind-decision
   code in the engine is UNCHANGED in this branch.
