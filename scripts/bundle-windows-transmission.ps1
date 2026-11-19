@@ -85,34 +85,20 @@ if (-not (Test-Path $PatchedSourceDaemon)) {
     $PatchedSourceDaemon = "$StagingDir\build\daemon\transmission-daemon.exe"
 }
 
-# If CMake and Git/Patch are available and patched source daemon not yet built, attempt source build
-if (-not (Test-Path $PatchedSourceDaemon) -and (Get-Command cmake -ErrorAction SilentlyContinue) -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Host "==> Attempting Windows source build with identity patch..."
+# Build the patched daemon from source when it is not already staged. The patch
+# carries the keepalive after 'interested' that rtorrent seedboxes need before
+# they unchoke, plus the identity hooks; the stock MSI daemon has neither.
+# NEBULAE_REQUIRE_PATCHED_DAEMON=1 turns a failed source build into an error
+# instead of falling back to the stock MSI daemon.
+if (-not (Test-Path $PatchedSourceDaemon)) {
+    Write-Host "==> Building patched transmission-daemon from source..."
     try {
-        $TarballUrl = "https://github.com/transmission/transmission/releases/download/$Version/transmission-$Version.tar.xz"
-        $TarballPath = "$StagingDir\transmission-$Version.tar.xz"
-        if (-not (Test-Path $TarballPath)) {
-            Invoke-WebRequest -Uri $TarballUrl -OutFile $TarballPath -UseBasicParsing
-        }
-        $SourceDir = "$StagingDir\transmission-$Version"
-        if (-not (Test-Path $SourceDir)) {
-            tar -xJf $TarballPath -C $StagingDir
-        }
-        $PatchFile = (Resolve-Path "scripts\patches\transmission-$Version-identity-override.patch" -ErrorAction SilentlyContinue)
-        if ($PatchFile) {
-            Write-Host "    Applying identity override patch..."
-            git apply --ignore-whitespace --ignore-space-change --directory="src-tauri/transmission-staging/transmission-$Version" $PatchFile.Path 2>$null
-        }
-        $BuildDir = "$StagingDir\build"
-        New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-        cmake -S $SourceDir -B $BuildDir -DCMAKE_BUILD_TYPE=Release -DENABLE_DAEMON=ON -DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_UTILS=OFF -DENABLE_MAC=OFF -DENABLE_TESTS=OFF -DENABLE_CLI=OFF
-        if ($LASTEXITCODE -eq 0) {
-            cmake --build $BuildDir --config Release --target transmission-daemon -j4
-        }
+        & "$PSScriptRoot\build-windows-transmission.ps1" -Version $Version -StagingDir $StagingDir
+        if (-not (Test-Path $PatchedSourceDaemon)) { throw "patched daemon missing after build" }
     } catch {
-        Write-Host "    Source build skipped/failed: $_. Reusing extracted MSI daemon."
-    } finally {
-        $global:LASTEXITCODE = 0
+        if ($env:NEBULAE_REQUIRE_PATCHED_DAEMON -eq "1") { throw }
+        Write-Host "WARNING: patched source build failed: $_"
+        Write-Host "WARNING: falling back to the stock MSI daemon (no keepalive/identity hooks)."
     }
 }
 

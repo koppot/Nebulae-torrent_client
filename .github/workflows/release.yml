@@ -186,6 +186,8 @@ jobs:
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          NEBULAE_REQUIRE_PATCHED_DAEMON: '1'
         run: |
           ./scripts/bundle-windows-transmission.ps1
 
