@@ -76,6 +76,24 @@ Detailed installation instructions covering Windows SmartScreen, macOS Gatekeepe
 
 ---
 
+## Nebulae Server (Docker)
+
+Run the torrent engine on a NAS, home server or seedbox and drive it from the desktop app's **Server** tab. The server downloads, seeds and stores on its own machine; the desktop app is the remote control. Image: `ghcr.io/koppot/nebulae-server:0.2.8` (linux/amd64).
+
+```bash
+export NEBULAE_TOKEN="$(openssl rand -hex 32)"
+docker run -d --name nebulae-server --restart unless-stopped --platform linux/amd64 \
+  -e NEBULAE_TOKEN="$NEBULAE_TOKEN" -p 9174:9174 -p 51413:51413 -p 51413:51413/udp \
+  -v nebulae-downloads:/data/downloads -v nebulae-config:/data/config -v nebulae-watch:/data/watch \
+  ghcr.io/koppot/nebulae-server:0.2.8
+```
+
+Then in the desktop app: **Settings → Server** → *Connect to a Nebulae Server (Transmission)* → `http://<server-ip>:9174` + token → **Test connection**.
+
+📖 **[Full guide: architecture, Compose, platforms, security, trackers, troubleshooting (docs/nebulae-server.md)](docs/nebulae-server.md)**
+
+---
+
 ## Code signing policy
 
 > **SignPath Foundation application declined due to insufficient project history. Windows beta builds are currently unsigned unless another signing provider is configured.**

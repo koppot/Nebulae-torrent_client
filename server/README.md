@@ -11,7 +11,9 @@ cp .env.example .env        # set NEBULAE_TOKEN (openssl rand -hex 32)
 docker compose up -d        # pulls ghcr.io/koppot/nebulae-server:0.2.8
 ```
 
-Then in the desktop client: Settings → Server → URL `http://<server-ip>:9174` and the token. Full guide (build from source, authentication and exposure, volumes, update, backup, rollback): [`docs/nebulae-server.md`](../docs/nebulae-server.md).
+Then in the desktop client: Settings → Server → URL `http://<server-ip>:9174` and the token.
+
+**The authoritative guide is [`docs/nebulae-server.md`](../docs/nebulae-server.md)**: architecture, install with Compose or `docker run`, Linux / Windows / macOS / Unraid notes, desktop connection steps, security, trackers, update/backup/rollback and troubleshooting. The published image `ghcr.io/koppot/nebulae-server:0.2.8` is **linux/amd64 only**.
 
 ## Docker Compose Configuration (`server/docker/.env`)
 
@@ -22,6 +24,7 @@ Then in the desktop client: Settings → Server → URL `http://<server-ip>:9174
 | `NEBULAE_HOST_PORT` | `9174` | Host port for the REST API |
 | `DOWNLOAD_DIR` | named volume | Host path for downloads |
 | `WATCH_DIR` | named volume | Host path for the .torrent watch folder |
+| `NEBULAE_IMAGE` | `ghcr.io/koppot/nebulae-server` | Image repository |
 | `PUID` / `PGID` | `1000` | Container user/group IDs |
 
 ## Ports
@@ -99,7 +102,7 @@ Expected response:
     "name": "nebulae-server",
     "version": "0.2.8",
     "engine": "transmission",
-    "engine_version": "4.1.3",
+    "engine_version": "4.1.3 (838877323f)",
     "build_id": "<git commit>",
     "kill_switch_engaged": false
 }
