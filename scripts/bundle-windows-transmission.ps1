@@ -120,6 +120,15 @@ $SystemDllPrefixes = @("api-ms-", "ext-ms-", "ucrtbase", "vcruntime", "msvcp", "
                        "crypt32", "secur32", "bcrypt", "iphlpapi", "psapi")
 Write-Host "==> Copying bundled DLLs..."
 $Copied = 0
+if (Test-Path $PatchedSourceDaemon) {
+    # The source build links OpenSSL, libcurl and zlib statically; the only DLLs
+    # it needs are the MSVC runtime ones the build step staged beside it.
+    Get-ChildItem -Path (Split-Path $PatchedSourceDaemon) -Filter "*.dll" | ForEach-Object {
+        Copy-Item -Path $_.FullName -Destination "$ResourceDir\$($_.Name)" -Force
+        Write-Host "    Copied: $($_.Name)"
+        $Copied++
+    }
+} else {
 Get-ChildItem -Path $DaemonDir -Filter "*.dll" | ForEach-Object {
     $lname = $_.Name.ToLower()
     $isSystem = $false
@@ -131,6 +140,7 @@ Get-ChildItem -Path $DaemonDir -Filter "*.dll" | ForEach-Object {
         Write-Host "    Copied: $($_.Name)"
         $Copied++
     }
+}
 }
 Write-Host "    Total DLLs copied: $Copied"
 

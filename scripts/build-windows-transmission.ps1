@@ -109,4 +109,14 @@ $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($
 foreach ($marker in "TRANSMISSION_PEER_ID_PREFIX", "TRANSMISSION_PEER_ID_SUFFIX", "NEBULAE_INTEREST_KEEPALIVE") {
     if (-not $text.Contains($marker)) { throw "$exe lacks the $marker patch marker" }
 }
+# The daemon links the dynamic MSVC runtime. Ship the redistributable DLLs
+# next to it so it starts on machines without the Visual C++ Redistributable.
+$crtDir = Get-ChildItem (Join-Path $vsPath "VC\Redist\MSVC") -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^\d' } | Sort-Object Name -Descending |
+    ForEach-Object { Get-ChildItem (Join-Path $_.FullName "x64") -Directory -Filter "Microsoft.VC*.CRT" -ErrorAction SilentlyContinue } |
+    Select-Object -First 1
+if (-not $crtDir) { throw "the Visual C++ redistributable DLLs were not found under $vsPath" }
+foreach ($dll in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll") {
+    Copy-Item (Join-Path $crtDir.FullName $dll) (Split-Path $exe) -Force
+}
 Write-Host "Patched transmission-daemon.exe built: $exe"
