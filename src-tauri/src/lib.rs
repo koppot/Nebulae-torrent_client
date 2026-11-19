@@ -7,6 +7,7 @@ pub mod models;
 pub mod player;
 pub mod qbit_import;
 pub mod shutdown;
+pub mod single_instance_gate;
 pub mod speed_format;
 pub mod status_bar;
 pub mod tailscale;
@@ -29,7 +30,57 @@ use utils::paths::AppPaths;
 
 pub static TS_STATE: std::sync::OnceLock<std::sync::Arc<TsState>> = std::sync::OnceLock::new();
 
+/// Handles the arguments of a second launch: focus the running window and
+/// queue any file/link payload. Shared by the plugin callback and the
+/// pre-startup hand-off consumer.
+fn handle_second_instance(app: &tauri::AppHandle, argv: &[String]) {
+    use tauri::{Emitter, Manager};
+    for arg in argv {
+        if arg == "--quit" || arg == "-q" || arg == "--exit" {
+            crate::commands::diagnostics::quit_app(app.clone());
+            return;
+        }
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        #[cfg(target_os = "windows")]
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
+            }
+        }
+    }
+    for arg in argv.iter().skip(1) {
+        let lower = arg.to_ascii_lowercase();
+        if lower.ends_with(".torrent")
+            || lower.ends_with(".adc")
+            || lower.starts_with("magnet:")
+            || lower.starts_with("adc:")
+            || (!arg.starts_with('-') && std::path::Path::new(arg).exists())
+        {
+            if let Some(pending) = app.try_state::<commands::association::PendingOpenPayloads>() {
+                if let Ok(mut queue) = pending.0.lock() {
+                    queue.push(arg.clone());
+                }
+            }
+            let _ = app.emit("nebulae://open-uri", arg.clone());
+        }
+    }
+}
+
 pub fn run() {
+    // Before any side effect (engine, Tailscale, WebView cleanup, DB): a second
+    // launch hands its arguments to the running instance and exits untouched.
+    if let Ok(early_paths) = AppPaths::init() {
+        if single_instance_gate::acquire(&early_paths.internal_dir)
+            == single_instance_gate::Gate::HandedOff
+        {
+            return;
+        }
+    }
+
     taskbar_windows::init_taskbar_app_id();
 
     // Portable BD-J: point libbluray (inside the bundled VLC plugins) at the
@@ -335,6 +386,7 @@ pub fn run() {
     let db_for_rss = Arc::clone(&db);
     let db_for_stats_poller = Arc::clone(&db);
     let db_for_inbox_poller = Arc::clone(&db);
+    let internal_dir_for_handoff = paths.internal_dir.clone();
     let engine_for_delivery_poller = Arc::clone(&local_engine);
     let db_for_delivery_poller = Arc::clone(&db);
 
@@ -343,40 +395,7 @@ pub fn run() {
         // focus the running app and hand it the file, not spawn a second
         // instance. Registered FIRST per the plugin's requirement.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            use tauri::{Emitter, Manager};
-            for arg in &argv {
-                if arg == "--quit" || arg == "-q" || arg == "--exit" {
-                    crate::commands::diagnostics::quit_app(app.clone());
-                    return;
-                }
-            }
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.unminimize();
-                let _ = win.set_focus();
-                #[cfg(target_os = "windows")]
-                if let Ok(hwnd) = win.hwnd() {
-                    unsafe {
-                        let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(hwnd);
-                    }
-                }
-            }
-            for arg in argv.iter().skip(1) {
-                let lower = arg.to_ascii_lowercase();
-                if lower.ends_with(".torrent")
-                    || lower.ends_with(".adc")
-                    || lower.starts_with("magnet:")
-                    || lower.starts_with("adc:")
-                    || (!arg.starts_with('-') && std::path::Path::new(arg).exists())
-                {
-                    if let Some(pending) = app.try_state::<commands::association::PendingOpenPayloads>() {
-                        if let Ok(mut queue) = pending.0.lock() {
-                            queue.push(arg.clone());
-                        }
-                    }
-                    let _ = app.emit("nebulae://open-uri", arg.clone());
-                }
-            }
+            handle_second_instance(app, &argv);
         }))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -475,6 +494,12 @@ pub fn run() {
                 builder.build()?;
             }
 
+            {
+                let handle = app.handle().clone();
+                single_instance_gate::spawn_consumer(internal_dir_for_handoff, move |argv| {
+                    handle_second_instance(&handle, &argv)
+                });
+            }
             engine::seeding::spawn_seeding_rules_loop(engine_for_seeding, db_for_seeding);
             engine::killswitch::spawn_kill_switch_watcher(engine_for_killswitch, db_for_killswitch);
             engine::telemetry::spawn_telemetry_loop(
