@@ -696,6 +696,13 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                             *guard = Some(child);
                             resumed = false;
                             adopted_logged = false;
+                            // On Windows, the keepalive client (debug daemon-logs)
+                            // MUST connect immediately so that readiness checks
+                            // do not trigger "client disconnected: disconnecting Tailscale"
+                            // backend teardown and hang.
+                            #[cfg(target_os = "windows")]
+                            spawn_keepalive(&state, &paths);
+
                             // Respawned daemons never auto-resume the saved
                             // profile on Windows (verified live): resume in
                             // the background so the loop keeps supervising.
@@ -706,9 +713,6 @@ fn supervise_loop(state: Arc<TsState>, paths: Paths) {
                                     tracing::warn!("[tailscale] respawn readiness: {e}");
                                     return;
                                 }
-                                // Keepalive goes in AFTER readiness so its
-                                // connect is the LAST client event (one
-                                // rebuild, then the backend is held).
                                 spawn_keepalive(&st2, &p2);
                                 match resume_saved_profile(&p2) {
                                     Ok(()) => {
