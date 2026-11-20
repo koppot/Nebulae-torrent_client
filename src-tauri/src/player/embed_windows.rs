@@ -273,7 +273,11 @@ pub fn set_video_surface_always_on_top(app: &AppHandle, enabled: bool) {
             if !IsWindow(Some(video_hwnd)).as_bool() {
                 return;
             }
-            let insert_after = if enabled { HWND_TOPMOST } else { HWND_NOTOPMOST };
+            let insert_after = if enabled {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            };
             let _ = SetWindowPos(
                 video_hwnd,
                 Some(insert_after),
