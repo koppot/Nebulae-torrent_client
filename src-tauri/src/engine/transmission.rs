@@ -1637,6 +1637,14 @@ impl TransmissionTorrentEngine {
             .and_then(|()| std::fs::rename(&tmp, &settings_path))
             .map_err(|e| format!("Failed to write transmission settings.json: {e}"))?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&engine_dir, std::fs::Permissions::from_mode(0o775));
+            let _ =
+                std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o664));
+        }
+
         // 6. Spawn the transmission-daemon sidecar
         info!(
             "Spawning transmission-daemon on RPC port {} with config dir {}",
