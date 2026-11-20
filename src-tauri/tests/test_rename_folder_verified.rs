@@ -40,8 +40,13 @@ fn test_rename_torrent_folder_comprehensive() {
     let default_dl = temp_root.join("default_downloads");
     fs::create_dir_all(&default_dl).unwrap();
 
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer_port = listener.local_addr().unwrap().port();
+    drop(listener);
+
     let settings = UserSettings {
         enable_upnp: false,
+        listening_port: peer_port,
         randomize_port_on_startup: true,
         ..Default::default()
     };

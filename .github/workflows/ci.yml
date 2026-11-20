@@ -29,6 +29,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev transmission-daemon
           sudo systemctl stop transmission-daemon || true
           sudo systemctl disable transmission-daemon || true
+          sudo pkill -9 -f transmission-daemon || true
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -49,6 +50,7 @@ jobs:
           BIN=$(which transmission-daemon) || { echo "ERROR: transmission-daemon not found in PATH"; exit 1; }
           echo "Resolved transmission-daemon: $BIN"
           "$BIN" --version || { echo "ERROR: failed to get transmission-daemon version"; exit 1; }
+          sudo pkill -9 -f transmission-daemon || true
 
       - name: Rust tests
         run: cargo test

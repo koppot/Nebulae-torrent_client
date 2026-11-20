@@ -464,6 +464,7 @@ impl TransmissionRpcClient {
         };
 
         let client = reqwest::blocking::Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .build()
@@ -1701,9 +1702,18 @@ impl TransmissionTorrentEngine {
             // Pin the working directory to the writable engine dir: inheriting
             // the app's CWD (e.g. a mounted DMG volume) must never affect the
             // daemon's path handling.
-            .current_dir(&engine_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+            .current_dir(&engine_dir);
+
+        let daemon_log_path = engine_dir.join("daemon.log");
+        if let Ok(log_f) = std::fs::File::create(&daemon_log_path) {
+            if let Ok(out_f) = log_f.try_clone() {
+                cmd.stdout(out_f);
+            }
+            cmd.stderr(log_f);
+        } else {
+            cmd.stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
 
         if daemon_supports_identity && spawned_profile != "transmission" {
             cmd.env("TRANSMISSION_USER_AGENT", &spawned_ua);
@@ -1733,7 +1743,7 @@ impl TransmissionTorrentEngine {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn transmission-daemon: {e}"))?;
 
@@ -1750,6 +1760,12 @@ impl TransmissionTorrentEngine {
         let daemon_version_arc = Arc::new(Mutex::new(None));
         let mut ready = false;
         for _ in 0..20 {
+            if let Ok(Some(exit_status)) = child.try_wait() {
+                let log_tail = std::fs::read_to_string(&daemon_log_path).unwrap_or_default();
+                return Err(format!(
+                    "transmission-daemon exited prematurely with {exit_status}. Output: {log_tail}"
+                ));
+            }
             std::thread::sleep(Duration::from_millis(250));
             if let Ok(resp) = rpc_client.session_get() {
                 if let Some(v) = resp
@@ -1767,9 +1783,9 @@ impl TransmissionTorrentEngine {
         if !ready {
             let mut proc = child;
             let _ = proc.kill();
+            let log_tail = std::fs::read_to_string(&daemon_log_path).unwrap_or_default();
             return Err(
-                "transmission-daemon failed to become responsive on RPC port within 5 seconds"
-                    .to_string(),
+                format!("transmission-daemon failed to become responsive on RPC port {rpc_port} within 5 seconds. Output: {log_tail}"),
             );
         }
 
