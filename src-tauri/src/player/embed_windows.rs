@@ -25,12 +25,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
     GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, LoadCursorW, RegisterClassExW,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC,
-    HWND_TOP, IDC_ARROW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_HREDRAW,
+    CS_VREDRAW, GWLP_WNDPROC, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW,
+    SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWNA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_DISPLAYCHANGE, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCACTIVATE, WM_SETFOCUS, WM_SIZE, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WNDPROC,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 unsafe extern "system" fn surface_wndproc_init(
@@ -222,6 +224,9 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
 
     let video_hwnd = HWND(v_hwnd_val as _);
     unsafe {
+        if !IsWindow(Some(video_hwnd)).as_bool() {
+            return;
+        }
         if IsIconic(main_h).as_bool() {
             let _ = ShowWindow(video_hwnd, SW_HIDE);
             return;
@@ -236,27 +241,51 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
         // outer screen rect was already updated before this call.
         sync_active_slot_size(cw, ch);
 
-        // Compare desired rectangle with current rectangle of video_hwnd; skip unchanged geometry.
-        let mut cur_rect = RECT::default();
-        if GetWindowRect(video_hwnd, &mut cur_rect).is_ok() {
-            let cur_w = cur_rect.right - cur_rect.left;
-            let cur_h = cur_rect.bottom - cur_rect.top;
-            if cur_rect.left == cx && cur_rect.top == cy && cur_w == cw && cur_h == ch {
-                return;
-            }
-        }
+        let _ = ShowWindow(video_hwnd, SW_SHOWNA);
 
-        // Update ONLY the video surface - do NOT call SetWindowPos on main_h.
+        // Position video_hwnd directly behind main_h in Z-order.
         let _ = SetWindowPos(
             video_hwnd,
-            None,
+            Some(main_h),
             cx,
             cy,
             cw,
             ch,
-            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_NOZORDER.0),
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
         );
     }
+}
+
+/// Synchronizes the always-on-top state of the video surface to match the main window.
+pub fn set_video_surface_always_on_top(app: &AppHandle, enabled: bool) {
+    let hwnd = app
+        .state::<crate::player::PlayerState>()
+        .overlay_view
+        .load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd == 0 {
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let video_hwnd = HWND(hwnd as _);
+        let Ok(main_h) = main_hwnd(&app2) else { return };
+        unsafe {
+            if !IsWindow(Some(video_hwnd)).as_bool() {
+                return;
+            }
+            let insert_after = if enabled { HWND_TOPMOST } else { HWND_NOTOPMOST };
+            let _ = SetWindowPos(
+                video_hwnd,
+                Some(insert_after),
+                0,
+                0,
+                0,
+                0,
+                SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0),
+            );
+            update_video_surface_position(main_h);
+        }
+    });
 }
 
 /// Returns the cached `AppHandle` if `ensure_overlay` has already run.
@@ -1247,6 +1276,13 @@ unsafe extern "system" fn overlay_wndproc(
             // the user clicks on the video area.  Without this, DefWindowProcW returns
             // MA_ACTIVATE, which reorders the Z-stack and buries main_hwnd (the
             // transparent WebView2 window that hosts all player controls).
+            // Instead, activate main_hwnd and synchronize the video surface directly behind it.
+            if let Some(app) = overlay_app_handle() {
+                if let Ok(main_h) = main_hwnd(app) {
+                    let _ = SetForegroundWindow(main_h);
+                    update_video_surface_position(main_h);
+                }
+            }
             return LRESULT(3); // MA_NOACTIVATE
         }
         WM_KEYDOWN => {
@@ -1410,42 +1446,63 @@ unsafe extern "system" fn main_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_WINDOWPOSCHANGED {
-        if VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) {
-            let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
-            if v_hwnd_val != 0 {
+    match msg {
+        WM_ACTIVATE => {
+            let activate_state = (wparam.0 & 0xFFFF) as u32;
+            if activate_state != 0 {
                 update_video_surface_position(hwnd);
             }
         }
-    } else if msg == WM_DISPLAYCHANGE {
-        // Re-apply EDR/tone-mapping on screen change. If the window moved
-        // to another display, refresh the per-window state below.
-        if let Some(app) = overlay_app_handle() {
-            use tauri::Emitter;
-            // Reset the latch so the next player_poll / force_apply_edr
-            // re-checks the player for the new display.
-            if let Some(state) = app.try_state::<crate::player::PlayerState>() {
-                state
-                    .edr_applied
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                // Re-apply corner radius (DWM preference may need refreshing).
-                let _ = set_window_corner_radius(app, 10.0);
+        WM_NCACTIVATE => {
+            if wparam.0 != 0 {
+                update_video_surface_position(hwnd);
             }
-            let _ = app.emit("player://screen-changed", true);
         }
-    } else if msg == WM_SIZE {
-        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-        // When the window is restored from the taskbar (taskbar button click or
-        // SC_RESTORE), Win32 delivers WM_SIZE(SIZE_RESTORED) but does NOT set
-        // foreground focus on a decorations(false)+transparent(true) window.
-        // Without focus, the WebView2 compositor treats the window as inactive
-        // and suppresses mouse hit-testing, leaving the custom Close and Minimize
-        // buttons unresponsive.  Calling SetForegroundWindow here restores the
-        // normal click-to-activate behaviour without interfering with minimize or
-        // display-change paths.
-        if should_activate_after_restore(wparam.0 as u32, &MAIN_WINDOW_WAS_MINIMIZED) {
-            let _ = SetForegroundWindow(hwnd);
+        WM_SETFOCUS => {
+            update_video_surface_position(hwnd);
         }
+        WM_WINDOWPOSCHANGED => {
+            if VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) {
+                let v_hwnd_val = VIDEO_HWND.load(Ordering::Relaxed);
+                if v_hwnd_val != 0 {
+                    update_video_surface_position(hwnd);
+                }
+            }
+        }
+        WM_DISPLAYCHANGE => {
+            // Re-apply EDR/tone-mapping on screen change. If the window moved
+            // to another display, refresh the per-window state below.
+            if let Some(app) = overlay_app_handle() {
+                use tauri::Emitter;
+                // Reset the latch so the next player_poll / force_apply_edr
+                // re-checks the player for the new display.
+                if let Some(state) = app.try_state::<crate::player::PlayerState>() {
+                    state
+                        .edr_applied
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    // Re-apply corner radius (DWM preference may need refreshing).
+                    let _ = set_window_corner_radius(app, 10.0);
+                }
+                let _ = app.emit("player://screen-changed", true);
+            }
+        }
+        WM_SIZE => {
+            // When the window is restored from the taskbar (taskbar button click or
+            // SC_RESTORE), Win32 delivers WM_SIZE(SIZE_RESTORED) but does NOT set
+            // foreground focus on a decorations(false)+transparent(true) window.
+            // Without focus, the WebView2 compositor treats the window as inactive
+            // and suppresses mouse hit-testing, leaving the custom Close and Minimize
+            // buttons unresponsive.  Calling SetForegroundWindow here restores the
+            // normal click-to-activate behaviour without interfering with minimize or
+            // display-change paths.
+            if should_activate_after_restore(wparam.0 as u32, &MAIN_WINDOW_WAS_MINIMIZED) {
+                let _ = SetForegroundWindow(hwnd);
+            }
+            if VIDEO_SURFACE_ACTIVE.load(Ordering::Relaxed) {
+                update_video_surface_position(hwnd);
+            }
+        }
+        _ => {}
     }
     if let Some(orig) = MAIN_WNDPROC.get() {
         CallWindowProcW(*orig, hwnd, msg, wparam, lparam)

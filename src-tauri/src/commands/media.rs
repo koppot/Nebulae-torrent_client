@@ -5504,6 +5504,8 @@ pub async fn player_set_always_on_top(
         win.set_always_on_top(enabled)
             .map_err(|e| format!("always on top: {e}"))?;
         PINNED_ON_TOP.store(enabled, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        crate::player::set_video_surface_always_on_top(&app, enabled);
         Ok(enabled)
     } else {
         Err("main window not found".to_string())

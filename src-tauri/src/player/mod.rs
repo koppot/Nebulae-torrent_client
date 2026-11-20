@@ -32,9 +32,9 @@ pub mod menu_watch;
 pub use embed_windows::{
     apply_window_corner_radius, begin_window_drag, ensure_overlay, fit_player_window_to_aspect,
     leave_fullscreen_if_active, miniaturize, set_active_crop, set_overlay_hidden,
-    set_window_corner_radius, sync_frame, toggle_fullscreen, update_blackout_state,
-    window_close_native, window_is_maximized_native, window_maximize_toggle_native,
-    window_minimize_native,
+    set_video_surface_always_on_top, set_window_corner_radius, sync_frame, toggle_fullscreen,
+    update_blackout_state, window_close_native, window_is_maximized_native,
+    window_maximize_toggle_native, window_minimize_native,
 };
 
 #[cfg(target_os = "linux")]
