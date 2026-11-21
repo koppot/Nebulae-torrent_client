@@ -404,6 +404,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       torrents: remaining,
       selectedId: get().selectedId === id ? remaining[0]?.id || null : get().selectedId,
     });
+    await get().fetchTorrents();
   },
 
   addTorrent: async (source: string, downloadDir?: string, bytes?: number[]) => {

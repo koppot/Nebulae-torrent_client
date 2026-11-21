@@ -5110,11 +5110,21 @@ pub async fn list_external_media(
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
+        let hidden_title_keys: std::collections::HashSet<String> = db
+            .list_hidden_media_titles()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| h.title_key)
+            .collect();
+
         // Source 1: JSON sidecar (user-added external media).
         let sidecar_items = read_external_store(&app);
         let mut live: Vec<ExternalMedia> = Vec::new();
         let mut seen_live_paths = std::collections::HashSet::new();
         for mut m in sidecar_items {
+            if hidden_title_keys.contains(&m.title.trim().to_lowercase()) {
+                continue;
+            }
             m.path = release_root_of(&m.path);
             let key = m.path.trim().to_lowercase().replace('\\', "/");
             if seen_live_paths.insert(key) {
@@ -5134,7 +5144,7 @@ pub async fn list_external_media(
         // metadata imported before the torrent was removed.
         if let Ok(all_meta) = db.list_all_torrent_metadata() {
             for (_, meta) in all_meta {
-                if !meta.is_external || meta.info_hash.len() < 20 {
+                if !meta.is_external || meta.info_hash.len() < 20 || meta.hidden_at.is_some() {
                     continue;
                 }
 
@@ -5156,6 +5166,10 @@ pub async fn list_external_media(
                     .or(derived_title.as_deref())
                     .unwrap_or(&meta.info_hash)
                     .to_string();
+
+                if hidden_title_keys.contains(&title.trim().to_lowercase()) {
+                    continue;
+                }
 
                 // Reconstruct the content path from save_path and display_title.
                 let raw_path = match meta.save_path.as_deref() {
@@ -5792,4 +5806,41 @@ pub async fn search_mal_titles(
         .await
         .map_err(|e| format!("search_mal_titles join: {e}"))
         .and_then(|r| r)
+}
+
+// ── Media Title Hide / Restore IPC Commands ─────────────────────────────────
+
+#[tauri::command]
+pub async fn set_media_title_hidden(
+    title: String,
+    hidden: bool,
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<(), String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.set_media_title_hidden(&title, hidden))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_hidden_media_titles(
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<Vec<crate::db::HiddenMediaTitle>, String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.list_hidden_media_titles())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn restore_all_hidden_titles(
+    db: tauri::State<'_, std::sync::Arc<crate::db::Database>>,
+) -> Result<(), String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.restore_all_hidden_titles())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }

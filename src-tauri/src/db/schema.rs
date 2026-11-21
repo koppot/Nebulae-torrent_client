@@ -38,7 +38,17 @@ CREATE TABLE IF NOT EXISTS torrent_metadata (
     -- Feature 5: consecutive missed sync count for removal detection
     sync_miss_count INTEGER DEFAULT 0,
     -- qBittorrent import last checked timestamp
-    last_checked INTEGER
+    last_checked INTEGER,
+    -- Persistent title/torrent hide state from Media grid
+    hidden_at INTEGER
+);
+"#;
+
+pub const CREATE_MEDIA_TITLE_HIDDEN_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS media_title_hidden (
+    title_key TEXT PRIMARY KEY,
+    display_title TEXT NOT NULL,
+    hidden_at INTEGER NOT NULL
 );
 "#;
 

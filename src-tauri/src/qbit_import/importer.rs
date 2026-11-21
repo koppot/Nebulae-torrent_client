@@ -283,6 +283,7 @@ impl QbitImporter {
                 is_external: false,
                 sync_miss_count: 0,
                 last_checked: initial_last_checked,
+                hidden_at: None,
             };
 
             if let Err(e) = db.upsert_torrent_metadata(&db_meta) {

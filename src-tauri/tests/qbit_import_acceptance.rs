@@ -392,6 +392,7 @@ fn test_acceptance_last_checked_survives_restart() {
         is_external: false,
         sync_miss_count: 0,
         last_checked: None,
+        hidden_at: None,
     };
 
     db.upsert_torrent_metadata(&meta).unwrap();
@@ -1334,6 +1335,7 @@ async fn test_acceptance_genuine_hash_checking_and_last_checked_states() {
             is_external: false,
             sync_miss_count: 0,
             last_checked: None,
+            hidden_at: None,
         };
         db.upsert_torrent_metadata(&meta).unwrap();
     }
@@ -1532,6 +1534,7 @@ fn test_acceptance_import_interruption_preserves_existing_database_records() {
             is_external: false,
             sync_miss_count: 0,
             last_checked: Some(1700002000),
+            hidden_at: None,
         };
         db.upsert_torrent_metadata(&meta).unwrap();
         db.set_user_display_title(h, &format!("Custom Renamed Movie {i}"), true)

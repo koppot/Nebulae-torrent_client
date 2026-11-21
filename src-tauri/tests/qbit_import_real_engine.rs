@@ -912,6 +912,7 @@ fn test_real_engine_process_interruption_preserves_database() {
             is_external: false,
             sync_miss_count: 0,
             last_checked: None,
+            hidden_at: None,
         };
         db.upsert_torrent_metadata(&meta).unwrap();
         db.set_user_display_title(&h, &format!("Custom Renamed Baseline {i}"), true)

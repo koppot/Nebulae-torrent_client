@@ -28,6 +28,7 @@ import {
   Copy,
   Trash2,
   RotateCcw,
+  EyeOff,
   FileText,
   Link,
   FileCheck,
@@ -91,6 +92,49 @@ export const SettingsModal: React.FC = () => {
   const [isTestingServer, setIsTestingServer] = useState(false);
   const [discPlayerStatus, setDiscPlayerStatus] = useState<DiscPlayerStatus | null>(null);
   const [isProbingPlayer, setIsProbingPlayer] = useState(false);
+  const [hiddenTitles, setHiddenTitles] = useState<Array<{ title_key: string; display_title: string; hidden_at: number }>>([]);
+  const [isRestoringHidden, setIsRestoringHidden] = useState(false);
+
+  const loadHiddenTitles = async () => {
+    try {
+      const list = await invoke<Array<{ title_key: string; display_title: string; hidden_at: number }>>('list_hidden_media_titles');
+      setHiddenTitles(list || []);
+    } catch {
+      // best-effort
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'media') {
+      void loadHiddenTitles();
+    }
+  }, [activeTab]);
+
+  const handleRestoreSingleHidden = async (title: string) => {
+    setIsRestoringHidden(true);
+    try {
+      await invoke('set_media_title_hidden', { title, hidden: false });
+      await loadHiddenTitles();
+      window.dispatchEvent(new CustomEvent('nebulae:restore-hidden-titles'));
+    } catch (err) {
+      console.error('Failed to restore title:', err);
+    } finally {
+      setIsRestoringHidden(false);
+    }
+  };
+
+  const handleRestoreAllHidden = async () => {
+    setIsRestoringHidden(true);
+    try {
+      await invoke('restore_all_hidden_titles');
+      await loadHiddenTitles();
+      window.dispatchEvent(new CustomEvent('nebulae:restore-hidden-titles'));
+    } catch (err) {
+      console.error('Failed to restore all titles:', err);
+    } finally {
+      setIsRestoringHidden(false);
+    }
+  };
 
   const [identityInfo, setIdentityInfo] = useState<EngineIdentityInfo | null>(null);
   const [, setIsLoadingIdentity] = useState(false);
@@ -2126,6 +2170,58 @@ export const SettingsModal: React.FC = () => {
                   <p className="text-[11px] leading-relaxed text-amber-300/80">
                     Nebulae strictly supports unprotected raw optical disc structures and community home rips. Commercial pressed discs with active AACS or BD+ encryption require prior decryption. Nebulae contains zero DRM circumvention tools or decryption keys.
                   </p>
+                </div>
+
+                {/* Hidden Media Titles Management */}
+                <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-white flex items-center gap-2">
+                        <EyeOff className="w-4 h-4 text-[#e50914]" />
+                        <span>Hidden Media Titles</span>
+                      </span>
+                      <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                        Titles hidden from the Media shelf view. Restoring brings the title and its metadata back into view.
+                      </p>
+                    </div>
+                    {hiddenTitles.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreAllHidden}
+                        disabled={isRestoringHidden}
+                        className="px-2.5 py-1 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-white text-[11px] flex items-center gap-1.5 transition"
+                      >
+                        <RotateCcw className="w-3 h-3 text-[#e50914]" />
+                        <span>Restore All</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {hiddenTitles.length === 0 ? (
+                    <p className="text-[11px] text-[#737373] italic">No media titles are currently hidden.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {hiddenTitles.map((item) => (
+                        <div
+                          key={item.title_key}
+                          className="flex items-center justify-between p-2 rounded bg-[#171717] border border-[#2a2a2a]"
+                        >
+                          <span className="text-white text-xs font-medium truncate max-w-[280px]">
+                            {item.display_title}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRestoreSingleHidden(item.display_title)}
+                            disabled={isRestoringHidden}
+                            className="px-2 py-0.5 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-white text-[10px] flex items-center gap-1 transition"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            <span>Restore</span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

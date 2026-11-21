@@ -105,6 +105,7 @@ impl Database {
         // Execute table initialization
         conn.execute(schema::CREATE_SETTINGS_TABLE, [])?;
         conn.execute(schema::CREATE_TORRENT_METADATA_TABLE, [])?;
+        conn.execute(schema::CREATE_MEDIA_TITLE_HIDDEN_TABLE, [])?;
         conn.execute(schema::CREATE_VPN_PROFILES_TABLE, [])?;
         conn.execute(schema::CREATE_SEED_TIME_TABLE, [])?;
         conn.execute(schema::CREATE_SNATCHED_RECORDS_TABLE, [])?;
@@ -141,6 +142,7 @@ impl Database {
             ("external_moved_at", "INTEGER"),
             ("sync_miss_count", "INTEGER DEFAULT 0"),
             ("last_checked", "INTEGER"),
+            ("hidden_at", "INTEGER"),
         ];
         for (col, col_type) in extra_cols {
             let sql = format!("ALTER TABLE torrent_metadata ADD COLUMN {col} {col_type}");
@@ -898,8 +900,8 @@ impl Database {
                 info_hash, display_title, category, labels, is_watched, notes, added_at,
                 completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
                 sequential_download, first_last_piece_prio, super_seeding, racing_override,
-                last_checked
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                last_checked, hidden_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             ON CONFLICT(info_hash) DO UPDATE SET
                 -- Only update display_title when the user has not locked it.
                 display_title = CASE WHEN user_title_locked = 1
@@ -918,7 +920,8 @@ impl Database {
                 first_last_piece_prio = excluded.first_last_piece_prio,
                 super_seeding = excluded.super_seeding,
                 racing_override = excluded.racing_override,
-                last_checked = COALESCE(excluded.last_checked, torrent_metadata.last_checked)",
+                last_checked = COALESCE(excluded.last_checked, torrent_metadata.last_checked),
+                hidden_at = COALESCE(excluded.hidden_at, torrent_metadata.hidden_at)",
             params![
                 meta.info_hash,
                 meta.display_title,
@@ -937,6 +940,7 @@ impl Database {
                 if meta.super_seeding { 1 } else { 0 },
                 meta.racing_override.map(|v| if v { 1i64 } else { 0i64 }),
                 meta.last_checked.map(|c| c as i64),
+                meta.hidden_at.map(|c| c as i64),
             ],
         )?;
         Ok(())
@@ -1014,7 +1018,7 @@ impl Database {
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
                     sequential_download, first_last_piece_prio, super_seeding, racing_override,
                     user_display_title, user_title_locked, sort_order, poster_path, is_external, sync_miss_count,
-                    last_checked
+                    last_checked, hidden_at
              FROM torrent_metadata WHERE info_hash = ?1",
         )?;
         let mut rows = stmt.query(params![info_hash])?;
@@ -1033,6 +1037,7 @@ impl Database {
             let is_ext_int: i32 = row.get(20).unwrap_or(0);
             let miss_count: i64 = row.get(21).unwrap_or(0);
             let lc_opt: Option<i64> = row.get(22).unwrap_or(None);
+            let ha_opt: Option<i64> = row.get(23).unwrap_or(None);
 
             Ok(Some(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -1058,6 +1063,7 @@ impl Database {
                 is_external: is_ext_int == 1,
                 sync_miss_count: miss_count,
                 last_checked: lc_opt.map(|c| c.max(0) as u64),
+                hidden_at: ha_opt.map(|c| c.max(0) as u64),
             }))
         } else {
             Ok(None)
@@ -1073,7 +1079,7 @@ impl Database {
                     completed_on, save_path, download_limit_kib, upload_limit_kib, ratio_limit,
                     sequential_download, first_last_piece_prio, super_seeding, racing_override,
                     user_display_title, user_title_locked, sort_order, poster_path, is_external, sync_miss_count,
-                    last_checked
+                    last_checked, hidden_at
              FROM torrent_metadata",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1091,6 +1097,7 @@ impl Database {
             let is_ext_int: i32 = row.get(20).unwrap_or(0);
             let miss_count: i64 = row.get(21).unwrap_or(0);
             let lc_opt: Option<i64> = row.get(22).unwrap_or(None);
+            let ha_opt: Option<i64> = row.get(23).unwrap_or(None);
 
             Ok(TorrentDbMetadata {
                 info_hash: row.get(0)?,
@@ -1116,6 +1123,7 @@ impl Database {
                 is_external: is_ext_int == 1,
                 sync_miss_count: miss_count,
                 last_checked: lc_opt.map(|c| c.max(0) as u64),
+                hidden_at: ha_opt.map(|c| c.max(0) as u64),
             })
         })?;
 
@@ -1428,6 +1436,90 @@ impl Database {
              WHERE info_hash = ?2",
             params![now, info_hash],
         )?;
+        Ok(())
+    }
+
+    // ── Media Title Hide / Restore State ──────────────────────────────────────
+
+    /// Hide or restore a media title independently of active torrents or file mutations.
+    pub fn set_media_title_hidden(&self, title: &str, hidden: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let trimmed = title.trim();
+        let key = trimmed.to_lowercase();
+        if key.is_empty() {
+            return Ok(());
+        }
+        if hidden {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "INSERT INTO media_title_hidden (title_key, display_title, hidden_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(title_key) DO UPDATE SET
+                     display_title = excluded.display_title,
+                     hidden_at = excluded.hidden_at",
+                params![key, trimmed, now],
+            )?;
+            let _ = conn.execute(
+                "UPDATE torrent_metadata
+                 SET hidden_at = ?1
+                 WHERE LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) = ?2",
+                params![now, key],
+            );
+        } else {
+            conn.execute(
+                "DELETE FROM media_title_hidden WHERE title_key = ?1",
+                params![key],
+            )?;
+            conn.execute(
+                "UPDATE torrent_metadata
+                 SET hidden_at = NULL
+                 WHERE LOWER(TRIM(COALESCE(user_display_title, display_title, ''))) = ?1",
+                params![key],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// List all currently hidden media titles ordered by most recently hidden.
+    pub fn list_hidden_media_titles(&self) -> Result<Vec<HiddenMediaTitle>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT title_key, display_title, hidden_at
+             FROM media_title_hidden
+             ORDER BY hidden_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let hidden_at_i64: i64 = row.get(2)?;
+            Ok(HiddenMediaTitle {
+                title_key: row.get(0)?,
+                display_title: row.get(1)?,
+                hidden_at: hidden_at_i64.max(0) as u64,
+            })
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
+
+    /// Check whether a specific media title is currently hidden.
+    pub fn is_media_title_hidden(&self, title: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let key = title.trim().to_lowercase();
+        let mut stmt = conn.prepare("SELECT 1 FROM media_title_hidden WHERE title_key = ?1")?;
+        let exists = stmt.exists(params![key])?;
+        Ok(exists)
+    }
+
+    /// Restore all hidden titles back to the visible media library.
+    pub fn restore_all_hidden_titles(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM media_title_hidden", [])?;
+        let _ = conn.execute("UPDATE torrent_metadata SET hidden_at = NULL", []);
         Ok(())
     }
 
@@ -1755,6 +1847,14 @@ pub struct TorrentDbMetadata {
     pub is_external: bool,
     pub sync_miss_count: i64,
     pub last_checked: Option<u64>,
+    pub hidden_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct HiddenMediaTitle {
+    pub title_key: String,
+    pub display_title: String,
+    pub hidden_at: u64,
 }
 
 #[cfg(test)]
@@ -2689,5 +2789,58 @@ mod tests {
         db.set_external_media_order(&with_dupes).unwrap();
         let loaded3 = db.get_external_media_order().unwrap();
         assert_eq!(loaded3, order2);
+    }
+
+    #[test]
+    fn test_media_title_hide_and_restore() {
+        let db = memory_db();
+
+        // 1. Add metadata for a torrent
+        let meta = TorrentDbMetadata {
+            info_hash: HASH.to_string(),
+            display_title: Some("Suzume (2022)".to_string()),
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&meta).unwrap();
+
+        assert!(!db.is_media_title_hidden("Suzume (2022)").unwrap());
+        assert!(!db.is_media_title_hidden("suzume (2022)").unwrap());
+
+        // 2. Hide title
+        db.set_media_title_hidden("Suzume (2022)", true).unwrap();
+        assert!(db.is_media_title_hidden("Suzume (2022)").unwrap());
+        assert!(db.is_media_title_hidden("suzume (2022)").unwrap());
+
+        // Verify torrent_metadata has hidden_at set
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert!(row.hidden_at.is_some());
+
+        // Verify list_hidden_media_titles returns it
+        let hidden = db.list_hidden_media_titles().unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].title_key, "suzume (2022)");
+        assert_eq!(hidden[0].display_title, "Suzume (2022)");
+
+        // 3. Unhide title
+        db.set_media_title_hidden("Suzume (2022)", false).unwrap();
+        assert!(!db.is_media_title_hidden("Suzume (2022)").unwrap());
+        assert_eq!(db.list_hidden_media_titles().unwrap().len(), 0);
+
+        let row = db.get_torrent_metadata(HASH).unwrap().unwrap();
+        assert!(row.hidden_at.is_none());
+    }
+
+    #[test]
+    fn test_restore_all_hidden_titles() {
+        let db = memory_db();
+
+        db.set_media_title_hidden("Title One", true).unwrap();
+        db.set_media_title_hidden("Title Two", true).unwrap();
+        assert_eq!(db.list_hidden_media_titles().unwrap().len(), 2);
+
+        db.restore_all_hidden_titles().unwrap();
+        assert_eq!(db.list_hidden_media_titles().unwrap().len(), 0);
+        assert!(!db.is_media_title_hidden("Title One").unwrap());
+        assert!(!db.is_media_title_hidden("Title Two").unwrap());
     }
 }

@@ -713,6 +713,145 @@ fn apply_torrent_renames_impl(
     Ok(applied)
 }
 
+/// Validate whether destructive file deletion can safely proceed.
+/// Blocks deletion if files are shared with another active torrent, belong to external/reclassified
+/// media, or if the target path is ambiguous/unverified.
+pub(crate) fn check_destructive_removal_safety(
+    target: Option<&TorrentItem>,
+    all_torrents: &[TorrentItem],
+    is_target_external: bool,
+) -> Result<(), String> {
+    if is_target_external {
+        return Err(
+            "Cannot delete files: Target media is an external or reclassified item. Deletion of external media files is blocked."
+                .to_string(),
+        );
+    }
+
+    let t = match target {
+        Some(t) => t,
+        None => {
+            return Err(
+                "Cannot delete files: Target torrent not found or indeterminate ownership. Select 'Remove without deleting files'."
+                    .to_string(),
+            );
+        }
+    };
+
+    let save_path = t.save_path.trim();
+    let name = t.raw_name.as_deref().unwrap_or(&t.name).trim();
+    if save_path.is_empty() || name.is_empty() {
+        return Err(
+            "Cannot delete files: Storage path is ambiguous or unverified. Select 'Remove without deleting files'."
+                .to_string(),
+        );
+    }
+
+    let target_path = std::path::Path::new(save_path).join(name);
+    // Disallow deleting root directories or top-level drives
+    if target_path.parent().is_none()
+        || target_path == std::path::Path::new("/")
+        || target_path == std::path::Path::new("\\")
+    {
+        return Err(
+            "Cannot delete files: Storage path resolves to a root directory. Select 'Remove without deleting files'."
+                .to_string(),
+        );
+    }
+
+    // Check against all other active torrents for path or content sharing
+    let is_shared = all_torrents.iter().any(|other| {
+        if other.id == t.id {
+            return false;
+        }
+        if other.info_hash.eq_ignore_ascii_case(&t.info_hash) {
+            return true;
+        }
+        if let (Some(ref cp_other), Some(ref cp_t)) = (&other.content_path, &t.content_path) {
+            if !cp_other.is_empty() && cp_other == cp_t {
+                return true;
+            }
+        }
+        let other_save = other.save_path.trim();
+        let other_name = other.raw_name.as_deref().unwrap_or(&other.name).trim();
+        if !other_save.is_empty() && !other_name.is_empty() {
+            let other_path = std::path::Path::new(other_save).join(other_name);
+            if other_path == target_path
+                || target_path.starts_with(&other_path)
+                || other_path.starts_with(&target_path)
+            {
+                return true;
+            }
+        }
+        false
+    });
+
+    if is_shared {
+        return Err(
+            "Cannot delete files: One or more files are shared with another active torrent. Remove the other torrent first, or select 'Remove without deleting files'."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Determine whether retained completed files should be reclassified to External media.
+/// Only reclassifies when the torrent is 100% complete and no other active managed torrent
+/// references the same files.
+pub(crate) fn should_reclassify_as_external(
+    target: Option<&TorrentItem>,
+    all_torrents: &[TorrentItem],
+    db_completed: bool,
+) -> bool {
+    let t = match target {
+        Some(t) => t,
+        None => return db_completed,
+    };
+
+    let is_completed = t.progress >= 1.0
+        || t.completed_on.is_some()
+        || t.status.eq_ignore_ascii_case("seeding")
+        || (t.status.eq_ignore_ascii_case("paused") && t.progress >= 1.0);
+
+    if !is_completed {
+        return false;
+    }
+
+    // If another active torrent references the same files, keep managed status
+    let has_other_active_reference = all_torrents.iter().any(|other| {
+        if other.id == t.id {
+            return false;
+        }
+        if other.info_hash.eq_ignore_ascii_case(&t.info_hash) {
+            return true;
+        }
+        if let (Some(ref cp_other), Some(ref cp_t)) = (&other.content_path, &t.content_path) {
+            if !cp_other.is_empty() && cp_other == cp_t {
+                return true;
+            }
+        }
+        let other_save = other.save_path.trim();
+        let other_name = other.raw_name.as_deref().unwrap_or(&other.name).trim();
+        let t_save = t.save_path.trim();
+        let t_name = t.raw_name.as_deref().unwrap_or(&t.name).trim();
+        if !other_save.is_empty()
+            && !other_name.is_empty()
+            && !t_save.is_empty()
+            && !t_name.is_empty()
+        {
+            let other_path = std::path::Path::new(other_save).join(other_name);
+            let t_path = std::path::Path::new(t_save).join(t_name);
+            if other_path == t_path {
+                return true;
+            }
+        }
+        false
+    });
+
+    !has_other_active_reference
+}
+
 #[tauri::command]
 pub async fn remove_torrent(
     id: String,
@@ -724,39 +863,96 @@ pub async fn remove_torrent(
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
         let del = delete_files.unwrap_or(false);
+        let torrents = engine.list_torrents().unwrap_or_default();
+        let target = torrents
+            .iter()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(&id))
+            .cloned();
+
         let (info_hash, display_name): (Option<String>, Option<String>) =
-            if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            if let Some(ref t) = target {
+                (Some(t.info_hash.to_lowercase()), Some(t.name.clone()))
+            } else if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
                 (Some(id.to_lowercase()), None)
-            } else if let Ok(torrents) = engine.list_torrents() {
-                torrents
-                    .iter()
-                    .find(|t| t.id == id)
-                    .map(|t| (Some(t.info_hash.to_lowercase()), Some(t.name.clone())))
-                    .unwrap_or((None, None))
             } else {
                 (None, None)
             };
 
+        let is_target_external = if let Some(ref hash) = info_hash {
+            db.get_torrent_metadata(hash)
+                .ok()
+                .flatten()
+                .map(|m| m.is_external)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if del {
+            check_destructive_removal_safety(target.as_ref(), &torrents, is_target_external)?;
+        }
+
         let res = engine.remove_torrent(&id, del);
+        if let Err(ref e) = res {
+            return Err(format!("Engine removal failed: {e}"));
+        }
 
         if let Some(ref hash) = info_hash {
             if del {
                 let _ = db.delete_torrent_metadata(hash);
             } else {
-                // Preserve the torrent's display name before reclassifying to
-                // External, so the External shelf shows the title instead of the
-                // raw info hash. Transmission-sourced torrents never have
-                // display_title populated in the DB.
-                if let Some(name) = &display_name {
+                let db_completed = db
+                    .get_torrent_metadata(hash)
+                    .ok()
+                    .flatten()
+                    .map(|m| m.completed_on.is_some())
+                    .unwrap_or(false);
+
+                if should_reclassify_as_external(target.as_ref(), &torrents, db_completed) {
                     if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
                         if meta.display_title.is_none() {
-                            meta.display_title = Some(name.clone());
-                            let _ = db.upsert_torrent_metadata(&meta);
+                            if let Some(name) = &display_name {
+                                meta.display_title = Some(name.clone());
+                            }
                         }
+                        if meta.save_path.is_none() {
+                            if let Some(ref t) = target {
+                                meta.save_path = Some(t.save_path.clone());
+                            }
+                        }
+                        let _ = db.upsert_torrent_metadata(&meta);
+                    } else if let Some(ref t) = target {
+                        let meta = crate::db::TorrentDbMetadata {
+                            info_hash: hash.clone(),
+                            display_title: Some(t.name.clone()),
+                            category: Some(t.category.clone()),
+                            labels: None,
+                            is_watched: false,
+                            notes: None,
+                            added_at: t.added_on,
+                            completed_on: t.completed_on,
+                            save_path: Some(t.save_path.clone()),
+                            download_limit_kib: 0,
+                            upload_limit_kib: 0,
+                            ratio_limit: -1.0,
+                            sequential_download: false,
+                            first_last_piece_prio: false,
+                            super_seeding: false,
+                            racing_override: None,
+                            user_display_title: None,
+                            user_title_locked: false,
+                            sort_order: None,
+                            poster_path: t.poster_url.clone(),
+                            is_external: false,
+                            sync_miss_count: 0,
+                            last_checked: None,
+                            hidden_at: None,
+                        };
+                        let _ = db.upsert_torrent_metadata(&meta);
                     }
+                    let _ = db.mark_as_external(hash);
+                    let _ = db.mark_snatched_record_external(hash);
                 }
-                let _ = db.mark_as_external(hash);
-                let _ = db.mark_snatched_record_external(hash);
             }
         }
 
@@ -1760,6 +1956,145 @@ mod tests {
         let res = parse_dialog_output(true, Some(0), format!("{path_str}\n").as_bytes(), b"");
         assert_eq!(res, Ok(Some(path_str)));
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    fn sample_torrent(
+        id: &str,
+        hash: &str,
+        name: &str,
+        save_path: &str,
+        progress: f32,
+    ) -> TorrentItem {
+        TorrentItem {
+            id: id.to_string(),
+            name: name.to_string(),
+            total_bytes: 1_000_000,
+            downloaded_bytes: (1_000_000.0 * progress) as u64,
+            uploaded_bytes: 500_000,
+            download_rate: 0,
+            upload_rate: 0,
+            seconds_downloading: 100,
+            seconds_seeding: 50,
+            progress,
+            status: if progress >= 1.0 {
+                "Seeding".to_string()
+            } else {
+                "Downloading".to_string()
+            },
+            eta_seconds: None,
+            seeds: Some(10),
+            peers: 5,
+            ratio: 0.5,
+            category: "movies".to_string(),
+            is_media: true,
+            poster_url: None,
+            raw_name: Some(name.to_string()),
+            content_path: Some(format!("{save_path}/{name}")),
+            info_hash: hash.to_string(),
+            save_path: save_path.to_string(),
+            historical_save_path: None,
+            added_on: 1_700_000_000,
+            completed_on: if progress >= 1.0 {
+                Some(1_700_001_000)
+            } else {
+                None
+            },
+            comment: "".to_string(),
+            created_by: "".to_string(),
+            piece_size: 16384,
+            total_pieces: 100,
+            sequential_download: false,
+            first_last_piece_prio: false,
+            sort_order: None,
+            super_seeding: false,
+            last_checked: None,
+            tags: Vec::new(),
+            files: Vec::new(),
+            trackers: Vec::new(),
+            download_limit_kib: 0,
+            upload_limit_kib: 0,
+            ratio_limit: -1.0,
+            bandwidth_priority: None,
+            peer_limit: None,
+            racing_mode: None,
+            error_string: None,
+            media_meta: None,
+        }
+    }
+
+    #[test]
+    fn test_destructive_removal_blocks_shared_files() {
+        let t1 = sample_torrent("1", "hash1", "SharedMovie", "/downloads", 1.0);
+        let t2 = sample_torrent("2", "hash2", "SharedMovie", "/downloads", 1.0);
+        let all = vec![t1.clone(), t2.clone()];
+
+        // Attempting to destructively remove t1 while t2 shares the path must fail
+        let res = check_destructive_removal_safety(Some(&t1), &all, false);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("shared with another active torrent"));
+    }
+
+    #[test]
+    fn test_destructive_removal_blocks_external_media() {
+        let t1 = sample_torrent("1", "hash1", "StandaloneMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        // If marked external, destructive deletion must be blocked
+        let res = check_destructive_removal_safety(Some(&t1), &all, true);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .contains("Target media is an external or reclassified item"));
+    }
+
+    #[test]
+    fn test_destructive_removal_blocks_ambiguous_root_path() {
+        let mut t1 = sample_torrent("1", "hash1", "", "/", 1.0);
+        t1.raw_name = Some("".to_string());
+        let all = vec![t1.clone()];
+
+        let res = check_destructive_removal_safety(Some(&t1), &all, false);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("ambiguous or unverified"));
+    }
+
+    #[test]
+    fn test_destructive_removal_allows_independent_torrent() {
+        let t1 = sample_torrent("1", "hash1", "IndependentMovie", "/downloads", 1.0);
+        let t2 = sample_torrent("2", "hash2", "OtherMovie", "/downloads", 1.0);
+        let all = vec![t1.clone(), t2.clone()];
+
+        let res = check_destructive_removal_safety(Some(&t1), &all, false);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_should_reclassify_as_external_rules() {
+        let completed = sample_torrent("1", "hash1", "Movie1", "/downloads", 1.0);
+        let incomplete = sample_torrent("2", "hash2", "Movie2", "/downloads", 0.5);
+        let shared_a = sample_torrent("3", "hash3", "SharedMovie", "/downloads", 1.0);
+        let shared_b = sample_torrent("4", "hash4", "SharedMovie", "/downloads", 1.0);
+        let all = vec![
+            completed.clone(),
+            incomplete.clone(),
+            shared_a.clone(),
+            shared_b.clone(),
+        ];
+
+        // 1. Completed standalone torrent -> Reclassifies
+        assert!(should_reclassify_as_external(Some(&completed), &all, true));
+
+        // 2. Incomplete torrent kept on disk -> Does NOT reclassify as completed External
+        assert!(!should_reclassify_as_external(
+            Some(&incomplete),
+            &all,
+            false
+        ));
+
+        // 3. Completed torrent whose files are still shared with another active torrent -> Does NOT reclassify yet
+        assert!(!should_reclassify_as_external(Some(&shared_a), &all, true));
     }
 
     #[test]

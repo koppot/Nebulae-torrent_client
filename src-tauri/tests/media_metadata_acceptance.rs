@@ -42,6 +42,7 @@ fn test_metadata_poster_saving_and_preservation_independent_of_title_lock() {
         is_external: false,
         sync_miss_count: 0,
         last_checked: None,
+        hidden_at: None,
     };
     db.upsert_torrent_metadata(&initial).unwrap();
 
@@ -141,6 +142,7 @@ fn test_metadata_poster_saving_and_preservation_independent_of_title_lock() {
         is_external: false,
         sync_miss_count: 5,
         last_checked: None,
+        hidden_at: None,
     };
     db.upsert_torrent_metadata(&external_item).unwrap();
     db.set_user_display_title(ext_hash, "Retained External Metadata Title", true)

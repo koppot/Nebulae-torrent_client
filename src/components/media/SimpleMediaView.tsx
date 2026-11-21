@@ -51,7 +51,7 @@ import {
   FolderArchive,
   X,
   Info,
-  Copy, Trash2, Pencil, GripVertical, Check, RotateCcw, Link, Image } from 'lucide-react';
+  Copy, Trash2, Pencil, GripVertical, Check, RotateCcw, Link, Image, EyeOff } from 'lucide-react';
 
 interface MediaGroup {
   id: string;
@@ -438,7 +438,29 @@ export const SimpleMediaView: React.FC = () => {
   const refreshExternalMedia = useCallback(async () => {
     try { setExternalMedia(await invoke('list_external_media')); } catch { /* best-effort */ }
   }, []);
-  useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia]);
+  useEffect(() => { void refreshExternalMedia(); }, [refreshExternalMedia, torrents.length]);
+
+  const [hiddenTitleKeys, setHiddenTitleKeys] = useState<Set<string>>(new Set());
+  const refreshHiddenTitles = useCallback(async () => {
+    try {
+      const titles = await invoke<Array<{ title_key: string; display_title: string; hidden_at: number }>>('list_hidden_media_titles');
+      setHiddenTitleKeys(new Set((titles || []).map((t) => t.title_key.toLowerCase().trim())));
+    } catch {
+      // best-effort
+    }
+  }, []);
+  useEffect(() => {
+    void refreshHiddenTitles();
+  }, [refreshHiddenTitles]);
+
+  useEffect(() => {
+    const onRestore = () => {
+      void refreshHiddenTitles();
+      void refreshExternalMedia();
+    };
+    window.addEventListener('nebulae:restore-hidden-titles', onRestore);
+    return () => window.removeEventListener('nebulae:restore-hidden-titles', onRestore);
+  }, [refreshHiddenTitles, refreshExternalMedia]);
 
   // Seed external posters from database-persisted poster_url
   useEffect(() => {
@@ -1040,16 +1062,20 @@ export const SimpleMediaView: React.FC = () => {
     });
   };
 
-  // Search filter (Canva top bar: "Search library...").
+  // Search & Hidden Title filter (Canva top bar: "Search library...").
   const query = searchQuery.trim().toLowerCase();
-  const visibleGroups = (groups: MediaGroup[]): MediaGroup[] =>
-    query
-      ? groups.filter(
+  const visibleGroups = (groups: MediaGroup[]): MediaGroup[] => {
+    const unhidden = groups.filter(
+      (g) => !hiddenTitleKeys.has(g.clean_title.toLowerCase().trim()),
+    );
+    return query
+      ? unhidden.filter(
           (g) =>
             g.clean_title.toLowerCase().includes(query) ||
             g.items.some((i) => i.name.toLowerCase().includes(query)),
         )
-      : groups;
+      : unhidden;
+  };
 
   // "2d 14h" style seed-time text for the ADC hover line.
     const layerLabel = (ls?: string) =>
@@ -2445,6 +2471,29 @@ export const SimpleMediaView: React.FC = () => {
                   <button
                     className={act}
                     onClick={async () => {
+                      const titleToHide = extCtx.title;
+                      setExtCtx(null);
+                      try {
+                        await invoke('set_media_title_hidden', { title: titleToHide, hidden: true });
+                        await refreshHiddenTitles();
+                        await refreshExternalMedia();
+                        setFeedbackNotice({
+                          type: 'info',
+                          message: `Hidden title from media library: ${titleToHide}`,
+                        });
+                      } catch (err) {
+                        setFeedbackNotice({
+                          type: 'error',
+                          message: errorMessage(err, 'Could not hide media title.'),
+                        });
+                      }
+                    }}
+                  >
+                    <EyeOff className="w-3.5 h-3.5" /> Hide Title from Media
+                  </button>
+                  <button
+                    className={act}
+                    onClick={async () => {
                       setExtCtx(null);
                       try {
                         await invoke('remove_external_media', { path: extCtx.path });
@@ -2611,6 +2660,29 @@ export const SimpleMediaView: React.FC = () => {
                     }}
                   >
                     <Image className="w-3.5 h-3.5" /> Set Custom Poster...
+                  </button>
+                  <button
+                    className={act}
+                    onClick={async () => {
+                      const titleToHide = group.clean_title;
+                      setCtxMenu(null);
+                      try {
+                        await invoke('set_media_title_hidden', { title: titleToHide, hidden: true });
+                        await refreshHiddenTitles();
+                        await refreshExternalMedia();
+                        setFeedbackNotice({
+                          type: 'info',
+                          message: `Hidden title from media library: ${titleToHide}`,
+                        });
+                      } catch (err) {
+                        setFeedbackNotice({
+                          type: 'error',
+                          message: errorMessage(err, 'Could not hide media title.'),
+                        });
+                      }
+                    }}
+                  >
+                    <EyeOff className="w-3.5 h-3.5" /> Hide Title from Media
                   </button>
                   <button
                     className={act}
