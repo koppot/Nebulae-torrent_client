@@ -960,12 +960,19 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   setLocation: async (id: string, newPath: string) => {
     const currentOps = get().activeOperations;
-    const existing = currentOps[id] || (id ? currentOps[id.toLowerCase()] : undefined);
+    const matchingTorrent = get().torrents.find(
+      (t) => t.id === id || (t.info_hash && t.info_hash.toLowerCase() === id.toLowerCase())
+    );
+    const existing =
+      currentOps[id] ||
+      (id ? currentOps[id.toLowerCase()] : undefined) ||
+      (matchingTorrent?.info_hash ? currentOps[matchingTorrent.info_hash.toLowerCase()] : undefined);
     if (existing && existing.phase !== 'error' && existing.phase !== 'complete') {
       return;
     }
 
-    const optimisticOpId = `op-opt-${Date.now()}`;
+    const now = Date.now();
+    const optimisticOpId = `op-opt-${now}`;
     const optimisticOp: TorrentOperationSnapshot = {
       operation_id: optimisticOpId,
       torrent_id: id,
@@ -973,16 +980,24 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       phase: 'moving',
       destination: newPath,
       revision: 1,
-      created_at: Date.now(),
+      created_at: now,
+      observed_at: now,
+      is_hydrated: false,
     };
 
-    set((state) => ({
-      activeOperations: {
-        ...state.activeOperations,
-        [id]: optimisticOp,
-        [id.toLowerCase()]: optimisticOp,
-      },
-    }));
+    const initialOps: Record<string, TorrentOperationSnapshot> = {
+      ...currentOps,
+      [id]: optimisticOp,
+      [id.toLowerCase()]: optimisticOp,
+    };
+    if (matchingTorrent) {
+      initialOps[matchingTorrent.id] = optimisticOp;
+      initialOps[matchingTorrent.id.toLowerCase()] = optimisticOp;
+      if (matchingTorrent.info_hash) {
+        initialOps[matchingTorrent.info_hash.toLowerCase()] = optimisticOp;
+      }
+    }
+    set({ activeOperations: initialOps });
 
     try {
       await invoke('set_torrent_location', { id, newPath });
@@ -997,6 +1012,12 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           return state;
         }
 
+        const isUncertain =
+          safeError.includes('The engine response was not received') ||
+          safeError.includes('may still be in progress') ||
+          safeError.toLowerCase().includes('timeout') ||
+          safeError.toLowerCase().includes('unconfirmed');
+
         const errorSnapshot: TorrentOperationSnapshot = {
           operation_id: resolvedOpId,
           torrent_id: id,
@@ -1006,6 +1027,21 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           safe_error: safeError,
           revision: currentRev + 1,
           created_at: current?.created_at ?? Date.now(),
+          observed_at: current?.observed_at,
+          is_hydrated: current?.is_hydrated,
+        };
+
+        const matching = state.torrents.find(
+          (t) => t.id === id || (t.info_hash && t.info_hash.toLowerCase() === id.toLowerCase())
+        );
+
+        const notice: TerminalNotice = {
+          operation_id: resolvedOpId,
+          torrent_id: id,
+          name: matching?.name || id,
+          outcome: safeError,
+          timestamp: Date.now(),
+          status: isUncertain ? 'uncertain' : 'error',
         };
 
         const updated = { ...state.activeOperations };
@@ -1016,8 +1052,19 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         }
         updated[id] = errorSnapshot;
         updated[id.toLowerCase()] = errorSnapshot;
+        if (matching) {
+          updated[matching.id] = errorSnapshot;
+          updated[matching.id.toLowerCase()] = errorSnapshot;
+          if (matching.info_hash) {
+            updated[matching.info_hash.toLowerCase()] = errorSnapshot;
+          }
+        }
 
-        return { activeOperations: updated };
+        return {
+          activeOperations: updated,
+          terminalNotice: notice,
+          lastOutcome: safeError,
+        };
       });
       throw err;
     } finally {

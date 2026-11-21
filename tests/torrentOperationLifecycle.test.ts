@@ -6,6 +6,8 @@ const mockActiveSnapshots: any[] = [];
 let dismissShouldFail = false;
 let removeTorrentDelay = 0;
 let removeTorrentError: Error | null = null;
+let setLocationDelay = 0;
+let setLocationError: Error | null = null;
 globalThis.window = {
   __TAURI_INTERNALS__: {
     invoke: async (cmd: string, args: any) => {
@@ -19,6 +21,12 @@ globalThis.window = {
         return undefined;
       }
       if (cmd === 'set_torrent_location') {
+        if (setLocationDelay > 0) {
+          await new Promise((r) => setTimeout(r, setLocationDelay));
+        }
+        if (setLocationError) {
+          throw setLocationError;
+        }
         return undefined;
       }
       if (cmd === 'remove_torrent') {
@@ -979,4 +987,79 @@ test('Hydration via fetchActiveOperations sets is_hydrated: true and preserves o
   assert.ok(op);
   assert.equal(op.is_hydrated, true);
   assert.ok(typeof op.observed_at === 'number');
+});
+
+test('Immediate pending state is registered upon setLocation invocation before backend finishes', async () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-move-imm-1',
+        name: 'Slow Move Torrent',
+        info_hash: '1234123412341234123412341234123412341234',
+        save_path: '/Volumes/SourceDisk/Data',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {},
+    tombstones: {},
+    terminalNotice: null,
+  });
+
+  setLocationDelay = 50;
+  const promise = useTorrentStore.getState().setLocation('t-move-imm-1', '/Volumes/DestDisk/Data');
+
+  // Immediately upon invocation, optimistic snapshot must be registered
+  const immediateOp = useTorrentStore.getState().activeOperations['t-move-imm-1'];
+  assert.ok(immediateOp, 'Immediate pending snapshot must exist before backend returns');
+  assert.equal(immediateOp.phase, 'moving');
+  assert.equal(immediateOp.destination, '/Volumes/DestDisk/Data');
+  assert.equal(immediateOp.is_hydrated, false);
+  assert.ok(typeof immediateOp.observed_at === 'number');
+
+  // Source save_path must remain the confirmed source location while in flight
+  assert.equal(
+    useTorrentStore.getState().torrents[0].save_path,
+    '/Volumes/SourceDisk/Data',
+    'Source save_path must not change before engine confirmation'
+  );
+
+  await promise;
+  setLocationDelay = 0;
+});
+
+test('Move failure with ambiguous timeout creates uncertain notice and retains source save_path', async () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-move-timeout',
+        name: 'Timeout Move Torrent',
+        info_hash: '5678567856785678567856785678567856785678',
+        save_path: '/Volumes/OrigDisk/Data',
+        status: 'Seeding',
+      } as any,
+    ],
+    activeOperations: {},
+    tombstones: {},
+    terminalNotice: null,
+  });
+
+  setLocationError = new Error('The engine response was not received within 30 seconds; operation may still be in progress');
+
+  try {
+    await useTorrentStore.getState().setLocation('t-move-timeout', '/Volumes/TargetDisk/Data');
+  } catch {
+    // Expected error
+  }
+
+  setLocationError = null;
+
+  const state = useTorrentStore.getState();
+  // 1. Error snapshot created with uncertain status
+  assert.ok(state.activeOperations['t-move-timeout']);
+  assert.equal(state.activeOperations['t-move-timeout'].phase, 'error');
+  assert.equal(state.terminalNotice?.status, 'uncertain');
+  assert.ok(state.terminalNotice?.outcome.includes('engine response was not received'));
+
+  // 2. Original save_path remains retained
+  assert.equal(state.torrents[0].save_path, '/Volumes/OrigDisk/Data');
 });

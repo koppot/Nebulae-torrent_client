@@ -1484,7 +1484,8 @@ export const TorrentManagerView: React.FC = () => {
                           } else if (activeOp?.phase === 'moving') {
                             const dest =
                               activeOp.destination || (activeOp.kind?.type === 'move' ? activeOp.kind.destination : '');
-                            phaseLabel = dest ? `Moving… ${dest}` : 'Moving…';
+                            phaseLabel = 'Moving…';
+                            supportingText = dest ? `Destination: ${dest}` : undefined;
                           } else if (activeOp?.outcome) {
                             phaseLabel = activeOp.outcome;
                           }
@@ -1857,6 +1858,24 @@ export const TorrentManagerView: React.FC = () => {
                                   )}
                                 </button>
                               </div>
+                              {(() => {
+                                const selOp =
+                                  activeOperations[selectedTorrent.id] ||
+                                  (selectedTorrent.info_hash
+                                    ? activeOperations[selectedTorrent.info_hash.toLowerCase()]
+                                    : undefined);
+                                if (selOp && selOp.phase === 'moving' && selOp.destination) {
+                                  return (
+                                    <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-amber-950/40 border border-amber-800/40 text-[10px] text-amber-300">
+                                      <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none flex-shrink-0" />
+                                      <span className="truncate">
+                                        Moving to: <span className="font-mono text-white">{selOp.destination}</span>
+                                      </span>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                             <div className="col-span-2 space-y-0.5">
                               <span className="text-[10px] uppercase text-[#a3a3a3] block font-sans">
