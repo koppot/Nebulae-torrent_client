@@ -5127,6 +5127,106 @@ mod tests {
     }
 
     #[test]
+    fn test_torrent_remove_no_retry_on_transport_failure() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let rc_server = Arc::clone(&request_count);
+
+        let server_thread = std::thread::spawn(move || {
+            // Accept connection, count it, and immediately drop/close the stream without response
+            if let Ok((mut stream, _)) = listener.accept() {
+                rc_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                // Drop stream to cause transport error / connection reset
+                drop(stream);
+            }
+            // Do NOT accept any second connection
+        });
+
+        let client = TransmissionRpcClient::new(port, "user", "pass");
+        let res = client.torrent_remove("123", true);
+        assert!(res.is_err(), "Must return error on connection drop");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("Transmission RPC connection error")
+                || err.contains("Transmission RPC timeout"),
+            "Error was: {err}"
+        );
+
+        server_thread.join().unwrap();
+        // Crucial verification: exactly 1 request was attempted, proving no transport retries for torrent_remove
+        assert_eq!(
+            request_count.load(Ordering::SeqCst),
+            1,
+            "torrent_remove must NOT perform automatic transport retries"
+        );
+    }
+
+    #[test]
+    fn test_torrent_remove_preserves_csrf_negotiation() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let rc_server = Arc::clone(&request_count);
+
+        let server_thread = std::thread::spawn(move || {
+            // First request: 409 Conflict with session ID header
+            if let Ok((mut stream, _)) = listener.accept() {
+                rc_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let resp = "HTTP/1.1 409 Conflict\r\nServer: Transmission\r\nX-Transmission-Session-Id: csrf-remove-token\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+            }
+
+            // Second request: client retries with the negotiated CSRF session ID
+            if let Ok((mut stream, _)) = listener.accept() {
+                rc_server.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                assert!(req_str.contains("x-transmission-session-id: csrf-remove-token"));
+                assert!(req_str.contains("\"method\":\"torrent-remove\""));
+
+                let body = r#"{"result":"success","arguments":{}}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let client = TransmissionRpcClient::new(port, "user", "pass");
+        let res = client.torrent_remove("123", true);
+        assert!(
+            res.is_ok(),
+            "torrent_remove must succeed after CSRF negotiation: {:?}",
+            res
+        );
+
+        server_thread.join().unwrap();
+        assert_eq!(
+            request_count.load(Ordering::SeqCst),
+            2,
+            "Expected 1 CSRF handshake request + 1 authenticated removal request"
+        );
+    }
+
+    #[test]
     fn test_resolve_transmission_download_dir_layout() {
         // Multi-file layout: output_folder ends with torrent_name -> parent directory
         let multi_resolved =

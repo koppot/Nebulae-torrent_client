@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 // Mock Tauri invoke BEFORE importing store
 const mockActiveSnapshots: any[] = [];
 let dismissShouldFail = false;
+let removeTorrentDelay = 0;
+let removeTorrentError: Error | null = null;
 globalThis.window = {
   __TAURI_INTERNALS__: {
     invoke: async (cmd: string, args: any) => {
@@ -17,6 +19,15 @@ globalThis.window = {
         return undefined;
       }
       if (cmd === 'set_torrent_location') {
+        return undefined;
+      }
+      if (cmd === 'remove_torrent') {
+        if (removeTorrentDelay > 0) {
+          await new Promise((r) => setTimeout(r, removeTorrentDelay));
+        }
+        if (removeTorrentError) {
+          throw removeTorrentError;
+        }
         return undefined;
       }
       if (cmd === 'list_torrents') {
@@ -597,4 +608,375 @@ test('Move completion with metadata failure updates physical save_path, exposes 
 
   // 5. Tombstone is recorded
   assert.ok(state.tombstones['op-move-mf-1']);
+});
+
+test('Immediate pending indicator is registered upon removeTorrent invocation before backend finishes', async () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-pending-1',
+        name: 'Slow Removal Torrent',
+        info_hash: '1111222233334444555566667777888899990000',
+        save_path: '/downloads',
+        status: 'Downloading',
+        progress: 0.5,
+      } as any,
+    ],
+    activeOperations: {},
+    tombstones: {},
+    terminalNotice: null,
+  });
+
+  removeTorrentDelay = 50;
+  const promise = useTorrentStore.getState().removeTorrent('t-pending-1', true);
+
+  // Synchronously after calling removeTorrent, activeOperations must already reflect pending state
+  const immediateOp = useTorrentStore.getState().activeOperations['t-pending-1'];
+  assert.ok(immediateOp, 'Immediate pending snapshot must exist before backend returns');
+  assert.equal(immediateOp.phase, 'removing_torrent_and_deleting_files');
+  assert.equal(immediateOp.kind.type, 'remove');
+  assert.equal(immediateOp.is_hydrated, false);
+  assert.ok(typeof immediateOp.observed_at === 'number');
+
+  // Verify hash alias is also populated immediately
+  assert.ok(useTorrentStore.getState().activeOperations['1111222233334444555566667777888899990000']);
+
+  await promise;
+  removeTorrentDelay = 0;
+});
+
+test('Row is retained when ordinary telemetry omits it while operation is in-flight or in error', () => {
+  const inFlightOp = {
+    operation_id: 'op-retain-1',
+    torrent_id: 't-retain-1',
+    kind: { type: 'remove' as const, delete_files: true },
+    phase: 'removing_torrent_and_deleting_files' as const,
+    revision: 1,
+    created_at: 1000,
+    observed_at: 1000,
+  };
+
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-retain-1',
+        name: 'Transient Omission Torrent',
+        info_hash: '2222333344445555666677778888999900001111',
+        save_path: '/downloads',
+        status: 'Downloading',
+        progress: 0.2,
+      } as any,
+      {
+        id: 't-other',
+        name: 'Other Torrent',
+        info_hash: '3333444455556666777788889999000011112222',
+        save_path: '/downloads',
+        status: 'Downloading',
+        progress: 0.9,
+      } as any,
+    ],
+    activeOperations: {
+      't-retain-1': inFlightOp,
+      '2222333344445555666677778888999900001111': inFlightOp,
+    },
+    tombstones: {},
+  });
+
+  // Telemetry poll arrives from engine without 't-retain-1' (e.g. engine temporarily paused or omitted it)
+  useTorrentStore.getState().applyTorrentTelemetry([
+    {
+      id: 't-other',
+      name: 'Other Torrent',
+      info_hash: '3333444455556666777788889999000011112222',
+      save_path: '/downloads',
+      status: 'Downloading',
+      progress: 0.9,
+    } as any,
+  ]);
+
+  // 't-retain-1' MUST be retained because operation is in-flight
+  const torrents = useTorrentStore.getState().torrents;
+  assert.equal(torrents.length, 2, 'In-flight torrent must be retained when omitted by telemetry');
+  assert.ok(torrents.find((t) => t.id === 't-retain-1'));
+
+  // Also check if operation transitions to error: row must still be retained
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-retain-1',
+    torrent_id: 't-retain-1',
+    kind: { type: 'remove', delete_files: true },
+    phase: 'error',
+    safe_error: 'The engine response was not received within 30 seconds; removal or file deletion may still be in progress.',
+    revision: 2,
+    created_at: 1000,
+  });
+
+  // Telemetry poll arrives again omitting 't-retain-1'
+  useTorrentStore.getState().applyTorrentTelemetry([
+    {
+      id: 't-other',
+      name: 'Other Torrent',
+      info_hash: '3333444455556666777788889999000011112222',
+      save_path: '/downloads',
+      status: 'Downloading',
+      progress: 0.9,
+    } as any,
+  ]);
+
+  assert.equal(useTorrentStore.getState().torrents.length, 2, 'Error-state torrent must be retained when omitted by telemetry');
+  assert.ok(useTorrentStore.getState().torrents.find((t) => t.id === 't-retain-1'));
+});
+
+test('Conflicting remove and move actions are blocked while operation is pending', async () => {
+  const inFlightOp = {
+    operation_id: 'op-block-1',
+    torrent_id: 't-block-1',
+    kind: { type: 'remove' as const, delete_files: false },
+    phase: 'removing_torrent' as const,
+    revision: 1,
+    created_at: 1000,
+    observed_at: 1000,
+  };
+
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-block-1',
+        name: 'Blocked Action Torrent',
+        info_hash: '4444555566667777888899990000111122223333',
+        save_path: '/downloads',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {
+      't-block-1': inFlightOp,
+      '4444555566667777888899990000111122223333': inFlightOp,
+    },
+    tombstones: {},
+  });
+
+  // 1. Conflicting removeTorrent call should no-op
+  await useTorrentStore.getState().removeTorrent('t-block-1', true);
+  assert.equal(
+    useTorrentStore.getState().activeOperations['t-block-1'].operation_id,
+    'op-block-1',
+    'removeTorrent must not replace or overwrite an in-flight operation'
+  );
+
+  // 2. Conflicting setLocation call should no-op
+  await useTorrentStore.getState().setLocation('t-block-1', '/new/path');
+  assert.equal(
+    useTorrentStore.getState().activeOperations['t-block-1'].operation_id,
+    'op-block-1',
+    'setLocation must not overwrite an in-flight operation'
+  );
+});
+
+test('Keep-files removal completion uses exact D3 outcome string and confirmed status', () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-keep-files',
+        name: 'Keep Files Torrent',
+        info_hash: '5555666677778888999900001111222233334444',
+        save_path: '/downloads',
+        status: 'Seeding',
+      } as any,
+    ],
+    activeOperations: {
+      't-keep-files': {
+        operation_id: 'op-kf-1',
+        torrent_id: 't-keep-files',
+        kind: { type: 'remove', delete_files: false },
+        phase: 'removing_torrent',
+        revision: 1,
+        created_at: 1000,
+      },
+    },
+    terminalNotice: null,
+    tombstones: {},
+  });
+
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-kf-1',
+    torrent_id: 't-keep-files',
+    kind: { type: 'remove', delete_files: false },
+    phase: 'complete',
+    revision: 2,
+    created_at: 1000,
+  });
+
+  const state = useTorrentStore.getState();
+  assert.equal(state.torrents.length, 0, 'Row removed upon completion');
+  assert.equal(state.lastOutcome, 'Torrent removed. Files kept.');
+  assert.equal(state.terminalNotice?.outcome, 'Torrent removed. Files kept.');
+  assert.equal(state.terminalNotice?.status, 'confirmed');
+});
+
+test('Delete-files removal completion uses exact D3 outcome string and unconfirmed status', () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-del-files',
+        name: 'Delete Files Torrent',
+        info_hash: '6666777788889999000011112222333344445555',
+        save_path: '/downloads',
+        status: 'Seeding',
+      } as any,
+    ],
+    activeOperations: {
+      't-del-files': {
+        operation_id: 'op-df-1',
+        torrent_id: 't-del-files',
+        kind: { type: 'remove', delete_files: true },
+        phase: 'removing_torrent_and_deleting_files',
+        revision: 1,
+        created_at: 1000,
+      },
+    },
+    terminalNotice: null,
+    tombstones: {},
+  });
+
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-df-1',
+    torrent_id: 't-del-files',
+    kind: { type: 'remove', delete_files: true },
+    phase: 'complete',
+    revision: 2,
+    created_at: 1000,
+  });
+
+  const state = useTorrentStore.getState();
+  assert.equal(state.torrents.length, 0, 'Row removed upon completion');
+  assert.equal(
+    state.lastOutcome,
+    'Torrent removed. File-deletion request processed; deletion of every file could not be verified.'
+  );
+  assert.equal(
+    state.terminalNotice?.outcome,
+    'Torrent removed. File-deletion request processed; deletion of every file could not be verified.'
+  );
+  assert.equal(state.terminalNotice?.status, 'unconfirmed');
+});
+
+test('Ambiguous timeout error marks notice status as uncertain and does not delete row', () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-ambig-1',
+        name: 'Ambiguous Timeout Torrent',
+        info_hash: '7777888899990000111122223333444455556666',
+        save_path: '/downloads',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {
+      't-ambig-1': {
+        operation_id: 'op-ambig-1',
+        torrent_id: 't-ambig-1',
+        kind: { type: 'remove', delete_files: true },
+        phase: 'removing_torrent_and_deleting_files',
+        revision: 1,
+        created_at: 1000,
+      },
+    },
+    terminalNotice: null,
+    tombstones: {},
+  });
+
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-ambig-1',
+    torrent_id: 't-ambig-1',
+    kind: { type: 'remove', delete_files: true },
+    phase: 'error',
+    safe_error: 'The engine response was not received within 30 seconds; removal or file deletion may still be in progress.',
+    revision: 2,
+    created_at: 1000,
+  });
+
+  const state = useTorrentStore.getState();
+  assert.equal(state.torrents.length, 1, 'Row must not be deleted on error event');
+  assert.equal(state.terminalNotice?.status, 'uncertain');
+  assert.equal(
+    state.terminalNotice?.outcome,
+    'The engine response was not received within 30 seconds; removal or file deletion may still be in progress.'
+  );
+});
+
+test('Stale operation event with lower revision does not overwrite newer state', () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-stale-1',
+        name: 'Revision Test Torrent',
+        info_hash: '8888999900001111222233334444555566667777',
+        save_path: '/downloads',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {
+      't-stale-1': {
+        operation_id: 'op-rev-1',
+        torrent_id: 't-stale-1',
+        kind: { type: 'remove', delete_files: true },
+        phase: 'reconciling',
+        revision: 5,
+        created_at: 1000,
+      },
+    },
+    tombstones: {},
+  });
+
+  // Stale event arrives with revision 3
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-rev-1',
+    torrent_id: 't-stale-1',
+    kind: { type: 'remove', delete_files: true },
+    phase: 'removing_torrent_and_deleting_files',
+    revision: 3,
+    created_at: 1000,
+  });
+
+  assert.equal(
+    useTorrentStore.getState().activeOperations['t-stale-1'].phase,
+    'reconciling',
+    'Stale event with lower revision must be ignored'
+  );
+  assert.equal(
+    useTorrentStore.getState().activeOperations['t-stale-1'].revision,
+    5
+  );
+});
+
+test('Hydration via fetchActiveOperations sets is_hydrated: true and preserves observed_at', async () => {
+  mockActiveSnapshots.length = 0;
+  mockActiveSnapshots.push({
+    operation_id: 'op-hydrated-1',
+    torrent_id: 't-hydrated-1',
+    kind: { type: 'remove', delete_files: true },
+    phase: 'removing_torrent_and_deleting_files',
+    revision: 1,
+    created_at: 500,
+  });
+
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-hydrated-1',
+        name: 'Hydrated Torrent',
+        info_hash: '9999000011112222333344445555666677778888',
+        save_path: '/downloads',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {},
+    tombstones: {},
+  });
+
+  await useTorrentStore.getState().fetchActiveOperations();
+
+  const op = useTorrentStore.getState().activeOperations['t-hydrated-1'];
+  assert.ok(op);
+  assert.equal(op.is_hydrated, true);
+  assert.ok(typeof op.observed_at === 'number');
 });

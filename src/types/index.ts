@@ -152,6 +152,8 @@ export interface TorrentOperationSnapshot {
   outcome?: string | null;
   revision: number;
   created_at: number;
+  observed_at?: number;
+  is_hydrated?: boolean;
 }
 
 export interface TorrentItem {

@@ -155,6 +155,7 @@ export interface TerminalNotice {
   name?: string;
   outcome: string;
   timestamp: number;
+  status?: 'confirmed' | 'unconfirmed' | 'uncertain' | 'error';
 }
 
 const MAX_TOMBSTONES = 100;
@@ -489,22 +490,34 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       return;
     }
 
-    const optimisticOpId = `op-opt-${Date.now()}`;
+    const now = Date.now();
+    const optimisticOpId = `op-opt-${now}`;
+    const matchingTorrent = get().torrents.find(
+      (t) => t.id === id || (t.info_hash && t.info_hash.toLowerCase() === id.toLowerCase())
+    );
     const optimisticOp: TorrentOperationSnapshot = {
       operation_id: optimisticOpId,
       torrent_id: id,
       kind: { type: 'remove', delete_files: !!deleteFiles },
       phase: deleteFiles ? 'removing_torrent_and_deleting_files' : 'removing_torrent',
       revision: 1,
-      created_at: Date.now(),
+      created_at: now,
+      observed_at: now,
+      is_hydrated: false,
     };
-    set((state) => ({
-      activeOperations: {
-        ...state.activeOperations,
-        [id]: optimisticOp,
-        [id.toLowerCase()]: optimisticOp,
-      },
-    }));
+    const initialOps: Record<string, TorrentOperationSnapshot> = {
+      ...get().activeOperations,
+      [id]: optimisticOp,
+      [id.toLowerCase()]: optimisticOp,
+    };
+    if (matchingTorrent) {
+      initialOps[matchingTorrent.id] = optimisticOp;
+      initialOps[matchingTorrent.id.toLowerCase()] = optimisticOp;
+      if (matchingTorrent.info_hash) {
+        initialOps[matchingTorrent.info_hash.toLowerCase()] = optimisticOp;
+      }
+    }
+    set({ activeOperations: initialOps });
 
     try {
       await invoke('remove_torrent', { id, deleteFiles: !!deleteFiles });
@@ -520,6 +533,12 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           return state;
         }
 
+        const isUncertain =
+          safeError.includes('The engine response was not received') ||
+          safeError.includes('Removal or file deletion may still be in progress') ||
+          safeError.toLowerCase().includes('timeout') ||
+          safeError.toLowerCase().includes('unconfirmed');
+
         const errorSnapshot: TorrentOperationSnapshot = {
           operation_id: resolvedOpId,
           torrent_id: id,
@@ -528,6 +547,21 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           safe_error: safeError,
           revision: currentRev + 1,
           created_at: current?.created_at ?? Date.now(),
+          observed_at: current?.observed_at,
+          is_hydrated: current?.is_hydrated,
+        };
+
+        const matching = state.torrents.find(
+          (t) => t.id === id || (t.info_hash && t.info_hash.toLowerCase() === id.toLowerCase())
+        );
+
+        const notice: TerminalNotice = {
+          operation_id: resolvedOpId,
+          torrent_id: id,
+          name: matching?.name || id,
+          outcome: safeError,
+          timestamp: Date.now(),
+          status: isUncertain ? 'uncertain' : 'error',
         };
 
         const updated = { ...state.activeOperations };
@@ -538,8 +572,19 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         }
         updated[id] = errorSnapshot;
         updated[id.toLowerCase()] = errorSnapshot;
+        if (matching) {
+          updated[matching.id] = errorSnapshot;
+          updated[matching.id.toLowerCase()] = errorSnapshot;
+          if (matching.info_hash) {
+            updated[matching.info_hash.toLowerCase()] = errorSnapshot;
+          }
+        }
 
-        return { activeOperations: updated };
+        return {
+          activeOperations: updated,
+          terminalNotice: notice,
+          lastOutcome: safeError,
+        };
       });
     }
   },
@@ -567,6 +612,11 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
             if (existing.created_at > item.created_at) {
               continue;
             }
+            item.observed_at = existing.observed_at || existing.created_at;
+            item.is_hydrated = existing.is_hydrated ?? false;
+          } else {
+            item.observed_at = Date.now();
+            item.is_hydrated = true;
           }
 
           currentOps[item.torrent_id] = item;
@@ -613,6 +663,8 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         if (!isExistingOptimistic && existing.operation_id !== op.operation_id && op.created_at < existing.created_at) {
           return state;
         }
+        op.observed_at = existing.observed_at;
+        op.is_hydrated = existing.is_hydrated;
       }
 
       const updated = { ...state.activeOperations };
@@ -635,15 +687,30 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
       if (op.phase === 'complete') {
         let resolvedOutcome = op.outcome;
+        let noticeStatus: 'confirmed' | 'unconfirmed' | 'uncertain' | 'error' = 'confirmed';
         if (!resolvedOutcome) {
           if (op.kind?.type === 'remove') {
-            resolvedOutcome = op.kind.delete_files
-              ? 'Removal request accepted; file deletion not independently confirmed'
-              : 'Torrent removed';
+            if (op.kind.delete_files) {
+              resolvedOutcome =
+                'Torrent removed. File-deletion request processed; deletion of every file could not be verified.';
+              noticeStatus = 'unconfirmed';
+            } else {
+              resolvedOutcome = 'Torrent removed. Files kept.';
+              noticeStatus = 'confirmed';
+            }
           } else if (op.kind?.type === 'move') {
             resolvedOutcome = `Moved to ${op.destination || op.kind.destination || 'new location'}`;
+            noticeStatus = 'confirmed';
           } else {
             resolvedOutcome = 'Operation complete';
+            noticeStatus = 'confirmed';
+          }
+        } else {
+          if (
+            resolvedOutcome.includes('could not be verified') ||
+            resolvedOutcome.includes('not independently confirmed')
+          ) {
+            noticeStatus = 'unconfirmed';
           }
         }
 
@@ -653,6 +720,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           name: matchingTorrent?.name || op.torrent_id,
           outcome: resolvedOutcome,
           timestamp: Date.now(),
+          status: noticeStatus,
         };
 
         const tombstone: OperationTombstone = {
@@ -700,8 +768,42 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           lastOutcome: resolvedOutcome,
           tombstones: addTombstone(state.tombstones, tombstone),
         };
+      } else if (op.phase === 'error') {
+        const errorMsg = op.safe_error || 'Operation failed';
+        const isUncertain =
+          errorMsg.includes('The engine response was not received') ||
+          errorMsg.includes('Removal or file deletion may still be in progress') ||
+          errorMsg.toLowerCase().includes('timeout') ||
+          errorMsg.toLowerCase().includes('unconfirmed');
+
+        const notice: TerminalNotice = {
+          operation_id: op.operation_id,
+          torrent_id: op.torrent_id,
+          name: matchingTorrent?.name || op.torrent_id,
+          outcome: errorMsg,
+          timestamp: Date.now(),
+          status: isUncertain ? 'uncertain' : 'error',
+        };
+
+        // Retain the torrent row in torrents (do not remove it upon error)
+        for (const [key, item] of Object.entries(updated)) {
+          if (item.torrent_id === op.torrent_id && item.operation_id !== op.operation_id) {
+            delete updated[key];
+          }
+        }
+        for (const k of keysToUpdate) {
+          updated[k] = op;
+        }
+
+        return {
+          activeOperations: updated,
+          torrents,
+          selectedId,
+          terminalNotice: notice,
+          lastOutcome: errorMsg,
+        };
       } else {
-        // Clean up any other aliases for older operations on this torrent
+        // In-flight phase (removing_torrent, removing_torrent_and_deleting_files, moving, reconciling)
         for (const [key, item] of Object.entries(updated)) {
           if (item.torrent_id === op.torrent_id && item.operation_id !== op.operation_id) {
             delete updated[key];

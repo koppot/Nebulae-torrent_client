@@ -38,6 +38,7 @@ import {
   Edit2,
   ShieldCheck,
   AlertCircle,
+  AlertTriangle,
   X,
   Folder,
   FolderOpen,
@@ -185,7 +186,18 @@ const FileProgressBar: React.FC<{ progress: number }> = ({ progress }) => {
   );
 };
 
+function formatElapsed(ms: number): string {
+  const totalSecs = Math.max(0, Math.floor(ms / 1000));
+  if (totalSecs < 60) {
+    return `${totalSecs}s`;
+  }
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  return `${mins}m ${secs}s`;
+}
+
 export const TorrentManagerView: React.FC = () => {
+  const [now, setNow] = useState(() => Date.now());
   const {
     torrents,
     selectedId,
@@ -211,6 +223,20 @@ export const TorrentManagerView: React.FC = () => {
     terminalNotice,
     dismissTerminalNotice,
   } = useTorrentStore();
+
+  const hasInFlightOperations = useMemo(() => {
+    return Object.values(activeOperations).some(
+      (op) => op.phase !== 'error' && op.phase !== 'complete'
+    );
+  }, [activeOperations]);
+
+  useEffect(() => {
+    if (!hasInFlightOperations) return;
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [hasInFlightOperations]);
 
   const {
     activeManagerTab,
@@ -1161,10 +1187,34 @@ export const TorrentManagerView: React.FC = () => {
           <div
             data-testid="manager-terminal-status"
             className="bg-[#1a1a1a] border-b border-[#262626] px-3 py-2 flex items-center justify-between text-xs font-sans text-white flex-shrink-0"
+            role="status"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-              <span className="truncate">
+              {(() => {
+                const outcome = terminalNotice.outcome || '';
+                const isAmbiguousOrUnconfirmed =
+                  terminalNotice.status === 'unconfirmed' ||
+                  terminalNotice.status === 'uncertain' ||
+                  outcome.includes('could not be verified') ||
+                  outcome.includes('not independently confirmed') ||
+                  outcome.includes('The engine response was not received') ||
+                  outcome.includes('may still be in progress');
+
+                const isError =
+                  terminalNotice.status === 'error' ||
+                  outcome.startsWith('Move failed:') ||
+                  outcome.startsWith('Removal failed:') ||
+                  outcome.includes('failed:');
+
+                if (isAmbiguousOrUnconfirmed) {
+                  return <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />;
+                }
+                if (isError) {
+                  return <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />;
+                }
+                return <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />;
+              })()}
+              <span className="truncate" aria-live="polite">
                 {terminalNotice.name ? <strong className="font-medium text-white">{terminalNotice.name}: </strong> : null}
                 <span className="text-[#d4d4d4]">{terminalNotice.outcome}</span>
               </span>
@@ -1299,22 +1349,41 @@ export const TorrentManagerView: React.FC = () => {
                     <td className="py-2 px-2.5 text-right tabular-nums">{formatBytes(t.total_bytes)}</td>
                     <td className="py-2 px-2.5 overflow-hidden">
                       {isOpError ? (
-                        <div className="flex items-center gap-1.5 text-xs text-[#e50914] font-medium">
-                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                          <span>Operation failed</span>
-                        </div>
+                        (() => {
+                          const rawError = activeOp?.safe_error || 'Operation failed';
+                          const isAmbiguous =
+                            rawError.includes('response was not received') ||
+                            rawError.includes('may still be in progress') ||
+                            rawError.includes('could not be verified') ||
+                            rawError.includes('timed out') ||
+                            rawError.includes('not independently confirmed');
+                          return (
+                            <div className={`flex items-center gap-1.5 text-xs font-medium ${isAmbiguous ? 'text-amber-400' : 'text-[#e50914]'}`}>
+                              {isAmbiguous ? (
+                                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                              ) : (
+                                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                              )}
+                              <span>{isAmbiguous ? 'Unconfirmed' : 'Operation stopped'}</span>
+                            </div>
+                          );
+                        })()
                       ) : isOperating ? (
                         <div className="flex flex-col gap-1 w-full max-w-full overflow-hidden">
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden relative">
-                              <div className="h-full bg-[#e50914] rounded-full w-full animate-pulse" />
+                              <div className="h-full bg-amber-500 rounded-full w-full animate-pulse motion-reduce:animate-none" />
                             </div>
-                            <span className="text-[10px] font-mono text-[#a3a3a3] flex items-center gap-1 flex-shrink-0">
-                              <Loader2 className="w-3 h-3 animate-spin text-[#e50914]" />
+                            <span className="text-[10px] font-mono text-[#a3a3a3] flex items-center gap-1 flex-shrink-0" aria-hidden="true">
+                              <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none text-amber-400" />
                             </span>
                           </div>
-                          <span className="text-[9px] font-mono text-[#a3a3a3] text-center leading-tight truncate block w-full">
-                            {activeOp?.phase === 'moving' ? 'Moving…' : 'Processing…'}
+                          <span className="text-[9px] font-mono text-amber-200/70 text-center leading-tight truncate block w-full" aria-hidden="true">
+                            {(() => {
+                              const elapsedMs = activeOp?.observed_at ? Math.max(0, now - activeOp.observed_at) : 0;
+                              const elapsedFormatted = formatElapsed(elapsedMs);
+                              return activeOp?.is_hydrated ? `${elapsedFormatted} observed` : elapsedFormatted;
+                            })()}
                           </span>
                         </div>
                       ) : (
@@ -1347,17 +1416,35 @@ export const TorrentManagerView: React.FC = () => {
                         (() => {
                           const isMove = activeOp?.kind?.type === 'move';
                           const defaultPrefix = isMove ? 'Move failed' : 'Removal failed';
-                          const rawError = activeOp?.safe_error;
-                          const errorLabel = rawError
-                            ? rawError.startsWith('Move failed:') || rawError.startsWith('Removal failed:')
+                          const rawError = activeOp?.safe_error || 'Operation failed';
+                          const isAmbiguous =
+                            rawError.includes('response was not received') ||
+                            rawError.includes('may still be in progress') ||
+                            rawError.includes('could not be verified') ||
+                            rawError.includes('timed out') ||
+                            rawError.includes('not independently confirmed');
+
+                          const errorLabel = isAmbiguous
+                            ? rawError.startsWith('Unconfirmed:')
                               ? rawError
-                              : `${defaultPrefix}: ${rawError}`
-                            : defaultPrefix;
+                              : `Unconfirmed: ${rawError}`
+                            : rawError.startsWith('Move failed:') || rawError.startsWith('Removal failed:')
+                              ? rawError
+                              : `${defaultPrefix}: ${rawError}`;
 
                           return (
                             <div className="flex items-center gap-1.5 overflow-hidden">
-                              <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
-                              <span className="text-[11px] font-sans text-[#e50914] truncate font-medium" title={errorLabel}>
+                              {isAmbiguous ? (
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                              ) : (
+                                <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
+                              )}
+                              <span
+                                className={`text-[11px] font-sans truncate font-medium ${
+                                  isAmbiguous ? 'text-amber-400' : 'text-[#e50914]'
+                                }`}
+                                title={errorLabel}
+                              >
                                 {errorLabel}
                               </span>
                               <button
@@ -1367,7 +1454,7 @@ export const TorrentManagerView: React.FC = () => {
                                   void dismissOperation(t.id);
                                 }}
                                 className="px-1.5 py-0.5 rounded text-[10px] bg-[#262626] text-white hover:bg-[#333333] border border-[#404040] flex-shrink-0 ml-1"
-                                title="Dismiss error notice"
+                                title="Dismiss notice"
                               >
                                 Dismiss
                               </button>
@@ -1376,29 +1463,61 @@ export const TorrentManagerView: React.FC = () => {
                         })()
                       ) : isOperating ? (
                         (() => {
+                          const isDeleteFiles =
+                            activeOp?.phase === 'removing_torrent_and_deleting_files' ||
+                            (activeOp?.kind?.type === 'remove' && activeOp?.kind?.delete_files);
+
                           let phaseLabel = 'Processing…';
-                          let titleAttr: string | undefined = undefined;
-                          if (activeOp?.outcome) {
-                            phaseLabel = activeOp.outcome;
+                          let supportingText: string | undefined = undefined;
+
+                          if (activeOp?.phase === 'reconciling') {
+                            phaseLabel = 'Updating Media…';
+                          } else if (isDeleteFiles) {
+                            phaseLabel = 'Removing torrent and requesting file deletion…';
+                            supportingText =
+                              'Large torrents or slow storage can take a while. File-deletion progress is not provided by the torrent engine.';
+                          } else if (
+                            activeOp?.phase === 'removing_torrent' ||
+                            (activeOp?.kind?.type === 'remove' && !activeOp?.kind?.delete_files)
+                          ) {
+                            phaseLabel = 'Removing torrent; keeping files…';
                           } else if (activeOp?.phase === 'moving') {
-                            const dest = activeOp.destination || (activeOp.kind?.type === 'move' ? activeOp.kind.destination : '');
+                            const dest =
+                              activeOp.destination || (activeOp.kind?.type === 'move' ? activeOp.kind.destination : '');
                             phaseLabel = dest ? `Moving… ${dest}` : 'Moving…';
-                            titleAttr = dest ? `Moving to ${dest}` : 'Moving…';
-                          } else if (activeOp?.phase === 'removing_torrent_and_deleting_files') {
-                            phaseLabel = 'Removing torrent & requesting file deletion…';
-                          } else if (activeOp?.phase === 'removing_torrent') {
-                            phaseLabel = 'Removing torrent…';
-                          } else if (activeOp?.phase === 'reconciling') {
-                            phaseLabel = 'Reconciling media…';
+                          } else if (activeOp?.outcome) {
+                            phaseLabel = activeOp.outcome;
                           }
+
+                          const elapsedMs = activeOp?.observed_at ? Math.max(0, now - activeOp.observed_at) : 0;
+                          const elapsedFormatted = formatElapsed(elapsedMs);
+                          const elapsedLabel = activeOp?.is_hydrated
+                            ? `${elapsedFormatted} observed`
+                            : elapsedFormatted;
+
                           return (
-                            <span
-                              className="text-[11px] font-sans text-amber-400 inline-flex items-center gap-1.5 truncate max-w-full"
-                              title={titleAttr}
-                            >
-                              <Loader2 className="w-3 h-3 animate-spin text-[#e50914] flex-shrink-0" />
-                              <span className="truncate">{phaseLabel}</span>
-                            </span>
+                            <div className="flex flex-col gap-0.5 min-w-0 max-w-full overflow-hidden" title={supportingText}>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-amber-400 flex-shrink-0" />
+                                <span
+                                  className="text-[11px] font-sans text-amber-400 truncate font-medium"
+                                  aria-live="polite"
+                                >
+                                  {phaseLabel}
+                                </span>
+                                <span className="text-[10px] font-mono text-amber-200/80 flex-shrink-0" aria-hidden="true">
+                                  ({elapsedLabel})
+                                </span>
+                              </div>
+                              {supportingText ? (
+                                <span
+                                  className="text-[9px] font-sans text-[#8c8c8c] truncate block"
+                                  aria-hidden="true"
+                                >
+                                  {supportingText}
+                                </span>
+                              ) : null}
+                            </div>
                           );
                         })()
                       ) : t.status === 'Downloading' && t.racingMode ? (

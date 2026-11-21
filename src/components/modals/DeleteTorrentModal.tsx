@@ -12,10 +12,16 @@ import {
 
 export const DeleteTorrentModal: React.FC = () => {
   const { deleteModalTarget, setDeleteModalTarget } = useUiStore();
-  const { removeTorrent } = useTorrentStore();
+  const { removeTorrent, activeOperations } = useTorrentStore();
   const { engineMode } = useSettingsStore();
 
   const [deleteFiles, setDeleteFiles] = useState(false);
+
+  const activeOp = deleteModalTarget
+    ? activeOperations[deleteModalTarget.id] ||
+      (deleteModalTarget.id ? activeOperations[deleteModalTarget.id.toLowerCase()] : undefined)
+    : undefined;
+  const isOperating = Boolean(activeOp && activeOp.phase !== 'error');
 
   // Reset state when opening a new target
   useEffect(() => {
@@ -28,12 +34,12 @@ export const DeleteTorrentModal: React.FC = () => {
   // and hands execution to the background lifecycle so the Manager UI remains
   // completely responsive with zero navigation lockup.
   const handleConfirm = useCallback(() => {
-    if (!deleteModalTarget) return;
+    if (!deleteModalTarget || isOperating) return;
     const targetId = deleteModalTarget.id;
     const delFiles = deleteFiles;
     setDeleteModalTarget(null);
     void removeTorrent(targetId, delFiles);
-  }, [deleteModalTarget, deleteFiles, removeTorrent, setDeleteModalTarget]);
+  }, [deleteModalTarget, deleteFiles, removeTorrent, setDeleteModalTarget, isOperating]);
 
   // Handle keyboard events (Enter to confirm, Escape to cancel)
   useEffect(() => {
@@ -137,12 +143,16 @@ export const DeleteTorrentModal: React.FC = () => {
             </button>
             <button
               type="button"
+              disabled={isOperating}
               onClick={handleConfirm}
               className={`px-4 py-1.5 rounded-lg text-white font-medium transition flex items-center gap-1.5 ${
-                deleteFiles
-                  ? 'bg-[#e50914] hover:bg-[#b80710]'
-                  : 'bg-[#e50914] hover:bg-[#f40612]'
+                isOperating
+                  ? 'opacity-40 cursor-not-allowed bg-neutral-700'
+                  : deleteFiles
+                    ? 'bg-[#e50914] hover:bg-[#b80710]'
+                    : 'bg-[#e50914] hover:bg-[#f40612]'
               }`}
+              title={isOperating ? 'An operation is already in progress for this torrent' : undefined}
             >
               {deleteFiles ? (
                 <span>Delete Torrent & Files</span>

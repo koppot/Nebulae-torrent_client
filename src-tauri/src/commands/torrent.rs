@@ -1483,10 +1483,12 @@ where
     snapshot.phase = TorrentOperationPhase::Complete;
     snapshot.revision += 1;
     if del {
-        snapshot.outcome =
-            Some("Removal request accepted; file deletion not independently confirmed".to_string());
+        snapshot.outcome = Some(
+            "Torrent removed. File-deletion request processed; deletion of every file could not be verified."
+                .to_string(),
+        );
     } else {
-        snapshot.outcome = Some("Torrent removed".to_string());
+        snapshot.outcome = Some("Torrent removed. Files kept.".to_string());
     }
     on_transition(&snapshot);
     remove_active_operation(id, info_hash.as_deref());
@@ -3135,7 +3137,7 @@ mod tests {
         let snap = final_snapshot.expect("Complete phase must be emitted");
         assert_eq!(
             snap.outcome,
-            Some("Removal request accepted; file deletion not independently confirmed".to_string())
+            Some("Torrent removed. File-deletion request processed; deletion of every file could not be verified.".to_string())
         );
 
         remove_active_operation("t_outcome", Some("hash_outcome"));
@@ -3743,7 +3745,7 @@ mod tests {
         );
         assert_eq!(
             final_outcome,
-            Some("Removal request accepted; file deletion not independently confirmed".to_string())
+            Some("Torrent removed. File-deletion request processed; deletion of every file could not be verified.".to_string())
         );
 
         remove_active_operation(op_key, Some(info_hash));
@@ -3898,7 +3900,10 @@ mod tests {
                 TorrentOperationPhase::Complete,
             ]
         );
-        assert_eq!(final_outcome, Some("Torrent removed".to_string()));
+        assert_eq!(
+            final_outcome,
+            Some("Torrent removed. Files kept.".to_string())
+        );
         remove_active_operation(op_key, Some(info_hash));
 
         // 2. Destructive safety check blocks removal when shared with another active torrent
