@@ -1382,6 +1382,17 @@ pub fn dismiss_torrent_operation(id: String) -> Result<(), String> {
     dismiss_active_operation(&id)
 }
 
+pub(crate) fn is_ambiguous_transport_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("connection error")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("response was not received")
+        || lower.contains("broken pipe")
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_remove_lifecycle_step<E, R>(
     id: &str,
@@ -1438,7 +1449,11 @@ where
 
     // 3. Indivisible engine removal
     if let Err(e) = engine_remove(id, del) {
-        let err_msg = format!("Engine removal failed: {e}");
+        let err_msg = if is_ambiguous_transport_error(&e) {
+            "The engine response was not received. Removal or file deletion may still be in progress. Check the torrent’s status before trying again.".to_string()
+        } else {
+            format!("Engine removal failed: {e}")
+        };
         snapshot.phase = TorrentOperationPhase::Error;
         snapshot.safe_error = Some(err_msg.clone());
         snapshot.revision += 1;
@@ -3562,6 +3577,434 @@ mod tests {
 
         // Cleared from active map so not left indefinitely active
         assert!(get_active_operation("t_move_meta_err").is_none());
+    }
+
+    #[test]
+    fn test_remove_observable_while_engine_pending() {
+        let op_key = "t_pending_obs";
+        let info_hash = "hash_pending_obs";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "PendingMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let (engine_started_tx, engine_started_rx) = std::sync::mpsc::channel();
+        let (release_engine_tx, release_engine_rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            run_remove_lifecycle_step(
+                op_key,
+                true,
+                Some(&t1),
+                &all,
+                false,
+                |_id, _del| {
+                    let _ = engine_started_tx.send(());
+                    let _ = release_engine_rx.recv();
+                    Ok(())
+                },
+                |_id, _del| Ok(()),
+                |_s| {},
+            )
+        });
+
+        engine_started_rx.recv().unwrap();
+
+        // While pending, the operation is observable by id and info_hash
+        let active_by_id =
+            get_active_operation(op_key).expect("Operation must be observable by id");
+        let active_by_hash =
+            get_active_operation(info_hash).expect("Operation must be observable by info_hash");
+        assert_eq!(active_by_id.operation_id, active_by_hash.operation_id);
+        assert_eq!(
+            active_by_id.phase,
+            TorrentOperationPhase::RemovingTorrentAndDeletingFiles
+        );
+
+        let active_list = list_active_operations();
+        assert!(
+            active_list
+                .iter()
+                .any(|op| op.operation_id == active_by_id.operation_id),
+            "Operation must appear in list_active_operations()"
+        );
+
+        let _ = release_engine_tx.send(());
+        let res = handle.join().unwrap();
+        assert!(res.is_ok());
+
+        assert!(get_active_operation(op_key).is_none());
+        remove_active_operation(op_key, Some(info_hash));
+    }
+
+    #[test]
+    fn test_remove_pending_rejects_duplicate_and_conflicting_move() {
+        let op_key = "t_pending_conflict";
+        let info_hash = "hash_pending_conflict";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "ConflictMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let (engine_started_tx, engine_started_rx) = std::sync::mpsc::channel();
+        let (release_engine_tx, release_engine_rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            run_remove_lifecycle_step(
+                op_key,
+                true,
+                Some(&t1),
+                &all,
+                false,
+                |_id, _del| {
+                    let _ = engine_started_tx.send(());
+                    let _ = release_engine_rx.recv();
+                    Ok(())
+                },
+                |_id, _del| Ok(()),
+                |_s| {},
+            )
+        });
+
+        engine_started_rx.recv().unwrap();
+
+        // Duplicate remove with same delete_files returns Duplicate
+        let dup_res = reserve_active_remove_operation(
+            op_key,
+            Some(info_hash),
+            true,
+            TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+        );
+        assert!(matches!(dup_res, Ok(ReservationResult::Duplicate(_))));
+
+        // Conflicting remove with delete_files=false is rejected
+        let conflict_remove = reserve_active_remove_operation(
+            op_key,
+            Some(info_hash),
+            false,
+            TorrentOperationPhase::RemovingTorrent,
+        );
+        assert!(conflict_remove.is_err());
+        assert!(conflict_remove.unwrap_err().contains("already in progress"));
+
+        // Conflicting move is rejected
+        let conflict_move = reserve_active_move_operation(
+            op_key,
+            Some(info_hash),
+            "/other/path",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(conflict_move.is_err());
+        assert!(conflict_move.unwrap_err().contains("already in progress"));
+
+        let _ = release_engine_tx.send(());
+        let res = handle.join().unwrap();
+        assert!(res.is_ok());
+
+        remove_active_operation(op_key, Some(info_hash));
+    }
+
+    #[test]
+    fn test_remove_successful_acknowledgement_reports_unconfirmed_deletion() {
+        let op_key = "t_ack_unconf";
+        let info_hash = "hash_ack_unconf";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "AckMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let mut emitted_phases = Vec::new();
+        let mut final_outcome = None;
+
+        let res = run_remove_lifecycle_step(
+            op_key,
+            true,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| {
+                emitted_phases.push(s.phase.clone());
+                if s.phase == TorrentOperationPhase::Complete {
+                    final_outcome = s.outcome.clone();
+                }
+            },
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            emitted_phases,
+            vec![
+                TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+                TorrentOperationPhase::Reconciling,
+                TorrentOperationPhase::Complete,
+            ]
+        );
+        assert_eq!(
+            final_outcome,
+            Some("Removal request accepted; file deletion not independently confirmed".to_string())
+        );
+
+        remove_active_operation(op_key, Some(info_hash));
+    }
+
+    #[test]
+    fn test_remove_known_rejection_does_not_reconcile_media() {
+        let op_key = "t_reject";
+        let info_hash = "hash_reject";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "RejectMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let mut reconcile_called = false;
+        let mut last_snapshot = None;
+
+        let res = run_remove_lifecycle_step(
+            op_key,
+            true,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| {
+                Err("Transmission RPC call 'torrent-remove' failed: torrent not found".to_string())
+            },
+            |_id, _del| {
+                reconcile_called = true;
+                Ok(())
+            },
+            |s| {
+                last_snapshot = Some(s.clone());
+            },
+        );
+
+        assert!(res.is_err());
+        assert!(
+            !reconcile_called,
+            "Media reconciliation must NOT be called on engine rejection"
+        );
+
+        let snap = last_snapshot.expect("Error snapshot must be emitted");
+        assert_eq!(snap.phase, TorrentOperationPhase::Error);
+        assert_eq!(
+            snap.safe_error,
+            Some("Engine removal failed: Transmission RPC call 'torrent-remove' failed: torrent not found".to_string())
+        );
+        assert_eq!(snap.outcome, None);
+
+        // Stays in active operations as Error so it can be observed/dismissed
+        let active = get_active_operation(op_key).expect("Error operation must remain in map");
+        assert_eq!(active.phase, TorrentOperationPhase::Error);
+
+        remove_active_operation(op_key, Some(info_hash));
+    }
+
+    #[test]
+    fn test_remove_timeout_uncertainty_produces_truthful_error_and_no_media_reconciliation() {
+        let op_key = "t_timeout";
+        let info_hash = "hash_timeout";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "TimeoutMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let mut reconcile_called = false;
+        let mut last_snapshot = None;
+
+        let res = run_remove_lifecycle_step(
+            op_key,
+            true,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| {
+                Err(
+                    "Transmission RPC timeout: error sending request for url: operation timed out"
+                        .to_string(),
+                )
+            },
+            |_id, _del| {
+                reconcile_called = true;
+                Ok(())
+            },
+            |s| {
+                last_snapshot = Some(s.clone());
+            },
+        );
+
+        assert!(res.is_err());
+        assert!(
+            !reconcile_called,
+            "Media reconciliation must NOT be called on transport timeout"
+        );
+
+        let snap = last_snapshot.expect("Error snapshot must be emitted");
+        assert_eq!(snap.phase, TorrentOperationPhase::Error);
+        assert_eq!(
+            snap.safe_error,
+            Some("The engine response was not received. Removal or file deletion may still be in progress. Check the torrent’s status before trying again.".to_string())
+        );
+        assert_eq!(
+            snap.outcome, None,
+            "Must produce no success claim on timeout"
+        );
+
+        let active = get_active_operation(op_key).expect("Error operation must remain in map");
+        assert_eq!(active.phase, TorrentOperationPhase::Error);
+        assert_eq!(
+            active.safe_error,
+            Some("The engine response was not received. Removal or file deletion may still be in progress. Check the torrent’s status before trying again.".to_string())
+        );
+
+        remove_active_operation(op_key, Some(info_hash));
+    }
+
+    #[test]
+    fn test_keep_files_and_destructive_safety_guards_intact() {
+        let op_key = "t_keep_guard";
+        let info_hash = "hash_keep_guard";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "KeepGuardMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let mut emitted_phases = Vec::new();
+        let mut final_outcome = None;
+
+        // 1. Keep files (del = false) completes with truthful "Torrent removed"
+        let res = run_remove_lifecycle_step(
+            op_key,
+            false,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| {
+                emitted_phases.push(s.phase.clone());
+                if s.phase == TorrentOperationPhase::Complete {
+                    final_outcome = s.outcome.clone();
+                }
+            },
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            emitted_phases,
+            vec![
+                TorrentOperationPhase::RemovingTorrent,
+                TorrentOperationPhase::Reconciling,
+                TorrentOperationPhase::Complete,
+            ]
+        );
+        assert_eq!(final_outcome, Some("Torrent removed".to_string()));
+        remove_active_operation(op_key, Some(info_hash));
+
+        // 2. Destructive safety check blocks removal when shared with another active torrent
+        let op_unsafe = "t_guard_unsafe";
+        let hash_unsafe = "hash_guard_unsafe";
+        remove_active_operation(op_unsafe, Some(hash_unsafe));
+
+        let tu1 = sample_torrent(op_unsafe, hash_unsafe, "SharedRelease", "/downloads", 1.0);
+        let tu2 = sample_torrent(
+            "t_other_release",
+            "hash_other_release",
+            "SharedRelease",
+            "/downloads",
+            1.0,
+        );
+        let shared_all = vec![tu1.clone(), tu2.clone()];
+
+        let mut guard_called = false;
+        let guard_res = run_remove_lifecycle_step(
+            op_unsafe,
+            true, // destructive removal
+            Some(&tu1),
+            &shared_all,
+            false,
+            |_id, _del| {
+                guard_called = true;
+                Ok(())
+            },
+            |_id, _del| Ok(()),
+            |_s| {},
+        );
+
+        assert!(guard_res.is_err());
+        assert!(
+            !guard_called,
+            "Destructive engine call must be blocked by safety guard"
+        );
+        let active_err = get_active_operation(op_unsafe).expect("Safety error must be recorded");
+        assert_eq!(active_err.phase, TorrentOperationPhase::Error);
+        assert!(active_err
+            .safe_error
+            .unwrap()
+            .contains("shared with another active torrent"));
+
+        remove_active_operation(op_unsafe, Some(hash_unsafe));
+    }
+
+    #[test]
+    fn test_registry_locks_released_during_engine_work() {
+        let op_key = "t_lock_sync";
+        let info_hash = "hash_lock_sync";
+        remove_active_operation(op_key, Some(info_hash));
+
+        let t1 = sample_torrent(op_key, info_hash, "LockSyncMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let (engine_started_tx, engine_started_rx) = std::sync::mpsc::channel();
+        let (release_engine_tx, release_engine_rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            run_remove_lifecycle_step(
+                op_key,
+                true,
+                Some(&t1),
+                &all,
+                false,
+                |_id, _del| {
+                    let _ = engine_started_tx.send(());
+                    let _ = release_engine_rx.recv();
+                    Ok(())
+                },
+                |_id, _del| Ok(()),
+                |_s| {},
+            )
+        });
+
+        // Wait until engine_remove is executing
+        engine_started_rx.recv().unwrap();
+
+        // Deterministic synchronization test:
+        // Attempt to lock get_active_operations_map() via try_lock.
+        // If the registry mutex were held across engine_remove, try_lock would never succeed
+        // because engine_remove is blocked awaiting release_engine_rx.
+        let mut acquired = false;
+        for _ in 0..50 {
+            if let Ok(map) = get_active_operations_map().try_lock() {
+                assert!(
+                    map.contains_key(op_key),
+                    "Registry remains readable and contains the active operation"
+                );
+                acquired = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            acquired,
+            "Operation registry mutex must NOT be held across blocking engine call"
+        );
+
+        // Resume and complete engine callback
+        let _ = release_engine_tx.send(());
+        let res = handle.join().unwrap();
+        assert!(res.is_ok());
+
+        remove_active_operation(op_key, Some(info_hash));
     }
 }
 

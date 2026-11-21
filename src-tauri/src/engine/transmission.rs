@@ -490,6 +490,24 @@ impl TransmissionRpcClient {
 
     /// Low-level RPC call handler with automatic CSRF session-id negotiation.
     pub fn request(&self, method: &str, arguments: Option<Value>) -> Result<Value, String> {
+        self.request_internal(method, arguments, true)
+    }
+
+    /// RPC call handler without transport retry for non-idempotent or destructive calls.
+    pub fn request_no_retry(
+        &self,
+        method: &str,
+        arguments: Option<Value>,
+    ) -> Result<Value, String> {
+        self.request_internal(method, arguments, false)
+    }
+
+    fn request_internal(
+        &self,
+        method: &str,
+        arguments: Option<Value>,
+        retry_on_transport: bool,
+    ) -> Result<Value, String> {
         let payload = json!({
             "method": method,
             "arguments": arguments.unwrap_or_else(|| json!({}))
@@ -498,14 +516,18 @@ impl TransmissionRpcClient {
         for attempt in 0..2 {
             // Bounded retry on transport errors: the daemon may be briefly
             // unreachable (watchdog restart backoff after a crash, or the
-            // first seconds after a relaunch). Re-sending is safe —
-            // torrent-add of the same metainfo is deduplicated by
-            // transmission-daemon and the remaining calls are idempotent —
-            // so the user's action fails only when the daemon is truly
-            // gone for the whole ~8.5s window.
+            // first seconds after a relaunch). Re-sending is safe for idempotent
+            // calls — but must NOT be performed on destructive calls like
+            // torrent-remove, where retry could send duplicate operations or
+            // mask in-flight deletions.
             let mut resp = None;
             let mut last_err = String::new();
-            for wait_ms in [0u64, 1000, 2000, 2500, 3000] {
+            let wait_delays: &[u64] = if retry_on_transport {
+                &[0u64, 1000, 2000, 2500, 3000]
+            } else {
+                &[0u64]
+            };
+            for &wait_ms in wait_delays {
                 if wait_ms > 0 {
                     std::thread::sleep(Duration::from_millis(wait_ms));
                 }
@@ -528,7 +550,11 @@ impl TransmissionRpcClient {
                         break;
                     }
                     Err(e) => {
-                        last_err = format!("Transmission RPC connection error: {e}");
+                        if e.is_timeout() {
+                            last_err = format!("Transmission RPC timeout: {e}");
+                        } else {
+                            last_err = format!("Transmission RPC connection error: {e}");
+                        }
                     }
                 }
             }
@@ -774,7 +800,7 @@ impl TransmissionRpcClient {
             "ids": [rpc_id(id)],
             "delete-local-data": delete_data
         });
-        self.request("torrent-remove", Some(args))?;
+        self.request_no_retry("torrent-remove", Some(args))?;
         Ok(())
     }
 
