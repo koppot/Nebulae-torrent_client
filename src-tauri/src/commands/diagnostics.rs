@@ -190,14 +190,16 @@ pub struct BugReportBundle {
 pub fn sanitize_diagnostic_text(text: &str) -> String {
     let mut s = text.to_string();
 
-    // 1. Redact Passkeys
-    if let Ok(re) = regex::Regex::new(r"(?i)(passkey[=/: ]+)[a-zA-Z0-9]{8,}") {
-        s = re.replace_all(&s, "$1[REDACTED_PASSKEY]").to_string();
+    // 1. Redact Passkeys and Passwords
+    if let Ok(re) = regex::Regex::new(
+        r"(?i)(passkey[=/: ]+|password[=/: ]+|passwd[=/: ]+|pwd[=/: ]+)[^\s,;&]{4,}",
+    ) {
+        s = re.replace_all(&s, "$1[REDACTED_SECRET]").to_string();
     }
 
-    // 2. Redact Authorization tokens, API keys, Bearer tokens
+    // 2. Redact Authorization tokens, API keys, Bearer tokens, secrets
     if let Ok(re) = regex::Regex::new(
-        r"(?i)(bearer\s+|token[=/: ]+|auth[=/: ]+|key[=/: ]+)[a-zA-Z0-9_\-\.]{8,}",
+        r"(?i)(bearer\s+|token[=/: ]+|auth[=/: ]+|key[=/: ]+|secret[=/: ]+)[a-zA-Z0-9_\-\.]{8,}",
     ) {
         s = re.replace_all(&s, "$1[REDACTED_TOKEN]").to_string();
     }
@@ -451,11 +453,13 @@ mod tests {
 
     #[test]
     fn test_sanitize_diagnostic_text_passkey_and_tokens() {
-        let input = "Error connecting with passkey: 12345678abcdef and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let input = "Error connecting with passkey: 12345678abcdef, password=supersecretpass123, pwd: secret456, and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
         let clean = sanitize_diagnostic_text(input);
         assert!(!clean.contains("12345678abcdef"));
+        assert!(!clean.contains("supersecretpass123"));
+        assert!(!clean.contains("secret456"));
         assert!(!clean.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
-        assert!(clean.contains("[REDACTED_PASSKEY]"));
+        assert!(clean.contains("[REDACTED_SECRET]"));
         assert!(clean.contains("[REDACTED_TOKEN]"));
     }
 

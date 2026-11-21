@@ -24,6 +24,7 @@ import {
   formatMegabytes,
 } from '../../lib/bugReportAttachments';
 import {
+  DEFAULT_REPORT_ENDPOINT,
   buildOutgoingPreview,
   buildPayload,
   describeDelivery,
@@ -109,8 +110,15 @@ export const BugReportModal: React.FC = () => {
   const [attempted, setAttempted] = useState(false);
   const [receipt, setReceipt] = useState<{ ref: string; token: string } | null>(null);
   const [delivery, setDelivery] = useState<ReportStatus | null>(null);
-  const [endpoint, setEndpoint] = useState<string | null>(null);
+  const [endpoint, setEndpoint] = useState<string>(DEFAULT_REPORT_ENDPOINT);
   const [githubBundle, setGithubBundle] = useState<BugReportBundle | null>(null);
+
+  const flushDraft = () => {
+    if (phase === 'received') return;
+    if (!title.trim() && !description.trim() && !steps.trim()) return;
+    const currentDraft = JSON.stringify({ title, category, description, steps, expected, actual, contactEmail, submissionId });
+    void invoke('save_bug_report_draft', { draft: currentDraft }).catch(() => {});
+  };
 
   const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
   const [screenshotErrors, setScreenshotErrors] = useState<string[]>([]);
@@ -187,29 +195,41 @@ export const BugReportModal: React.FC = () => {
 
     if (!restoredRef.current) {
       restoredRef.current = true;
-      if (bugReportContext?.error) {
-        setTitle(`Error: ${bugReportContext.error.slice(0, 60)}`);
-        setDescription(`Encountered error:\n${bugReportContext.error}\n\nSteps leading to error:\n1. `);
-      } else {
-        invoke<string | null>('get_bug_report_draft')
-          .then((draftJson) => {
-            if (!draftJson || !draftJson.trim()) return;
+      invoke<string | null>('get_bug_report_draft')
+        .then((draftJson) => {
+          let hasDraft = false;
+          if (draftJson && draftJson.trim()) {
             try {
               const d = JSON.parse(draftJson);
-              if (d.title) setTitle(d.title);
-              if (d.category) setCategory(d.category);
-              if (d.description) setDescription(d.description);
-              if (d.steps) setSteps(d.steps);
-              if (d.expected) setExpected(d.expected);
-              if (d.actual) setActual(d.actual);
-              if (d.contactEmail) setContactEmail(d.contactEmail);
-              if (d.submissionId) setSubmissionId(d.submissionId);
+              if (d.title || d.description || d.steps) {
+                hasDraft = true;
+                if (d.title) setTitle(d.title);
+                if (d.category) setCategory(d.category);
+                if (d.description) setDescription(d.description);
+                if (d.steps) setSteps(d.steps);
+                if (d.expected) setExpected(d.expected);
+                if (d.actual) setActual(d.actual);
+                if (d.contactEmail) setContactEmail(d.contactEmail);
+                if (d.submissionId) setSubmissionId(d.submissionId);
+              }
             } catch {
-              setDescription(draftJson);
+              if (draftJson.trim()) {
+                hasDraft = true;
+                setDescription(draftJson);
+              }
             }
-          })
-          .catch(() => {});
-      }
+          }
+          if (!hasDraft && bugReportContext?.error) {
+            setTitle(`Error: ${bugReportContext.error.slice(0, 60)}`);
+            setDescription(`Encountered error:\n${bugReportContext.error}\n\nSteps leading to error:\n1. `);
+          }
+        })
+        .catch(() => {
+          if (bugReportContext?.error) {
+            setTitle(`Error: ${bugReportContext.error.slice(0, 60)}`);
+            setDescription(`Encountered error:\n${bugReportContext.error}\n\nSteps leading to error:\n1. `);
+          }
+        });
     }
 
     invoke<string>('bug_report_endpoint')
@@ -243,7 +263,13 @@ export const BugReportModal: React.FC = () => {
       invoke('save_bug_report_draft', { draft: payload }).catch(() => {});
     }, 600);
     return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        if (title.trim() || description.trim() || steps.trim()) {
+          const payload = JSON.stringify({ title, category, description, steps, expected, actual, contactEmail, submissionId });
+          void invoke('save_bug_report_draft', { draft: payload }).catch(() => {});
+        }
+      }
     };
   }, [title, category, description, steps, expected, actual, contactEmail, submissionId, showBugReport, phase]);
 
@@ -369,6 +395,9 @@ export const BugReportModal: React.FC = () => {
         // The service now holds the report, so the local draft is no longer needed.
         void invoke('clear_bug_report_draft').catch(() => {});
       } else {
+        // Persist draft immediately so failure never loses user text
+        const currentDraft = JSON.stringify({ title, category, description, steps, expected, actual, contactEmail, submissionId });
+        void invoke('save_bug_report_draft', { draft: currentDraft }).catch(() => {});
         setPhase('compose');
         setNotice({
           tone: 'error',
@@ -381,6 +410,9 @@ export const BugReportModal: React.FC = () => {
         });
       }
     } catch (err) {
+      // Persist draft immediately so error never loses user text
+      const currentDraft = JSON.stringify({ title, category, description, steps, expected, actual, contactEmail, submissionId });
+      void invoke('save_bug_report_draft', { draft: currentDraft }).catch(() => {});
       setPhase('compose');
       setNotice({ tone: 'error', text: `Failed before receipt: ${String(err)}. Your report is still here.` });
     } finally {
@@ -444,7 +476,10 @@ export const BugReportModal: React.FC = () => {
             )}
           </div>
           <button
-            onClick={() => setShowBugReport(false)}
+            onClick={() => {
+              flushDraft();
+              setShowBugReport(false);
+            }}
             className="p-1 rounded text-[#a3a3a3] hover:text-white transition"
             aria-label="Close"
           >
