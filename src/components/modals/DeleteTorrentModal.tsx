@@ -2,13 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { errorMessage as toErrorMessage } from '../../utils/errors';
 import {
   Trash2,
   X,
   AlertTriangle,
   ShieldCheck,
-  AlertCircle,
   FileText,
 } from 'lucide-react';
 
@@ -18,34 +16,24 @@ export const DeleteTorrentModal: React.FC = () => {
   const { engineMode } = useSettingsStore();
 
   const [deleteFiles, setDeleteFiles] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Reset state when opening a new target
   useEffect(() => {
     if (deleteModalTarget) {
       setDeleteFiles(false);
-      setIsDeleting(false);
-      setErrorMessage(null);
     }
   }, [deleteModalTarget]);
 
-  // Declared with useCallback BEFORE the keyboard effect below so the effect
-  // can depend on a stable identity (hooks must also stay above the early
-  // `return null` further down).
-  const handleConfirm = useCallback(async () => {
-    if (!deleteModalTarget || isDeleting) return;
-    setIsDeleting(true);
-    setErrorMessage(null);
-
-    try {
-      await removeTorrent(deleteModalTarget.id, deleteFiles);
-      setDeleteModalTarget(null);
-    } catch (err: unknown) {
-      setErrorMessage(toErrorMessage(err, 'Failed to remove torrent'));
-      setIsDeleting(false);
-    }
-  }, [deleteModalTarget, isDeleting, deleteFiles, removeTorrent, setDeleteModalTarget]);
+  // Immediate acknowledgement: closes the modal immediately upon confirmation
+  // and hands execution to the background lifecycle so the Manager UI remains
+  // completely responsive with zero navigation lockup.
+  const handleConfirm = useCallback(() => {
+    if (!deleteModalTarget) return;
+    const targetId = deleteModalTarget.id;
+    const delFiles = deleteFiles;
+    setDeleteModalTarget(null);
+    void removeTorrent(targetId, delFiles);
+  }, [deleteModalTarget, deleteFiles, removeTorrent, setDeleteModalTarget]);
 
   // Handle keyboard events (Enter to confirm, Escape to cancel)
   useEffect(() => {
@@ -55,7 +43,7 @@ export const DeleteTorrentModal: React.FC = () => {
       if (e.key === 'Escape') {
         e.preventDefault();
         setDeleteModalTarget(null);
-      } else if (e.key === 'Enter' && !isDeleting) {
+      } else if (e.key === 'Enter') {
         e.preventDefault();
         handleConfirm();
       }
@@ -63,12 +51,11 @@ export const DeleteTorrentModal: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteModalTarget, deleteFiles, isDeleting, handleConfirm, setDeleteModalTarget]);
+  }, [deleteModalTarget, deleteFiles, handleConfirm, setDeleteModalTarget]);
 
   if (!deleteModalTarget) return null;
 
   const handleClose = () => {
-    if (isDeleting) return;
     setDeleteModalTarget(null);
   };
 
@@ -84,8 +71,7 @@ export const DeleteTorrentModal: React.FC = () => {
           <button
             type="button"
             onClick={handleClose}
-            disabled={isDeleting}
-            className="p-1 rounded text-[#a3a3a3] hover:text-white disabled:opacity-50 transition"
+            className="p-1 rounded text-[#a3a3a3] hover:text-white transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -113,7 +99,6 @@ export const DeleteTorrentModal: React.FC = () => {
                 type="checkbox"
                 checked={deleteFiles}
                 onChange={(e) => setDeleteFiles(e.target.checked)}
-                disabled={isDeleting}
                 className="w-4 h-4 rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-[#e50914] focus:ring-offset-0 cursor-pointer accent-[#e50914]"
               />
               <span className="text-xs font-medium text-white">
@@ -141,37 +126,25 @@ export const DeleteTorrentModal: React.FC = () => {
             </span>
           </div>
 
-          {/* Error Banner */}
-          {errorMessage && (
-            <div className="p-2.5 rounded bg-[#261010] border border-[#e50914] flex items-start gap-2 text-xs text-red-200 font-mono">
-              <AlertCircle className="w-4 h-4 text-[#e50914] flex-shrink-0 mt-0.5" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
-
           {/* Action Buttons */}
           <div className="flex justify-end gap-2 pt-3 border-t border-[#333333]">
             <button
               type="button"
               onClick={handleClose}
-              disabled={isDeleting}
-              className="px-4 py-1.5 rounded-lg text-[#a3a3a3] hover:text-white transition disabled:opacity-50"
+              className="px-4 py-1.5 rounded-lg text-[#a3a3a3] hover:text-white transition"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={isDeleting}
-              className={`px-4 py-1.5 rounded-lg text-white font-medium transition flex items-center gap-1.5 disabled:opacity-50 ${
+              className={`px-4 py-1.5 rounded-lg text-white font-medium transition flex items-center gap-1.5 ${
                 deleteFiles
                   ? 'bg-[#e50914] hover:bg-[#b80710]'
                   : 'bg-[#e50914] hover:bg-[#f40612]'
               }`}
             >
-              {isDeleting ? (
-                <span>Removing...</span>
-              ) : deleteFiles ? (
+              {deleteFiles ? (
                 <span>Delete Torrent & Files</span>
               ) : (
                 <span>Remove</span>

@@ -544,6 +544,7 @@ export const App: React.FC = () => {
     loadSettings();
     fetchEngineMode();
     fetchTorrents();
+    void useTorrentStore.getState().fetchActiveOperations();
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
@@ -606,6 +607,24 @@ export const App: React.FC = () => {
       .catch(() => {});
 
     listen('nebulae://adc-torrent-added', () => {
+      void useTorrentStore.getState().fetchTorrents();
+    })
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen<import('./types').TorrentOperationSnapshot>(
+      'nebulae://torrent-operation',
+      (event) => {
+        if (event.payload) {
+          useTorrentStore.getState().handleOperationEvent(event.payload);
+        }
+      },
+    )
+      .then((unlisten) => unlistenFns.push(unlisten))
+      .catch(() => {});
+
+    listen('nebulae://media-updated', () => {
+      void useLibraryStore.getState().loadPreferences();
       void useTorrentStore.getState().fetchTorrents();
     })
       .then((unlisten) => unlistenFns.push(unlisten))

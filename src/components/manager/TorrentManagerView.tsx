@@ -206,6 +206,8 @@ export const TorrentManagerView: React.FC = () => {
     setTorrentLimits,
     setLocation,
     selectDownloadDirectory,
+    activeOperations,
+    dismissOperation,
   } = useTorrentStore();
 
   const {
@@ -461,25 +463,35 @@ export const TorrentManagerView: React.FC = () => {
       const currentTorrent = torrents.find((t) => t.id === selectedId);
       if (!currentTorrent) return;
 
+      const currentOp = activeOperations[currentTorrent.id] ||
+        (currentTorrent.info_hash ? activeOperations[currentTorrent.info_hash.toLowerCase()] : undefined);
+      const isOperating = Boolean(currentOp && currentOp.phase !== 'error');
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        setDeleteModalTarget({ id: currentTorrent.id, name: currentTorrent.name });
+        if (!isOperating) {
+          setDeleteModalTarget({ id: currentTorrent.id, name: currentTorrent.name });
+        }
       } else if (e.key === 'F2') {
         e.preventDefault();
-        setRenameModal({
-          isOpen: true,
-          type: 'torrent',
-          id: currentTorrent.id,
-          currentName: currentTorrent.name,
-          newName: currentTorrent.name,
-          savePath: currentTorrent.save_path,
-        });
+        if (!isOperating) {
+          setRenameModal({
+            isOpen: true,
+            type: 'torrent',
+            id: currentTorrent.id,
+            currentName: currentTorrent.name,
+            newName: currentTorrent.name,
+            savePath: currentTorrent.save_path,
+          });
+        }
       } else if (e.key === ' ') {
         e.preventDefault();
-        if (currentTorrent.status === 'Downloading' || currentTorrent.status === 'Seeding') {
-          pauseTorrent(selectedId);
-        } else {
-          resumeTorrent(selectedId);
+        if (!isOperating) {
+          if (currentTorrent.status === 'Downloading' || currentTorrent.status === 'Seeding') {
+            pauseTorrent(selectedId);
+          } else {
+            resumeTorrent(selectedId);
+          }
         }
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -498,7 +510,7 @@ export const TorrentManagerView: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, torrents, displayedTorrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId]);
+  }, [selectedId, torrents, displayedTorrents, pauseTorrent, resumeTorrent, setDeleteModalTarget, setSelectedId, activeOperations]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -636,6 +648,9 @@ export const TorrentManagerView: React.FC = () => {
 
   const handleContextMenu = (e: React.MouseEvent, torrentId: string) => {
     e.preventDefault();
+    const t = torrents.find((item) => item.id === torrentId);
+    const op = activeOperations[torrentId] || (t?.info_hash ? activeOperations[t.info_hash.toLowerCase()] : undefined);
+    if (op && op.phase !== 'error') return;
     setSelectedId(torrentId);
     setContextMenu({
       visible: true,
@@ -1208,11 +1223,15 @@ export const TorrentManagerView: React.FC = () => {
               {displayedTorrents.map((t) => {
                 const isSelected = selectedId === t.id;
                 const progressPct = Math.round(t.progress * 100);
+                const activeOp = activeOperations[t.id] || (t.info_hash ? activeOperations[t.info_hash.toLowerCase()] : undefined);
+                const isOperating = Boolean(activeOp && activeOp.phase !== 'error');
+                const isOpError = Boolean(activeOp && activeOp.phase === 'error');
+
                 // Not connected: the torrent itself errored, or every one of
                 // its trackers reports failure/error. The whole row turns
                 // the app red and reverts once connectivity returns.
                 const trackersAllFailing = trackersAllFailingCheck(t);
-                const rowError = t.status === 'Error' || trackersAllFailing;
+                const rowError = t.status === 'Error' || trackersAllFailing || isOpError;
                 const rowErrorClass = rowError ? 'text-[#e50914] hover:text-[#e50914]' : '';
                 // While downloading the bar carries the downloaded volume;
                 // once complete it switches to the uploaded volume (seeders
@@ -1225,14 +1244,22 @@ export const TorrentManagerView: React.FC = () => {
                   <tr
                     key={t.id}
                     onClick={() => setSelectedId(t.id)}
-                    onContextMenu={(e) => handleContextMenu(e, t.id)}
-                    onDoubleClick={isRemoteServer ? undefined : openRenameTorrentModal}
+                    onContextMenu={(e) => {
+                      if (isOperating) {
+                        e.preventDefault();
+                        return;
+                      }
+                      handleContextMenu(e, t.id);
+                    }}
+                    onDoubleClick={isOperating ? undefined : (isRemoteServer ? undefined : openRenameTorrentModal)}
                     className={`cursor-pointer transition select-none ${
                       isSelected
                         ? `bg-[#1f1f1f] border-l-2 border-[#e50914] text-white ${rowErrorClass}`
                         : rowError
                           ? 'hover:bg-[#1a1a1a] text-[#e50914]'
-                          : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
+                          : isOperating
+                            ? 'hover:bg-[#1a1a1a] text-amber-200'
+                            : 'hover:bg-[#1a1a1a] text-[#a3a3a3] hover:text-white'
                     }`}
                   >
                     <td className={`py-2 px-3 font-sans font-medium truncate ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
@@ -1247,31 +1274,87 @@ export const TorrentManagerView: React.FC = () => {
                     </td>
                     <td className="py-2 px-2.5 text-right tabular-nums">{formatBytes(t.total_bytes)}</td>
                     <td className="py-2 px-2.5 overflow-hidden">
-                      <div className="flex flex-col gap-0.5 w-full max-w-full overflow-hidden">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
-                            <div
-                              className="h-full bg-white rounded-full transition-all"
-                              style={{ width: `${progressPct}%` }}
-                            />
+                      {isOpError ? (
+                        <div className="flex items-center gap-1.5 text-xs text-[#e50914] font-medium">
+                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>Operation failed</span>
+                        </div>
+                      ) : isOperating ? (
+                        <div className="flex flex-col gap-1 w-full max-w-full overflow-hidden">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden relative">
+                              <div className="h-full bg-[#e50914] rounded-full w-full animate-pulse" />
+                            </div>
+                            <span className="text-[10px] font-mono text-[#a3a3a3] flex items-center gap-1 flex-shrink-0">
+                              <Loader2 className="w-3 h-3 animate-spin text-[#e50914]" />
+                            </span>
                           </div>
-                          <span className={`text-[10px] w-8 text-right font-mono flex-shrink-0 ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
-                            {progressPct}%
+                          <span className="text-[9px] font-mono text-[#a3a3a3] text-center leading-tight truncate block w-full">
+                            Processing…
                           </span>
                         </div>
-                        <span className="text-[9px] font-mono text-[#737373] text-center leading-tight truncate block w-full">
-                          {isChecking
-                            ? t.status === 'Queued for checking'
+                      ) : (
+                        <div className="flex flex-col gap-0.5 w-full max-w-full overflow-hidden">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 rounded-full bg-[#333333] overflow-hidden">
+                              <div
+                                className="h-full bg-white rounded-full transition-all"
+                                style={{ width: `${progressPct}%` }}
+                              />
+                            </div>
+                            <span className={`text-[10px] w-8 text-right font-mono flex-shrink-0 ${rowError ? 'text-[#e50914]' : 'text-white'}`}>
+                              {progressPct}%
+                            </span>
+                          </div>
+                          <span className="text-[9px] font-mono text-[#737373] text-center leading-tight truncate block w-full">
+                            {isChecking
+                              ? t.status === 'Queued for checking'
                               ? 'Queued for checking'
                               : `Verifying… ${progressPct}%`
-                            : isComplete
+                              : isComplete
                               ? `${formatBytes(t.uploaded_bytes)} uploaded`
                               : `${formatBytes(t.downloaded_bytes)} of ${formatBytes(t.total_bytes)}`}
-                        </span>
-                      </div>
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 px-2.5 overflow-hidden whitespace-nowrap text-ellipsis">
-                      {t.status === 'Downloading' && t.racingMode ? (
+                      {isOpError ? (
+                        <div className="flex items-center gap-1.5 overflow-hidden">
+                          <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
+                          <span className="text-[11px] font-sans text-[#e50914] truncate font-medium" title={activeOp?.safe_error || 'Removal failed'}>
+                            {activeOp?.safe_error ? `Removal failed: ${activeOp.safe_error}` : 'Removal failed'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void dismissOperation(t.id);
+                            }}
+                            className="px-1.5 py-0.5 rounded text-[10px] bg-[#262626] text-white hover:bg-[#333333] border border-[#404040] flex-shrink-0 ml-1"
+                            title="Dismiss error notice"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      ) : isOperating ? (
+                        (() => {
+                          let phaseLabel = 'Processing…';
+                          if (activeOp?.phase === 'removing_torrent_and_deleting_files') {
+                            phaseLabel = 'Removing torrent & deleting files…';
+                          } else if (activeOp?.phase === 'removing_torrent') {
+                            phaseLabel = 'Removing torrent…';
+                          } else if (activeOp?.phase === 'reconciling') {
+                            phaseLabel = 'Reconciling media…';
+                          }
+                          return (
+                            <span className="text-[11px] font-sans text-amber-400 inline-flex items-center gap-1.5 truncate">
+                              <Loader2 className="w-3 h-3 animate-spin text-[#e50914] flex-shrink-0" />
+                              <span className="truncate">{phaseLabel}</span>
+                            </span>
+                          );
+                        })()
+                      ) : t.status === 'Downloading' && t.racingMode ? (
                         <span className="text-[11px] font-sans text-white inline-flex items-center gap-1">
                           <Zap className="w-3 h-3 text-[#e50914] flex-shrink-0" fill="currentColor" />
                           <span>Racing mode</span>
@@ -1284,19 +1367,19 @@ export const TorrentManagerView: React.FC = () => {
                       className="py-2 px-2.5 text-white whitespace-nowrap text-right tabular-nums"
                       title={t.avg_download_rate ? `Current rate: ${formatSpeed(t.download_rate)} | Since-start average: ${formatSpeed(t.avg_download_rate)}` : undefined}
                     >
-                      {formatSpeed(t.download_rate)}
+                      {isOperating || isOpError ? '—' : formatSpeed(t.download_rate)}
                     </td>
                     <td
                       className="py-2 px-2.5 whitespace-nowrap text-right tabular-nums"
                       title={t.avg_upload_rate ? `Current rate: ${formatSpeed(t.upload_rate)} | Since-start average: ${formatSpeed(t.avg_upload_rate)}` : undefined}
                     >
-                      {formatSpeed(t.upload_rate)}
+                      {isOperating || isOpError ? '—' : formatSpeed(t.upload_rate)}
                     </td>
                     <td
                       className="py-2 px-2.5 text-right tabular-nums"
                       title={t.eta_seconds !== undefined ? 'Estimated from the average download rate since the transfer began' : undefined}
                     >
-                      {formatEta(t.eta_seconds)}
+                      {isOperating || isOpError ? '—' : formatEta(t.eta_seconds)}
                     </td>
                     <td className="py-2 px-2.5 text-white text-right tabular-nums">{formatRatio(t.ratio)}</td>
                     <td className="py-2 px-2.5 text-white text-right tabular-nums">

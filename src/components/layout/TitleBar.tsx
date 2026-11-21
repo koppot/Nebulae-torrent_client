@@ -54,8 +54,13 @@ export const TitleBar: React.FC = () => {
     setDeleteModalTarget,
   } = useUiStore();
 
-  const { selectedId, torrents, resumeTorrent, pauseTorrent } = useTorrentStore();
+  const { selectedId, torrents, resumeTorrent, pauseTorrent, activeOperations } = useTorrentStore();
   const selectedTorrent = torrents.find((t) => t.id === selectedId);
+  const isSelectedOperating = Boolean(
+    selectedTorrent &&
+      (activeOperations[selectedTorrent.id] ||
+        (selectedTorrent.info_hash ? activeOperations[selectedTorrent.info_hash.toLowerCase()] : undefined))
+  );
 
   const [isMaximized, setIsMaximized] = useState(false);
   const [showAppInfo, setShowAppInfo] = useState(false);
@@ -122,15 +127,15 @@ export const TitleBar: React.FC = () => {
   }, []);
 
   const handleResume = () => {
-    if (selectedId) resumeTorrent(selectedId);
+    if (selectedId && !isSelectedOperating) resumeTorrent(selectedId);
   };
 
   const handlePause = () => {
-    if (selectedId) pauseTorrent(selectedId);
+    if (selectedId && !isSelectedOperating) pauseTorrent(selectedId);
   };
 
   const handleRemove = () => {
-    if (selectedTorrent) {
+    if (selectedTorrent && !isSelectedOperating) {
       setDeleteModalTarget({ id: selectedTorrent.id, name: selectedTorrent.name });
     }
   };
@@ -463,7 +468,7 @@ export const TitleBar: React.FC = () => {
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleResume(); }}
-            disabled={!selectedTorrent}
+            disabled={!selectedTorrent || isSelectedOperating}
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
             title="Resume Selected Transfer"
           >
@@ -474,7 +479,7 @@ export const TitleBar: React.FC = () => {
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handlePause(); }}
-            disabled={!selectedTorrent}
+            disabled={!selectedTorrent || isSelectedOperating}
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
             title="Pause Selected Transfer"
           >
@@ -485,7 +490,7 @@ export const TitleBar: React.FC = () => {
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); handleRemove(); }}
-            disabled={!selectedTorrent}
+            disabled={!selectedTorrent || isSelectedOperating}
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#1f1f1f] hover:bg-[#262626] border border-[#333333] text-white hover:text-[#e50914] text-xs font-medium disabled:opacity-30 disabled:cursor-not-allowed transition"
             title="Delete Selected Transfer"
           >

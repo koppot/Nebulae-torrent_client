@@ -129,6 +129,28 @@ export interface ThumbnailResult {
   source: string;
 }
 
+export type TorrentOperationKind =
+  | { type: 'remove'; delete_files: boolean }
+  | { type: 'move'; destination: string };
+
+export type TorrentOperationPhase =
+  | 'pending'
+  | 'removing_torrent'
+  | 'removing_torrent_and_deleting_files'
+  | 'reconciling'
+  | 'complete'
+  | 'error';
+
+export interface TorrentOperationSnapshot {
+  operation_id: string;
+  torrent_id: string;
+  kind: TorrentOperationKind;
+  phase: TorrentOperationPhase;
+  destination?: string | null;
+  safe_error?: string | null;
+  revision: number;
+}
+
 export interface TorrentItem {
   id: string;
   name: string;

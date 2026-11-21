@@ -823,6 +823,8 @@ pub fn run() {
             commands::torrent::open_torrent_folder,
             commands::torrent::add_torrent,
             commands::torrent::remove_torrent,
+            commands::torrent::get_active_torrent_operations,
+            commands::torrent::dismiss_torrent_operation,
             commands::torrent::pause_torrent,
             commands::torrent::resume_torrent,
             commands::torrent::pause_all_torrents,

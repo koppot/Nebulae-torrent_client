@@ -1,6 +1,97 @@
 use crate::engine::{EngineStatus, SharedEngine};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::State;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TorrentOperationKind {
+    Remove { delete_files: bool },
+    Move { destination: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TorrentOperationPhase {
+    Pending,
+    RemovingTorrent,
+    RemovingTorrentAndDeletingFiles,
+    Reconciling,
+    Complete,
+    Error,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TorrentOperationSnapshot {
+    pub operation_id: String,
+    pub torrent_id: String,
+    pub kind: TorrentOperationKind,
+    pub phase: TorrentOperationPhase,
+    pub destination: Option<String>,
+    pub safe_error: Option<String>,
+    pub revision: u64,
+}
+
+static ACTIVE_OPERATIONS: OnceLock<Arc<Mutex<HashMap<String, TorrentOperationSnapshot>>>> =
+    OnceLock::new();
+
+fn get_active_operations_map() -> &'static Arc<Mutex<HashMap<String, TorrentOperationSnapshot>>> {
+    ACTIVE_OPERATIONS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub(crate) fn get_active_operation(key: &str) -> Option<TorrentOperationSnapshot> {
+    let map = get_active_operations_map().lock().ok()?;
+    map.get(key)
+        .or_else(|| map.get(&key.to_lowercase()))
+        .cloned()
+}
+
+pub(crate) fn register_active_operation(
+    id: &str,
+    info_hash: Option<&str>,
+    snapshot: &TorrentOperationSnapshot,
+) {
+    if let Ok(mut map) = get_active_operations_map().lock() {
+        map.insert(id.to_string(), snapshot.clone());
+        if let Some(hash) = info_hash {
+            map.insert(hash.to_lowercase(), snapshot.clone());
+        }
+    }
+}
+
+pub(crate) fn remove_active_operation(id: &str, info_hash: Option<&str>) {
+    if let Ok(mut map) = get_active_operations_map().lock() {
+        map.remove(id);
+        map.remove(&id.to_lowercase());
+        if let Some(hash) = info_hash {
+            map.remove(hash);
+            map.remove(&hash.to_lowercase());
+        }
+    }
+}
+
+pub(crate) fn list_active_operations() -> Vec<TorrentOperationSnapshot> {
+    if let Ok(map) = get_active_operations_map().lock() {
+        let mut seen = HashSet::new();
+        let mut list = Vec::new();
+        for op in map.values() {
+            if seen.insert(op.operation_id.clone()) {
+                list.push(op.clone());
+            }
+        }
+        list
+    } else {
+        Vec::new()
+    }
+}
+
+fn emit_operation_event(app: Option<&tauri::AppHandle>, snapshot: &TorrentOperationSnapshot) {
+    if let Some(app) = app {
+        use tauri::Emitter;
+        let _ = app.emit("nebulae://torrent-operation", snapshot);
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TorrentFileItem {
@@ -856,11 +947,13 @@ pub(crate) fn should_reclassify_as_external(
 pub async fn remove_torrent(
     id: String,
     delete_files: Option<bool>,
+    app: tauri::AppHandle,
     engine: State<'_, SharedEngine>,
     db: State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<(), String> {
     let engine = engine.inner().clone();
     let db = db.inner().clone();
+    let app_handle = app.clone();
     tokio::task::spawn_blocking(move || {
         let del = delete_files.unwrap_or(false);
         let torrents = engine.list_torrents().unwrap_or_default();
@@ -888,78 +981,203 @@ pub async fn remove_torrent(
             false
         };
 
-        if del {
-            check_destructive_removal_safety(target.as_ref(), &torrents, is_target_external)?;
-        }
+        run_remove_lifecycle_step(
+            &id,
+            del,
+            target.as_ref(),
+            &torrents,
+            is_target_external,
+            |tid, d| engine.remove_torrent(tid, d),
+            |_tid, _d| {
+                if let Some(ref hash) = info_hash {
+                    if del {
+                        let _ = db.delete_torrent_metadata(hash);
+                    } else {
+                        let db_completed = db
+                            .get_torrent_metadata(hash)
+                            .ok()
+                            .flatten()
+                            .map(|m| m.completed_on.is_some())
+                            .unwrap_or(false);
 
-        let res = engine.remove_torrent(&id, del);
-        if let Err(ref e) = res {
-            return Err(format!("Engine removal failed: {e}"));
-        }
-
-        if let Some(ref hash) = info_hash {
-            if del {
-                let _ = db.delete_torrent_metadata(hash);
-            } else {
-                let db_completed = db
-                    .get_torrent_metadata(hash)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.completed_on.is_some())
-                    .unwrap_or(false);
-
-                if should_reclassify_as_external(target.as_ref(), &torrents, db_completed) {
-                    if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
-                        if meta.display_title.is_none() {
-                            if let Some(name) = &display_name {
-                                meta.display_title = Some(name.clone());
+                        if should_reclassify_as_external(target.as_ref(), &torrents, db_completed) {
+                            if let Ok(Some(mut meta)) = db.get_torrent_metadata(hash) {
+                                if meta.display_title.is_none() {
+                                    if let Some(name) = &display_name {
+                                        meta.display_title = Some(name.clone());
+                                    }
+                                }
+                                if meta.save_path.is_none() {
+                                    if let Some(ref t) = target {
+                                        meta.save_path = Some(t.save_path.clone());
+                                    }
+                                }
+                                let _ = db.upsert_torrent_metadata(&meta);
+                            } else if let Some(ref t) = target {
+                                let meta = crate::db::TorrentDbMetadata {
+                                    info_hash: hash.clone(),
+                                    display_title: Some(t.name.clone()),
+                                    category: Some(t.category.clone()),
+                                    labels: None,
+                                    is_watched: false,
+                                    notes: None,
+                                    added_at: t.added_on,
+                                    completed_on: t.completed_on,
+                                    save_path: Some(t.save_path.clone()),
+                                    download_limit_kib: 0,
+                                    upload_limit_kib: 0,
+                                    ratio_limit: -1.0,
+                                    sequential_download: false,
+                                    first_last_piece_prio: false,
+                                    super_seeding: false,
+                                    racing_override: None,
+                                    user_display_title: None,
+                                    user_title_locked: false,
+                                    sort_order: None,
+                                    poster_path: t.poster_url.clone(),
+                                    is_external: false,
+                                    sync_miss_count: 0,
+                                    last_checked: None,
+                                    hidden_at: None,
+                                };
+                                let _ = db.upsert_torrent_metadata(&meta);
                             }
+                            let _ = db.mark_as_external(hash);
+                            let _ = db.mark_snatched_record_external(hash);
                         }
-                        if meta.save_path.is_none() {
-                            if let Some(ref t) = target {
-                                meta.save_path = Some(t.save_path.clone());
-                            }
-                        }
-                        let _ = db.upsert_torrent_metadata(&meta);
-                    } else if let Some(ref t) = target {
-                        let meta = crate::db::TorrentDbMetadata {
-                            info_hash: hash.clone(),
-                            display_title: Some(t.name.clone()),
-                            category: Some(t.category.clone()),
-                            labels: None,
-                            is_watched: false,
-                            notes: None,
-                            added_at: t.added_on,
-                            completed_on: t.completed_on,
-                            save_path: Some(t.save_path.clone()),
-                            download_limit_kib: 0,
-                            upload_limit_kib: 0,
-                            ratio_limit: -1.0,
-                            sequential_download: false,
-                            first_last_piece_prio: false,
-                            super_seeding: false,
-                            racing_override: None,
-                            user_display_title: None,
-                            user_title_locked: false,
-                            sort_order: None,
-                            poster_path: t.poster_url.clone(),
-                            is_external: false,
-                            sync_miss_count: 0,
-                            last_checked: None,
-                            hidden_at: None,
-                        };
-                        let _ = db.upsert_torrent_metadata(&meta);
                     }
-                    let _ = db.mark_as_external(hash);
-                    let _ = db.mark_snatched_record_external(hash);
                 }
-            }
-        }
-
-        res
+                use tauri::Emitter;
+                let _ = app_handle.emit("nebulae://media-updated", ());
+                Ok(())
+            },
+            |snap| {
+                emit_operation_event(Some(&app_handle), snap);
+            },
+        )
     })
     .await
     .map_err(|e| format!("remove_torrent task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn get_active_torrent_operations() -> Result<Vec<TorrentOperationSnapshot>, String> {
+    Ok(list_active_operations())
+}
+
+#[tauri::command]
+pub fn dismiss_torrent_operation(id: String) -> Result<(), String> {
+    remove_active_operation(&id, None);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_remove_lifecycle_step<E, R>(
+    id: &str,
+    del: bool,
+    target: Option<&TorrentItem>,
+    torrents: &[TorrentItem],
+    is_target_external: bool,
+    engine_remove: E,
+    reconcile: R,
+    mut on_transition: impl FnMut(&TorrentOperationSnapshot),
+) -> Result<(), String>
+where
+    E: FnOnce(&str, bool) -> Result<(), String>,
+    R: FnOnce(&str, bool) -> Result<(), String>,
+{
+    let info_hash = target.map(|t| t.info_hash.to_lowercase()).or_else(|| {
+        if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+            Some(id.to_lowercase())
+        } else {
+            None
+        }
+    });
+    let active_lookup_key = info_hash.as_deref().unwrap_or(id);
+
+    // 1. Serialization / deduplication check
+    if let Some(existing) = get_active_operation(active_lookup_key) {
+        match existing.kind {
+            TorrentOperationKind::Remove {
+                delete_files: existing_del,
+            } if existing_del == del => {
+                // Reuse active result, avoid duplicate destructive work
+                return Ok(());
+            }
+            _ => {
+                return Err(format!(
+                    "An active operation is already in progress for torrent '{id}'"
+                ));
+            }
+        }
+    }
+
+    // 2. Initial phase
+    let op_id = uuid::Uuid::new_v4().to_string();
+    let initial_phase = if del {
+        TorrentOperationPhase::RemovingTorrentAndDeletingFiles
+    } else {
+        TorrentOperationPhase::RemovingTorrent
+    };
+    let mut snapshot = TorrentOperationSnapshot {
+        operation_id: op_id,
+        torrent_id: active_lookup_key.to_string(),
+        kind: TorrentOperationKind::Remove { delete_files: del },
+        phase: initial_phase,
+        destination: None,
+        safe_error: None,
+        revision: 1,
+    };
+
+    register_active_operation(id, info_hash.as_deref(), &snapshot);
+    on_transition(&snapshot);
+
+    // 3. Safety check before removal
+    if del {
+        if let Err(e) = check_destructive_removal_safety(target, torrents, is_target_external) {
+            snapshot.phase = TorrentOperationPhase::Error;
+            snapshot.safe_error = Some(e.clone());
+            snapshot.revision += 1;
+            register_active_operation(id, info_hash.as_deref(), &snapshot);
+            on_transition(&snapshot);
+            return Err(e);
+        }
+    }
+
+    // 4. Indivisible engine removal
+    if let Err(e) = engine_remove(id, del) {
+        let err_msg = format!("Engine removal failed: {e}");
+        snapshot.phase = TorrentOperationPhase::Error;
+        snapshot.safe_error = Some(err_msg.clone());
+        snapshot.revision += 1;
+        register_active_operation(id, info_hash.as_deref(), &snapshot);
+        on_transition(&snapshot);
+        return Err(err_msg);
+    }
+
+    // 5. Reconciling phase
+    snapshot.phase = TorrentOperationPhase::Reconciling;
+    snapshot.revision += 1;
+    register_active_operation(id, info_hash.as_deref(), &snapshot);
+    on_transition(&snapshot);
+
+    if let Err(e) = reconcile(id, del) {
+        let err_msg = format!("Reconciliation failed: {e}");
+        snapshot.phase = TorrentOperationPhase::Error;
+        snapshot.safe_error = Some(err_msg.clone());
+        snapshot.revision += 1;
+        register_active_operation(id, info_hash.as_deref(), &snapshot);
+        on_transition(&snapshot);
+        return Err(err_msg);
+    }
+
+    // 6. Complete phase
+    snapshot.phase = TorrentOperationPhase::Complete;
+    snapshot.revision += 1;
+    on_transition(&snapshot);
+    remove_active_operation(id, info_hash.as_deref());
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2169,6 +2387,254 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("Use resolve_adc_torrent to resolve metainfo"));
+    }
+
+    #[test]
+    fn test_operation_snapshot_serialization() {
+        let snap = TorrentOperationSnapshot {
+            operation_id: "op-123".to_string(),
+            torrent_id: "hash_abc".to_string(),
+            kind: TorrentOperationKind::Remove { delete_files: true },
+            phase: TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+            destination: None,
+            safe_error: None,
+            revision: 1,
+        };
+        let json_str = serde_json::to_string(&snap).unwrap();
+        assert!(json_str.contains("\"type\":\"remove\""));
+        assert!(json_str.contains("\"delete_files\":true"));
+        assert!(json_str.contains("\"phase\":\"removing_torrent_and_deleting_files\""));
+
+        let deserialized: TorrentOperationSnapshot = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized, snap);
+    }
+
+    #[test]
+    fn test_operation_registry_deduplication() {
+        let t1 = sample_torrent("t_dedup", "hash_dedup", "DedupMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        // Clear any leftover state
+        remove_active_operation("t_dedup", Some("hash_dedup"));
+
+        let mut transitions = Vec::new();
+
+        // Initial remove request succeeds
+        let res1 = run_remove_lifecycle_step(
+            "t_dedup",
+            false,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| transitions.push(s.clone()),
+        );
+        assert!(res1.is_ok());
+
+        // Now simulate in-progress operation
+        let in_progress = TorrentOperationSnapshot {
+            operation_id: "op-active".to_string(),
+            torrent_id: "hash_dedup".to_string(),
+            kind: TorrentOperationKind::Remove {
+                delete_files: false,
+            },
+            phase: TorrentOperationPhase::RemovingTorrent,
+            destination: None,
+            safe_error: None,
+            revision: 1,
+        };
+        register_active_operation("t_dedup", Some("hash_dedup"), &in_progress);
+
+        // Duplicate call with same delete_files returns Ok without running engine remove
+        let mut engine_called = false;
+        let res2 = run_remove_lifecycle_step(
+            "t_dedup",
+            false,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| {
+                engine_called = true;
+                Ok(())
+            },
+            |_id, _del| Ok(()),
+            |_s| {},
+        );
+        assert!(
+            res2.is_ok(),
+            "Duplicate remove request must reuse active result"
+        );
+        assert!(
+            !engine_called,
+            "Engine remove must not be re-run on duplicate request"
+        );
+
+        // Clean up
+        remove_active_operation("t_dedup", Some("hash_dedup"));
+    }
+
+    #[test]
+    fn test_operation_registry_rejects_conflicting_operation() {
+        remove_active_operation("t_conflict", Some("hash_conflict"));
+
+        let in_progress = TorrentOperationSnapshot {
+            operation_id: "op-move".to_string(),
+            torrent_id: "hash_conflict".to_string(),
+            kind: TorrentOperationKind::Move {
+                destination: "/new_path".to_string(),
+            },
+            phase: TorrentOperationPhase::Pending,
+            destination: Some("/new_path".to_string()),
+            safe_error: None,
+            revision: 1,
+        };
+        register_active_operation("t_conflict", Some("hash_conflict"), &in_progress);
+
+        let t1 = sample_torrent(
+            "t_conflict",
+            "hash_conflict",
+            "ConflictMovie",
+            "/downloads",
+            1.0,
+        );
+        let all = vec![t1.clone()];
+
+        // Attempting to remove while move is active must fail
+        let res = run_remove_lifecycle_step(
+            "t_conflict",
+            false,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |_s| {},
+        );
+        assert!(res.is_err(), "Conflicting operation must be rejected");
+        assert!(res.unwrap_err().contains("already in progress"));
+
+        remove_active_operation("t_conflict", Some("hash_conflict"));
+    }
+
+    #[test]
+    fn test_destructive_removal_safety_records_error_phase() {
+        remove_active_operation("t_unsafe", Some("hash_unsafe"));
+
+        let t1 = sample_torrent("t_unsafe", "hash_unsafe", "SharedMovie", "/downloads", 1.0);
+        let t2 = sample_torrent("t_other", "hash_other", "SharedMovie", "/downloads", 1.0);
+        let all = vec![t1.clone(), t2.clone()];
+
+        let mut recorded_phases = Vec::new();
+        let mut engine_called = false;
+
+        let res = run_remove_lifecycle_step(
+            "t_unsafe",
+            true, // delete files = true while shared with t2
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| {
+                engine_called = true;
+                Ok(())
+            },
+            |_id, _del| Ok(()),
+            |s| recorded_phases.push((s.phase.clone(), s.safe_error.clone())),
+        );
+
+        assert!(res.is_err());
+        assert!(
+            !engine_called,
+            "Engine removal must not be called when safety check fails"
+        );
+        assert_eq!(
+            recorded_phases,
+            vec![
+                (TorrentOperationPhase::RemovingTorrentAndDeletingFiles, None),
+                (
+                    TorrentOperationPhase::Error,
+                    Some(
+                        "Cannot delete files: One or more files are shared with another active torrent. Remove the other torrent first, or select 'Remove without deleting files'."
+                            .to_string()
+                    )
+                )
+            ]
+        );
+
+        remove_active_operation("t_unsafe", Some("hash_unsafe"));
+    }
+
+    #[test]
+    fn test_remove_torrent_lifecycle_phases() {
+        remove_active_operation("t_lifecycle", Some("hash_lifecycle"));
+
+        let t1 = sample_torrent(
+            "t_lifecycle",
+            "hash_lifecycle",
+            "SafeMovie",
+            "/downloads",
+            1.0,
+        );
+        let all = vec![t1.clone()];
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_remove_lifecycle_step(
+            "t_lifecycle",
+            true, // delete files
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| recorded_phases.push(s.phase.clone()),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            recorded_phases,
+            vec![
+                TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+                TorrentOperationPhase::Reconciling,
+                TorrentOperationPhase::Complete,
+            ]
+        );
+
+        // Verify cleaned up from active map upon completion
+        assert!(get_active_operation("hash_lifecycle").is_none());
+    }
+
+    #[test]
+    fn test_keep_files_removal_lifecycle_phases() {
+        remove_active_operation("t_keep", Some("hash_keep"));
+
+        let t1 = sample_torrent("t_keep", "hash_keep", "KeepMovie", "/downloads", 1.0);
+        let all = vec![t1.clone()];
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_remove_lifecycle_step(
+            "t_keep",
+            false, // delete files = false
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| recorded_phases.push(s.phase.clone()),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            recorded_phases,
+            vec![
+                TorrentOperationPhase::RemovingTorrent,
+                TorrentOperationPhase::Reconciling,
+                TorrentOperationPhase::Complete,
+            ]
+        );
+
+        assert!(get_active_operation("hash_keep").is_none());
     }
 }
 
