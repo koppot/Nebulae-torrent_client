@@ -4,7 +4,9 @@ import { getVersion } from '@tauri-apps/api/app';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useConnectivityStore } from '../../stores/connectivityStore';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useUiStore } from '../../stores/uiStore';
 import { VpnStatus } from '../../types/vpn';
+import { AvailableUpdateInfo } from '../../types';
 import { formatBytes, formatSpeed } from '../../lib/formatters';
 
 // How far the last live probe of the ADC host got. No value means "offline":
@@ -60,6 +62,7 @@ export const StatusBar: React.FC = () => {
   const { torrents } = useTorrentStore();
   const { report, runDoctorTest } = useConnectivityStore();
   const { settings, saveSettings } = useSettingsStore();
+  const { openSettings } = useUiStore();
 
   const [isTogglingRacing, setIsTogglingRacing] = useState(false);
 
@@ -81,9 +84,44 @@ export const StatusBar: React.FC = () => {
   const vpnConfigured = vpn ? vpn.mode !== 'NoVpn' : false;
   const [disk, setDisk] = useState<VolumeSpace | null>(null);
   const [appVersion, setAppVersion] = useState<string>('');
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdateInfo | null>(null);
+  const [isStaged, setIsStaged] = useState<boolean>(false);
 
   useEffect(() => {
     getVersion().then((v) => setAppVersion(v)).catch(() => {});
+    invoke<AvailableUpdateInfo | null>('get_available_update')
+      .then((u) => setAvailableUpdate(u))
+      .catch(() => {});
+    invoke<boolean>('get_update_staged')
+      .then((staged) => setIsStaged(Boolean(staged)))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let unlistenAvailable: (() => void) | undefined;
+    let unlistenNotAvailable: (() => void) | undefined;
+    let unlistenStaged: (() => void) | undefined;
+
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<AvailableUpdateInfo>('nebulae://update-available', (event) => {
+        setAvailableUpdate(event.payload);
+      }).then((un) => { unlistenAvailable = un; });
+
+      listen('nebulae://update-not-available', () => {
+        setAvailableUpdate(null);
+      }).then((un) => { unlistenNotAvailable = un; });
+
+      listen<AvailableUpdateInfo>('nebulae://update-staged', (event) => {
+        setAvailableUpdate(event.payload);
+        setIsStaged(true);
+      }).then((un) => { unlistenStaged = un; });
+    }).catch(() => {});
+
+    return () => {
+      unlistenAvailable?.();
+      unlistenNotAvailable?.();
+      unlistenStaged?.();
+    };
   }, []);
 
   const totalDlSpeed = torrents.reduce((acc, t) => acc + (t.download_rate || 0), 0);
@@ -383,6 +421,32 @@ export const StatusBar: React.FC = () => {
           <span className="text-[#a3a3a3]" title="Nebulae application version">
             Nebulae v{appVersion || '…'}
           </span>
+
+          {availableUpdate && (
+            <>
+              <span className="text-[#333333]">|</span>
+              <button
+                type="button"
+                onClick={() => openSettings('behavior')}
+                className="text-[#46d369] hover:underline cursor-pointer flex items-center gap-1 font-medium transition"
+                title={`Version ${availableUpdate.version} is available. Click to open Settings.`}
+              >
+                <span>v{availableUpdate.version} available</span>
+              </button>
+            </>
+          )}
+
+          {isStaged && !availableUpdate && (
+            <>
+              <span className="text-[#333333]">|</span>
+              <span
+                className="text-[#46d369]"
+                title="Update downloaded and staged. It will take effect on next launch."
+              >
+                Restart to update
+              </span>
+            </>
+          )}
         </div>
       </div>
     </footer>

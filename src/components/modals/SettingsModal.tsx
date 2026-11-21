@@ -10,9 +10,11 @@ import {
   DiscPlayerStatus,
   UserSettings,
   EngineIdentityInfo,
+  AvailableUpdateInfo,
 } from '../../types';
 import { errorMessage } from '../../utils/errors';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   X,
   Sliders,
@@ -41,6 +43,10 @@ import {
   Info,
   FolderInput,
   Bug,
+  Download,
+  Check,
+  AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 
 type SettingsTab =
@@ -133,6 +139,72 @@ export const SettingsModal: React.FC = () => {
       console.error('Failed to restore all titles:', err);
     } finally {
       setIsRestoringHidden(false);
+    }
+  };
+
+  // Software Updater state
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState<boolean>(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdateInfo | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<
+    'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'staged' | 'error'
+  >('idle');
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersion().then((v) => setAppVersion(v)).catch(() => {});
+    invoke<AvailableUpdateInfo | null>('get_available_update')
+      .then((u) => {
+        if (u) {
+          setAvailableUpdate(u);
+          setUpdateStatus('available');
+        }
+      })
+      .catch(() => {});
+    invoke<boolean>('get_update_staged')
+      .then((staged) => {
+        if (staged) {
+          setUpdateStatus('staged');
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleManualCheckUpdates = async () => {
+    setIsCheckingUpdate(true);
+    setUpdateError(null);
+    setUpdateStatus('checking');
+    try {
+      const result = await invoke<AvailableUpdateInfo | null>('check_for_updates');
+      if (result) {
+        setAvailableUpdate(result);
+        setUpdateStatus('available');
+      } else {
+        setAvailableUpdate(null);
+        setUpdateStatus('up-to-date');
+      }
+    } catch (err) {
+      setUpdateError(errorMessage(err, 'Failed to check for updates'));
+      setUpdateStatus('error');
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadAndInstallUpdate = async () => {
+    setIsDownloadingUpdate(true);
+    setUpdateError(null);
+    setUpdateStatus('downloading');
+    try {
+      const res = await invoke<AvailableUpdateInfo>('download_and_install_update');
+      setAvailableUpdate(res);
+      setUpdateStatus('staged');
+    } catch (err) {
+      setUpdateError(errorMessage(err, 'Failed to download and stage update'));
+      setUpdateStatus('error');
+    } finally {
+      setIsDownloadingUpdate(false);
     }
   };
 
@@ -544,13 +616,99 @@ export const SettingsModal: React.FC = () => {
                         className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 mt-0.5"
                       />
                       <div>
-                        <span className="text-white font-medium">Automatically keep Nebulae updated (recommended)</span>
+                        <span className="text-white font-medium">Automatically check for updates (recommended)</span>
                         <span className="block text-[11px] text-[#8c8c8c] mt-0.5">
-                          Checks for signed releases on startup, downloads silently in the background, and stages updates to apply on quit without interrupting active torrent transfers.
+                          Periodically checks for signed releases and notifies when an update is available without downloading or installing in the background.
                           On Linux Debian/RPM installations, updates are managed by your system package manager.
                         </span>
                       </div>
                     </label>
+
+                    {/* Manual Software Update Action */}
+                    <div className="p-3.5 rounded-lg bg-[#1f1f1f] border border-[#333333] space-y-2.5 text-xs mt-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-white flex items-center gap-2">
+                            <Download className="w-4 h-4 text-[#e50914]" />
+                            <span>Software Update</span>
+                          </span>
+                          <p className="text-[11px] text-[#8c8c8c] mt-0.5">
+                            Installed version: <span className="font-mono text-white">v{appVersion || '…'}</span>
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleManualCheckUpdates}
+                          disabled={isCheckingUpdate || isDownloadingUpdate}
+                          className="px-3 py-1.5 rounded bg-[#262626] hover:bg-[#333333] border border-[#404040] text-white text-xs font-medium transition disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {isCheckingUpdate ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Checking…</span>
+                            </>
+                          ) : (
+                            <span>Check for Updates</span>
+                          )}
+                        </button>
+                      </div>
+
+                      {updateStatus === 'up-to-date' && (
+                        <div className="p-2 rounded bg-[#171717] border border-[#333333] text-[11px] text-[#46d369] flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-[#46d369]" />
+                          <span>Nebulae is up to date (v{appVersion}).</span>
+                        </div>
+                      )}
+
+                      {updateStatus === 'error' && (
+                        <div className="p-2 rounded bg-[#171717] border border-[#e50914]/40 text-[11px] text-[#e50914] flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-[#e50914]" />
+                          <span>{updateError || 'Update check failed.'}</span>
+                        </div>
+                      )}
+
+                      {availableUpdate && updateStatus !== 'staged' && (
+                        <div className="p-2.5 rounded bg-[#171717] border border-[#333333] space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[#46d369] font-semibold text-xs flex items-center gap-1.5">
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Update Available: v{availableUpdate.version}</span>
+                              </span>
+                              {availableUpdate.body && (
+                                <p className="text-[11px] text-[#a3a3a3] mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap">
+                                  {availableUpdate.body}
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleDownloadAndInstallUpdate}
+                              disabled={isDownloadingUpdate}
+                              className="px-3 py-1.5 rounded bg-[#e50914] hover:bg-[#f40612] text-white text-xs font-medium transition disabled:opacity-50 flex items-center gap-1.5 ml-3 shrink-0"
+                            >
+                              {isDownloadingUpdate ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Downloading…</span>
+                                </>
+                              ) : (
+                                <span>Download & Install</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {updateStatus === 'staged' && (
+                        <div className="p-2.5 rounded bg-[#171717] border border-[#46d369]/30 text-[11px] text-[#46d369] flex items-center gap-2">
+                          <Check className="w-4 h-4 text-[#46d369] shrink-0" />
+                          <span>
+                            Update v{availableUpdate?.version || ''} downloaded and staged. It will take effect when Nebulae restarts.
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 

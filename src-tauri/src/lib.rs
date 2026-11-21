@@ -409,6 +409,7 @@ pub fn run() {
         .manage(engine_mode)
         .manage(pending_payloads)
         .manage(updater::StagedUpdateState::default())
+        .manage(updater::PendingUpdateState::default())
         .manage(player::PlayerState::default())
         .manage(commands::qbit_import::QbitImportState::default())
         .setup(move |app| {
@@ -1010,6 +1011,11 @@ pub fn run() {
             commands::qbit_import::qbit_scan_torrents,
             commands::qbit_import::qbit_execute_import,
             commands::qbit_import::qbit_restore_backup,
+            // Software Updater
+            updater::check_for_updates,
+            updater::get_available_update,
+            updater::download_and_install_update,
+            updater::get_update_staged,
         ])
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");

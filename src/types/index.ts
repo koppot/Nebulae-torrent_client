@@ -386,6 +386,13 @@ export interface DiagnosticSummary {
   total_logs_size_bytes: number;
 }
 
+export interface AvailableUpdateInfo {
+  version: string;
+  current_version: string;
+  date?: string | null;
+  body?: string | null;
+}
+
 export interface AssociationStatus {
   torrent_files: boolean | null;
   adc_files: boolean | null;
