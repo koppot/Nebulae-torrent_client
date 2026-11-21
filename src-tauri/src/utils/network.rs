@@ -173,7 +173,10 @@ pub fn get_process_ipv6_listening_sockets(pid: u32) -> Vec<String> {
     let mut sockets = Vec::new();
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("netstat").arg("-ano").output() {
+        if let Ok(output) = crate::utils::process::create_hidden_command("netstat")
+            .arg("-ano")
+            .output()
+        {
             if let Ok(stdout) = String::from_utf8(output.stdout) {
                 let pid_str = pid.to_string();
                 for line in stdout.lines() {
