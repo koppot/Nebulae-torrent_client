@@ -322,6 +322,7 @@ mod windows_impl {
         /// True when the band must be suppressed due to insufficient taskbar space.
         hide_no_space: bool,
         /// Free span between the last task button and the right-hand controls (diagnostics).
+        #[allow(dead_code)]
         span: (i32, i32),
     }
 
@@ -568,42 +569,61 @@ mod windows_impl {
     }
 
     fn reposition_band(hwnd: HWND) {
+        // 1. If overlay is disabled, hide once if currently visible and do no positioning work
+        if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
+            unsafe {
+                if IsWindowVisible(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    FULLSCREEN_SUPPRESSED.store(false, Ordering::Relaxed);
+                }
+            }
+            return;
+        }
+
+        // 2. The band must be hidden when it has no room to fit without overlapping controls,
+        // or when a fullscreen window covers its monitor.
         let p = calculate_taskbar_position();
+        let now_fullscreen = foreground_is_fullscreen_on_band_monitor(hwnd);
+        let want_hidden = p.hide_no_space || now_fullscreen;
+        let visible = unsafe { IsWindowVisible(hwnd).as_bool() };
+        FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
+
+        if want_hidden {
+            if visible {
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+                tracing::info!(
+                    hidden = true,
+                    no_space = p.hide_no_space,
+                    fullscreen = now_fullscreen,
+                    x = p.x,
+                    width = p.w,
+                    "taskbar speed band suppressed and hidden"
+                );
+            }
+            return;
+        }
+
+        // 3. Only position and assert topmost when enabled and not suppressed
         unsafe {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), p.x, p.y, p.w, p.h, SWP_NOACTIVATE);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                p.x,
+                p.y,
+                p.w,
+                p.h,
+                windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(
+                    SWP_NOACTIVATE.0 | windows::Win32::UI::WindowsAndMessaging::SWP_NOOWNERZORDER.0,
+                ),
+            );
         }
         BAND_W.store(p.layout.width, Ordering::Relaxed);
         BAND_H.store(p.layout.height, Ordering::Relaxed);
 
-        if !OVERLAY_ENABLED.load(Ordering::Relaxed) {
-            return;
-        }
-
-        // The band must be hidden when it has no room to fit without overlapping controls,
-        // or when a fullscreen window covers its monitor.
-        let now_fullscreen = foreground_is_fullscreen_on_band_monitor(hwnd);
-        let want_hidden = p.hide_no_space || now_fullscreen;
-        // Compare with the window's real state, not only the suppression flag: the band can be
-        // created hidden (no room at startup) while the flag still reads "not suppressed".
-        let visible = unsafe { IsWindowVisible(hwnd).as_bool() };
-        FULLSCREEN_SUPPRESSED.store(want_hidden, Ordering::Relaxed);
-        if want_hidden == !visible {
-            return; // No state change — nothing to do.
-        }
-        tracing::info!(
-            hidden = want_hidden,
-            no_space = p.hide_no_space,
-            fullscreen = now_fullscreen,
-            x = p.x,
-            width = p.w,
-            free_span_left = p.span.0,
-            free_span_right = p.span.1,
-            "taskbar speed band visibility changed"
-        );
         unsafe {
-            if want_hidden {
-                let _ = ShowWindow(hwnd, SW_HIDE);
-            } else {
+            if !visible {
                 let _ = ShowWindow(hwnd, SW_SHOWNA);
                 let _ = PostMessageW(Some(hwnd), WM_RENDER_BAND, WPARAM(0), LPARAM(0));
             }

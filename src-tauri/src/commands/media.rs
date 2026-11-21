@@ -4007,13 +4007,35 @@ pub async fn get_volume_disk_space(
     target_path: Option<String>,
 ) -> Result<crate::utils::library_cleaner::VolumeSpaceInfo, String> {
     tokio::task::spawn_blocking(move || {
-        let p = target_path
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")));
+        let p = if let Some(ref t) = target_path {
+            let trimmed = t.trim();
+            if !trimmed.is_empty() {
+                crate::utils::paths::resolve_local_dir(trimmed)
+                    .unwrap_or_else(|_| PathBuf::from(trimmed))
+            } else {
+                resolve_configured_default_download_path()
+            }
+        } else {
+            resolve_configured_default_download_path()
+        };
         crate::utils::library_cleaner::LibraryCleaner::get_disk_space(&p)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn resolve_configured_default_download_path() -> PathBuf {
+    if let Ok(paths) = crate::utils::paths::AppPaths::init() {
+        if let Ok(db) = crate::db::Database::new(&paths.db_file) {
+            let settings = crate::commands::settings::load_user_settings_from_db(&db);
+            let dir = settings.download_directory.trim();
+            if !dir.is_empty() {
+                return crate::utils::paths::resolve_local_dir(dir)
+                    .unwrap_or_else(|_| PathBuf::from(dir));
+            }
+        }
+    }
+    dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[tauri::command]

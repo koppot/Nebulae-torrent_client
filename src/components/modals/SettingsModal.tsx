@@ -406,7 +406,7 @@ export const SettingsModal: React.FC = () => {
                         <input
                           type="checkbox"
                           data-testid="speed-overlay-toggle"
-                          checked={settings.show_taskbar_speed_overlay ?? true}
+                          checked={settings.show_taskbar_speed_overlay ?? false}
                           onChange={async (e) => {
                             const val = e.target.checked;
                             saveSettings({ show_taskbar_speed_overlay: val });

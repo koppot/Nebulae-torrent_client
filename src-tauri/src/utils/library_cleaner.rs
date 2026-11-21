@@ -45,11 +45,85 @@ pub struct LibraryCleaner;
 
 impl LibraryCleaner {
     /// Measure volume disk space (total, available, used) for a target directory or mount point.
+    /// Walks upward to the nearest existing ancestor within the volume boundary.
+    /// Returns an explicit error if the volume/drive is unavailable or disconnected.
     pub fn get_disk_space(target_path: &Path) -> Result<VolumeSpaceInfo, String> {
-        let path = if target_path.exists() {
-            target_path.to_path_buf()
+        #[cfg(target_os = "macos")]
+        let volume_boundary: Option<PathBuf> = if target_path.starts_with("/Volumes") {
+            let mut comps = target_path.components();
+            let _root = comps.next();
+            let _vol = comps.next();
+            comps
+                .next()
+                .map(|name| PathBuf::from("/Volumes").join(name.as_os_str()))
         } else {
-            dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+            None
+        };
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let volume_boundary: Option<PathBuf> = if target_path.starts_with("/mnt") {
+            let mut comps = target_path.components();
+            let _root = comps.next();
+            let _mnt = comps.next();
+            comps
+                .next()
+                .map(|name| PathBuf::from("/mnt").join(name.as_os_str()))
+        } else if target_path.starts_with("/media") {
+            let mut comps = target_path.components();
+            let _root = comps.next();
+            let _media = comps.next();
+            comps
+                .next()
+                .map(|name| PathBuf::from("/media").join(name.as_os_str()))
+        } else {
+            None
+        };
+
+        #[cfg(windows)]
+        let volume_boundary: Option<PathBuf> = {
+            target_path.components().next().map(|c| {
+                let s = c.as_os_str().to_string_lossy().to_string();
+                if s.ends_with('\\') || s.ends_with('/') {
+                    PathBuf::from(s)
+                } else {
+                    PathBuf::from(format!("{}\\", s))
+                }
+            })
+        };
+
+        let mut cur = target_path.to_path_buf();
+        let mut existing_path = None;
+
+        loop {
+            if cur.exists() {
+                existing_path = Some(cur.clone());
+                break;
+            }
+            if let Some(ref bound) = volume_boundary {
+                if &cur == bound {
+                    break;
+                }
+            }
+            #[cfg(unix)]
+            if cur.parent() == Some(Path::new("/")) {
+                break;
+            }
+            match cur.parent() {
+                Some(parent) if parent != cur => {
+                    cur = parent.to_path_buf();
+                }
+                _ => break,
+            }
+        }
+
+        let path = match existing_path {
+            Some(p) => p,
+            None => {
+                return Err(format!(
+                    "Configured storage path '{}' is unavailable (drive or share disconnected)",
+                    target_path.display()
+                ));
+            }
         };
 
         #[cfg(unix)]
@@ -738,5 +812,68 @@ mod tests {
         assert!(!test_file.exists()); // Active run deletes candidate
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_disk_space_reachable_parent() {
+        let temp_dir = std::env::temp_dir();
+        let nonexistent_child = temp_dir.join("nonexistent_sub_dir_12345/deeper");
+        assert!(!nonexistent_child.exists());
+
+        let res = LibraryCleaner::get_disk_space(&nonexistent_child);
+        assert!(res.is_ok(), "Must resolve to existing ancestor temp_dir");
+        let space = res.unwrap();
+        assert!(space.total_bytes > 0);
+        assert!(space.available_bytes > 0);
+    }
+
+    #[test]
+    fn test_disk_space_unavailable_path_returns_error() {
+        #[cfg(unix)]
+        let unavailable = Path::new("/nonexistent_drive_root_99999/sub");
+        #[cfg(windows)]
+        let unavailable = Path::new("Q:\\nonexistent_drive_root_99999\\sub");
+
+        let res = LibraryCleaner::get_disk_space(unavailable);
+        assert!(
+            res.is_err(),
+            "Must return error for disconnected/unavailable drive"
+        );
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains("unavailable"),
+            "Error must state destination is unavailable, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_disk_space_alternate_drive_and_subfolder_resolution() {
+        #[cfg(windows)]
+        {
+            if Path::new("V:\\").exists() {
+                let target = Path::new("V:\\nonexistent_subfolder_nebulae_test\\nested");
+                let res = LibraryCleaner::get_disk_space(target);
+                assert!(
+                    res.is_ok(),
+                    "Must resolve nonexistent subfolder on V: to V:\\ root"
+                );
+                let space = res.unwrap();
+                assert!(space.mount_point.starts_with("V:"));
+                assert!(space.total_bytes > 0);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let temp = std::env::temp_dir();
+            let target = temp.join("nebulae_subfolder_test_456/nested");
+            let res = LibraryCleaner::get_disk_space(&target);
+            assert!(
+                res.is_ok(),
+                "Must resolve nonexistent subfolder in temp to temp_dir"
+            );
+            let space = res.unwrap();
+            assert!(space.total_bytes > 0);
+        }
     }
 }

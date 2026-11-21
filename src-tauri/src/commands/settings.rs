@@ -190,10 +190,10 @@ pub struct UserSettings {
     /// Defaults to true; explicit false is preserved.
     #[serde(default = "default_true")]
     pub blackout_other_displays_in_fullscreen: bool,
-    // 14. Windows Taskbar Speed Overlay
-    /// When enabled, an upload/download transfer rate overlay band appears in the Windows taskbar.
-    /// Defaults to true; explicit false is preserved.
-    #[serde(default = "default_true")]
+    // 14. Windows Taskbar Speed Overlay / macOS Menu Bar Speed Display
+    /// When enabled, an upload/download transfer rate overlay band appears in the Windows taskbar or macOS menu bar.
+    /// Defaults to false for new or unset configurations; explicit choices are preserved.
+    #[serde(default)]
     pub show_taskbar_speed_overlay: bool,
 }
 
@@ -365,7 +365,7 @@ impl Default for UserSettings {
             media_mode_decision_made: false,
             blackout_other_displays_in_fullscreen: true,
             // 14. Windows Taskbar Speed Overlay
-            show_taskbar_speed_overlay: true,
+            show_taskbar_speed_overlay: false,
         }
     }
 }
@@ -877,6 +877,39 @@ mod tests {
         assert!(
             deserialized_true.racing_mode_enabled,
             "Explicit true must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_speed_overlay_defaults_false_and_preserves_explicit() {
+        // Missing show_taskbar_speed_overlay defaults to false
+        let missing_json = r#"{"download_directory": "/tmp/custom"}"#;
+        let deserialized: UserSettings = serde_json::from_str(missing_json).unwrap();
+        assert!(
+            !deserialized.show_taskbar_speed_overlay,
+            "Missing show_taskbar_speed_overlay must default to false"
+        );
+
+        // Explicit false is preserved
+        let false_json = r#"{"show_taskbar_speed_overlay": false}"#;
+        let deserialized_false: UserSettings = serde_json::from_str(false_json).unwrap();
+        assert!(
+            !deserialized_false.show_taskbar_speed_overlay,
+            "Explicit false must be preserved"
+        );
+
+        // Explicit true is preserved
+        let true_json = r#"{"show_taskbar_speed_overlay": true}"#;
+        let deserialized_true: UserSettings = serde_json::from_str(true_json).unwrap();
+        assert!(
+            deserialized_true.show_taskbar_speed_overlay,
+            "Explicit true must be preserved"
+        );
+
+        // Default struct has false
+        assert!(
+            !UserSettings::default().show_taskbar_speed_overlay,
+            "UserSettings::default() must have show_taskbar_speed_overlay set to false"
         );
     }
 

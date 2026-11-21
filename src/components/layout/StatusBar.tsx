@@ -368,8 +368,8 @@ export const StatusBar: React.FC = () => {
 
         {/* Right: Storage & Application State */}
         <div className="flex items-center gap-x-3 gap-y-1">
-          <span title={disk ? `Volume ${disk.mount_point}` : 'Available storage'}>
-            Disk: {disk ? formatBytes(disk.available_bytes) : '…'} free
+          <span title={disk ? `Volume ${disk.mount_point}` : 'Storage destination unavailable'}>
+            Disk: {disk ? `${formatBytes(disk.available_bytes)} free` : 'unavailable'}
           </span>
 
           <span className="text-[#333333]">|</span>
