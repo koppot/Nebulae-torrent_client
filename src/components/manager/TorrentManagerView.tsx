@@ -1340,8 +1340,10 @@ export const TorrentManagerView: React.FC = () => {
                       ) : isOperating ? (
                         (() => {
                           let phaseLabel = 'Processing…';
-                          if (activeOp?.phase === 'removing_torrent_and_deleting_files') {
-                            phaseLabel = 'Removing torrent & deleting files…';
+                          if (activeOp?.outcome) {
+                            phaseLabel = activeOp.outcome;
+                          } else if (activeOp?.phase === 'removing_torrent_and_deleting_files') {
+                            phaseLabel = 'Removing torrent & requesting file deletion…';
                           } else if (activeOp?.phase === 'removing_torrent') {
                             phaseLabel = 'Removing torrent…';
                           } else if (activeOp?.phase === 'reconciling') {

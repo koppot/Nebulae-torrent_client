@@ -28,9 +28,27 @@ pub struct TorrentOperationSnapshot {
     pub torrent_id: String,
     pub kind: TorrentOperationKind,
     pub phase: TorrentOperationPhase,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub safe_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
     pub revision: u64,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReservationResult {
+    Reserved(TorrentOperationSnapshot),
+    Duplicate(TorrentOperationSnapshot),
+}
+
+fn current_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 static ACTIVE_OPERATIONS: OnceLock<Arc<Mutex<HashMap<String, TorrentOperationSnapshot>>>> =
@@ -40,11 +58,77 @@ fn get_active_operations_map() -> &'static Arc<Mutex<HashMap<String, TorrentOper
     ACTIVE_OPERATIONS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_active_operation(key: &str) -> Option<TorrentOperationSnapshot> {
     let map = get_active_operations_map().lock().ok()?;
     map.get(key)
         .or_else(|| map.get(&key.to_lowercase()))
         .cloned()
+}
+
+pub(crate) fn reserve_active_remove_operation(
+    id: &str,
+    info_hash: Option<&str>,
+    del: bool,
+    initial_phase: TorrentOperationPhase,
+) -> Result<ReservationResult, String> {
+    let mut map = get_active_operations_map()
+        .lock()
+        .map_err(|e| format!("Registry lock poisoned: {e}"))?;
+
+    let active_lookup_key = info_hash.unwrap_or(id);
+
+    let existing = map
+        .get(id)
+        .or_else(|| map.get(&id.to_lowercase()))
+        .or_else(|| info_hash.and_then(|h| map.get(h).or_else(|| map.get(&h.to_lowercase()))))
+        .cloned();
+
+    if let Some(existing) = existing {
+        // An existing Error record must not return Ok as a successful duplicate
+        if existing.phase == TorrentOperationPhase::Error {
+            let err_msg = existing
+                .safe_error
+                .unwrap_or_else(|| "Previous operation failed".to_string());
+            return Err(err_msg);
+        }
+
+        match existing.kind {
+            TorrentOperationKind::Remove {
+                delete_files: existing_del,
+            } if existing_del == del => {
+                // In-progress duplicate with matching parameters: reuse active result
+                return Ok(ReservationResult::Duplicate(existing));
+            }
+            _ => {
+                return Err(format!(
+                    "An active operation is already in progress for torrent '{id}'"
+                ));
+            }
+        }
+    }
+
+    let op_id = uuid::Uuid::new_v4().to_string();
+    let snapshot = TorrentOperationSnapshot {
+        operation_id: op_id,
+        torrent_id: active_lookup_key.to_string(),
+        kind: TorrentOperationKind::Remove { delete_files: del },
+        phase: initial_phase,
+        destination: None,
+        safe_error: None,
+        outcome: None,
+        revision: 1,
+        created_at: current_time_millis(),
+    };
+
+    map.insert(id.to_string(), snapshot.clone());
+    map.insert(id.to_lowercase(), snapshot.clone());
+    if let Some(hash) = info_hash {
+        map.insert(hash.to_string(), snapshot.clone());
+        map.insert(hash.to_lowercase(), snapshot.clone());
+    }
+
+    Ok(ReservationResult::Reserved(snapshot))
 }
 
 pub(crate) fn register_active_operation(
@@ -54,19 +138,68 @@ pub(crate) fn register_active_operation(
 ) {
     if let Ok(mut map) = get_active_operations_map().lock() {
         map.insert(id.to_string(), snapshot.clone());
+        map.insert(id.to_lowercase(), snapshot.clone());
         if let Some(hash) = info_hash {
+            map.insert(hash.to_string(), snapshot.clone());
             map.insert(hash.to_lowercase(), snapshot.clone());
         }
     }
 }
 
+pub(crate) fn dismiss_active_operation(key: &str) -> Result<(), String> {
+    let mut map = get_active_operations_map()
+        .lock()
+        .map_err(|e| format!("Registry lock poisoned: {e}"))?;
+
+    let target = map
+        .get(key)
+        .or_else(|| map.get(&key.to_lowercase()))
+        .or_else(|| {
+            map.values().find(|op| {
+                op.torrent_id == key
+                    || op.torrent_id.eq_ignore_ascii_case(key)
+                    || op.operation_id == key
+            })
+        })
+        .cloned();
+
+    let snapshot = match target {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // Allow dismissal only for terminal errors; do not let dismissal clear an in-flight reservation
+    if snapshot.phase != TorrentOperationPhase::Error {
+        return Err(format!(
+            "Cannot dismiss operation '{}': operation is currently in phase '{:?}'. Only terminal errors can be dismissed.",
+            snapshot.operation_id, snapshot.phase
+        ));
+    }
+
+    // Remove every alias for that operation_id
+    let target_op_id = snapshot.operation_id;
+    map.retain(|_, op| op.operation_id != target_op_id);
+
+    Ok(())
+}
+
 pub(crate) fn remove_active_operation(id: &str, info_hash: Option<&str>) {
     if let Ok(mut map) = get_active_operations_map().lock() {
-        map.remove(id);
-        map.remove(&id.to_lowercase());
-        if let Some(hash) = info_hash {
-            map.remove(hash);
-            map.remove(&hash.to_lowercase());
+        let op_id = map
+            .get(id)
+            .or_else(|| map.get(&id.to_lowercase()))
+            .or_else(|| info_hash.and_then(|h| map.get(h).or_else(|| map.get(&h.to_lowercase()))))
+            .map(|op| op.operation_id.clone());
+
+        if let Some(ref target_id) = op_id {
+            map.retain(|_, op| &op.operation_id != target_id);
+        } else {
+            map.remove(id);
+            map.remove(&id.to_lowercase());
+            if let Some(hash) = info_hash {
+                map.remove(hash);
+                map.remove(&hash.to_lowercase());
+            }
         }
     }
 }
@@ -991,12 +1124,12 @@ pub async fn remove_torrent(
             |_tid, _d| {
                 if let Some(ref hash) = info_hash {
                     if del {
-                        let _ = db.delete_torrent_metadata(hash);
+                        db.delete_torrent_metadata(hash)
+                            .map_err(|e| format!("Failed to delete torrent metadata: {e}"))?;
                     } else {
                         let db_completed = db
                             .get_torrent_metadata(hash)
-                            .ok()
-                            .flatten()
+                            .map_err(|e| format!("Failed to read metadata: {e}"))?
                             .map(|m| m.completed_on.is_some())
                             .unwrap_or(false);
 
@@ -1012,7 +1145,9 @@ pub async fn remove_torrent(
                                         meta.save_path = Some(t.save_path.clone());
                                     }
                                 }
-                                let _ = db.upsert_torrent_metadata(&meta);
+                                db.upsert_torrent_metadata(&meta).map_err(|e| {
+                                    format!("Failed to update torrent metadata: {e}")
+                                })?;
                             } else if let Some(ref t) = target {
                                 let meta = crate::db::TorrentDbMetadata {
                                     info_hash: hash.clone(),
@@ -1040,10 +1175,15 @@ pub async fn remove_torrent(
                                     last_checked: None,
                                     hidden_at: None,
                                 };
-                                let _ = db.upsert_torrent_metadata(&meta);
+                                db.upsert_torrent_metadata(&meta).map_err(|e| {
+                                    format!("Failed to insert torrent metadata: {e}")
+                                })?;
                             }
-                            let _ = db.mark_as_external(hash);
-                            let _ = db.mark_snatched_record_external(hash);
+                            db.mark_as_external(hash)
+                                .map_err(|e| format!("Failed to mark as external: {e}"))?;
+                            db.mark_snatched_record_external(hash).map_err(|e| {
+                                format!("Failed to mark snatched record external: {e}")
+                            })?;
                         }
                     }
                 }
@@ -1067,8 +1207,7 @@ pub fn get_active_torrent_operations() -> Result<Vec<TorrentOperationSnapshot>, 
 
 #[tauri::command]
 pub fn dismiss_torrent_operation(id: String) -> Result<(), String> {
-    remove_active_operation(&id, None);
-    Ok(())
+    dismiss_active_operation(&id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1093,46 +1232,27 @@ where
             None
         }
     });
-    let active_lookup_key = info_hash.as_deref().unwrap_or(id);
 
-    // 1. Serialization / deduplication check
-    if let Some(existing) = get_active_operation(active_lookup_key) {
-        match existing.kind {
-            TorrentOperationKind::Remove {
-                delete_files: existing_del,
-            } if existing_del == del => {
-                // Reuse active result, avoid duplicate destructive work
-                return Ok(());
-            }
-            _ => {
-                return Err(format!(
-                    "An active operation is already in progress for torrent '{id}'"
-                ));
-            }
-        }
-    }
-
-    // 2. Initial phase
-    let op_id = uuid::Uuid::new_v4().to_string();
     let initial_phase = if del {
         TorrentOperationPhase::RemovingTorrentAndDeletingFiles
     } else {
         TorrentOperationPhase::RemovingTorrent
     };
-    let mut snapshot = TorrentOperationSnapshot {
-        operation_id: op_id,
-        torrent_id: active_lookup_key.to_string(),
-        kind: TorrentOperationKind::Remove { delete_files: del },
-        phase: initial_phase,
-        destination: None,
-        safe_error: None,
-        revision: 1,
+
+    // 1. Atomic reservation under registry lock (lock dropped before engine work)
+    let reservation =
+        reserve_active_remove_operation(id, info_hash.as_deref(), del, initial_phase)?;
+    let mut snapshot = match reservation {
+        ReservationResult::Duplicate(_) => {
+            // Reusing active result, avoid duplicate destructive engine removal
+            return Ok(());
+        }
+        ReservationResult::Reserved(s) => s,
     };
 
-    register_active_operation(id, info_hash.as_deref(), &snapshot);
     on_transition(&snapshot);
 
-    // 3. Safety check before removal
+    // 2. Safety check before destructive removal
     if del {
         if let Err(e) = check_destructive_removal_safety(target, torrents, is_target_external) {
             snapshot.phase = TorrentOperationPhase::Error;
@@ -1144,7 +1264,7 @@ where
         }
     }
 
-    // 4. Indivisible engine removal
+    // 3. Indivisible engine removal
     if let Err(e) = engine_remove(id, del) {
         let err_msg = format!("Engine removal failed: {e}");
         snapshot.phase = TorrentOperationPhase::Error;
@@ -1155,14 +1275,15 @@ where
         return Err(err_msg);
     }
 
-    // 5. Reconciling phase
+    // 4. Reconciling phase
     snapshot.phase = TorrentOperationPhase::Reconciling;
     snapshot.revision += 1;
     register_active_operation(id, info_hash.as_deref(), &snapshot);
     on_transition(&snapshot);
 
-    if let Err(e) = reconcile(id, del) {
-        let err_msg = format!("Reconciliation failed: {e}");
+    if let Err(_e) = reconcile(id, del) {
+        // If engine removal succeeded but reconciliation failed, record specific failure
+        let err_msg = "Torrent removed; Media update failed.".to_string();
         snapshot.phase = TorrentOperationPhase::Error;
         snapshot.safe_error = Some(err_msg.clone());
         snapshot.revision += 1;
@@ -1171,9 +1292,15 @@ where
         return Err(err_msg);
     }
 
-    // 6. Complete phase
+    // 5. Complete phase
     snapshot.phase = TorrentOperationPhase::Complete;
     snapshot.revision += 1;
+    if del {
+        snapshot.outcome =
+            Some("Removal request accepted; file deletion not independently confirmed".to_string());
+    } else {
+        snapshot.outcome = Some("Torrent removed".to_string());
+    }
     on_transition(&snapshot);
     remove_active_operation(id, info_hash.as_deref());
 
@@ -2398,7 +2525,9 @@ mod tests {
             phase: TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
             destination: None,
             safe_error: None,
+            outcome: None,
             revision: 1,
+            created_at: 1000,
         };
         let json_str = serde_json::to_string(&snap).unwrap();
         assert!(json_str.contains("\"type\":\"remove\""));
@@ -2442,7 +2571,9 @@ mod tests {
             phase: TorrentOperationPhase::RemovingTorrent,
             destination: None,
             safe_error: None,
+            outcome: None,
             revision: 1,
+            created_at: 1000,
         };
         register_active_operation("t_dedup", Some("hash_dedup"), &in_progress);
 
@@ -2487,7 +2618,9 @@ mod tests {
             phase: TorrentOperationPhase::Pending,
             destination: Some("/new_path".to_string()),
             safe_error: None,
+            outcome: None,
             revision: 1,
+            created_at: 1000,
         };
         register_active_operation("t_conflict", Some("hash_conflict"), &in_progress);
 
@@ -2515,6 +2648,206 @@ mod tests {
         assert!(res.unwrap_err().contains("already in progress"));
 
         remove_active_operation("t_conflict", Some("hash_conflict"));
+    }
+
+    #[test]
+    fn test_concurrent_reservation_is_atomic() {
+        remove_active_operation("t_atomic", Some("hash_atomic"));
+
+        // First reservation succeeds
+        let res1 = reserve_active_remove_operation(
+            "t_atomic",
+            Some("hash_atomic"),
+            true,
+            TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+        );
+        assert!(matches!(res1, Ok(ReservationResult::Reserved(_))));
+
+        // Concurrent/second reservation sees active operation and returns Duplicate
+        let res2 = reserve_active_remove_operation(
+            "t_atomic",
+            Some("hash_atomic"),
+            true,
+            TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+        );
+        assert!(matches!(res2, Ok(ReservationResult::Duplicate(_))));
+
+        remove_active_operation("t_atomic", Some("hash_atomic"));
+    }
+
+    #[test]
+    fn test_complete_alias_dismissal() {
+        remove_active_operation("t_dismiss", Some("hash_dismiss"));
+
+        let in_progress = TorrentOperationSnapshot {
+            operation_id: "op-dismiss-1".to_string(),
+            torrent_id: "hash_dismiss".to_string(),
+            kind: TorrentOperationKind::Remove { delete_files: true },
+            phase: TorrentOperationPhase::RemovingTorrentAndDeletingFiles,
+            destination: None,
+            safe_error: None,
+            outcome: None,
+            revision: 1,
+            created_at: 1000,
+        };
+        register_active_operation("t_dismiss", Some("hash_dismiss"), &in_progress);
+
+        // In-flight dismissal must be rejected
+        let dismiss_in_flight = dismiss_active_operation("t_dismiss");
+        assert!(dismiss_in_flight.is_err());
+        assert!(dismiss_in_flight
+            .unwrap_err()
+            .contains("Only terminal errors can be dismissed"));
+
+        // Transition to Error
+        let err_snap = TorrentOperationSnapshot {
+            phase: TorrentOperationPhase::Error,
+            safe_error: Some("Simulated failure".to_string()),
+            revision: 2,
+            ..in_progress
+        };
+        register_active_operation("t_dismiss", Some("hash_dismiss"), &err_snap);
+
+        // Dismissal by id must clear both id alias and info_hash alias
+        let dismiss_res = dismiss_active_operation("t_dismiss");
+        assert!(dismiss_res.is_ok());
+
+        assert!(get_active_operation("t_dismiss").is_none());
+        assert!(get_active_operation("hash_dismiss").is_none());
+        assert!(get_active_operation("HASH_DISMISS").is_none());
+    }
+
+    #[test]
+    fn test_error_not_successful_duplicate() {
+        remove_active_operation("t_err_dup", Some("hash_err_dup"));
+
+        let err_snap = TorrentOperationSnapshot {
+            operation_id: "op-failed".to_string(),
+            torrent_id: "hash_err_dup".to_string(),
+            kind: TorrentOperationKind::Remove { delete_files: true },
+            phase: TorrentOperationPhase::Error,
+            destination: None,
+            safe_error: Some("Cannot delete files: storage unverified".to_string()),
+            outcome: None,
+            revision: 2,
+            created_at: 1000,
+        };
+        register_active_operation("t_err_dup", Some("hash_err_dup"), &err_snap);
+
+        let t1 = sample_torrent(
+            "t_err_dup",
+            "hash_err_dup",
+            "FailedMovie",
+            "/downloads",
+            1.0,
+        );
+        let all = vec![t1.clone()];
+
+        // Must return Err and NOT return Ok as a duplicate!
+        let res = run_remove_lifecycle_step(
+            "t_err_dup",
+            true,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |_s| {},
+        );
+        assert!(res.is_err(), "Error record must not return Ok duplicate");
+        assert!(res
+            .unwrap_err()
+            .contains("Cannot delete files: storage unverified"));
+
+        remove_active_operation("t_err_dup", Some("hash_err_dup"));
+    }
+
+    #[test]
+    fn test_reconciliation_failure_propagates_correct_message() {
+        remove_active_operation("t_recon_fail", Some("hash_recon_fail"));
+
+        let t1 = sample_torrent(
+            "t_recon_fail",
+            "hash_recon_fail",
+            "ReconMovie",
+            "/downloads",
+            1.0,
+        );
+        let all = vec![t1.clone()];
+
+        let mut recorded_phases = Vec::new();
+        let mut engine_remove_called = 0;
+
+        let res = run_remove_lifecycle_step(
+            "t_recon_fail",
+            false,
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| {
+                engine_remove_called += 1;
+                Ok(())
+            },
+            |_id, _del| Err("Simulated database write error".to_string()),
+            |s| recorded_phases.push((s.phase.clone(), s.safe_error.clone())),
+        );
+
+        // Engine removal was invoked once and not retried
+        assert_eq!(engine_remove_called, 1);
+
+        // Must return the exact prescribed failure message: "Torrent removed; Media update failed."
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "Torrent removed; Media update failed.");
+
+        // Safe error on snapshot must be updated accordingly
+        let last_phase = recorded_phases.last().unwrap();
+        assert_eq!(last_phase.0, TorrentOperationPhase::Error);
+        assert_eq!(
+            last_phase.1,
+            Some("Torrent removed; Media update failed.".to_string())
+        );
+
+        remove_active_operation("t_recon_fail", Some("hash_recon_fail"));
+    }
+
+    #[test]
+    fn test_file_deletion_outcome_claims_unconfirmed() {
+        remove_active_operation("t_outcome", Some("hash_outcome"));
+
+        let t1 = sample_torrent(
+            "t_outcome",
+            "hash_outcome",
+            "OutcomeMovie",
+            "/downloads",
+            1.0,
+        );
+        let all = vec![t1.clone()];
+
+        let mut final_snapshot = None;
+
+        let res = run_remove_lifecycle_step(
+            "t_outcome",
+            true, // delete_files = true
+            Some(&t1),
+            &all,
+            false,
+            |_id, _del| Ok(()),
+            |_id, _del| Ok(()),
+            |s| {
+                if s.phase == TorrentOperationPhase::Complete {
+                    final_snapshot = Some(s.clone());
+                }
+            },
+        );
+
+        assert!(res.is_ok());
+        let snap = final_snapshot.expect("Complete phase must be emitted");
+        assert_eq!(
+            snap.outcome,
+            Some("Removal request accepted; file deletion not independently confirmed".to_string())
+        );
+
+        remove_active_operation("t_outcome", Some("hash_outcome"));
     }
 
     #[test]

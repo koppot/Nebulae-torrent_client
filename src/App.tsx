@@ -544,7 +544,6 @@ export const App: React.FC = () => {
     loadSettings();
     fetchEngineMode();
     fetchTorrents();
-    void useTorrentStore.getState().fetchActiveOperations();
     runDoctorTest();
     fetchVpnStatus();
     fetchTrackerProfile();
@@ -620,7 +619,11 @@ export const App: React.FC = () => {
         }
       },
     )
-      .then((unlisten) => unlistenFns.push(unlisten))
+      .then((unlisten) => {
+        unlistenFns.push(unlisten);
+        // Install the event listener before fetching the initial snapshot
+        void useTorrentStore.getState().fetchActiveOperations();
+      })
       .catch(() => {});
 
     listen('nebulae://media-updated', () => {

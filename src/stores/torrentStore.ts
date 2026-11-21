@@ -421,22 +421,25 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   removeTorrent: async (id: string, deleteFiles?: boolean) => {
-    const existing = get().activeOperations[id];
+    const existing = get().activeOperations[id] || (id ? get().activeOperations[id.toLowerCase()] : undefined);
     if (existing && existing.phase !== 'error' && existing.phase !== 'complete') {
       return;
     }
 
+    const optimisticOpId = `op-opt-${Date.now()}`;
     const optimisticOp: TorrentOperationSnapshot = {
-      operation_id: `op-opt-${Date.now()}`,
+      operation_id: optimisticOpId,
       torrent_id: id,
       kind: { type: 'remove', delete_files: !!deleteFiles },
       phase: deleteFiles ? 'removing_torrent_and_deleting_files' : 'removing_torrent',
       revision: 1,
+      created_at: Date.now(),
     };
     set((state) => ({
       activeOperations: {
         ...state.activeOperations,
         [id]: optimisticOp,
+        [id.toLowerCase()]: optimisticOp,
       },
     }));
 
@@ -444,40 +447,80 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       await invoke('remove_torrent', { id, deleteFiles: !!deleteFiles });
     } catch (err: unknown) {
       const safeError = typeof err === 'string' ? err : (err as Error)?.message || 'Removal failed';
-      set((state) => ({
-        activeOperations: {
-          ...state.activeOperations,
-          [id]: {
-            operation_id: optimisticOp.operation_id,
-            torrent_id: id,
-            kind: { type: 'remove', delete_files: !!deleteFiles },
-            phase: 'error',
-            safe_error: safeError,
-            revision: (state.activeOperations[id]?.revision ?? 1) + 1,
-          },
-        },
-      }));
+      set((state) => {
+        // Replace optimistic state with authoritative state without allowing the invoke catch to overwrite it with a different ID
+        const current = state.activeOperations[id] || (id ? state.activeOperations[id.toLowerCase()] : undefined);
+        const resolvedOpId = current?.operation_id || optimisticOpId;
+        const currentRev = current?.revision ?? 1;
+
+        if (current && current.phase === 'error') {
+          return state;
+        }
+
+        const errorSnapshot: TorrentOperationSnapshot = {
+          operation_id: resolvedOpId,
+          torrent_id: id,
+          kind: { type: 'remove', delete_files: !!deleteFiles },
+          phase: 'error',
+          safe_error: safeError,
+          revision: currentRev + 1,
+          created_at: current?.created_at ?? Date.now(),
+        };
+
+        const updated = { ...state.activeOperations };
+        for (const [key, item] of Object.entries(updated)) {
+          if (item.operation_id === resolvedOpId) {
+            updated[key] = errorSnapshot;
+          }
+        }
+        updated[id] = errorSnapshot;
+        updated[id.toLowerCase()] = errorSnapshot;
+
+        return { activeOperations: updated };
+      });
     }
   },
 
   fetchActiveOperations: async () => {
     try {
       const list = await invoke<TorrentOperationSnapshot[]>('get_active_torrent_operations');
-      const ops: Record<string, TorrentOperationSnapshot> = {};
-      const currentTorrents = get().torrents;
-      for (const item of list) {
-        ops[item.torrent_id] = item;
-        const matchingTorrent = currentTorrents.find(
-          (t) => t.id === item.torrent_id || (t.info_hash && t.info_hash.toLowerCase() === item.torrent_id.toLowerCase())
-        );
-        if (matchingTorrent) {
-          ops[matchingTorrent.id] = item;
-          if (matchingTorrent.info_hash) {
-            ops[matchingTorrent.info_hash.toLowerCase()] = item;
+      set((state) => {
+        const currentOps = { ...state.activeOperations };
+        let changed = false;
+
+        for (const item of list) {
+          const existing =
+            currentOps[item.torrent_id] || (item.torrent_id ? currentOps[item.torrent_id.toLowerCase()] : undefined);
+
+          if (existing) {
+            // Reconcile snapshot without overwriting newer events
+            if (existing.operation_id === item.operation_id && existing.revision >= item.revision) {
+              continue;
+            }
+            if (existing.created_at > item.created_at) {
+              continue;
+            }
           }
+
+          currentOps[item.torrent_id] = item;
+          if (item.torrent_id) {
+            currentOps[item.torrent_id.toLowerCase()] = item;
+          }
+          const matchingTorrent = state.torrents.find(
+            (t) => t.id === item.torrent_id || (t.info_hash && t.info_hash.toLowerCase() === item.torrent_id.toLowerCase())
+          );
+          if (matchingTorrent) {
+            currentOps[matchingTorrent.id] = item;
+            currentOps[matchingTorrent.id.toLowerCase()] = item;
+            if (matchingTorrent.info_hash) {
+              currentOps[matchingTorrent.info_hash.toLowerCase()] = item;
+            }
+          }
+          changed = true;
         }
-      }
-      set({ activeOperations: ops });
+
+        return changed ? { activeOperations: currentOps } : state;
+      });
     } catch (err) {
       console.warn('fetchActiveOperations failed:', err);
     }
@@ -485,14 +528,32 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   handleOperationEvent: (op: TorrentOperationSnapshot) => {
     set((state) => {
+      const existing =
+        state.activeOperations[op.torrent_id] ||
+        (op.torrent_id ? state.activeOperations[op.torrent_id.toLowerCase()] : undefined);
+
+      if (existing) {
+        // Ignore older revisions of the same operation
+        if (existing.operation_id === op.operation_id && op.revision < existing.revision) {
+          return state;
+        }
+        // Ignore obsolete events from an earlier operation
+        const isExistingOptimistic = existing.operation_id.startsWith('op-opt-');
+        if (!isExistingOptimistic && existing.operation_id !== op.operation_id && op.created_at < existing.created_at) {
+          return state;
+        }
+      }
+
       const updated = { ...state.activeOperations };
       const matchingTorrent = state.torrents.find(
         (t) => t.id === op.torrent_id || (t.info_hash && t.info_hash.toLowerCase() === op.torrent_id.toLowerCase())
       );
 
       const keysToUpdate = [op.torrent_id];
+      if (op.torrent_id) keysToUpdate.push(op.torrent_id.toLowerCase());
       if (matchingTorrent) {
         keysToUpdate.push(matchingTorrent.id);
+        keysToUpdate.push(matchingTorrent.id.toLowerCase());
         if (matchingTorrent.info_hash) {
           keysToUpdate.push(matchingTorrent.info_hash.toLowerCase());
         }
@@ -508,10 +569,22 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         if (selectedId && (selectedId === op.torrent_id || (matchingTorrent && selectedId === matchingTorrent.id))) {
           selectedId = torrents[0]?.id || null;
         }
+        // Remove every alias for this operation_id
+        for (const [key, item] of Object.entries(updated)) {
+          if (item.operation_id === op.operation_id) {
+            delete updated[key];
+          }
+        }
         for (const k of keysToUpdate) {
           delete updated[k];
         }
       } else {
+        // Clean up any other aliases for older operations on this torrent
+        for (const [key, item] of Object.entries(updated)) {
+          if (item.torrent_id === op.torrent_id && item.operation_id !== op.operation_id) {
+            delete updated[key];
+          }
+        }
         for (const k of keysToUpdate) {
           updated[k] = op;
         }
@@ -526,21 +599,44 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   dismissOperation: async (id: string) => {
+    const currentOps = get().activeOperations;
+    const targetOp =
+      currentOps[id] ||
+      (id ? currentOps[id.toLowerCase()] : undefined) ||
+      Object.values(currentOps).find(
+        (op) => op.torrent_id === id || op.torrent_id.toLowerCase() === id.toLowerCase() || op.operation_id === id
+      );
+
+    // Allow dismissal only for terminal errors; do not let dismissal clear an in-flight reservation
+    if (targetOp && targetOp.phase !== 'error') {
+      console.warn(`Cannot dismiss operation ${targetOp.operation_id}: phase is '${targetOp.phase}'`);
+      return;
+    }
+
     try {
       await invoke('dismiss_torrent_operation', { id });
     } catch (err) {
       console.warn('dismiss_torrent_operation failed:', err);
+      return;
     }
+
+    // Remove every alias matching operation_id in frontend
+    const targetOpId = targetOp?.operation_id;
     set((state) => {
       const nextOps = { ...state.activeOperations };
-      delete nextOps[id];
-      for (const [key, op] of Object.entries(nextOps)) {
-        if (op.torrent_id === id || op.torrent_id.toLowerCase() === id.toLowerCase()) {
-          delete nextOps[key];
+      if (targetOpId) {
+        for (const [key, op] of Object.entries(nextOps)) {
+          if (op.operation_id === targetOpId) {
+            delete nextOps[key];
+          }
         }
+      } else {
+        delete nextOps[id];
+        delete nextOps[id.toLowerCase()];
       }
       return { activeOperations: nextOps };
     });
+
     void get().fetchTorrents();
   },
 

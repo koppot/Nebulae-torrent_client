@@ -148,7 +148,9 @@ export interface TorrentOperationSnapshot {
   phase: TorrentOperationPhase;
   destination?: string | null;
   safe_error?: string | null;
+  outcome?: string | null;
   revision: number;
+  created_at: number;
 }
 
 export interface TorrentItem {
