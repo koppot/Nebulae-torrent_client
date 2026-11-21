@@ -3362,13 +3362,23 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let moved_to = new_path.to_string();
         let moved_item = dest.join(name);
         let on_done: MoveDoneCallback = Box::new(move |verdict| {
-            if verdict.is_err() {
+            if let Err(e) = &verdict {
+                crate::commands::torrent::fail_active_move_operation(
+                    &moved_hash,
+                    Some(&moved_hash),
+                    &format!("Move failed: {e}"),
+                );
                 return;
             }
             if !moved_item.exists() {
                 tracing::error!(
                     "[set-location] daemon reported success but {} is missing; stored location left unchanged",
                     moved_item.display()
+                );
+                crate::commands::torrent::fail_active_move_operation(
+                    &moved_hash,
+                    Some(&moved_hash),
+                    "Move failed: files missing at destination",
                 );
                 return;
             }
@@ -3382,6 +3392,11 @@ impl TorrentEngine for TransmissionTorrentEngine {
                 meta.save_path = Some(moved_to.clone());
                 let _ = db.upsert_torrent_metadata(&meta);
             }
+            crate::commands::torrent::complete_active_move_operation(
+                &moved_hash,
+                Some(&moved_hash),
+                &moved_to,
+            );
         });
         self.rpc_client
             .torrent_set_location(&target_id, new_path, true, Some(on_done))

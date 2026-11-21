@@ -1314,7 +1314,7 @@ export const TorrentManagerView: React.FC = () => {
                             </span>
                           </div>
                           <span className="text-[9px] font-mono text-[#a3a3a3] text-center leading-tight truncate block w-full">
-                            Processing…
+                            {activeOp?.phase === 'moving' ? 'Moving…' : 'Processing…'}
                           </span>
                         </div>
                       ) : (
@@ -1344,28 +1344,46 @@ export const TorrentManagerView: React.FC = () => {
                     </td>
                     <td className="py-2 px-2.5 overflow-hidden whitespace-nowrap text-ellipsis">
                       {isOpError ? (
-                        <div className="flex items-center gap-1.5 overflow-hidden">
-                          <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
-                          <span className="text-[11px] font-sans text-[#e50914] truncate font-medium" title={activeOp?.safe_error || 'Removal failed'}>
-                            {activeOp?.safe_error ? `Removal failed: ${activeOp.safe_error}` : 'Removal failed'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void dismissOperation(t.id);
-                            }}
-                            className="px-1.5 py-0.5 rounded text-[10px] bg-[#262626] text-white hover:bg-[#333333] border border-[#404040] flex-shrink-0 ml-1"
-                            title="Dismiss error notice"
-                          >
-                            Dismiss
-                          </button>
-                        </div>
+                        (() => {
+                          const isMove = activeOp?.kind?.type === 'move';
+                          const defaultPrefix = isMove ? 'Move failed' : 'Removal failed';
+                          const rawError = activeOp?.safe_error;
+                          const errorLabel = rawError
+                            ? rawError.startsWith('Move failed:') || rawError.startsWith('Removal failed:')
+                              ? rawError
+                              : `${defaultPrefix}: ${rawError}`
+                            : defaultPrefix;
+
+                          return (
+                            <div className="flex items-center gap-1.5 overflow-hidden">
+                              <AlertCircle className="w-3.5 h-3.5 text-[#e50914] flex-shrink-0" />
+                              <span className="text-[11px] font-sans text-[#e50914] truncate font-medium" title={errorLabel}>
+                                {errorLabel}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void dismissOperation(t.id);
+                                }}
+                                className="px-1.5 py-0.5 rounded text-[10px] bg-[#262626] text-white hover:bg-[#333333] border border-[#404040] flex-shrink-0 ml-1"
+                                title="Dismiss error notice"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          );
+                        })()
                       ) : isOperating ? (
                         (() => {
                           let phaseLabel = 'Processing…';
+                          let titleAttr: string | undefined = undefined;
                           if (activeOp?.outcome) {
                             phaseLabel = activeOp.outcome;
+                          } else if (activeOp?.phase === 'moving') {
+                            const dest = activeOp.destination || (activeOp.kind?.type === 'move' ? activeOp.kind.destination : '');
+                            phaseLabel = dest ? `Moving… ${dest}` : 'Moving…';
+                            titleAttr = dest ? `Moving to ${dest}` : 'Moving…';
                           } else if (activeOp?.phase === 'removing_torrent_and_deleting_files') {
                             phaseLabel = 'Removing torrent & requesting file deletion…';
                           } else if (activeOp?.phase === 'removing_torrent') {
@@ -1374,7 +1392,10 @@ export const TorrentManagerView: React.FC = () => {
                             phaseLabel = 'Reconciling media…';
                           }
                           return (
-                            <span className="text-[11px] font-sans text-amber-400 inline-flex items-center gap-1.5 truncate">
+                            <span
+                              className="text-[11px] font-sans text-amber-400 inline-flex items-center gap-1.5 truncate max-w-full"
+                              title={titleAttr}
+                            >
                               <Loader2 className="w-3 h-3 animate-spin text-[#e50914] flex-shrink-0" />
                               <span className="truncate">{phaseLabel}</span>
                             </span>
@@ -2120,91 +2141,121 @@ export const TorrentManagerView: React.FC = () => {
       </div>
 
       {/* 4. Desktop Right-Click Context Menu */}
-      {contextMenu.visible && (
-        <div
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          className="fixed z-50 w-52 bg-[#1f1f1f] border border-[#333333] rounded shadow-2xl py-1 text-xs select-none"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => {
-              resumeTorrent(contextMenu.torrentId);
-              setContextMenu((prev) => ({ ...prev, visible: false }));
-            }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+      {contextMenu.visible && (() => {
+        const contextTorrent = torrents.find((item) => item.id === contextMenu.torrentId);
+        const contextActiveOp = contextTorrent
+          ? activeOperations[contextTorrent.id] ||
+            (contextTorrent.info_hash ? activeOperations[contextTorrent.info_hash.toLowerCase()] : undefined)
+          : undefined;
+        const isContextOperating =
+          !!contextActiveOp && contextActiveOp.phase !== 'error' && contextActiveOp.phase !== 'complete';
+
+        return (
+          <div
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            className="fixed z-50 w-52 bg-[#1f1f1f] border border-[#333333] rounded shadow-2xl py-1 text-xs select-none"
+            onClick={(e) => e.stopPropagation()}
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Resume</span>
-          </button>
-          <button
-            onClick={() => {
-              pauseTorrent(contextMenu.torrentId);
-              setContextMenu((prev) => ({ ...prev, visible: false }));
-            }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
-          >
-            <Pause className="w-3.5 h-3.5 fill-current" />
-            <span>Pause</span>
-          </button>
-          <div className="h-[1px] bg-[#333333] my-1" />
-          {!isRemoteServer && (
             <button
               onClick={() => {
-                openRenameTorrentModal();
+                resumeTorrent(contextMenu.torrentId);
                 setContextMenu((prev) => ({ ...prev, visible: false }));
               }}
               className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
             >
-              <Edit2 className="w-3.5 h-3.5" />
-              <span>Rename...</span>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Resume</span>
             </button>
-          )}
-          {!isRemoteServer && (
-            <>
+            <button
+              onClick={() => {
+                pauseTorrent(contextMenu.torrentId);
+                setContextMenu((prev) => ({ ...prev, visible: false }));
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+            >
+              <Pause className="w-3.5 h-3.5 fill-current" />
+              <span>Pause</span>
+            </button>
+            <div className="h-[1px] bg-[#333333] my-1" />
+            {!isRemoteServer && (
               <button
-                onClick={async () => {
-                  const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                disabled={isContextOperating}
+                onClick={() => {
+                  if (isContextOperating) return;
+                  openRenameTorrentModal();
                   setContextMenu((prev) => ({ ...prev, visible: false }));
-                  if (!t) return;
-                  const folder = await selectDownloadDirectory();
-                  if (!folder) return;
-                  try {
-                    await setLocation(t.id, folder);
-                  } catch (err) {
-                    showNotice(`Could not move the torrent:\n${err}`);
-                  }
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition ${
+                  isContextOperating
+                    ? 'opacity-40 cursor-not-allowed text-[#888888]'
+                    : 'hover:bg-[#e50914] text-white'
+                }`}
+                title={isContextOperating ? 'An operation is already in progress for this torrent' : undefined}
               >
-                <FolderInput className="w-3.5 h-3.5" />
-                <span>Move to Folder...</span>
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Rename...</span>
               </button>
-              <button
-                onClick={async () => {
-                  const t = torrents.find((item) => item.id === contextMenu.torrentId);
-                  setContextMenu((prev) => ({ ...prev, visible: false }));
-                  if (!t) return;
-                  const selected = await invoke<string | null>('select_disc_source', { kind: null });
-                  if (selected) {
+            )}
+            {!isRemoteServer && (
+              <>
+                <button
+                  disabled={isContextOperating}
+                  onClick={async () => {
+                    if (isContextOperating) return;
+                    const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                    setContextMenu((prev) => ({ ...prev, visible: false }));
+                    if (!t) return;
+                    const folder = await selectDownloadDirectory();
+                    if (!folder) return;
                     try {
-                      await invoke('relink_torrent_media', {
-                        infoHash: t.info_hash || t.id,
-                        newPath: selected,
-                      });
+                      await setLocation(t.id, folder);
                     } catch (err) {
-                      showNotice(`Could not relink the torrent:\n${err}`);
-                    } finally {
-                      await useTorrentStore.getState().fetchTorrents();
+                      showNotice(`Could not move the torrent:\n${err}`);
                     }
-                  }
-                }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
-              >
-                <Link className="w-3.5 h-3.5" />
-                <span>Relink...</span>
-              </button>
-            </>
-          )}
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition ${
+                    isContextOperating
+                      ? 'opacity-40 cursor-not-allowed text-[#888888]'
+                      : 'hover:bg-[#e50914] text-white'
+                  }`}
+                  title={isContextOperating ? 'An operation is already in progress for this torrent' : undefined}
+                >
+                  <FolderInput className="w-3.5 h-3.5" />
+                  <span>Move to Folder...</span>
+                </button>
+                <button
+                  disabled={isContextOperating}
+                  onClick={async () => {
+                    if (isContextOperating) return;
+                    const t = torrents.find((item) => item.id === contextMenu.torrentId);
+                    setContextMenu((prev) => ({ ...prev, visible: false }));
+                    if (!t) return;
+                    const selected = await invoke<string | null>('select_disc_source', { kind: null });
+                    if (selected) {
+                      try {
+                        await invoke('relink_torrent_media', {
+                          infoHash: t.info_hash || t.id,
+                          newPath: selected,
+                        });
+                      } catch (err) {
+                        showNotice(`Could not relink the torrent:\n${err}`);
+                      } finally {
+                        await useTorrentStore.getState().fetchTorrents();
+                      }
+                    }
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition ${
+                    isContextOperating
+                      ? 'opacity-40 cursor-not-allowed text-[#888888]'
+                      : 'hover:bg-[#e50914] text-white'
+                  }`}
+                  title={isContextOperating ? 'An operation is already in progress for this torrent' : undefined}
+                >
+                  <Link className="w-3.5 h-3.5" />
+                  <span>Relink...</span>
+                </button>
+              </>
+            )}
           <button
             onClick={async () => {
               const targetId = contextMenu.torrentId;
@@ -2343,20 +2394,28 @@ export const TorrentManagerView: React.FC = () => {
           })()}
           <div className="h-[1px] bg-[#333333] my-1" />
           <button
+            disabled={isContextOperating}
             onClick={() => {
+              if (isContextOperating) return;
               const t = torrents.find((item) => item.id === contextMenu.torrentId);
               if (t) {
                 setDeleteModalTarget({ id: t.id, name: t.name });
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[#e50914] text-white text-left transition"
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition ${
+              isContextOperating
+                ? 'opacity-40 cursor-not-allowed text-[#888888]'
+                : 'hover:bg-[#e50914] text-white'
+            }`}
+            title={isContextOperating ? 'An operation is already in progress for this torrent' : undefined}
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>Delete Torrent...</span>
           </button>
         </div>
-      )}
+      );
+    })()}
 
       {/* 5. Rename Modal with Strict External qBittorrent Protection */}
       {notice !== null && (

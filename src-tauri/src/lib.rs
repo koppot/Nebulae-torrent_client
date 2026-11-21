@@ -425,6 +425,7 @@ pub fn run() {
                 });
             }
             commands::media::maybe_autoplay(app.handle());
+            commands::torrent::register_app_handle(app.handle());
 
             // Start-minimized (owner setting): hide the window when the app
             // was launched by the OS autostart entry with --minimized.

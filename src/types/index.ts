@@ -137,6 +137,7 @@ export type TorrentOperationPhase =
   | 'pending'
   | 'removing_torrent'
   | 'removing_torrent_and_deleting_files'
+  | 'moving'
   | 'reconciling'
   | 'complete'
   | 'error';

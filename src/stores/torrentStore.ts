@@ -634,11 +634,18 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       let selectedId = state.selectedId;
 
       if (op.phase === 'complete') {
-        const resolvedOutcome =
-          op.outcome ||
-          (op.kind?.type === 'remove' && op.kind.delete_files
-            ? 'Removal request accepted; file deletion not independently confirmed'
-            : 'Torrent removed');
+        let resolvedOutcome = op.outcome;
+        if (!resolvedOutcome) {
+          if (op.kind?.type === 'remove') {
+            resolvedOutcome = op.kind.delete_files
+              ? 'Removal request accepted; file deletion not independently confirmed'
+              : 'Torrent removed';
+          } else if (op.kind?.type === 'move') {
+            resolvedOutcome = `Moved to ${op.destination || op.kind.destination || 'new location'}`;
+          } else {
+            resolvedOutcome = 'Operation complete';
+          }
+        }
 
         const notice: TerminalNotice = {
           operation_id: op.operation_id,
@@ -655,12 +662,26 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           timestamp: Date.now(),
         };
 
-        torrents = state.torrents.filter(
-          (t) => t.id !== op.torrent_id && (!t.info_hash || t.info_hash.toLowerCase() !== op.torrent_id.toLowerCase())
-        );
-        if (selectedId && (selectedId === op.torrent_id || (matchingTorrent && selectedId === matchingTorrent.id))) {
-          selectedId = torrents[0]?.id || null;
+        if (op.kind?.type === 'remove') {
+          torrents = state.torrents.filter(
+            (t) => t.id !== op.torrent_id && (!t.info_hash || t.info_hash.toLowerCase() !== op.torrent_id.toLowerCase())
+          );
+          if (selectedId && (selectedId === op.torrent_id || (matchingTorrent && selectedId === matchingTorrent.id))) {
+            selectedId = torrents[0]?.id || null;
+          }
+        } else if (op.kind?.type === 'move') {
+          const newPath = op.destination || op.kind.destination;
+          if (newPath) {
+            torrents = state.torrents.map((t) => {
+              const isMatch =
+                t.id === op.torrent_id ||
+                (matchingTorrent && t.id === matchingTorrent.id) ||
+                (t.info_hash && op.torrent_id && t.info_hash.toLowerCase() === op.torrent_id.toLowerCase());
+              return isMatch ? { ...t, save_path: newPath } : t;
+            });
+          }
         }
+
         // Remove every alias for this operation_id
         for (const [key, item] of Object.entries(updated)) {
           if (item.operation_id === op.operation_id) {
@@ -722,6 +743,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       await invoke('dismiss_torrent_operation', { id });
     } catch (err) {
       console.warn('dismiss_torrent_operation failed:', err);
+      return;
     }
 
     // Remove every alias matching operation_id in frontend and preserve tombstone
@@ -835,10 +857,67 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   setLocation: async (id: string, newPath: string) => {
-    // The daemon moves the files in the background; the stored location only
-    // changes after it has finished, so show what the engine reports.
+    const currentOps = get().activeOperations;
+    const existing = currentOps[id] || (id ? currentOps[id.toLowerCase()] : undefined);
+    if (existing && existing.phase !== 'error' && existing.phase !== 'complete') {
+      return;
+    }
+
+    const optimisticOpId = `op-opt-${Date.now()}`;
+    const optimisticOp: TorrentOperationSnapshot = {
+      operation_id: optimisticOpId,
+      torrent_id: id,
+      kind: { type: 'move', destination: newPath },
+      phase: 'moving',
+      destination: newPath,
+      revision: 1,
+      created_at: Date.now(),
+    };
+
+    set((state) => ({
+      activeOperations: {
+        ...state.activeOperations,
+        [id]: optimisticOp,
+        [id.toLowerCase()]: optimisticOp,
+      },
+    }));
+
     try {
       await invoke('set_torrent_location', { id, newPath });
+    } catch (err: unknown) {
+      const safeError = typeof err === 'string' ? err : (err as Error)?.message || 'Move failed';
+      set((state) => {
+        const current = state.activeOperations[id] || (id ? state.activeOperations[id.toLowerCase()] : undefined);
+        const resolvedOpId = current?.operation_id || optimisticOpId;
+        const currentRev = current?.revision ?? 1;
+
+        if (current && current.phase === 'error') {
+          return state;
+        }
+
+        const errorSnapshot: TorrentOperationSnapshot = {
+          operation_id: resolvedOpId,
+          torrent_id: id,
+          kind: { type: 'move', destination: newPath },
+          phase: 'error',
+          destination: newPath,
+          safe_error: safeError,
+          revision: currentRev + 1,
+          created_at: current?.created_at ?? Date.now(),
+        };
+
+        const updated = { ...state.activeOperations };
+        for (const [key, item] of Object.entries(updated)) {
+          if (item.operation_id === resolvedOpId) {
+            updated[key] = errorSnapshot;
+          }
+        }
+        updated[id] = errorSnapshot;
+        updated[id.toLowerCase()] = errorSnapshot;
+
+        return { activeOperations: updated };
+      });
+      throw err;
     } finally {
       await get().fetchTorrents();
     }

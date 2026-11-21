@@ -17,6 +17,7 @@ pub enum TorrentOperationPhase {
     Pending,
     RemovingTorrent,
     RemovingTorrentAndDeletingFiles,
+    Moving,
     Reconciling,
     Complete,
     Error,
@@ -49,6 +50,12 @@ fn current_time_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+pub fn register_app_handle(app: &tauri::AppHandle) {
+    let _ = APP_HANDLE.set(app.clone());
 }
 
 static ACTIVE_OPERATIONS: OnceLock<Arc<Mutex<HashMap<String, TorrentOperationSnapshot>>>> =
@@ -129,6 +136,156 @@ pub(crate) fn reserve_active_remove_operation(
     }
 
     Ok(ReservationResult::Reserved(snapshot))
+}
+
+pub(crate) fn reserve_active_move_operation(
+    id: &str,
+    info_hash: Option<&str>,
+    destination: &str,
+    initial_phase: TorrentOperationPhase,
+) -> Result<ReservationResult, String> {
+    let mut map = get_active_operations_map()
+        .lock()
+        .map_err(|e| format!("Registry lock poisoned: {e}"))?;
+
+    let active_lookup_key = info_hash.unwrap_or(id);
+
+    let existing = map
+        .get(id)
+        .or_else(|| map.get(&id.to_lowercase()))
+        .or_else(|| info_hash.and_then(|h| map.get(h).or_else(|| map.get(&h.to_lowercase()))))
+        .cloned();
+
+    if let Some(existing) = existing {
+        // An existing Error record must not return Ok as a successful duplicate
+        if existing.phase == TorrentOperationPhase::Error {
+            let err_msg = existing
+                .safe_error
+                .unwrap_or_else(|| "Previous operation failed".to_string());
+            return Err(err_msg);
+        }
+
+        match &existing.kind {
+            TorrentOperationKind::Move {
+                destination: existing_dest,
+            } if existing_dest == destination => {
+                // In-progress duplicate with matching destination: reuse active result
+                return Ok(ReservationResult::Duplicate(existing));
+            }
+            _ => {
+                return Err(format!(
+                    "An active operation is already in progress for torrent '{id}'"
+                ));
+            }
+        }
+    }
+
+    let op_id = uuid::Uuid::new_v4().to_string();
+    let snapshot = TorrentOperationSnapshot {
+        operation_id: op_id,
+        torrent_id: active_lookup_key.to_string(),
+        kind: TorrentOperationKind::Move {
+            destination: destination.to_string(),
+        },
+        phase: initial_phase,
+        destination: Some(destination.to_string()),
+        safe_error: None,
+        outcome: None,
+        revision: 1,
+        created_at: current_time_millis(),
+    };
+
+    map.insert(id.to_string(), snapshot.clone());
+    map.insert(id.to_lowercase(), snapshot.clone());
+    if let Some(hash) = info_hash {
+        map.insert(hash.to_string(), snapshot.clone());
+        map.insert(hash.to_lowercase(), snapshot.clone());
+    }
+
+    Ok(ReservationResult::Reserved(snapshot))
+}
+
+pub(crate) fn complete_active_move_operation(id: &str, info_hash: Option<&str>, destination: &str) {
+    let mut map = match get_active_operations_map().lock() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    let target = map
+        .get(id)
+        .or_else(|| map.get(&id.to_lowercase()))
+        .or_else(|| info_hash.and_then(|h| map.get(h).or_else(|| map.get(&h.to_lowercase()))))
+        .cloned();
+
+    if let Some(mut snapshot) = target {
+        snapshot.phase = TorrentOperationPhase::Complete;
+        snapshot.destination = Some(destination.to_string());
+        snapshot.outcome = Some(format!("Moved to {}", destination));
+        snapshot.revision += 1;
+
+        emit_operation_event(None, &snapshot);
+
+        if let Some(app) = APP_HANDLE.get() {
+            use tauri::Emitter;
+            let _ = app.emit("nebulae://media-updated", ());
+        }
+
+        let op_id = snapshot.operation_id.clone();
+        map.retain(|_, op| op.operation_id != op_id);
+    }
+}
+
+pub(crate) fn fail_active_move_operation(id: &str, info_hash: Option<&str>, error_msg: &str) {
+    let mut map = match get_active_operations_map().lock() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    let target = map
+        .get(id)
+        .or_else(|| map.get(&id.to_lowercase()))
+        .or_else(|| info_hash.and_then(|h| map.get(h).or_else(|| map.get(&h.to_lowercase()))))
+        .cloned();
+
+    let snapshot = match target {
+        Some(mut s) => {
+            s.phase = TorrentOperationPhase::Error;
+            s.safe_error = Some(error_msg.to_string());
+            s.revision += 1;
+            s
+        }
+        None => {
+            let active_lookup_key = info_hash.unwrap_or(id);
+            TorrentOperationSnapshot {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                torrent_id: active_lookup_key.to_string(),
+                kind: TorrentOperationKind::Move {
+                    destination: String::new(),
+                },
+                phase: TorrentOperationPhase::Error,
+                destination: None,
+                safe_error: Some(error_msg.to_string()),
+                outcome: None,
+                revision: 1,
+                created_at: current_time_millis(),
+            }
+        }
+    };
+
+    let target_op_id = snapshot.operation_id.clone();
+    for op in map.values_mut() {
+        if op.operation_id == target_op_id {
+            *op = snapshot.clone();
+        }
+    }
+    map.insert(id.to_string(), snapshot.clone());
+    map.insert(id.to_lowercase(), snapshot.clone());
+    if let Some(hash) = info_hash {
+        map.insert(hash.to_string(), snapshot.clone());
+        map.insert(hash.to_lowercase(), snapshot.clone());
+    }
+
+    emit_operation_event(None, &snapshot);
 }
 
 pub(crate) fn register_active_operation(
@@ -220,6 +377,7 @@ pub(crate) fn list_active_operations() -> Vec<TorrentOperationSnapshot> {
 }
 
 fn emit_operation_event(app: Option<&tauri::AppHandle>, snapshot: &TorrentOperationSnapshot) {
+    let app = app.or_else(|| APP_HANDLE.get());
     if let Some(app) = app {
         use tauri::Emitter;
         let _ = app.emit("nebulae://torrent-operation", snapshot);
@@ -1084,6 +1242,7 @@ pub async fn remove_torrent(
     engine: State<'_, SharedEngine>,
     db: State<'_, std::sync::Arc<crate::db::Database>>,
 ) -> Result<(), String> {
+    register_app_handle(&app);
     let engine = engine.inner().clone();
     let db = db.inner().clone();
     let app_handle = app.clone();
@@ -1307,6 +1466,54 @@ where
     Ok(())
 }
 
+pub(crate) fn run_move_lifecycle_step<E>(
+    id: &str,
+    destination: &str,
+    info_hash: Option<&str>,
+    is_async: bool,
+    engine_move: E,
+    mut on_transition: impl FnMut(&TorrentOperationSnapshot),
+) -> Result<(), String>
+where
+    E: FnOnce(&str, &str) -> Result<(), String>,
+{
+    // 1. Atomic reservation under registry lock
+    let reservation =
+        reserve_active_move_operation(id, info_hash, destination, TorrentOperationPhase::Moving)?;
+    let mut snapshot = match reservation {
+        ReservationResult::Duplicate(_) => return Ok(()),
+        ReservationResult::Reserved(s) => s,
+    };
+    on_transition(&snapshot);
+
+    // 2. Engine move execution
+    if let Err(e) = engine_move(id, destination) {
+        let err_msg = if e.starts_with("Move failed:") {
+            e
+        } else {
+            format!("Move failed: {e}")
+        };
+        snapshot.phase = TorrentOperationPhase::Error;
+        snapshot.safe_error = Some(err_msg.clone());
+        snapshot.revision += 1;
+        register_active_operation(id, info_hash, &snapshot);
+        on_transition(&snapshot);
+        return Err(err_msg);
+    }
+
+    // 3. Complete phase if synchronous
+    if !is_async {
+        snapshot.phase = TorrentOperationPhase::Complete;
+        snapshot.destination = Some(destination.to_string());
+        snapshot.outcome = Some(format!("Moved to {}", destination));
+        snapshot.revision += 1;
+        on_transition(&snapshot);
+        remove_active_operation(id, info_hash);
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn pause_torrent(id: String, engine: State<'_, SharedEngine>) -> Result<(), String> {
     let engine = engine.inner().clone();
@@ -1362,12 +1569,43 @@ pub async fn reannounce_torrent(id: String, engine: State<'_, SharedEngine>) -> 
 pub async fn set_torrent_location(
     id: String,
     new_path: String,
+    app: tauri::AppHandle,
     engine: State<'_, SharedEngine>,
 ) -> Result<(), String> {
+    register_app_handle(&app);
     let engine = engine.inner().clone();
-    tokio::task::spawn_blocking(move || engine.set_location(&id, &new_path))
-        .await
-        .map_err(|e| format!("set_torrent_location task failed: {e}"))?
+    let app_handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let torrents = engine.list_torrents().unwrap_or_default();
+        let target = torrents
+            .iter()
+            .find(|t| t.id == id || t.info_hash.eq_ignore_ascii_case(&id))
+            .cloned();
+
+        let info_hash = target
+            .as_ref()
+            .map(|t| t.info_hash.to_lowercase())
+            .or_else(|| {
+                if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
+                    Some(id.to_lowercase())
+                } else {
+                    None
+                }
+            });
+
+        run_move_lifecycle_step(
+            &id,
+            &new_path,
+            info_hash.as_deref(),
+            true,
+            |tid, path| engine.set_location(tid, path),
+            |snap| {
+                emit_operation_event(Some(&app_handle), snap);
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("set_torrent_location task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -2968,6 +3206,219 @@ mod tests {
         );
 
         assert!(get_active_operation("hash_keep").is_none());
+    }
+
+    #[test]
+    fn test_move_lifecycle_phases() {
+        remove_active_operation("t_move_sync", Some("hash_move_sync"));
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_move_lifecycle_step(
+            "t_move_sync",
+            "/new/destination/path",
+            Some("hash_move_sync"),
+            false, // synchronous move
+            |_id, _dest| Ok(()),
+            |s| recorded_phases.push((s.phase.clone(), s.destination.clone(), s.outcome.clone())),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            recorded_phases,
+            vec![
+                (
+                    TorrentOperationPhase::Moving,
+                    Some("/new/destination/path".to_string()),
+                    None
+                ),
+                (
+                    TorrentOperationPhase::Complete,
+                    Some("/new/destination/path".to_string()),
+                    Some("Moved to /new/destination/path".to_string())
+                ),
+            ]
+        );
+
+        // Verify cleaned up from active map upon completion
+        assert!(get_active_operation("t_move_sync").is_none());
+        assert!(get_active_operation("hash_move_sync").is_none());
+    }
+
+    #[test]
+    fn test_move_lifecycle_error() {
+        remove_active_operation("t_move_err", Some("hash_move_err"));
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_move_lifecycle_step(
+            "t_move_err",
+            "/protected/destination",
+            Some("hash_move_err"),
+            false,
+            |_id, _dest| Err("Permission denied".to_string()),
+            |s| recorded_phases.push((s.phase.clone(), s.safe_error.clone())),
+        );
+
+        assert!(res.is_err());
+        assert_eq!(
+            recorded_phases,
+            vec![
+                (TorrentOperationPhase::Moving, None),
+                (
+                    TorrentOperationPhase::Error,
+                    Some("Move failed: Permission denied".to_string())
+                ),
+            ]
+        );
+
+        // Verify operation remains in active map as error so it can be dismissed
+        let active =
+            get_active_operation("t_move_err").expect("Error operation must remain in map");
+        assert_eq!(active.phase, TorrentOperationPhase::Error);
+        assert_eq!(
+            active.safe_error,
+            Some("Move failed: Permission denied".to_string())
+        );
+
+        remove_active_operation("t_move_err", Some("hash_move_err"));
+    }
+
+    #[test]
+    fn test_conflicting_remove_blocked_by_active_move() {
+        remove_active_operation("t_move_conflict", Some("hash_move_conflict"));
+
+        let res = reserve_active_move_operation(
+            "t_move_conflict",
+            Some("hash_move_conflict"),
+            "/path/a",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(matches!(res, Ok(ReservationResult::Reserved(_))));
+
+        // Attempting to reserve remove on the moving torrent must fail
+        let remove_res = reserve_active_remove_operation(
+            "t_move_conflict",
+            Some("hash_move_conflict"),
+            false,
+            TorrentOperationPhase::RemovingTorrent,
+        );
+        assert!(remove_res.is_err());
+        assert!(remove_res.unwrap_err().contains("already in progress"));
+
+        remove_active_operation("t_move_conflict", Some("hash_move_conflict"));
+    }
+
+    #[test]
+    fn test_conflicting_move_blocked_by_active_remove() {
+        remove_active_operation("t_remove_conflict", Some("hash_remove_conflict"));
+
+        let res = reserve_active_remove_operation(
+            "t_remove_conflict",
+            Some("hash_remove_conflict"),
+            false,
+            TorrentOperationPhase::RemovingTorrent,
+        );
+        assert!(matches!(res, Ok(ReservationResult::Reserved(_))));
+
+        // Attempting to reserve move on removing torrent must fail
+        let move_res = reserve_active_move_operation(
+            "t_remove_conflict",
+            Some("hash_remove_conflict"),
+            "/new/dir",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(move_res.is_err());
+        assert!(move_res.unwrap_err().contains("already in progress"));
+
+        remove_active_operation("t_remove_conflict", Some("hash_remove_conflict"));
+    }
+
+    #[test]
+    fn test_duplicate_move_reservation_is_deduplicated() {
+        remove_active_operation("t_move_dup", Some("hash_move_dup"));
+
+        let res1 = reserve_active_move_operation(
+            "t_move_dup",
+            Some("hash_move_dup"),
+            "/same/destination",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(matches!(res1, Ok(ReservationResult::Reserved(_))));
+
+        // Same destination: returns Duplicate
+        let res2 = reserve_active_move_operation(
+            "t_move_dup",
+            Some("hash_move_dup"),
+            "/same/destination",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(matches!(res2, Ok(ReservationResult::Duplicate(_))));
+
+        // Different destination: rejected as conflict
+        let res3 = reserve_active_move_operation(
+            "t_move_dup",
+            Some("hash_move_dup"),
+            "/different/destination",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(res3.is_err());
+        assert!(res3.unwrap_err().contains("already in progress"));
+
+        remove_active_operation("t_move_dup", Some("hash_move_dup"));
+    }
+
+    #[test]
+    fn test_error_move_not_successful_duplicate() {
+        remove_active_operation("t_move_err_dup", Some("hash_move_err_dup"));
+
+        let err_snap = TorrentOperationSnapshot {
+            operation_id: "op-move-failed".to_string(),
+            torrent_id: "hash_move_err_dup".to_string(),
+            kind: TorrentOperationKind::Move {
+                destination: "/same/dest".to_string(),
+            },
+            phase: TorrentOperationPhase::Error,
+            destination: Some("/same/dest".to_string()),
+            safe_error: Some("Move failed: disk full".to_string()),
+            outcome: None,
+            revision: 2,
+            created_at: 1000,
+        };
+        register_active_operation("t_move_err_dup", Some("hash_move_err_dup"), &err_snap);
+
+        // Attempting to reserve move with matching destination must NOT return Ok Duplicate
+        let res = reserve_active_move_operation(
+            "t_move_err_dup",
+            Some("hash_move_err_dup"),
+            "/same/dest",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("Move failed: disk full"));
+
+        remove_active_operation("t_move_err_dup", Some("hash_move_err_dup"));
+    }
+
+    #[test]
+    fn test_complete_active_move_clears_aliases() {
+        remove_active_operation("t_move_alias", Some("hash_move_alias"));
+
+        let res = reserve_active_move_operation(
+            "t_move_alias",
+            Some("hash_move_alias"),
+            "/dest/folder",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(matches!(res, Ok(ReservationResult::Reserved(_))));
+
+        assert!(get_active_operation("t_move_alias").is_some());
+        assert!(get_active_operation("hash_move_alias").is_some());
+
+        complete_active_move_operation("t_move_alias", Some("hash_move_alias"), "/dest/folder");
+
+        assert!(get_active_operation("t_move_alias").is_none());
+        assert!(get_active_operation("hash_move_alias").is_none());
     }
 }
 
