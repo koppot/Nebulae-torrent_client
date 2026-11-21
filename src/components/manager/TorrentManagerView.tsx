@@ -208,6 +208,8 @@ export const TorrentManagerView: React.FC = () => {
     selectDownloadDirectory,
     activeOperations,
     dismissOperation,
+    terminalNotice,
+    dismissTerminalNotice,
   } = useTorrentStore();
 
   const {
@@ -1155,6 +1157,28 @@ export const TorrentManagerView: React.FC = () => {
 
       {/* 2. Main Right Area: Dense Transfer Grid + Inspector */}
       <div className="flex-1 flex flex-col overflow-hidden bg-[#141414] min-w-0">
+        {terminalNotice && (
+          <div
+            data-testid="manager-terminal-status"
+            className="bg-[#1a1a1a] border-b border-[#262626] px-3 py-2 flex items-center justify-between text-xs font-sans text-white flex-shrink-0"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              <span className="truncate">
+                {terminalNotice.name ? <strong className="font-medium text-white">{terminalNotice.name}: </strong> : null}
+                <span className="text-[#d4d4d4]">{terminalNotice.outcome}</span>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => dismissTerminalNotice()}
+              className="px-2 py-0.5 rounded text-[10px] bg-[#262626] text-white hover:bg-[#333333] border border-[#404040] flex-shrink-0 ml-3 transition"
+              title="Dismiss outcome notice"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {/* Data Table: Classic Grid */}
         <div className="flex-1 overflow-auto bg-[#141414] min-w-0">
           <table className="w-full min-w-[720px] table-fixed text-left border-collapse text-xs">

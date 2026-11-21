@@ -1,14 +1,14 @@
 import { create } from 'zustand';
-import {
+import type {
   TorrentItem,
   CreateTorrentParams,
   InspectTorrentResult,
   TorrentContentMatch,
   TorrentRenameEntry,
   TorrentOperationSnapshot,
-} from '../types';
+} from '../types/index.ts';
 import { invoke } from '@tauri-apps/api/core';
-import { createLatestGate, mergeFileStats } from '../lib/torrentFiles';
+import { createLatestGate, mergeFileStats } from '../lib/torrentFiles.ts';
 
 // Per-torrent request ordering for detail fetches: a response is applied only
 // to its own torrent, and never after a response to a newer request for it.
@@ -142,6 +142,61 @@ export interface SystemPathPresets {
   documents?: string | null;
 }
 
+export interface OperationTombstone {
+  operation_id: string;
+  torrent_id: string;
+  revision: number;
+  timestamp: number;
+}
+
+export interface TerminalNotice {
+  operation_id: string;
+  torrent_id: string;
+  name?: string;
+  outcome: string;
+  timestamp: number;
+}
+
+const MAX_TOMBSTONES = 100;
+
+function addTombstone(
+  tombstones: Record<string, OperationTombstone>,
+  entry: OperationTombstone
+): Record<string, OperationTombstone> {
+  const next = { ...tombstones, [entry.operation_id]: entry };
+  const keys = Object.keys(next);
+  if (keys.length > MAX_TOMBSTONES) {
+    keys.sort((a, b) => next[a].timestamp - next[b].timestamp);
+    const excess = keys.length - MAX_TOMBSTONES;
+    for (let i = 0; i < excess; i++) {
+      delete next[keys[i]];
+    }
+  }
+  return next;
+}
+
+function isOperationTombstoned(
+  tombstones: Record<string, OperationTombstone>,
+  opId: string,
+  torrentId?: string,
+  createdAt?: number
+): boolean {
+  if (tombstones[opId]) {
+    return true;
+  }
+  if (torrentId) {
+    const match = Object.values(tombstones).find(
+      (t) =>
+        (t.torrent_id === torrentId || t.torrent_id.toLowerCase() === torrentId.toLowerCase()) &&
+        (createdAt ? createdAt <= t.timestamp : false)
+    );
+    if (match) {
+      return true;
+    }
+  }
+  return false;
+}
+
 interface TorrentState {
   torrents: TorrentItem[];
   selectedId: string | null;
@@ -188,6 +243,10 @@ interface TorrentState {
   fetchActiveOperations: () => Promise<void>;
   handleOperationEvent: (op: TorrentOperationSnapshot) => void;
   dismissOperation: (id: string) => Promise<void>;
+  terminalNotice: TerminalNotice | null;
+  lastOutcome: string | null;
+  tombstones: Record<string, OperationTombstone>;
+  dismissTerminalNotice: () => void;
 }
 
 function areTorrentsEqual(a: TorrentItem, b: TorrentItem): boolean {
@@ -225,6 +284,10 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   filesLoadingId: null,
   filesError: null,
   activeOperations: {},
+  terminalNotice: null,
+  lastOutcome: null,
+  tombstones: {},
+  dismissTerminalNotice: () => set({ terminalNotice: null, lastOutcome: null }),
 
   applyTorrentTelemetry: (incoming: TorrentItem[]) => {
     const prevTorrents = get().torrents;
@@ -489,6 +552,10 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         let changed = false;
 
         for (const item of list) {
+          if (isOperationTombstoned(state.tombstones, item.operation_id, item.torrent_id, item.created_at)) {
+            continue;
+          }
+
           const existing =
             currentOps[item.torrent_id] || (item.torrent_id ? currentOps[item.torrent_id.toLowerCase()] : undefined);
 
@@ -528,6 +595,10 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
 
   handleOperationEvent: (op: TorrentOperationSnapshot) => {
     set((state) => {
+      if (isOperationTombstoned(state.tombstones, op.operation_id, op.torrent_id, op.created_at)) {
+        return state;
+      }
+
       const existing =
         state.activeOperations[op.torrent_id] ||
         (op.torrent_id ? state.activeOperations[op.torrent_id.toLowerCase()] : undefined);
@@ -563,6 +634,27 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       let selectedId = state.selectedId;
 
       if (op.phase === 'complete') {
+        const resolvedOutcome =
+          op.outcome ||
+          (op.kind?.type === 'remove' && op.kind.delete_files
+            ? 'Removal request accepted; file deletion not independently confirmed'
+            : 'Torrent removed');
+
+        const notice: TerminalNotice = {
+          operation_id: op.operation_id,
+          torrent_id: op.torrent_id,
+          name: matchingTorrent?.name || op.torrent_id,
+          outcome: resolvedOutcome,
+          timestamp: Date.now(),
+        };
+
+        const tombstone: OperationTombstone = {
+          operation_id: op.operation_id,
+          torrent_id: op.torrent_id,
+          revision: op.revision,
+          timestamp: Date.now(),
+        };
+
         torrents = state.torrents.filter(
           (t) => t.id !== op.torrent_id && (!t.info_hash || t.info_hash.toLowerCase() !== op.torrent_id.toLowerCase())
         );
@@ -578,6 +670,15 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         for (const k of keysToUpdate) {
           delete updated[k];
         }
+
+        return {
+          activeOperations: updated,
+          torrents,
+          selectedId,
+          terminalNotice: notice,
+          lastOutcome: resolvedOutcome,
+          tombstones: addTombstone(state.tombstones, tombstone),
+        };
       } else {
         // Clean up any other aliases for older operations on this torrent
         for (const [key, item] of Object.entries(updated)) {
@@ -613,15 +714,17 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
       return;
     }
 
+    const targetOpId = targetOp?.operation_id || id;
+    const targetTorrentId = targetOp?.torrent_id || id;
+    const targetRevision = targetOp?.revision ?? 1;
+
     try {
       await invoke('dismiss_torrent_operation', { id });
     } catch (err) {
       console.warn('dismiss_torrent_operation failed:', err);
-      return;
     }
 
-    // Remove every alias matching operation_id in frontend
-    const targetOpId = targetOp?.operation_id;
+    // Remove every alias matching operation_id in frontend and preserve tombstone
     set((state) => {
       const nextOps = { ...state.activeOperations };
       if (targetOpId) {
@@ -630,11 +733,33 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
             delete nextOps[key];
           }
         }
-      } else {
-        delete nextOps[id];
-        delete nextOps[id.toLowerCase()];
       }
-      return { activeOperations: nextOps };
+      delete nextOps[id];
+      delete nextOps[id.toLowerCase()];
+      delete nextOps[targetTorrentId];
+      delete nextOps[targetTorrentId.toLowerCase()];
+
+      const tombstone: OperationTombstone = {
+        operation_id: targetOpId,
+        torrent_id: targetTorrentId,
+        revision: targetRevision,
+        timestamp: Date.now(),
+      };
+
+      const nextNotice =
+        state.terminalNotice &&
+        (state.terminalNotice.operation_id === targetOpId ||
+          state.terminalNotice.torrent_id === targetTorrentId ||
+          state.terminalNotice.torrent_id === id)
+          ? null
+          : state.terminalNotice;
+
+      return {
+        activeOperations: nextOps,
+        tombstones: addTombstone(state.tombstones, tombstone),
+        terminalNotice: nextNotice,
+        lastOutcome: nextNotice ? state.lastOutcome : null,
+      };
     });
 
     void get().fetchTorrents();
