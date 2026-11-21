@@ -528,3 +528,73 @@ test('setLocation prevents starting conflicting move while operation is in-fligh
     'Conflicting setLocation must not overwrite in-flight move operation'
   );
 });
+
+test('Move completion with metadata failure updates physical save_path, exposes warning in terminalNotice, and clears active operation aliases', () => {
+  useTorrentStore.setState({
+    torrents: [
+      {
+        id: 't-move-meta-fail',
+        name: 'Oppenheimer (2023)',
+        info_hash: '99887766554433221100aabbccddeeff00112233',
+        save_path: '/Volumes/DiskA/Movies',
+        status: 'Downloading',
+      } as any,
+    ],
+    activeOperations: {
+      't-move-meta-fail': {
+        operation_id: 'op-move-mf-1',
+        torrent_id: 't-move-meta-fail',
+        kind: { type: 'move', destination: '/Volumes/DiskB/Movies' },
+        phase: 'moving',
+        destination: '/Volumes/DiskB/Movies',
+        revision: 1,
+        created_at: 9000,
+      },
+      '99887766554433221100aabbccddeeff00112233': {
+        operation_id: 'op-move-mf-1',
+        torrent_id: 't-move-meta-fail',
+        kind: { type: 'move', destination: '/Volumes/DiskB/Movies' },
+        phase: 'moving',
+        destination: '/Volumes/DiskB/Movies',
+        revision: 1,
+        created_at: 9000,
+      },
+    },
+    terminalNotice: null,
+    lastOutcome: null,
+    tombstones: {},
+  });
+
+  // Dispatch complete event with custom metadata failure outcome
+  useTorrentStore.getState().handleOperationEvent({
+    operation_id: 'op-move-mf-1',
+    torrent_id: 't-move-meta-fail',
+    kind: { type: 'move', destination: '/Volumes/DiskB/Movies' },
+    phase: 'complete',
+    destination: '/Volumes/DiskB/Movies',
+    outcome: 'Files moved; saved location could not be updated.',
+    revision: 2,
+    created_at: 9000,
+  });
+
+  const state = useTorrentStore.getState();
+
+  // 1. Torrent row is retained in store
+  assert.equal(state.torrents.length, 1);
+  const updatedRow = state.torrents.find((t) => t.id === 't-move-meta-fail');
+  assert.ok(updatedRow);
+
+  // 2. Physical save_path is updated
+  assert.equal(updatedRow?.save_path, '/Volumes/DiskB/Movies');
+
+  // 3. Warning outcome is exposed in terminalNotice and lastOutcome
+  assert.equal(state.lastOutcome, 'Files moved; saved location could not be updated.');
+  assert.equal(state.terminalNotice?.outcome, 'Files moved; saved location could not be updated.');
+
+  // 4. Active operation aliases are removed
+  assert.equal(state.activeOperations['t-move-meta-fail'], undefined);
+  assert.equal(state.activeOperations['99887766554433221100aabbccddeeff00112233'], undefined);
+
+  // 5. Tombstone is recorded
+  assert.ok(state.tombstones['op-move-mf-1']);
+});

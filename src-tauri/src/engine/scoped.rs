@@ -165,6 +165,9 @@ impl TorrentEngine for ScopedEngine {
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String> {
         self.active().set_location(id, new_path)
     }
+    fn move_completion_semantics(&self) -> crate::engine::traits::MoveCompletionSemantics {
+        self.active().move_completion_semantics()
+    }
     fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
         self.active().relink_location(id, new_path)
     }

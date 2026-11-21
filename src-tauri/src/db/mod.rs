@@ -1805,6 +1805,13 @@ impl Database {
         )?;
         Ok(())
     }
+
+    #[cfg(test)]
+    pub fn execute_raw_for_test(&self, sql: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(sql)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

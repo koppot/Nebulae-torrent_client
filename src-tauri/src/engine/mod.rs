@@ -21,7 +21,7 @@ pub use mock::MockTorrentEngine;
 pub use remote::RemoteServerEngine;
 pub use rtorrent::RtorrentRemoteEngine;
 pub use scoped::{LocalEngine, ScopedEngine};
-pub use traits::{EngineHook, EngineStatus, TorrentEngine};
+pub use traits::{EngineHook, EngineStatus, MoveCompletionSemantics, TorrentEngine};
 pub use transmission::TransmissionTorrentEngine;
 
 pub type SharedEngine = std::sync::Arc<dyn TorrentEngine>;

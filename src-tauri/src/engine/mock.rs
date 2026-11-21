@@ -934,6 +934,10 @@ impl TorrentEngine for MockTorrentEngine {
         }
     }
 
+    fn move_completion_semantics(&self) -> crate::engine::traits::MoveCompletionSemantics {
+        crate::engine::traits::MoveCompletionSemantics::Synchronous
+    }
+
     fn set_category(&self, id: &str, category: &str) -> Result<(), String> {
         let mut list = self.torrents.lock().unwrap();
         if let Some(item) = list.iter_mut().find(|t| t.id == id) {

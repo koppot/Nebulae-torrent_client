@@ -205,10 +205,15 @@ pub(crate) fn reserve_active_move_operation(
     Ok(ReservationResult::Reserved(snapshot))
 }
 
-pub(crate) fn complete_active_move_operation(id: &str, info_hash: Option<&str>, destination: &str) {
+pub(crate) fn complete_active_move_operation(
+    id: &str,
+    info_hash: Option<&str>,
+    destination: &str,
+    outcome: Option<String>,
+) -> Option<TorrentOperationSnapshot> {
     let mut map = match get_active_operations_map().lock() {
         Ok(m) => m,
-        Err(_) => return,
+        Err(_) => return None,
     };
 
     let target = map
@@ -220,7 +225,7 @@ pub(crate) fn complete_active_move_operation(id: &str, info_hash: Option<&str>, 
     if let Some(mut snapshot) = target {
         snapshot.phase = TorrentOperationPhase::Complete;
         snapshot.destination = Some(destination.to_string());
-        snapshot.outcome = Some(format!("Moved to {}", destination));
+        snapshot.outcome = Some(outcome.unwrap_or_else(|| format!("Moved to {}", destination)));
         snapshot.revision += 1;
 
         emit_operation_event(None, &snapshot);
@@ -232,13 +237,20 @@ pub(crate) fn complete_active_move_operation(id: &str, info_hash: Option<&str>, 
 
         let op_id = snapshot.operation_id.clone();
         map.retain(|_, op| op.operation_id != op_id);
+        Some(snapshot)
+    } else {
+        None
     }
 }
 
-pub(crate) fn fail_active_move_operation(id: &str, info_hash: Option<&str>, error_msg: &str) {
+pub(crate) fn fail_active_move_operation(
+    id: &str,
+    info_hash: Option<&str>,
+    error_msg: &str,
+) -> Option<TorrentOperationSnapshot> {
     let mut map = match get_active_operations_map().lock() {
         Ok(m) => m,
-        Err(_) => return,
+        Err(_) => return None,
     };
 
     let target = map
@@ -286,6 +298,7 @@ pub(crate) fn fail_active_move_operation(id: &str, info_hash: Option<&str>, erro
     }
 
     emit_operation_event(None, &snapshot);
+    Some(snapshot)
 }
 
 pub(crate) fn register_active_operation(
@@ -1470,7 +1483,7 @@ pub(crate) fn run_move_lifecycle_step<E>(
     id: &str,
     destination: &str,
     info_hash: Option<&str>,
-    is_async: bool,
+    semantics: crate::engine::traits::MoveCompletionSemantics,
     engine_move: E,
     mut on_transition: impl FnMut(&TorrentOperationSnapshot),
 ) -> Result<(), String>
@@ -1501,17 +1514,40 @@ where
         return Err(err_msg);
     }
 
-    // 3. Complete phase if synchronous
-    if !is_async {
-        snapshot.phase = TorrentOperationPhase::Complete;
-        snapshot.destination = Some(destination.to_string());
-        snapshot.outcome = Some(format!("Moved to {}", destination));
-        snapshot.revision += 1;
-        on_transition(&snapshot);
-        remove_active_operation(id, info_hash);
+    // 3. Completion handling bound to demonstrated engine semantics
+    match semantics {
+        crate::engine::traits::MoveCompletionSemantics::AsyncCallback => {
+            // Engine moves asynchronously; completion or failure will be signaled by callback.
+            Ok(())
+        }
+        crate::engine::traits::MoveCompletionSemantics::Synchronous => {
+            snapshot.phase = TorrentOperationPhase::Complete;
+            snapshot.destination = Some(destination.to_string());
+            snapshot.outcome = Some(format!("Moved to {}", destination));
+            snapshot.revision += 1;
+            on_transition(&snapshot);
+            if let Some(app) = APP_HANDLE.get() {
+                use tauri::Emitter;
+                let _ = app.emit("nebulae://media-updated", ());
+            }
+            remove_active_operation(id, info_hash);
+            Ok(())
+        }
+        crate::engine::traits::MoveCompletionSemantics::Unconfirmed => {
+            snapshot.phase = TorrentOperationPhase::Complete;
+            snapshot.destination = Some(destination.to_string());
+            snapshot.outcome =
+                Some("Location set; file relocation not confirmed by engine".to_string());
+            snapshot.revision += 1;
+            on_transition(&snapshot);
+            if let Some(app) = APP_HANDLE.get() {
+                use tauri::Emitter;
+                let _ = app.emit("nebulae://media-updated", ());
+            }
+            remove_active_operation(id, info_hash);
+            Ok(())
+        }
     }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -1593,11 +1629,13 @@ pub async fn set_torrent_location(
                 }
             });
 
+        let semantics = engine.move_completion_semantics();
+
         run_move_lifecycle_step(
             &id,
             &new_path,
             info_hash.as_deref(),
-            true,
+            semantics,
             |tid, path| engine.set_location(tid, path),
             |snap| {
                 emit_operation_event(Some(&app_handle), snap);
@@ -3218,7 +3256,7 @@ mod tests {
             "t_move_sync",
             "/new/destination/path",
             Some("hash_move_sync"),
-            false, // synchronous move
+            crate::engine::traits::MoveCompletionSemantics::Synchronous,
             |_id, _dest| Ok(()),
             |s| recorded_phases.push((s.phase.clone(), s.destination.clone(), s.outcome.clone())),
         );
@@ -3246,6 +3284,83 @@ mod tests {
     }
 
     #[test]
+    fn test_move_lifecycle_unconfirmed_terminates_truthfully() {
+        remove_active_operation("t_move_unconf", Some("hash_move_unconf"));
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_move_lifecycle_step(
+            "t_move_unconf",
+            "/remote/destination/path",
+            Some("hash_move_unconf"),
+            crate::engine::traits::MoveCompletionSemantics::Unconfirmed,
+            |_id, _dest| Ok(()),
+            |s| recorded_phases.push((s.phase.clone(), s.destination.clone(), s.outcome.clone())),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            recorded_phases,
+            vec![
+                (
+                    TorrentOperationPhase::Moving,
+                    Some("/remote/destination/path".to_string()),
+                    None
+                ),
+                (
+                    TorrentOperationPhase::Complete,
+                    Some("/remote/destination/path".to_string()),
+                    Some("Location set; file relocation not confirmed by engine".to_string())
+                ),
+            ]
+        );
+
+        // Verify active reservation is cleared truthfully rather than left indefinitely active
+        assert!(get_active_operation("t_move_unconf").is_none());
+        assert!(get_active_operation("hash_move_unconf").is_none());
+    }
+
+    #[test]
+    fn test_move_lifecycle_async_callback_leaves_moving_for_callback() {
+        remove_active_operation("t_move_async", Some("hash_move_async"));
+
+        let mut recorded_phases = Vec::new();
+
+        let res = run_move_lifecycle_step(
+            "t_move_async",
+            "/async/destination/path",
+            Some("hash_move_async"),
+            crate::engine::traits::MoveCompletionSemantics::AsyncCallback,
+            |_id, _dest| Ok(()),
+            |s| recorded_phases.push((s.phase.clone(), s.destination.clone(), s.outcome.clone())),
+        );
+
+        assert!(res.is_ok());
+        assert_eq!(
+            recorded_phases,
+            vec![(
+                TorrentOperationPhase::Moving,
+                Some("/async/destination/path".to_string()),
+                None
+            )]
+        );
+
+        // Verify active reservation remains in map awaiting callback
+        let in_flight = get_active_operation("t_move_async").expect("Must remain in active map");
+        assert_eq!(in_flight.phase, TorrentOperationPhase::Moving);
+
+        // Simulated callback completion
+        complete_active_move_operation(
+            "t_move_async",
+            Some("hash_move_async"),
+            "/async/destination/path",
+            None,
+        );
+
+        assert!(get_active_operation("t_move_async").is_none());
+    }
+
+    #[test]
     fn test_move_lifecycle_error() {
         remove_active_operation("t_move_err", Some("hash_move_err"));
 
@@ -3255,7 +3370,7 @@ mod tests {
             "t_move_err",
             "/protected/destination",
             Some("hash_move_err"),
-            false,
+            crate::engine::traits::MoveCompletionSemantics::Synchronous,
             |_id, _dest| Err("Permission denied".to_string()),
             |s| recorded_phases.push((s.phase.clone(), s.safe_error.clone())),
         );
@@ -3415,10 +3530,38 @@ mod tests {
         assert!(get_active_operation("t_move_alias").is_some());
         assert!(get_active_operation("hash_move_alias").is_some());
 
-        complete_active_move_operation("t_move_alias", Some("hash_move_alias"), "/dest/folder");
+        complete_active_move_operation(
+            "t_move_alias",
+            Some("hash_move_alias"),
+            "/dest/folder",
+            None,
+        );
 
         assert!(get_active_operation("t_move_alias").is_none());
         assert!(get_active_operation("hash_move_alias").is_none());
+    }
+
+    #[test]
+    fn test_complete_active_move_with_custom_metadata_failure_outcome() {
+        remove_active_operation("t_move_meta_err", Some("hash_move_meta_err"));
+
+        let res = reserve_active_move_operation(
+            "t_move_meta_err",
+            Some("hash_move_meta_err"),
+            "/disk/new_location",
+            TorrentOperationPhase::Moving,
+        );
+        assert!(matches!(res, Ok(ReservationResult::Reserved(_))));
+
+        complete_active_move_operation(
+            "t_move_meta_err",
+            Some("hash_move_meta_err"),
+            "/disk/new_location",
+            Some("Files moved; saved location could not be updated.".to_string()),
+        );
+
+        // Cleared from active map so not left indefinitely active
+        assert!(get_active_operation("t_move_meta_err").is_none());
     }
 }
 

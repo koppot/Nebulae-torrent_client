@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::commands::settings::UserSettings;
 use crate::commands::torrent::{TorrentFileItem, TorrentItem, TorrentTrackerItem};
 use crate::db::{Database, TorrentDbMetadata};
-use crate::engine::traits::{EngineHook, EngineStatus, TorrentEngine};
+use crate::engine::traits::{EngineHook, EngineStatus, MoveCompletionSemantics, TorrentEngine};
 use crate::models::peering::{LocalityTier, PeerTelemetry};
 use crate::utils::keyring::{get_secret, passkey_secret_target};
 use crate::utils::network::{
@@ -2993,6 +2993,80 @@ impl TransmissionTorrentEngine {
     }
 }
 
+pub(crate) fn handle_transmission_move_done(
+    verdict: Result<(), String>,
+    moved_item_exists: bool,
+    moved_hash: &str,
+    moved_to: &str,
+    cache: &Arc<Mutex<HashMap<String, TorrentDbMetadata>>>,
+    db: &Arc<Database>,
+) -> Option<crate::commands::torrent::TorrentOperationSnapshot> {
+    if let Err(e) = &verdict {
+        return crate::commands::torrent::fail_active_move_operation(
+            moved_hash,
+            Some(moved_hash),
+            &format!("Move failed: {e}"),
+        );
+    }
+    if !moved_item_exists {
+        tracing::error!(
+            "[set-location] daemon reported success but destination item is missing; stored location left unchanged"
+        );
+        return crate::commands::torrent::fail_active_move_operation(
+            moved_hash,
+            Some(moved_hash),
+            "Move failed: files missing at destination",
+        );
+    }
+
+    let mut meta_persist_failed = false;
+    if let Ok(mut cache_guard) = cache.lock() {
+        if let Some(meta) = cache_guard.get_mut(moved_hash) {
+            meta.save_path = Some(moved_to.to_string());
+            if let Err(e) = db.upsert_torrent_metadata(meta) {
+                tracing::error!(
+                    "[set-location] failed to persist cached metadata for {}: {e}",
+                    moved_hash
+                );
+                meta_persist_failed = true;
+            }
+        }
+    }
+    match db.get_torrent_metadata(moved_hash) {
+        Ok(Some(mut meta)) => {
+            meta.save_path = Some(moved_to.to_string());
+            if let Err(e) = db.upsert_torrent_metadata(&meta) {
+                tracing::error!(
+                    "[set-location] failed to persist database metadata for {}: {e}",
+                    moved_hash
+                );
+                meta_persist_failed = true;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(
+                "[set-location] failed to fetch metadata from database for {}: {e}",
+                moved_hash
+            );
+            meta_persist_failed = true;
+        }
+    }
+
+    let custom_outcome = if meta_persist_failed {
+        Some("Files moved; saved location could not be updated.".to_string())
+    } else {
+        None
+    };
+
+    crate::commands::torrent::complete_active_move_operation(
+        moved_hash,
+        Some(moved_hash),
+        moved_to,
+        custom_outcome,
+    )
+}
+
 impl TorrentEngine for TransmissionTorrentEngine {
     fn shutdown(&self) {
         self.shutdown_engine();
@@ -3362,44 +3436,22 @@ impl TorrentEngine for TransmissionTorrentEngine {
         let moved_to = new_path.to_string();
         let moved_item = dest.join(name);
         let on_done: MoveDoneCallback = Box::new(move |verdict| {
-            if let Err(e) = &verdict {
-                crate::commands::torrent::fail_active_move_operation(
-                    &moved_hash,
-                    Some(&moved_hash),
-                    &format!("Move failed: {e}"),
-                );
-                return;
-            }
-            if !moved_item.exists() {
-                tracing::error!(
-                    "[set-location] daemon reported success but {} is missing; stored location left unchanged",
-                    moved_item.display()
-                );
-                crate::commands::torrent::fail_active_move_operation(
-                    &moved_hash,
-                    Some(&moved_hash),
-                    "Move failed: files missing at destination",
-                );
-                return;
-            }
-            if let Ok(mut cache) = cache.lock() {
-                if let Some(meta) = cache.get_mut(&moved_hash) {
-                    meta.save_path = Some(moved_to.clone());
-                    let _ = db.upsert_torrent_metadata(meta);
-                }
-            }
-            if let Ok(Some(mut meta)) = db.get_torrent_metadata(&moved_hash) {
-                meta.save_path = Some(moved_to.clone());
-                let _ = db.upsert_torrent_metadata(&meta);
-            }
-            crate::commands::torrent::complete_active_move_operation(
+            let item_exists = moved_item.exists();
+            let _ = handle_transmission_move_done(
+                verdict,
+                item_exists,
                 &moved_hash,
-                Some(&moved_hash),
                 &moved_to,
+                &cache,
+                &db,
             );
         });
         self.rpc_client
             .torrent_set_location(&target_id, new_path, true, Some(on_done))
+    }
+
+    fn move_completion_semantics(&self) -> MoveCompletionSemantics {
+        MoveCompletionSemantics::AsyncCallback
     }
 
     fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
@@ -5439,5 +5491,198 @@ mod tests {
         assert_eq!(hist, Some(meta_dir.to_str().unwrap().to_string()));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_transmission_async_move_callback_success() {
+        use crate::commands::torrent::{
+            get_active_operation, remove_active_operation, reserve_active_move_operation,
+            ReservationResult, TorrentOperationPhase,
+        };
+        use std::path::Path;
+
+        let db = Arc::new(Database::new(Path::new(":memory:")).expect("db"));
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let hash = "111122223333444455556666777788889999aaaa";
+
+        let initial_meta = TorrentDbMetadata {
+            info_hash: hash.to_string(),
+            save_path: Some("/old/location".to_string()),
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&initial_meta).expect("upsert");
+        cache.lock().unwrap().insert(hash.to_string(), initial_meta);
+
+        remove_active_operation("t_tx_move_succ", Some(hash));
+        let res = reserve_active_move_operation(
+            "t_tx_move_succ",
+            Some(hash),
+            "/new/location",
+            TorrentOperationPhase::Moving,
+        )
+        .expect("reserve");
+        assert!(matches!(res, ReservationResult::Reserved(_)));
+
+        let snap = handle_transmission_move_done(
+            Ok(()),
+            true, // moved_item_exists
+            hash,
+            "/new/location",
+            &cache,
+            &db,
+        )
+        .expect("snapshot returned");
+
+        assert_eq!(snap.phase, TorrentOperationPhase::Complete);
+        assert_eq!(snap.destination, Some("/new/location".to_string()));
+        assert_eq!(snap.outcome, Some("Moved to /new/location".to_string()));
+
+        // Active map should no longer have the active reservation
+        assert!(get_active_operation(hash).is_none());
+
+        // Cache and DB should reflect updated save_path
+        assert_eq!(
+            db.get_torrent_metadata(hash).unwrap().unwrap().save_path,
+            Some("/new/location".to_string())
+        );
+        assert_eq!(
+            cache.lock().unwrap().get(hash).unwrap().save_path,
+            Some("/new/location".to_string())
+        );
+
+        remove_active_operation("t_tx_move_succ", Some(hash));
+    }
+
+    #[test]
+    fn test_transmission_async_move_callback_metadata_failure() {
+        use crate::commands::torrent::{
+            get_active_operation, remove_active_operation, reserve_active_move_operation,
+            ReservationResult, TorrentOperationPhase,
+        };
+        use std::path::Path;
+
+        let db = Arc::new(Database::new(Path::new(":memory:")).expect("db"));
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let hash = "22223333444455556666777788889999aaaabbbb";
+
+        let initial_meta = TorrentDbMetadata {
+            info_hash: hash.to_string(),
+            save_path: Some("/initial/dir".to_string()),
+            ..Default::default()
+        };
+        db.upsert_torrent_metadata(&initial_meta).expect("upsert");
+        cache.lock().unwrap().insert(hash.to_string(), initial_meta);
+
+        // Install a trigger that aborts updates to torrent_metadata, simulating a persistence failure
+        db.execute_raw_for_test(
+            "CREATE TRIGGER fail_metadata_update
+            BEFORE UPDATE ON torrent_metadata
+            BEGIN
+                SELECT RAISE(ABORT, 'forced metadata failure');
+            END;",
+        )
+        .expect("trigger installed");
+
+        remove_active_operation("t_tx_move_meta_err", Some(hash));
+        let res = reserve_active_move_operation(
+            "t_tx_move_meta_err",
+            Some(hash),
+            "/target/relocated",
+            TorrentOperationPhase::Moving,
+        )
+        .expect("reserve");
+        assert!(matches!(res, ReservationResult::Reserved(_)));
+
+        let snap = handle_transmission_move_done(
+            Ok(()),
+            true, // moved_item_exists: files were physically moved
+            hash,
+            "/target/relocated",
+            &cache,
+            &db,
+        )
+        .expect("snapshot returned");
+
+        // Operation completes, destination preserved, truthful warning outcome reported
+        assert_eq!(snap.phase, TorrentOperationPhase::Complete);
+        assert_eq!(snap.destination, Some("/target/relocated".to_string()));
+        assert_eq!(
+            snap.outcome,
+            Some("Files moved; saved location could not be updated.".to_string())
+        );
+
+        // Not indefinitely active
+        assert!(get_active_operation(hash).is_none());
+
+        remove_active_operation("t_tx_move_meta_err", Some(hash));
+    }
+
+    #[test]
+    fn test_transmission_async_move_callback_failure() {
+        use crate::commands::torrent::{
+            get_active_operation, remove_active_operation, reserve_active_move_operation,
+            ReservationResult, TorrentOperationPhase,
+        };
+        use std::path::Path;
+
+        let db = Arc::new(Database::new(Path::new(":memory:")).expect("db"));
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let hash = "3333444455556666777788889999aaaabbbbcccc";
+
+        remove_active_operation("t_tx_move_fail", Some(hash));
+        let res = reserve_active_move_operation(
+            "t_tx_move_fail",
+            Some(hash),
+            "/target/dest",
+            TorrentOperationPhase::Moving,
+        )
+        .expect("reserve");
+        let orig_op_id = match res {
+            ReservationResult::Reserved(s) => s.operation_id,
+            _ => panic!("expected reserved"),
+        };
+
+        // Case A: Daemon reported error
+        let snap_err = handle_transmission_move_done(
+            Err("Disk write error".to_string()),
+            false,
+            hash,
+            "/target/dest",
+            &cache,
+            &db,
+        )
+        .expect("snapshot returned");
+
+        assert_eq!(snap_err.phase, TorrentOperationPhase::Error);
+        assert_eq!(snap_err.operation_id, orig_op_id);
+        assert!(snap_err
+            .safe_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Disk write error"));
+
+        // Retained in active map as error so it can be queried/dismissed
+        let active = get_active_operation(hash).expect("retained in active map");
+        assert_eq!(active.phase, TorrentOperationPhase::Error);
+
+        // Case B: Daemon reported success but files are missing
+        let snap_missing = handle_transmission_move_done(
+            Ok(()),
+            false, // item does NOT exist
+            hash,
+            "/target/dest",
+            &cache,
+            &db,
+        )
+        .expect("snapshot returned");
+
+        assert_eq!(snap_missing.phase, TorrentOperationPhase::Error);
+        assert!(snap_missing
+            .safe_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("missing at destination"));
+
+        remove_active_operation("t_tx_move_fail", Some(hash));
     }
 }

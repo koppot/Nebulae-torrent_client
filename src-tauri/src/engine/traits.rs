@@ -22,6 +22,16 @@ pub struct EngineStatus {
     pub bound_interface: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MoveCompletionSemantics {
+    /// Asynchronous daemon relocation: the engine moves data in the background and signals completion/failure via callback.
+    AsyncCallback,
+    /// Synchronous relocation: the engine moves data and confirms completion on return.
+    Synchronous,
+    /// Unconfirmed relocation: the engine changes location metadata or forwards request, but does not establish or confirm physical file relocation.
+    Unconfirmed,
+}
+
 pub trait TorrentEngine: Send + Sync {
     fn list_torrents(&self) -> Result<Vec<TorrentItem>, String>;
     fn get_torrent_details(&self, id: &str) -> Result<TorrentItem, String> {
@@ -76,6 +86,10 @@ pub trait TorrentEngine: Send + Sync {
     fn set_location(&self, id: &str, new_path: &str) -> Result<(), String>;
     fn relink_location(&self, id: &str, new_path: &str) -> Result<(), String> {
         self.set_location(id, new_path)
+    }
+    /// Indicates how this engine establishes completion for `set_location`.
+    fn move_completion_semantics(&self) -> MoveCompletionSemantics {
+        MoveCompletionSemantics::Unconfirmed
     }
     fn set_category(&self, id: &str, category: &str) -> Result<(), String>;
     fn set_torrent_limits(
