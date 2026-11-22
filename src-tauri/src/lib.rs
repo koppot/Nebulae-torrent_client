@@ -961,6 +961,8 @@ pub fn run() {
             commands::media::player_device_return_to_local,
             commands::media::player_device_stop,
             commands::media::player_device_status,
+            commands::media::player_airplay_mount,
+            commands::media::player_airplay_unmount,
             commands::media::get_disc_player_status,
             commands::media::detect_disc_format,
             commands::media::classify_dropped_media_path,

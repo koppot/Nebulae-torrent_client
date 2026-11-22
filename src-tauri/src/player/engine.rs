@@ -179,7 +179,7 @@ pub struct VlcRendererItemEvent {
 pub union VlcEventUnion {
     pub item_added: VlcRendererItemEvent,
     pub item_deleted: VlcRendererItemEvent,
-    pub padding: [u8; 64],
+    pub padding: [u8; 16],
 }
 
 #[repr(C)]
@@ -1650,10 +1650,6 @@ impl VlcSession {
             if media.is_null() {
                 return Err(format!("libvlc could not open {path}"));
             }
-            // Always suppress native Chromecast performance warning popup so modal dialogs never block
-            if let Ok(opt) = CString::new(":sout-chromecast-show-perf-warning=0") {
-                (lib.libvlc_media_add_option)(media, opt.as_ptr());
-            }
             if let Some(st) = start_time_s {
                 if st > 0.0 {
                     if let Ok(opt) = CString::new(format!(":start-time={:.3}", st)) {
@@ -1781,6 +1777,16 @@ impl VlcSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vlc_event_ffi_abi_layout() {
+        assert_eq!(std::mem::size_of::<VlcEvent>(), 32);
+        assert_eq!(std::mem::size_of::<VlcEventUnion>(), 16);
+        assert_eq!(std::mem::align_of::<VlcEvent>(), 8);
+        assert_eq!(std::mem::align_of::<VlcEventUnion>(), 8);
+        assert_eq!(LIBVLC_RENDERER_DISCOVERER_ITEM_ADDED, 0x502);
+        assert_eq!(LIBVLC_RENDERER_DISCOVERER_ITEM_DELETED, 0x503);
+    }
 
     #[test]
     fn test_format_disc_mrl_windows_drive_and_spaces() {

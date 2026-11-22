@@ -46,10 +46,10 @@ pub struct CastPreflightResult {
     pub is_supported_media: bool,
     pub video_supported: bool,
     pub audio_supported: bool,
-    pub conversion_required: bool,
     pub subtitle_supported: bool,
     pub selected_subtitle: Option<String>,
     pub selected_audio: Option<String>,
+    pub rejection_reason: Option<String>,
     pub details: String,
 }
 
@@ -525,19 +525,25 @@ mod tests {
         let preflight = CastPreflightResult {
             device_id: "dev-1".to_string(),
             device_name: "TV".to_string(),
-            is_supported_media: true,
+            is_supported_media: false,
             video_supported: true,
             audio_supported: false,
-            conversion_required: true,
             subtitle_supported: false,
             selected_subtitle: Some("English".to_string()),
             selected_audio: Some("Japanese".to_string()),
-            details: "Audio codec transcode required. Subtitles dropped by Cast renderer."
-                .to_string(),
+            rejection_reason: Some(
+                "Google Cast cannot stream selected subtitles without video conversion."
+                    .to_string(),
+            ),
+            details: "Direct playback unavailable under receiver-native policy.".to_string(),
         };
         let val = serde_json::to_value(&preflight).unwrap();
-        assert_eq!(val["conversion_required"], true);
+        assert_eq!(val["is_supported_media"], false);
         assert_eq!(val["subtitle_supported"], false);
         assert_eq!(val["selected_subtitle"], "English");
+        assert!(val["rejection_reason"]
+            .as_str()
+            .unwrap()
+            .contains("subtitles"));
     }
 }

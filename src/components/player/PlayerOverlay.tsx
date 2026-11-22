@@ -41,10 +41,10 @@ interface CastPreflight {
   is_supported_media: boolean;
   video_supported: boolean;
   audio_supported: boolean;
-  conversion_required: boolean;
   subtitle_supported: boolean;
   selected_subtitle?: string | null;
   selected_audio?: string | null;
+  rejection_reason?: string | null;
   details: string;
 }
 
@@ -209,11 +209,11 @@ export default function PlayerOverlay() {
   const [preflight, setPreflight] = useState<CastPreflight | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | null>(null);
-  const [approveConversion, setApproveConversion] = useState(false);
   const [castStatus, setCastStatus] = useState<string | null>(null);
   const [castDeviceName, setCastDeviceName] = useState<string | null>(null);
   const [castActionLoading, setCastActionLoading] = useState(false);
   const discoveryTimerRef = useRef<number | null>(null);
+  const airplayAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const isCastingActive = useMemo(() => {
     return Boolean(castStatus && castStatus !== 'idle' && castStatus !== 'stopped' && castStatus !== 'disconnected');
@@ -390,7 +390,6 @@ export default function PlayerOverlay() {
     setSelectedDevice(null);
     setPreflight(null);
     setPreflightError(null);
-    setApproveConversion(false);
 
     if (player.isDisc) {
       return;
@@ -417,7 +416,6 @@ export default function PlayerOverlay() {
     setPreflightLoading(true);
     setPreflightError(null);
     setPreflight(null);
-    setApproveConversion(false);
 
     try {
       const result = await invoke<CastPreflight>('player_device_preflight', { deviceId: device.id });
@@ -436,7 +434,6 @@ export default function PlayerOverlay() {
     try {
       await invoke('player_device_start', {
         deviceId: selectedDevice.id,
-        approveConversion,
       });
       setShowDevicePicker(false);
       stopDiscovery();
@@ -447,7 +444,7 @@ export default function PlayerOverlay() {
     } finally {
       setCastActionLoading(false);
     }
-  }, [selectedDevice, approveConversion, stopDiscovery]);
+  }, [selectedDevice, stopDiscovery]);
 
   const handleReturnToLocal = useCallback(async () => {
     setCastActionLoading(true);
@@ -476,6 +473,42 @@ export default function PlayerOverlay() {
   }, []);
 
   useEffect(() => {
+    const isAirplay = Boolean(
+      isCastingActive &&
+      (castDeviceName?.toLowerCase().includes('airplay') || castDeviceName?.toLowerCase().includes('apple tv'))
+    );
+    if (!isAirplay) {
+      invoke('player_airplay_unmount').catch(() => {});
+      return;
+    }
+
+    const updatePosition = () => {
+      const el = airplayAnchorRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          invoke('player_airplay_mount', {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          }).catch((e) => {
+            console.error('[AirPlay] mount failed:', e);
+          });
+        }
+      }
+    };
+
+    const timer = window.setTimeout(updatePosition, 100);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('resize', updatePosition);
+      invoke('player_airplay_unmount').catch(() => {});
+    };
+  }, [isCastingActive, castDeviceName]);
+
+  useEffect(() => {
     if (!player.open) return;
     window.focus();
     setEnded(false);
@@ -487,7 +520,6 @@ export default function PlayerOverlay() {
     setSelectedDevice(null);
     setPreflight(null);
     setPreflightError(null);
-    setApproveConversion(false);
     setCastStatus(null);
     setCastDeviceName(null);
     setCastActionLoading(false);
@@ -1678,14 +1710,30 @@ export default function PlayerOverlay() {
               <h3 className="text-white text-base font-semibold">
                 {isCastError
                   ? 'Playback Error on Device'
-                  : `Playback requested on ${castDeviceName || 'device'}`}
+                  : castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting'
+                  ? `Connecting to ${castDeviceName || 'device'}...`
+                  : `Playing on ${castDeviceName || 'device'}`}
               </h3>
               <p className="text-xs text-white/60">
                 {isCastError
                   ? castStatusText
-                  : 'Local pipeline streaming. Use the controls below to pause, seek, adjust volume, or return playback to this computer.'}
+                  : castDeviceName?.toLowerCase().includes('airplay') || castDeviceName?.toLowerCase().includes('apple tv')
+                  ? 'Native AirPlay stream active. Use player controls to seek, pause, or return playback to this computer.'
+                  : 'Direct Cast stream active. Use player controls to seek, pause, or return playback to this computer.'}
               </p>
             </div>
+
+            {/* If AirPlay is active, mount the native AVRoutePickerView anchor button */}
+            {(castDeviceName?.toLowerCase().includes('airplay') || castDeviceName?.toLowerCase().includes('apple tv')) && (
+              <div className="flex flex-col items-center gap-1.5 py-1">
+                <div
+                  ref={airplayAnchorRef}
+                  className="w-10 h-10 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center cursor-pointer"
+                  title="Choose AirPlay Device"
+                />
+                <span className="text-[11px] text-white/50">Click route icon to switch AirPlay destination</span>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 pt-2">
               <button
@@ -2314,7 +2362,7 @@ export default function PlayerOverlay() {
               /* Device Discovery List */
               <div className="space-y-4">
                 <div className="flex items-center justify-between text-xs text-white/60">
-                  <span>Available Google Cast receivers:</span>
+                  <span>Available receivers:</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -2335,10 +2383,10 @@ export default function PlayerOverlay() {
                       {isDiscovering ? (
                         <div className="flex flex-col items-center gap-2">
                           <RefreshCw className="w-5 h-5 animate-spin text-white/40" />
-                          <span>Searching local network for Cast receivers...</span>
+                          <span>Searching local network for receivers...</span>
                         </div>
                       ) : (
-                        <span>No Cast devices found on your network. Make sure your receiver is powered on and connected to the same Wi-Fi.</span>
+                        <span>No receivers found on your network. Make sure your receiver is powered on and connected to the same Wi-Fi.</span>
                       )}
                     </div>
                   ) : (
@@ -2353,7 +2401,9 @@ export default function PlayerOverlay() {
                           <Tv className="w-5 h-5 text-white/70 group-hover:text-white transition" />
                           <div>
                             <div className="text-xs font-semibold text-white">{dev.name}</div>
-                            <div className="text-[10px] text-white/50 capitalize">{dev.renderer_type || 'Google Cast'}</div>
+                            <div className="text-[10px] text-white/50 capitalize">
+                              {dev.renderer_type === 'airplay' ? 'Apple TV / AirPlay' : (dev.renderer_type || 'Google Cast')}
+                            </div>
                           </div>
                         </div>
                         <span className="text-[11px] font-medium text-white/70 group-hover:text-white">
@@ -2397,112 +2447,196 @@ export default function PlayerOverlay() {
                     <span>Checking media format compatibility...</span>
                   </div>
                 ) : preflight ? (
-                  <div className="space-y-3">
-                    <div className="p-3 rounded-lg bg-[#141414] border border-[#252525] space-y-2 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-white/60">Video Compatibility:</span>
-                        <span className={preflight.video_supported ? 'text-green-400 font-medium' : 'text-yellow-400 font-medium'}>
-                          {preflight.video_supported ? 'Direct Stream' : 'Transcode Required'}
-                        </span>
+                  selectedDevice.renderer_type === 'airplay' ? (
+                    /* Apple TV / AirPlay Compatibility & Confirmation */
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-lg bg-[#141414] border border-[#252525] space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Video Compatibility:</span>
+                          <span className={preflight.video_supported ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
+                            {preflight.video_supported ? 'Direct Stream (H.264 / HEVC / ProRes)' : 'Incompatible Container / Codec'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Audio Track:</span>
+                          <span className={preflight.audio_supported ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
+                            {preflight.selected_audio || (preflight.audio_supported ? 'Default Audio' : 'No Compatible Audio Track')}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Subtitles:</span>
+                          <span className={preflight.subtitle_supported ? 'text-green-400 font-medium' : 'text-white/70 font-medium'}>
+                            {preflight.selected_subtitle || 'Subtitles Off'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-white/60">Audio Compatibility:</span>
-                        <span className={preflight.audio_supported ? 'text-green-400 font-medium' : 'text-yellow-400 font-medium'}>
-                          {preflight.audio_supported ? 'Direct Stream' : 'Transcode Required'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-white/60">Subtitles:</span>
-                        <span className={preflight.subtitle_supported ? 'text-green-400 font-medium' : 'text-orange-400 font-medium'}>
-                          {preflight.subtitle_supported ? 'Supported' : 'Not supported by Cast'}
-                        </span>
-                      </div>
-                    </div>
 
-                    {/* Transcoding Approval Requirement */}
-                    {preflight.conversion_required && (
-                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2">
-                        <div className="flex items-start gap-2">
-                          <AlertCircle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-                          <div className="text-xs text-white/90">
-                            <span className="font-semibold text-yellow-400">Conversion Required:</span>{' '}
-                            The media codec requires real-time video/audio transcoding to stream to this device.
+                      {!preflight.is_supported_media ? (
+                        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 space-y-1 text-xs">
+                          <div className="flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                            <div className="text-white/90">
+                              <span className="font-semibold text-red-400">AirPlay Incompatibility:</span>{' '}
+                              {preflight.rejection_reason || preflight.details}
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-white/60 pl-6">
+                            AirPlay receiver-native playback requires Apple-supported containers (MP4, M4V, MOV). Authored discs, MKV, AVI, and external subtitles cannot be streamed directly without transcoding. To watch this media, continue playing on this computer.
                           </div>
                         </div>
-                        <label className="flex items-center gap-2 text-xs text-white cursor-pointer pt-1 select-none">
-                          <input
-                            type="checkbox"
-                            checked={approveConversion}
-                            onChange={(e) => setApproveConversion(e.target.checked)}
-                            className="rounded border-[#444] text-red-600 focus:ring-0"
-                          />
-                          <span>Approve real-time media conversion</span>
-                        </label>
-                      </div>
-                    )}
-
-                    {/* Subtitle Limitation Notice & Acknowledgment */}
-                    {/* Subtitle Limitation Notice */}
-                    {Boolean(preflight.selected_subtitle) && (
-                      <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 space-y-1 text-xs">
-                        <div className="flex items-start gap-2">
-                          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                          <div className="text-white/90">
-                            <span className="font-semibold text-red-400">Subtitle Limitation:</span>{' '}
-                            The selected subtitle track ({preflight.selected_subtitle}) cannot be rendered on remote Cast devices by the libVLC 3.0 renderer. Subtitle-enabled device playback is currently unavailable.
+                      ) : (
+                        <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-xs text-white/90 flex items-start gap-2">
+                          <Tv className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-semibold text-green-400">Direct Native Stream:</span> Media is fully compatible with Apple TV AirPlay. Audio and subtitles will be delivered directly without transcoding.
                           </div>
                         </div>
-                        <div className="text-[11px] text-white/60 pl-6">
-                          To stream to this device, turn Subtitles Off in player controls. To watch with subtitles, continue playing on this computer.
+                      )}
+
+                      {preflightError && (
+                        <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30 text-[11px] text-red-400">
+                          {preflightError}
+                        </div>
+                      )}
+
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDevice(null);
+                            setPreflight(null);
+                            setPreflightError(null);
+                          }}
+                          className="px-3 py-1.5 text-xs rounded border border-[#333] text-white/80 hover:bg-[#252525] hover:text-white transition"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          disabled={castActionLoading || !preflight.is_supported_media}
+                          onClick={() => void handleStartCasting()}
+                          className="px-4 py-1.5 text-xs font-semibold rounded bg-[#e50914] text-white hover:bg-[#b80710] disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-2"
+                          title={
+                            !preflight.is_supported_media
+                              ? 'Media format is not supported for native AirPlay playback.'
+                              : undefined
+                          }
+                        >
+                          {castActionLoading ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>Starting AirPlay...</span>
+                            </>
+                          ) : (
+                            <span>Connect to AirPlay</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Google Cast Compatibility & Confirmation */
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-lg bg-[#141414] border border-[#252525] space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Video Compatibility:</span>
+                          <span className={preflight.video_supported ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
+                            {preflight.video_supported ? 'Direct Stream' : 'Incompatible Codec'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Audio Compatibility:</span>
+                          <span className={preflight.audio_supported ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
+                            {preflight.audio_supported ? 'Direct Stream' : 'Incompatible Codec'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-white/60">Subtitles:</span>
+                          <span className={preflight.subtitle_supported ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
+                            {preflight.subtitle_supported ? 'None (Direct Stream)' : 'Not supported by Cast'}
+                          </span>
                         </div>
                       </div>
-                    )}
 
-                    {preflightError && (
-                      <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30 text-[11px] text-red-400">
-                        {preflightError}
+                      {/* Subtitle Limitation Notice */}
+                      {Boolean(preflight.selected_subtitle) && (
+                        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 space-y-1 text-xs">
+                          <div className="flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                            <div className="text-white/90">
+                              <span className="font-semibold text-red-400">Subtitle Limitation:</span>{' '}
+                              The selected subtitle track ({preflight.selected_subtitle}) cannot be rendered on remote Cast devices by the libVLC 3.0 renderer without transcoding. Subtitle-enabled device playback is currently unavailable.
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-white/60 pl-6">
+                            To stream to this device, turn Subtitles Off in player controls. To watch with subtitles, continue playing on this computer.
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Codec Incompatibility Notice */}
+                      {!Boolean(preflight.selected_subtitle) && !preflight.is_supported_media && (
+                        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 space-y-1 text-xs">
+                          <div className="flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                            <div className="text-white/90">
+                              <span className="font-semibold text-red-400">Codec Incompatibility:</span>{' '}
+                              {preflight.rejection_reason || 'This media format requires transcoding to stream to Google Cast.'}
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-white/60 pl-6">
+                            Real-time transcoding is not permitted under the receiver-native playback contract. To watch this media, continue playing on this computer.
+                          </div>
+                        </div>
+                      )}
+
+                      {preflightError && (
+                        <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30 text-[11px] text-red-400">
+                          {preflightError}
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDevice(null);
+                            setPreflight(null);
+                            setPreflightError(null);
+                          }}
+                          className="px-3 py-1.5 text-xs rounded border border-[#333] text-white/80 hover:bg-[#252525] hover:text-white transition"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            castActionLoading ||
+                            !preflight.is_supported_media ||
+                            Boolean(preflight.selected_subtitle)
+                          }
+                          onClick={() => void handleStartCasting()}
+                          className="px-4 py-1.5 text-xs font-semibold rounded bg-[#e50914] text-white hover:bg-[#b80710] disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-2"
+                          title={
+                            preflight.selected_subtitle
+                              ? 'Subtitle-enabled casting is currently unavailable. Turn subtitles Off to cast.'
+                              : !preflight.is_supported_media
+                              ? 'Media format is not supported for direct Cast playback.'
+                              : undefined
+                          }
+                        >
+                          {castActionLoading ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>Connecting...</span>
+                            </>
+                          ) : (
+                            <span>Start Playback on Device</span>
+                          )}
+                        </button>
                       </div>
-                    )}
-
-                    {/* Action buttons */}
-                    <div className="flex justify-end gap-2 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedDevice(null);
-                          setPreflight(null);
-                          setPreflightError(null);
-                        }}
-                        className="px-3 py-1.5 text-xs rounded border border-[#333] text-white/80 hover:bg-[#252525] hover:text-white transition"
-                      >
-                        Back
-                      </button>
-                      <button
-                        type="button"
-                        disabled={
-                          castActionLoading ||
-                          (preflight.conversion_required && !approveConversion) ||
-                          Boolean(preflight.selected_subtitle)
-                        }
-                        onClick={() => void handleStartCasting()}
-                        className="px-4 py-1.5 text-xs font-semibold rounded bg-[#e50914] text-white hover:bg-[#b80710] disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-2"
-                        title={
-                          preflight.selected_subtitle
-                            ? 'Subtitle-enabled casting is currently unavailable. Turn subtitles Off to cast.'
-                            : undefined
-                        }
-                      >
-                        {castActionLoading ? (
-                          <>
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>Connecting...</span>
-                          </>
-                        ) : (
-                          <span>Start Playback on Device</span>
-                        )}
-                      </button>
                     </div>
-                  </div>
+                  )
                 ) : null}
               </div>
             )}

@@ -12,8 +12,10 @@
 //! Bundling VLC would relicense the whole app under GPL and ship ~200 MB of
 //! plugins nobody needs duplicated.
 
+pub mod airplay_macos;
 pub mod device;
 pub mod engine;
+pub mod output;
 
 #[cfg(target_os = "macos")]
 pub use embed_macos::{
@@ -127,6 +129,8 @@ pub struct PlayerState {
     /// main-feature lock (`feature_lock`) takes it so that it follows the
     /// viewer instead of pulling playback back. Cleared with every session.
     pub feature_lock_request: Mutex<Option<i32>>,
+    /// Output coordinator tracking routing between local VLC, native AirPlay, and Google Cast.
+    pub output_coordinator: Mutex<output::OutputCoordinator>,
     /// Bounded discovery manager for remote playback renderers (Chromecast, etc.).
     pub discovery_manager: Mutex<Option<device::DiscoveryManager>>,
     /// Active casting session state and truthful handoff/playback tracker.
