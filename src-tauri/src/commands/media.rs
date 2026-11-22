@@ -3126,31 +3126,59 @@ pub fn player_poll(
     app: tauri::AppHandle,
     state: tauri::State<PlayerState>,
 ) -> Result<PlayerPoll, String> {
-    if let Ok(coord) = state.output_coordinator.lock() {
+    if let Ok(mut coord) = state.output_coordinator.lock() {
         if coord.active_output == player::output::ActiveOutputKind::AirPlay {
             let airplay_status = player::airplay_macos::implementation::get_status();
-            let state_str = if airplay_status.is_external_active {
-                "external_active".to_string()
+            if airplay_status.position_ms > 0 {
+                coord.latest_remote_position_ms = Some(airplay_status.position_ms);
+            }
+
+            let route_state = if let Some(ref err) = airplay_status.error {
+                coord.set_error(err.clone());
+                player::output::RouteState::Disconnected
+            } else if !airplay_status.is_active {
+                player::output::RouteState::Disconnected
+            } else if airplay_status.is_external_active {
+                if airplay_status.is_playing {
+                    player::output::RouteState::ExternalActive
+                } else {
+                    player::output::RouteState::PlaybackPaused
+                }
             } else {
-                coord.state.clone()
+                if coord.route_state == player::output::RouteState::PreparingNativeMedia {
+                    player::output::RouteState::PreparingNativeMedia
+                } else {
+                    player::output::RouteState::ReadyForPicker
+                }
             };
+            coord.route_state = route_state;
+            coord.state = route_state.as_str().to_string();
+
             let unified = player::output::UnifiedOutputStatus {
                 active_output: player::output::ActiveOutputKind::AirPlay,
                 target_id: coord.target_id.clone(),
                 target_name: coord.target_name.clone(),
-                state: state_str.clone(),
-                is_external: true,
+                state: route_state.as_str().to_string(),
+                route_state,
+                route_state_label: route_state.display_label().to_string(),
+                is_external: airplay_status.is_external_active,
                 error: coord.error.clone(),
                 position_ms: airplay_status.position_ms,
                 duration_ms: airplay_status.duration_ms,
                 is_seekable: true,
                 supports_return_to_local: true,
                 has_recovery_snapshot: coord.recovery_snapshot.is_some(),
+                latest_remote_position_ms: coord.latest_remote_position_ms,
             };
-            let cast_stat = if airplay_status.is_external_active {
-                Some(player::device::CastStatus::RequestIssued)
-            } else {
-                Some(player::device::CastStatus::Connecting)
+            let cast_stat = match route_state {
+                player::output::RouteState::ExternalActive
+                | player::output::RouteState::PlaybackPaused => {
+                    Some(player::device::CastStatus::RequestIssued)
+                }
+                player::output::RouteState::Disconnected => {
+                    Some(player::device::CastStatus::Disconnected)
+                }
+                _ => Some(player::device::CastStatus::Connecting),
             };
             return Ok(PlayerPoll {
                 time_ms: airplay_status.position_ms,
@@ -3316,6 +3344,8 @@ pub fn player_poll(
             target_id: c.target_id.clone(),
             target_name: c.target_name.clone(),
             state: c.state.clone(),
+            route_state: c.route_state,
+            route_state_label: c.route_state.display_label().to_string(),
             is_external: c.active_output != player::output::ActiveOutputKind::LocalVlc,
             error: c.error.clone(),
             position_ms: time_ms,
@@ -3324,6 +3354,7 @@ pub fn player_poll(
             supports_return_to_local: c.active_output != player::output::ActiveOutputKind::LocalVlc
                 || c.recovery_snapshot.is_some(),
             has_recovery_snapshot: c.recovery_snapshot.is_some(),
+            latest_remote_position_ms: c.latest_remote_position_ms,
         })
     };
 
@@ -4083,17 +4114,16 @@ pub fn player_device_discovery_stop(state: tauri::State<PlayerState>) -> Result<
     Ok(())
 }
 
-#[tauri::command]
-pub fn player_device_list(
-    state: tauri::State<PlayerState>,
-) -> Result<Vec<player::device::DiscoveredDevice>, String> {
+pub(crate) fn player_device_list_inner(
+    dm: Option<&mut player::device::DiscoveryManager>,
+) -> Vec<player::device::DiscoveredDevice> {
     let mut list = Vec::new();
 
     #[cfg(target_os = "macos")]
     {
         list.push(player::device::DiscoveredDevice {
-            id: "airplay:appletv".to_string(),
-            name: "Apple TV (AirPlay)".to_string(),
+            id: "airplay:default".to_string(),
+            name: "AirPlay…".to_string(),
             renderer_type: "airplay".to_string(),
             icon_uri: None,
             can_audio: true,
@@ -4102,22 +4132,31 @@ pub fn player_device_list(
         });
     }
 
+    if let Some(dm) = dm {
+        dm.check_expiration();
+        list.extend(dm.list_devices());
+    }
+    list
+}
+
+#[tauri::command]
+pub fn player_device_list(
+    state: tauri::State<PlayerState>,
+) -> Result<Vec<player::device::DiscoveredDevice>, String> {
     let mut dm_guard = state
         .discovery_manager
         .lock()
         .map_err(|_| "discovery state poisoned")?;
-    if let Some(dm) = dm_guard.as_mut() {
-        dm.check_expiration();
-        list.extend(dm.list_devices());
-    }
-    Ok(list)
+    Ok(player_device_list_inner(dm_guard.as_mut()))
 }
 
+#[allow(dead_code)]
 pub(crate) fn is_video_compatible_cast(codec: &str) -> bool {
     let clean = codec.trim().to_ascii_lowercase();
     matches!(clean.as_str(), "h264" | "avc1" | "vp80" | "vp8")
 }
 
+#[allow(dead_code)]
 pub(crate) fn is_audio_compatible_cast(codec: &str) -> bool {
     let clean = codec.trim().to_ascii_lowercase();
     matches!(clean.as_str(), "mp4a" | "mp3" | "opus" | "vorb" | "flac")
@@ -4156,7 +4195,7 @@ pub fn player_device_preflight(
         }
     };
 
-    let (active_sub_id, active_sub_name, active_sub_lang) = {
+    let (_active_sub_id, active_sub_name, active_sub_lang) = {
         let _mp_guard = state
             .media_player_cell
             .lock()
@@ -4196,14 +4235,16 @@ pub fn player_device_preflight(
             && airplay_res.audio_compatible
             && airplay_res.subtitle_compatible;
         return Ok(player::device::CastPreflightResult {
-            device_id: "airplay:appletv".to_string(),
-            device_name: "Apple TV (AirPlay)".to_string(),
+            device_id: "airplay:default".to_string(),
+            device_name: "AirPlay".to_string(),
             is_supported_media: is_supported,
             video_supported: airplay_res.is_playable,
             audio_supported: airplay_res.audio_compatible,
             subtitle_supported: airplay_res.subtitle_compatible,
             selected_subtitle: active_sub_name,
             selected_audio: active_audio_name,
+            matched_audio_idx: airplay_res.matched_audio_idx,
+            matched_subtitle_idx: airplay_res.matched_subtitle_idx,
             rejection_reason: airplay_res.rejection_reason.clone(),
             details: if is_supported {
                 "Natively playable by AVPlayer via AirPlay without conversion.".to_string()
@@ -4225,112 +4266,25 @@ pub fn player_device_preflight(
         .and_then(|dm| dm.get_device(&device_id))
         .ok_or_else(|| format!("Device '{device_id}' not found"))?;
 
-    let is_disc = match resolve_playback(&current_path) {
-        Ok(r) => r.is_disc,
-        Err(_) => false,
-    };
-
-    if is_disc {
-        return Ok(player::device::CastPreflightResult {
-            device_id: device.id,
-            device_name: device.name,
-            is_supported_media: false,
-            video_supported: false,
-            audio_supported: false,
-            subtitle_supported: false,
-            selected_subtitle: active_sub_name,
-            selected_audio: active_audio_name,
-            rejection_reason: Some(
-                "DVD/Blu-ray disc structures cannot be streamed to Google Cast directly without transcoding. Under the receiver-native playback policy, conversion is not permitted."
-                    .to_string(),
-            ),
-            details: "Disc structures require transcoding, which is not permitted under the receiver-native policy.".into(),
-        });
-    }
-
-    // Inspect media codecs via libVLC media tracks
-    let mut video_codec = String::new();
-    let mut audio_codec = String::new();
-    let lib = loaded_lib(&state).ok();
-    let media_ptr = *poison(&state.media);
-    if media_ptr != 0 {
-        if let Some(l) = lib.as_ref() {
-            if let (Some(tracks_get), Some(tracks_rel)) =
-                (l.libvlc_media_tracks_get, l.libvlc_media_tracks_release)
-            {
-                let mut tracks_ptr: *mut *mut player::engine::VlcMediaTrack = std::ptr::null_mut();
-                let count = unsafe { tracks_get(media_ptr as *mut c_void, &mut tracks_ptr) };
-                if count > 0 && !tracks_ptr.is_null() {
-                    for i in 0..count {
-                        let track = unsafe { &**tracks_ptr.add(i as usize) };
-                        let fourcc = track.i_codec;
-                        let fcc_bytes = [
-                            (fourcc & 0xFF) as u8,
-                            ((fourcc >> 8) & 0xFF) as u8,
-                            ((fourcc >> 16) & 0xFF) as u8,
-                            ((fourcc >> 24) & 0xFF) as u8,
-                        ];
-                        let fcc_str = String::from_utf8_lossy(&fcc_bytes).to_lowercase();
-                        if track.i_type == 1 && video_codec.is_empty() {
-                            video_codec = fcc_str;
-                        } else if track.i_type == 0 && audio_codec.is_empty() {
-                            audio_codec = fcc_str;
-                        }
-                    }
-                    unsafe {
-                        tracks_rel(tracks_ptr, count);
-                    }
-                }
-            }
-        }
-    }
-
-    let video_supported = video_codec.is_empty() || is_video_compatible_cast(&video_codec);
-    let audio_supported = audio_codec.is_empty() || is_audio_compatible_cast(&audio_codec);
-
-    let has_subtitles = active_sub_name.is_some() || active_sub_id > 0;
-    let subtitle_supported = !has_subtitles;
-
-    let mut is_supported_media = true;
-    let mut rejection_reason = None;
-
-    if has_subtitles {
-        is_supported_media = false;
-        rejection_reason = Some(
-            "Google Cast cannot stream selected subtitles without video conversion. To stream directly to Google Cast, turn subtitles off in player controls, or continue local playback."
-                .to_string(),
-        );
-    } else if !video_supported {
-        is_supported_media = false;
-        rejection_reason = Some(format!(
-            "Google Cast cannot play video codec '{video_codec}' directly without conversion. Under the receiver-native playback policy, conversion is not permitted."
-        ));
-    } else if !audio_supported {
-        is_supported_media = false;
-        rejection_reason = Some(format!(
-            "Google Cast cannot play audio codec '{audio_codec}' directly without conversion. Under the receiver-native playback policy, conversion is not permitted."
-        ));
-    }
-
-    let details = if is_supported_media {
-        "Direct streaming supported without conversion.".to_string()
-    } else {
-        rejection_reason.clone().unwrap_or_else(|| {
-            "Media format incompatible with direct Google Cast streaming.".to_string()
-        })
-    };
+    // Per receiver-native playback contract: VLC 3.0's stream_out chromecast module
+    // automatically invokes internal transcoding and remuxing without a libVLC API
+    // mechanism to prevent conversion fallback. Therefore, Cast playback cannot be
+    // guaranteed non-converting and is disabled.
+    let reason_text = "Google Cast playback cannot be guaranteed to prevent libVLC 3.0's internal background transcoding and remuxing pipelines. In accordance with the receiver-native no-conversion requirement, Cast playback is disabled until a non-transcoding transport is available.".to_string();
 
     Ok(player::device::CastPreflightResult {
         device_id: device.id,
         device_name: device.name,
-        is_supported_media,
-        video_supported,
-        audio_supported,
-        subtitle_supported,
+        is_supported_media: false,
+        video_supported: false,
+        audio_supported: false,
+        subtitle_supported: false,
         selected_subtitle: active_sub_name,
         selected_audio: active_audio_name,
-        rejection_reason,
-        details,
+        matched_audio_idx: None,
+        matched_subtitle_idx: None,
+        rejection_reason: Some(reason_text.clone()),
+        details: reason_text,
     })
 }
 
@@ -4340,6 +4294,13 @@ pub fn player_device_start(
     state: tauri::State<PlayerState>,
     device_id: String,
 ) -> Result<(), String> {
+    if !device_id.starts_with("airplay:") {
+        return Err(
+            "Google Cast playback is disabled under the receiver-native no-conversion contract: libVLC 3.0 invokes internal transcoding pipelines without a mechanism to prevent conversion."
+                .to_string(),
+        );
+    }
+
     let preflight = player_device_preflight(state.clone(), device_id.clone())?;
     if !preflight.is_supported_media {
         let msg = preflight.rejection_reason.unwrap_or(preflight.details);
@@ -4426,110 +4387,34 @@ pub fn player_device_start(
         subtitle_track_idx: Some(active_sub_idx),
     };
 
-    if device_id.starts_with("airplay:") {
-        // Prepare native AVPlayer session
-        player::airplay_macos::implementation::prepare_session(
-            &app,
-            &media_path,
-            current_pos_ms,
-            None,
-            None,
-        )?;
-
-        // Pause local VLC player so both outputs do not play audibly
-        let _mp_guard = state
-            .media_player_cell
-            .lock()
-            .map_err(|_| "player state poisoned")?;
-        let mp = *poison(&state.media_player);
-        if mp != 0 {
-            let lib = loaded_lib(&state)?;
-            unsafe {
-                if let Some(set_pause) = lib.libvlc_media_player_set_pause {
-                    set_pause(mp as *mut c_void, 1);
-                } else {
-                    (lib.libvlc_media_player_pause)(mp as *mut c_void);
-                }
-            }
-        }
-
-        let mut coord = state.output_coordinator.lock().unwrap();
-        coord.set_airplay_preparing("Apple TV (AirPlay)".to_string(), snapshot);
-        return Ok(());
-    }
-
-    // Google Cast start
-    let dm_guard = state
-        .discovery_manager
-        .lock()
-        .map_err(|_| "discovery state poisoned")?;
-    let device = dm_guard
-        .as_ref()
-        .and_then(|dm| dm.get_device(&device_id))
-        .ok_or_else(|| format!("Device '{device_id}' not found"))?;
-    let native_item = device.native_item;
-    if native_item == 0 {
-        return Err("Device renderer item is invalid".into());
-    }
-    let device_name = device.name.clone();
-    drop(dm_guard);
-
-    // Stop local session
-    stop_session(&app, &state);
-
-    let lib = loaded_lib(&state)?;
-    let session = match engine::VlcSession::open_renderer(
-        &lib,
-        &state.shared_instance,
+    // Prepare native AVPlayer session with matched track indices
+    player::airplay_macos::implementation::prepare_session(
+        &app,
         &media_path,
-        native_item,
-        Some(current_pos_ms as f64 / 1000.0),
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("player_device_start failed to open renderer: {e}, restoring local");
-            let _ = start_playback_inner(&app, &state, &media_path, true, None, false);
-            let mp_fallback = *poison(&state.media_player);
-            if mp_fallback != 0 {
-                unsafe {
-                    if current_pos_ms > 0 {
-                        (lib.libvlc_media_player_set_time)(
-                            mp_fallback as *mut c_void,
-                            current_pos_ms,
-                        );
-                    }
-                    if was_paused {
-                        (lib.libvlc_media_player_pause)(mp_fallback as *mut c_void);
-                    }
-                    if active_audio_id > 0 {
-                        (lib.libvlc_audio_set_track)(mp_fallback as *mut c_void, active_audio_id);
-                    }
-                }
+        current_pos_ms,
+        preflight.matched_audio_idx,
+        preflight.matched_subtitle_idx,
+    )?;
+
+    // Pause local VLC player so both outputs do not play audibly
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let mp = *poison(&state.media_player);
+    if mp != 0 {
+        let lib = loaded_lib(&state)?;
+        unsafe {
+            if let Some(set_pause) = lib.libvlc_media_player_set_pause {
+                set_pause(mp as *mut c_void, 1);
+            } else {
+                (lib.libvlc_media_player_pause)(mp as *mut c_void);
             }
-            let mut coord = state.output_coordinator.lock().unwrap();
-            coord.set_error(format!(
-                "Failed to start remote playback on {}: {}",
-                device_name, e
-            ));
-            return Err(format!(
-                "Failed to start remote playback on {}: {}",
-                device_name, e
-            ));
         }
-    };
-
-    *poison(&state.instance) = session.instance;
-    *poison(&state.media) = session.media;
-    *poison(&state.media_player) = session.media_player;
-    *poison(&state.started) = true;
-    *poison(&state.current_path) = Some(media_path.clone());
-    *poison(&state.current_resolved) = Some(media_path.clone());
-
-    let _ = player::set_overlay_hidden(&app, true);
+    }
 
     let mut coord = state.output_coordinator.lock().unwrap();
-    coord.set_cast_starting(device_id, device_name, snapshot);
-
+    coord.set_airplay_preparing("AirPlay".to_string(), snapshot);
     Ok(())
 }
 
@@ -4543,13 +4428,18 @@ pub fn player_device_return_to_local(
     let snapshot_opt = coord.recovery_snapshot.clone();
 
     if active_out == player::output::ActiveOutputKind::AirPlay {
-        let latest_pos_ms = player::airplay_macos::implementation::teardown()
-            .unwrap_or_else(|| snapshot_opt.as_ref().map(|s| s.position_ms).unwrap_or(0));
+        let teardown_pos = player::airplay_macos::implementation::teardown();
+        let latest_pos_ms = teardown_pos
+            .or(coord.latest_remote_position_ms)
+            .or_else(|| snapshot_opt.as_ref().map(|s| s.position_ms))
+            .unwrap_or(0);
 
         let snapshot = match snapshot_opt {
             Some(s) => s,
             None => return Err("No recovery snapshot available".into()),
         };
+
+        let _ = player::airplay_macos::implementation::unmount_route_picker(&app);
 
         coord.reset_to_local();
         drop(coord);
@@ -4678,6 +4568,19 @@ pub fn player_device_stop(
     let active_out = coord.active_output;
     if active_out == player::output::ActiveOutputKind::AirPlay {
         let _ = player::airplay_macos::implementation::teardown();
+        let _ = player::airplay_macos::implementation::unmount_route_picker(&app);
+        let _mp_guard = state
+            .media_player_cell
+            .lock()
+            .map_err(|_| "player state poisoned")?;
+        let mp = *poison(&state.media_player);
+        if mp != 0 {
+            if let Ok(lib) = loaded_lib(&state) {
+                unsafe {
+                    (lib.libvlc_media_player_stop)(mp as *mut c_void);
+                }
+            }
+        }
         coord.reset_to_local();
         return Ok(());
     }
@@ -4704,34 +4607,36 @@ pub fn player_device_status(
 
     if active_out == player::output::ActiveOutputKind::AirPlay {
         let native_status = player::airplay_macos::implementation::get_status();
-        let state_str = if native_status.is_external_active {
-            "external_active".to_string()
-        } else {
-            coord.state.clone()
-        };
+        let route_state = coord.route_state;
         let unified = player::output::UnifiedOutputStatus {
             active_output: active_out,
             target_id: coord.target_id.clone(),
             target_name: coord.target_name.clone(),
-            state: state_str.clone(),
-            is_external: true,
+            state: route_state.as_str().to_string(),
+            route_state,
+            route_state_label: route_state.display_label().to_string(),
+            is_external: native_status.is_external_active,
             error: coord.error.clone(),
             position_ms: native_status.position_ms,
             duration_ms: native_status.duration_ms,
             is_seekable: true,
             supports_return_to_local: true,
             has_recovery_snapshot: coord.recovery_snapshot.is_some(),
+            latest_remote_position_ms: coord.latest_remote_position_ms,
         };
-        let cast_stat = if native_status.is_external_active {
-            player::device::CastStatus::RequestIssued
-        } else {
-            player::device::CastStatus::Connecting
+        let cast_stat = match route_state {
+            player::output::RouteState::ExternalActive
+            | player::output::RouteState::PlaybackPaused => {
+                player::device::CastStatus::RequestIssued
+            }
+            player::output::RouteState::Disconnected => player::device::CastStatus::Disconnected,
+            _ => player::device::CastStatus::Connecting,
         };
         return Ok(CastingStatusPayload {
             status: cast_stat,
             device: Some(player::device::DiscoveredDevice {
-                id: "airplay:appletv".to_string(),
-                name: "Apple TV (AirPlay)".to_string(),
+                id: "airplay:default".to_string(),
+                name: "AirPlay…".to_string(),
                 renderer_type: "airplay".to_string(),
                 icon_uri: None,
                 can_audio: true,
@@ -4766,6 +4671,8 @@ pub fn player_device_status(
             target_id: coord.target_id.clone(),
             target_name: coord.target_name.clone(),
             state: coord.state.clone(),
+            route_state: coord.route_state,
+            route_state_label: coord.route_state.display_label().to_string(),
             is_external: true,
             error: coord.error.clone(),
             position_ms: pos,
@@ -4773,6 +4680,7 @@ pub fn player_device_status(
             is_seekable: true,
             supports_return_to_local: true,
             has_recovery_snapshot: coord.recovery_snapshot.is_some(),
+            latest_remote_position_ms: coord.latest_remote_position_ms,
         })
     } else {
         None
@@ -5276,32 +5184,103 @@ mod tests {
     }
 
     #[test]
-    fn test_casting_state_preserves_audio_sub_and_pause() {
-        let mut cast = crate::player::device::CastingSessionState {
-            last_local_position_ms: 12345,
-            last_media_path: Some("/path/to/movie.mkv".to_string()),
-            last_audio_track_id: 2,
-            last_audio_track_name: Some("Japanese 5.1".to_string()),
-            last_audio_track_idx: 1,
-            last_subtitle_track_id: 3,
-            last_subtitle_track_name: Some("English".to_string()),
-            last_subtitle_track_idx: 2,
-            was_paused: true,
-            conversion_approved: true,
-            ..Default::default()
+    fn test_airplay_route_state_serialization() {
+        use crate::player::output::RouteState;
+        let states = [
+            (RouteState::Local, "local", "Local playback"),
+            (
+                RouteState::PreparingNativeMedia,
+                "preparing_native_media",
+                "Preparing native media",
+            ),
+            (
+                RouteState::ReadyForPicker,
+                "ready_for_picker",
+                "Ready to select an AirPlay receiver",
+            ),
+            (
+                RouteState::AwaitingExternal,
+                "awaiting_external",
+                "Awaiting external playback",
+            ),
+            (
+                RouteState::ExternalActive,
+                "external_active",
+                "External playback active",
+            ),
+            (
+                RouteState::PlaybackPaused,
+                "playback_paused",
+                "Playback paused or waiting",
+            ),
+            (
+                RouteState::Disconnected,
+                "disconnected",
+                "Disconnected or failed",
+            ),
+        ];
+
+        for (st, expected_str, expected_label) in states {
+            assert_eq!(st.as_str(), expected_str);
+            assert_eq!(st.display_label(), expected_label);
+            let val = serde_json::to_value(st).unwrap();
+            assert_eq!(val, expected_str);
+        }
+    }
+
+    #[test]
+    fn test_output_coordinator_recovery_and_latest_position() {
+        use crate::player::output::{
+            ActiveOutputKind, OutputCoordinator, PlaybackRecoverySnapshot, RouteState,
         };
 
-        assert_eq!(cast.last_local_position_ms, 12345);
-        assert_eq!(cast.last_audio_track_name.as_deref(), Some("Japanese 5.1"));
-        assert_eq!(cast.last_subtitle_track_name.as_deref(), Some("English"));
-        assert!(cast.was_paused);
+        let mut coord = OutputCoordinator::new();
+        assert_eq!(coord.active_output, ActiveOutputKind::LocalVlc);
+        assert_eq!(coord.route_state, RouteState::Local);
 
-        cast.reset();
-        assert_eq!(cast.last_local_position_ms, 0);
-        assert!(cast.last_audio_track_name.is_none());
-        assert!(cast.last_subtitle_track_name.is_none());
-        assert!(!cast.was_paused);
-        assert!(!cast.conversion_approved);
+        let snap = PlaybackRecoverySnapshot {
+            media_path: "/tmp/movie.mp4".to_string(),
+            position_ms: 5000,
+            was_paused: false,
+            audio_track_id: Some(1),
+            audio_track_name: Some("Stereo".to_string()),
+            audio_track_idx: Some(0),
+            subtitle_track_id: None,
+            subtitle_track_name: None,
+            subtitle_track_idx: None,
+        };
+
+        coord.set_airplay_preparing("AirPlay".to_string(), snap);
+        assert_eq!(coord.active_output, ActiveOutputKind::AirPlay);
+        assert_eq!(coord.route_state, RouteState::ReadyForPicker);
+        assert_eq!(coord.target_id.as_deref(), Some("airplay:default"));
+        assert_eq!(coord.latest_remote_position_ms, Some(5000));
+
+        // Advance remote position
+        coord.update_remote_position(12500);
+        assert_eq!(coord.latest_remote_position_ms, Some(12500));
+
+        // Return to local resets coordinator state while retaining recovery capability
+        coord.reset_to_local();
+        assert_eq!(coord.active_output, ActiveOutputKind::LocalVlc);
+        assert_eq!(coord.route_state, RouteState::Local);
+        assert!(coord.recovery_snapshot.is_some());
+    }
+
+    #[test]
+    fn test_player_device_list_labels_airplay_entry() {
+        let list = player_device_list_inner(None);
+        #[cfg(target_os = "macos")]
+        {
+            let airplay_dev = list.iter().find(|d| d.id == "airplay:default");
+            assert!(
+                airplay_dev.is_some(),
+                "AirPlay device must be listed on macOS"
+            );
+            let dev = airplay_dev.unwrap();
+            assert_eq!(dev.name, "AirPlay…");
+            assert_eq!(dev.renderer_type, "airplay");
+        }
     }
 
     /// The frontend fences stale callbacks by `gen`; the field must ride

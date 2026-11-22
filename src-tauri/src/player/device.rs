@@ -49,6 +49,10 @@ pub struct CastPreflightResult {
     pub subtitle_supported: bool,
     pub selected_subtitle: Option<String>,
     pub selected_audio: Option<String>,
+    #[serde(default)]
+    pub matched_audio_idx: Option<usize>,
+    #[serde(default)]
+    pub matched_subtitle_idx: Option<usize>,
     pub rejection_reason: Option<String>,
     pub details: String,
 }
@@ -531,6 +535,8 @@ mod tests {
             subtitle_supported: false,
             selected_subtitle: Some("English".to_string()),
             selected_audio: Some("Japanese".to_string()),
+            matched_audio_idx: None,
+            matched_subtitle_idx: None,
             rejection_reason: Some(
                 "Google Cast cannot stream selected subtitles without video conversion."
                     .to_string(),

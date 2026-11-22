@@ -238,41 +238,110 @@ pub mod implementation {
             // Match selected audio track
             let mut matched_audio_idx = None;
             let mut audio_compatible = true;
-            if !audio_options.is_empty() {
-                if let Some(target_lang) = vlc_audio_lang {
-                    let matches: Vec<_> = audio_options
+            let mut audio_rejection_reason = None;
+
+            if audio_options.is_empty() {
+                matched_audio_idx = None;
+            } else if vlc_audio_name.is_none() && vlc_audio_lang.is_none() {
+                // Default to first track if no preference is asserted
+                matched_audio_idx = Some(0);
+            } else {
+                // 1. Exact display_name match
+                if let Some(target_name) = vlc_audio_name {
+                    let target_clean = target_name.trim().to_lowercase();
+                    let exact_matches: Vec<_> = audio_options
                         .iter()
-                        .filter(|o| {
-                            o.language_code
-                                .as_deref()
-                                .unwrap_or("")
-                                .eq_ignore_ascii_case(target_lang)
-                        })
+                        .filter(|o| o.display_name.trim().to_lowercase() == target_clean)
                         .collect();
-                    if matches.len() == 1 {
-                        matched_audio_idx = Some(matches[0].index);
+                    if exact_matches.len() == 1 {
+                        matched_audio_idx = Some(exact_matches[0].index);
+                    } else if exact_matches.len() > 1 {
+                        audio_compatible = false;
+                        audio_rejection_reason = Some(format!(
+                            "Ambiguous audio track match: multiple tracks share display name '{}'.",
+                            target_name
+                        ));
                     }
                 }
-                if matched_audio_idx.is_none() {
-                    if let Some(target_name) = vlc_audio_name {
-                        let target_clean = target_name.trim().to_lowercase();
-                        let matches: Vec<_> = audio_options
+
+                // 2. Language match
+                if matched_audio_idx.is_none() && audio_compatible {
+                    if let Some(target_lang) = vlc_audio_lang {
+                        let lang_clean = target_lang.trim().to_lowercase();
+                        let lang_matches: Vec<_> = audio_options
                             .iter()
                             .filter(|o| {
-                                o.display_name.trim().to_lowercase().contains(&target_clean)
+                                o.language_code
+                                    .as_deref()
+                                    .unwrap_or("")
+                                    .trim()
+                                    .eq_ignore_ascii_case(&lang_clean)
                             })
                             .collect();
-                        if matches.len() == 1 {
-                            matched_audio_idx = Some(matches[0].index);
+                        if lang_matches.len() == 1 {
+                            matched_audio_idx = Some(lang_matches[0].index);
+                        } else if lang_matches.len() > 1 {
+                            if let Some(target_name) = vlc_audio_name {
+                                let target_clean = target_name.trim().to_lowercase();
+                                let disambiguated: Vec<_> = lang_matches
+                                    .iter()
+                                    .filter(|o| {
+                                        let d = o.display_name.trim().to_lowercase();
+                                        d.contains(&target_clean) || target_clean.contains(&d)
+                                    })
+                                    .collect();
+                                if disambiguated.len() == 1 {
+                                    matched_audio_idx = Some(disambiguated[0].index);
+                                } else {
+                                    audio_compatible = false;
+                                    audio_rejection_reason = Some(format!(
+                                        "Ambiguous audio track match: multiple tracks match language '{}'.",
+                                        target_lang
+                                    ));
+                                }
+                            } else {
+                                audio_compatible = false;
+                                audio_rejection_reason = Some(format!(
+                                    "Ambiguous audio track match: multiple tracks match language '{}'.",
+                                    target_lang
+                                ));
+                            }
                         }
                     }
                 }
-                // Fall back to first track only if there's only one track in the asset
-                if matched_audio_idx.is_none() {
+
+                // 3. Substring name match
+                if matched_audio_idx.is_none() && audio_compatible {
+                    if let Some(target_name) = vlc_audio_name {
+                        let target_clean = target_name.trim().to_lowercase();
+                        let sub_matches: Vec<_> = audio_options
+                            .iter()
+                            .filter(|o| {
+                                let d = o.display_name.trim().to_lowercase();
+                                d.contains(&target_clean) || target_clean.contains(&d)
+                            })
+                            .collect();
+                        if sub_matches.len() == 1 {
+                            matched_audio_idx = Some(sub_matches[0].index);
+                        } else if sub_matches.len() > 1 {
+                            audio_compatible = false;
+                            audio_rejection_reason = Some(format!(
+                                "Ambiguous audio track match: multiple tracks match '{}'.",
+                                target_name
+                            ));
+                        }
+                    }
+                }
+
+                if matched_audio_idx.is_none() && audio_rejection_reason.is_none() {
                     if audio_options.len() == 1 {
                         matched_audio_idx = Some(0);
-                    } else if vlc_audio_name.is_some() || vlc_audio_lang.is_some() {
+                    } else {
                         audio_compatible = false;
+                        audio_rejection_reason = Some(
+                            "Selected audio track could not be unambiguously mapped to an embedded audio track."
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -280,58 +349,122 @@ pub mod implementation {
             // Match selected subtitle track
             let mut matched_sub_idx = None;
             let mut subtitle_compatible = true;
+            let mut sub_rejection_reason = None;
+
             if vlc_sub_name.is_none() && vlc_sub_lang.is_none() {
-                // User has subtitles off: fully compatible (nil selection)
+                // User has subtitles off: fully compatible (nil selection preserved)
                 matched_sub_idx = None;
                 subtitle_compatible = true;
             } else if sub_options.is_empty() {
                 subtitle_compatible = false;
+                sub_rejection_reason = Some(
+                    "Selected subtitle track cannot be played: media file contains no embedded subtitle tracks."
+                        .to_string(),
+                );
             } else {
-                if let Some(target_lang) = vlc_sub_lang {
-                    let matches: Vec<_> = sub_options
+                // 1. Exact name match
+                if let Some(target_name) = vlc_sub_name {
+                    let target_clean = target_name.trim().to_lowercase();
+                    let exact_matches: Vec<_> = sub_options
                         .iter()
-                        .filter(|o| {
-                            o.language_code
-                                .as_deref()
-                                .unwrap_or("")
-                                .eq_ignore_ascii_case(target_lang)
-                        })
+                        .filter(|o| o.display_name.trim().to_lowercase() == target_clean)
                         .collect();
-                    if matches.len() == 1 {
-                        matched_sub_idx = Some(matches[0].index);
+                    if exact_matches.len() == 1 {
+                        matched_sub_idx = Some(exact_matches[0].index);
+                    } else if exact_matches.len() > 1 {
+                        subtitle_compatible = false;
+                        sub_rejection_reason = Some(format!(
+                            "Ambiguous subtitle track match: multiple tracks share display name '{}'.",
+                            target_name
+                        ));
                     }
                 }
-                if matched_sub_idx.is_none() {
-                    if let Some(target_name) = vlc_sub_name {
-                        let target_clean = target_name.trim().to_lowercase();
-                        let matches: Vec<_> = sub_options
+
+                // 2. Language match
+                if matched_sub_idx.is_none() && subtitle_compatible {
+                    if let Some(target_lang) = vlc_sub_lang {
+                        let lang_clean = target_lang.trim().to_lowercase();
+                        let lang_matches: Vec<_> = sub_options
                             .iter()
                             .filter(|o| {
-                                o.display_name.trim().to_lowercase().contains(&target_clean)
+                                o.language_code
+                                    .as_deref()
+                                    .unwrap_or("")
+                                    .trim()
+                                    .eq_ignore_ascii_case(&lang_clean)
                             })
                             .collect();
-                        if matches.len() == 1 {
-                            matched_sub_idx = Some(matches[0].index);
+                        if lang_matches.len() == 1 {
+                            matched_sub_idx = Some(lang_matches[0].index);
+                        } else if lang_matches.len() > 1 {
+                            if let Some(target_name) = vlc_sub_name {
+                                let target_clean = target_name.trim().to_lowercase();
+                                let disambiguated: Vec<_> = lang_matches
+                                    .iter()
+                                    .filter(|o| {
+                                        let d = o.display_name.trim().to_lowercase();
+                                        d.contains(&target_clean) || target_clean.contains(&d)
+                                    })
+                                    .collect();
+                                if disambiguated.len() == 1 {
+                                    matched_sub_idx = Some(disambiguated[0].index);
+                                } else {
+                                    subtitle_compatible = false;
+                                    sub_rejection_reason = Some(format!(
+                                        "Ambiguous subtitle track match: multiple tracks match language '{}'.",
+                                        target_lang
+                                    ));
+                                }
+                            } else {
+                                subtitle_compatible = false;
+                                sub_rejection_reason = Some(format!(
+                                    "Ambiguous subtitle track match: multiple tracks match language '{}'.",
+                                    target_lang
+                                ));
+                            }
                         }
                     }
                 }
-                if matched_sub_idx.is_none() {
+
+                // 3. Substring name match
+                if matched_sub_idx.is_none() && subtitle_compatible {
+                    if let Some(target_name) = vlc_sub_name {
+                        let target_clean = target_name.trim().to_lowercase();
+                        let sub_matches: Vec<_> = sub_options
+                            .iter()
+                            .filter(|o| {
+                                let d = o.display_name.trim().to_lowercase();
+                                d.contains(&target_clean) || target_clean.contains(&d)
+                            })
+                            .collect();
+                        if sub_matches.len() == 1 {
+                            matched_sub_idx = Some(sub_matches[0].index);
+                        } else if sub_matches.len() > 1 {
+                            subtitle_compatible = false;
+                            sub_rejection_reason = Some(format!(
+                                "Ambiguous subtitle track match: multiple tracks match '{}'.",
+                                target_name
+                            ));
+                        }
+                    }
+                }
+
+                if matched_sub_idx.is_none() && sub_rejection_reason.is_none() {
                     subtitle_compatible = false;
+                    sub_rejection_reason = Some(
+                        "Selected subtitle track could not be unambiguously mapped to an embedded subtitle track."
+                            .to_string(),
+                    );
                 }
             }
 
-            let mut rejection_reason = None;
-            if !audio_compatible {
-                rejection_reason = Some(
-                    "Selected audio track could not be unambiguously mapped to an embedded AVFoundation audio track."
-                        .to_string(),
-                );
+            let rejection_reason = if !audio_compatible {
+                audio_rejection_reason
             } else if !subtitle_compatible {
-                rejection_reason = Some(
-                    "Selected subtitle track could not be unambiguously mapped to an embedded AVFoundation subtitle track."
-                        .to_string(),
-                );
-            }
+                sub_rejection_reason
+            } else {
+                None
+            };
 
             AirPlayPreflightResult {
                 is_playable: true,
@@ -355,7 +488,25 @@ pub mod implementation {
         matched_audio_idx: Option<usize>,
         matched_sub_idx: Option<usize>,
     ) -> Result<(), String> {
+        prepare_session_inner(
+            file_path,
+            start_position_ms,
+            matched_audio_idx,
+            matched_sub_idx,
+        )
+    }
+
+    /// Inner helper callable in tests without requiring an active GUI Tauri AppHandle.
+    pub fn prepare_session_inner(
+        file_path: &str,
+        start_position_ms: i64,
+        matched_audio_idx: Option<usize>,
+        matched_sub_idx: Option<usize>,
+    ) -> Result<(), String> {
         unsafe {
+            // Teardown any lingering prior session before reallocating
+            let _ = teardown();
+
             let ns_path = NSString::from_str(file_path);
             let url_cls = class!(NSURL);
             let file_url: *mut AnyObject = msg_send![url_cls, fileURLWithPath: &*ns_path];
@@ -383,7 +534,7 @@ pub mod implementation {
                 return Err("Failed to create AVPlayerItem.".into());
             }
 
-            // Apply audio track selection
+            // Apply and verify audio track selection
             let audio_group: *mut AnyObject = msg_send![asset, mediaSelectionGroupForMediaCharacteristic: AVMediaCharacteristicAudible];
             if !audio_group.is_null() {
                 if let Some(idx) = matched_audio_idx {
@@ -391,12 +542,22 @@ pub mod implementation {
                     let count: usize = msg_send![options_arr, count];
                     if idx < count {
                         let opt: *mut AnyObject = msg_send![options_arr, objectAtIndex: idx];
-                        let _: () = msg_send![player_item, selectMediaSelectedOption: opt, inMediaSelectionGroup: audio_group];
+                        let _: () = msg_send![player_item, selectMediaOption: opt, inMediaSelectionGroup: audio_group];
+                        let selected: *mut AnyObject = msg_send![player_item, selectedMediaOptionInMediaSelectionGroup: audio_group];
+                        if selected.is_null() {
+                            return Err(
+                                "AVPlayerItem failed to verify selected audio track option.".into(),
+                            );
+                        }
+                    } else {
+                        return Err(format!(
+                            "Audio track index {idx} out of bounds (count={count})"
+                        ));
                     }
                 }
             }
 
-            // Apply subtitle track selection
+            // Apply and verify subtitle track selection
             let sub_group: *mut AnyObject = msg_send![asset, mediaSelectionGroupForMediaCharacteristic: AVMediaCharacteristicLegible];
             if !sub_group.is_null() {
                 if let Some(idx) = matched_sub_idx {
@@ -404,12 +565,23 @@ pub mod implementation {
                     let count: usize = msg_send![options_arr, count];
                     if idx < count {
                         let opt: *mut AnyObject = msg_send![options_arr, objectAtIndex: idx];
-                        let _: () = msg_send![player_item, selectMediaSelectedOption: opt, inMediaSelectionGroup: sub_group];
+                        let _: () = msg_send![player_item, selectMediaOption: opt, inMediaSelectionGroup: sub_group];
+                        let selected: *mut AnyObject = msg_send![player_item, selectedMediaOptionInMediaSelectionGroup: sub_group];
+                        if selected.is_null() {
+                            return Err(
+                                "AVPlayerItem failed to verify selected subtitle track option."
+                                    .into(),
+                            );
+                        }
+                    } else {
+                        return Err(format!(
+                            "Subtitle track index {idx} out of bounds (count={count})"
+                        ));
                     }
                 } else {
                     // Turn off subtitles in legible group
                     let nil_opt: *mut AnyObject = std::ptr::null_mut();
-                    let _: () = msg_send![player_item, selectMediaSelectedOption: nil_opt, inMediaSelectionGroup: sub_group];
+                    let _: () = msg_send![player_item, selectMediaOption: nil_opt, inMediaSelectionGroup: sub_group];
                 }
             }
 
@@ -418,6 +590,9 @@ pub mod implementation {
             if player.is_null() {
                 return Err("Failed to create AVPlayer.".into());
             }
+
+            // Mute local AVPlayer audio until external playback is confirmed active
+            let _: () = msg_send![player, setMuted: true];
 
             // Enable external playback (AirPlay)
             let _: () = msg_send![player, setAllowsExternalPlayback: true];
@@ -540,6 +715,8 @@ pub mod implementation {
             let mut sess = AIRPLAY_SESSION.lock().unwrap();
             if let Some(ref mut s) = *sess {
                 if !s.player.is_null() {
+                    let is_ext: bool = msg_send![s.player, isExternalPlaybackActive];
+                    let _: () = msg_send![s.player, setMuted: !is_ext];
                     let _: () = msg_send![s.player, play];
                     s.is_playing = true;
                     return Ok(());
@@ -585,6 +762,7 @@ pub mod implementation {
             if let Some(ref s) = *sess {
                 if !s.player.is_null() {
                     let is_ext: bool = msg_send![s.player, isExternalPlaybackActive];
+                    let _: () = msg_send![s.player, setMuted: !is_ext];
                     let time_status: isize = msg_send![s.player, timeControlStatus];
                     let is_playing = time_status == 2;
                     let current_cm: CMTime = msg_send![s.player, currentTime];
@@ -630,6 +808,7 @@ pub mod implementation {
                         latest_ms = (pos_s * 1000.0) as i64;
                     }
                     let _: () = msg_send![s.player, pause];
+                    let _: () = msg_send![s.player, setMuted: true];
                     let nil_item: *mut AnyObject = std::ptr::null_mut();
                     let _: () = msg_send![s.player, replaceCurrentItemWithPlayerItem: nil_item];
                 }
@@ -743,6 +922,15 @@ pub mod implementation {
         Err("Native AirPlay is only supported on macOS.".into())
     }
 
+    pub fn prepare_session_inner(
+        _file_path: &str,
+        _start_position_ms: i64,
+        _matched_audio_idx: Option<usize>,
+        _matched_sub_idx: Option<usize>,
+    ) -> Result<(), String> {
+        Err("Native AirPlay is only supported on macOS.".into())
+    }
+
     pub fn mount_route_picker(
         _app: &tauri::AppHandle,
         _x: f64,
@@ -782,5 +970,188 @@ pub mod implementation {
 
     pub fn teardown() -> Option<i64> {
         None
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::implementation::*;
+
+    #[test]
+    fn test_airplay_disposable_media_preflight_and_lifecycle() {
+        let disposable = "/tmp/test_airplay_disposable.mp4";
+        assert!(
+            std::path::Path::new(disposable).exists(),
+            "Disposable test media must exist at /tmp/test_airplay_disposable.mp4"
+        );
+
+        // 1. Preflight check: standalone MP4 container, H.264/AAC
+        let preflight_res = preflight(disposable, None, None, None, None, false);
+        assert!(
+            preflight_res.is_playable,
+            "Disposable MP4 must be playable by AVFoundation"
+        );
+        assert!(preflight_res.audio_compatible, "Audio must be compatible");
+        assert!(
+            preflight_res.subtitle_compatible,
+            "Subtitles-off must be compatible"
+        );
+        assert!(preflight_res.rejection_reason.is_none());
+
+        // 2. Prepare session at 500ms
+        let prep = prepare_session_inner(disposable, 500, preflight_res.matched_audio_idx, None);
+        assert!(
+            prep.is_ok(),
+            "prepare_session_inner should succeed: {:?}",
+            prep.err()
+        );
+
+        // 3. Status immediately after prepare: session active, AVPlayer muted, not external yet
+        let status = get_status();
+        assert!(status.is_active, "AirPlay session must be active");
+        assert!(
+            !status.is_external_active,
+            "External playback must not be active locally without route selection"
+        );
+        assert!(
+            !status.is_playing,
+            "Player must not be playing immediately after prepare"
+        );
+
+        // 4. Play control routing
+        let play_res = play();
+        assert!(play_res.is_ok(), "play() should succeed on active session");
+
+        // 5. Pause control routing
+        let pause_res = pause();
+        assert!(
+            pause_res.is_ok(),
+            "pause() should succeed on active session"
+        );
+
+        // 6. Seek control routing
+        let seek_res = seek(1200);
+        assert!(seek_res.is_ok(), "seek() should succeed on active session");
+
+        // 7. Teardown session and verify recovered position
+        let end_pos = teardown();
+        assert!(end_pos.is_some(), "Teardown must return valid position");
+        assert!(
+            end_pos.unwrap() >= 0,
+            "Recovered position must be non-negative"
+        );
+
+        // 8. Verified teardown cleanup
+        let after_status = get_status();
+        assert!(
+            !after_status.is_active,
+            "Session must be inactive after teardown"
+        );
+    }
+
+    #[test]
+    fn test_airplay_multitrack_track_fidelity() {
+        let multitrack = "/tmp/test_airplay_multitrack.mp4";
+        assert!(
+            std::path::Path::new(multitrack).exists(),
+            "Multitrack test media must exist at /tmp/test_airplay_multitrack.mp4"
+        );
+
+        // 1. Preflight matching English track
+        let pre_eng = preflight(
+            multitrack,
+            Some("English Main"),
+            Some("eng"),
+            None,
+            None,
+            false,
+        );
+        assert!(pre_eng.is_playable);
+        assert!(pre_eng.audio_compatible);
+        assert_eq!(pre_eng.matched_audio_idx, Some(0));
+
+        // 2. Preflight matching Japanese Commentary track
+        let pre_jpn = preflight(
+            multitrack,
+            Some("Japanese Commentary"),
+            Some("jpn"),
+            None,
+            None,
+            false,
+        );
+        assert!(pre_jpn.is_playable);
+        assert!(pre_jpn.audio_compatible);
+        assert_eq!(pre_jpn.matched_audio_idx, Some(1));
+
+        // 3. Preflight with non-existent track must reject unambiguously
+        let pre_none = preflight(
+            multitrack,
+            Some("French Stereo"),
+            Some("fra"),
+            None,
+            None,
+            false,
+        );
+        assert!(!pre_none.audio_compatible);
+        assert!(pre_none.rejection_reason.is_some());
+
+        // 4. Prepare session with Japanese Commentary (index 1) and verify applied on AVPlayerItem
+        let prep = prepare_session_inner(multitrack, 0, Some(1), None);
+        assert!(
+            prep.is_ok(),
+            "Track application and AVPlayerItem verification succeeded"
+        );
+
+        let end_pos = teardown();
+        assert!(end_pos.is_some());
+    }
+
+    #[test]
+    fn test_airplay_incompatible_container_rejection() {
+        let incompatible = "/tmp/test_airplay_incompatible.mkv";
+        assert!(
+            std::path::Path::new(incompatible).exists(),
+            "Incompatible test media must exist at /tmp/test_airplay_incompatible.mkv"
+        );
+
+        // AVFoundation does not support MKV containers natively
+        let pre = preflight(incompatible, None, None, None, None, false);
+        assert!(!pre.is_playable);
+        assert!(pre.rejection_reason.is_some());
+        let reason = pre.rejection_reason.unwrap();
+        assert!(
+            reason.contains("Apple-supported") || reason.contains("not natively playable"),
+            "Reason must explain container incompatibility: {reason}"
+        );
+
+        // Attempting to prepare session on MKV must return error
+        let prep = prepare_session_inner(incompatible, 0, None, None);
+        assert!(prep.is_err(), "prepare_session on MKV must fail");
+    }
+
+    #[test]
+    fn test_airplay_external_subtitles_rejection() {
+        let disposable = "/tmp/test_airplay_disposable.mp4";
+        let pre = preflight(
+            disposable,
+            None,
+            None,
+            Some("external.srt"),
+            Some("eng"),
+            true,
+        );
+        assert!(!pre.subtitle_compatible);
+        assert!(!pre.is_playable);
+        assert!(pre
+            .rejection_reason
+            .unwrap()
+            .contains("External subtitle files"));
+    }
+
+    #[test]
+    fn test_airplay_teardown_idempotent() {
+        // Teardown when no session is active should return None and not crash
+        assert_eq!(teardown(), None);
+        assert_eq!(teardown(), None);
     }
 }
