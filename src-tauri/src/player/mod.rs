@@ -12,6 +12,7 @@
 //! Bundling VLC would relicense the whole app under GPL and ship ~200 MB of
 //! plugins nobody needs duplicated.
 
+pub mod device;
 pub mod engine;
 
 #[cfg(target_os = "macos")]
@@ -126,6 +127,10 @@ pub struct PlayerState {
     /// main-feature lock (`feature_lock`) takes it so that it follows the
     /// viewer instead of pulling playback back. Cleared with every session.
     pub feature_lock_request: Mutex<Option<i32>>,
+    /// Bounded discovery manager for remote playback renderers (Chromecast, etc.).
+    pub discovery_manager: Mutex<Option<device::DiscoveryManager>>,
+    /// Active casting session state and truthful handoff/playback tracker.
+    pub casting_state: Mutex<device::CastingSessionState>,
 }
 
 /// Consecutive agreeing samples after which framing sampling stops.

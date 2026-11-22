@@ -15,6 +15,9 @@ import {
   VolumeX,
   X,
   Pin,
+  Tv,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { clearFeatureResume, closePlayer, openInPlayer, savePositionMs, savedPositionMs, usePlayerStore } from '../../lib/playerStore';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -23,6 +26,27 @@ import { DiscStructureInfo } from '../../types';
 import { createMenuMoveGuard, MenuMoveGuard } from '../../lib/menuMoveGuard';
 import { armMenuReturnGuard, evaluateMenuReturnGuard, type MenuReturnGuardState } from '../../lib/menuReturnGuard';
 
+interface DiscoveredDevice {
+  id: string;
+  name: string;
+  renderer_type: string;
+  icon_uri?: string | null;
+  can_audio: boolean;
+  can_video: boolean;
+}
+
+interface CastPreflight {
+  device_id: string;
+  device_name: string;
+  is_supported_media: boolean;
+  video_supported: boolean;
+  audio_supported: boolean;
+  conversion_required: boolean;
+  subtitle_supported: boolean;
+  selected_subtitle?: string | null;
+  selected_audio?: string | null;
+  details: string;
+}
 
 interface Poll {
   time_ms: number;
@@ -33,11 +57,9 @@ interface Poll {
   chapter: number;
   chapter_count: number;
   at_menu: boolean;
-  /** True for Blu-ray discs with no authored Top Menu (popup-only discs,
-   *  BDMV/index.bdmv id_ref == 0xFFFF).  False for discs with a real Top
-   *  Menu, for DVD, and for plain files.  Gated additionally by !at_menu:
-   *  the BD popup is a feature-playback overlay, not a main-menu feature. */
   has_popup_menu: boolean;
+  cast_status?: string | { error: string } | null;
+  cast_device_name?: string | null;
 }
 
 /**
@@ -179,6 +201,35 @@ export default function PlayerOverlay() {
   const [subTracks, setSubTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
   const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; active: boolean }[]>([]);
 
+  // Device playback (Google Cast) state
+  const [showDevicePicker, setShowDevicePicker] = useState(false);
+  const [discoveredDevices, setDiscoveredDevices] = useState<DiscoveredDevice[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState<DiscoveredDevice | null>(null);
+  const [preflight, setPreflight] = useState<CastPreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
+  const [approveConversion, setApproveConversion] = useState(false);
+  const [dropSubtitles, setDropSubtitles] = useState(false);
+  const [castStatus, setCastStatus] = useState<string | null>(null);
+  const [castDeviceName, setCastDeviceName] = useState<string | null>(null);
+  const [castActionLoading, setCastActionLoading] = useState(false);
+  const discoveryTimerRef = useRef<number | null>(null);
+
+  const isCastingActive = useMemo(() => {
+    return Boolean(castStatus && castStatus !== 'idle' && castStatus !== 'stopped' && castStatus !== 'disconnected');
+  }, [castStatus]);
+
+  const isCastError = useMemo(() => {
+    return Boolean(castStatus && (castStatus.startsWith('error:') || castStatus === 'error'));
+  }, [castStatus]);
+
+  const castStatusText = useMemo(() => {
+    if (!castStatus) return '';
+    if (castStatus.startsWith('error:')) return castStatus.slice(6).trim();
+    return castStatus;
+  }, [castStatus]);
+
   // Per-disc cache of the libbluray language probe (module level so it
   // survives menu→feature transitions within a session).
   const trackLangsCacheRef = useMemo(() => new Map<string, { audio: string[]; subs: string[] }>(), []);
@@ -317,6 +368,117 @@ export default function PlayerOverlay() {
     }).catch(() => {});
   }, []);
 
+  const stopDiscovery = useCallback(() => {
+    if (discoveryTimerRef.current !== null) {
+      window.clearInterval(discoveryTimerRef.current);
+      discoveryTimerRef.current = null;
+    }
+    setIsDiscovering(false);
+    invoke('player_device_discovery_stop').catch(() => {});
+  }, []);
+
+  const refreshDeviceList = useCallback(async () => {
+    try {
+      const devices = await invoke<DiscoveredDevice[]>('player_device_list');
+      setDiscoveredDevices(devices);
+    } catch {
+      // non-blocking
+    }
+  }, []);
+
+  const startDiscovery = useCallback(async () => {
+    setShowDevicePicker(true);
+    setSelectedDevice(null);
+    setPreflight(null);
+    setPreflightError(null);
+    setApproveConversion(false);
+    setDropSubtitles(false);
+
+    if (player.isDisc) {
+      return;
+    }
+
+    setIsDiscovering(true);
+    try {
+      await invoke('player_device_discovery_start');
+      await refreshDeviceList();
+      if (discoveryTimerRef.current !== null) {
+        window.clearInterval(discoveryTimerRef.current);
+      }
+      discoveryTimerRef.current = window.setInterval(() => {
+        void refreshDeviceList();
+      }, 1500);
+    } catch (e: unknown) {
+      setPreflightError(e instanceof Error ? e.message : String(e));
+      setIsDiscovering(false);
+    }
+  }, [player.isDisc, refreshDeviceList]);
+
+  const handleSelectDevice = useCallback(async (device: DiscoveredDevice) => {
+    setSelectedDevice(device);
+    setPreflightLoading(true);
+    setPreflightError(null);
+    setPreflight(null);
+    setApproveConversion(false);
+    setDropSubtitles(false);
+
+    try {
+      const result = await invoke<CastPreflight>('player_device_preflight', { deviceId: device.id });
+      setPreflight(result);
+    } catch (e: unknown) {
+      setPreflightError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPreflightLoading(false);
+    }
+  }, []);
+
+  const handleStartCasting = useCallback(async () => {
+    if (!selectedDevice) return;
+    setCastActionLoading(true);
+    setPreflightError(null);
+    try {
+      await invoke('player_device_start', {
+        deviceId: selectedDevice.id,
+        approveConversion,
+        dropSubtitles,
+      });
+      setShowDevicePicker(false);
+      stopDiscovery();
+      setCastStatus('request_issued');
+      setCastDeviceName(selectedDevice.name);
+    } catch (e: unknown) {
+      setPreflightError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCastActionLoading(false);
+    }
+  }, [selectedDevice, approveConversion, dropSubtitles, stopDiscovery]);
+
+  const handleReturnToLocal = useCallback(async () => {
+    setCastActionLoading(true);
+    try {
+      await invoke('player_device_return_to_local');
+      setCastStatus('idle');
+      setCastDeviceName(null);
+    } catch (e: unknown) {
+      setErrorMessage(`Failed to return playback to local player: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCastActionLoading(false);
+    }
+  }, []);
+
+  const handleDisconnectDevice = useCallback(async () => {
+    setCastActionLoading(true);
+    try {
+      await invoke('player_device_stop');
+      setCastStatus('idle');
+      setCastDeviceName(null);
+    } catch (e: unknown) {
+      setErrorMessage(`Failed to disconnect device: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setCastActionLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!player.open) return;
     window.focus();
@@ -325,6 +487,15 @@ export default function PlayerOverlay() {
     setDiscChoices(null);
     setAuthoredTitle(null);
     setErrorMessage(null);
+    setShowDevicePicker(false);
+    setSelectedDevice(null);
+    setPreflight(null);
+    setPreflightError(null);
+    setApproveConversion(false);
+    setDropSubtitles(false);
+    setCastStatus(null);
+    setCastDeviceName(null);
+    setCastActionLoading(false);
     wasAtMenuRef.current = false;
     menuConfirmPollsRef.current = 0;
     menuReturnGuardRef.current = null;
@@ -346,6 +517,18 @@ export default function PlayerOverlay() {
 
     const apply = (p: Poll) => {
       setPoll(p);
+      if (p.cast_status !== undefined) {
+        if (typeof p.cast_status === 'string') {
+          setCastStatus(p.cast_status);
+        } else if (p.cast_status && typeof p.cast_status === 'object' && 'error' in p.cast_status) {
+          setCastStatus(`error: ${(p.cast_status as { error: string }).error}`);
+        } else {
+          setCastStatus(null);
+        }
+      }
+      if (p.cast_device_name !== undefined) {
+        setCastDeviceName(p.cast_device_name);
+      }
       const now = Date.now();
 
       // Reset user-initiated transient flags once playback or menu state transitions
@@ -576,6 +759,11 @@ export default function PlayerOverlay() {
       window.clearInterval(iv);
       ro.disconnect();
       window.removeEventListener('resize', syncViewport);
+      if (discoveryTimerRef.current !== null) {
+        window.clearInterval(discoveryTimerRef.current);
+        discoveryTimerRef.current = null;
+      }
+      invoke('player_device_discovery_stop').catch(() => {});
     };
   }, [player.open, player.resolvedPath, player.gen, syncViewport]);
 
@@ -1477,6 +1665,59 @@ export default function PlayerOverlay() {
         </div>
       )}
 
+      {/* Active Casting Viewport Card */}
+      {isCastingActive && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <div className="pointer-events-auto max-w-md w-full mx-4 p-6 rounded-xl bg-black/85 border border-white/20 backdrop-blur-md shadow-2xl flex flex-col items-center text-center space-y-4">
+            <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center text-white">
+              {castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting' ? (
+                <RefreshCw className="w-8 h-8 animate-spin text-white/80" />
+              ) : isCastError ? (
+                <AlertCircle className="w-8 h-8 text-[#e50914]" />
+              ) : (
+                <Tv className="w-8 h-8 text-white" />
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-white text-base font-semibold">
+                {castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting'
+                  ? `Playback requested on ${castDeviceName || 'device'}`
+                  : isCastError
+                  ? 'Playback Error on Device'
+                  : `Playing on ${castDeviceName || 'device'}`}
+              </h3>
+              <p className="text-xs text-white/60">
+                {castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting'
+                  ? 'Establishing remote stream. Playback will begin momentarily.'
+                  : isCastError
+                  ? castStatusText
+                  : 'Media stream is playing on your remote screen. Use the controls below to seek, pause, or adjust volume.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                disabled={castActionLoading}
+                onClick={handleReturnToLocal}
+                className="px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-medium border border-white/20 transition disabled:opacity-50"
+              >
+                {castActionLoading ? 'Switching...' : 'Play on this Computer'}
+              </button>
+              <button
+                type="button"
+                disabled={castActionLoading}
+                onClick={handleDisconnectDevice}
+                className="px-4 py-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium transition disabled:opacity-50"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Nebulae control bar: floats over the video — the native video
           view sits BELOW the transparent webview, so the bar, its popovers
           and track menus all render above the video and stay clickable. */}
@@ -1950,6 +2191,27 @@ export default function PlayerOverlay() {
           )}
         </div>
 
+        {/* Play on device (Google Cast) */}
+        <button
+          type="button"
+          onClick={() => {
+            if (isCastingActive) {
+              setShowDevicePicker(true);
+            } else {
+              void startDiscovery();
+            }
+          }}
+          className={`shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-md px-2.5 py-1 border transition ${
+            isCastingActive
+              ? 'border-red-500 bg-red-500/20 text-white'
+              : 'border-white/40 text-white/90 hover:text-white hover:border-white hover:bg-white/10'
+          }`}
+          title={isCastingActive ? `Casting to ${castDeviceName || 'device'}` : 'Play on device'}
+        >
+          <Tv className="w-3.5 h-3.5" />
+          <span>{isCastingActive ? 'Casting' : 'Cast'}</span>
+        </button>
+
         {/* Fullscreen (owner): explicit button in the bar, right-hand side. */}
         <button
           type="button"
@@ -2012,6 +2274,250 @@ export default function PlayerOverlay() {
           <X className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Device Picker & Preflight Compatibility Modal */}
+      {showDevicePicker && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="max-w-md w-full bg-[#181818] border border-[#333333] rounded-lg p-5 shadow-2xl space-y-4 text-left">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#282828] pb-3">
+              <div className="flex items-center gap-2">
+                <Tv className="w-5 h-5 text-white" />
+                <h3 className="text-white text-sm font-semibold">Play on Device</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDevicePicker(false);
+                  stopDiscovery();
+                }}
+                className="p-1 rounded text-white/60 hover:text-white hover:bg-white/10 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* If media is an authored disc */}
+            {player.isDisc ? (
+              <div className="space-y-3 py-2">
+                <div className="flex items-start gap-3 p-3 rounded-md bg-yellow-500/10 border border-yellow-500/30">
+                  <AlertCircle className="w-5 h-5 text-yellow-400 shrink-0 mt-0.5" />
+                  <div className="text-xs text-white/90 space-y-1">
+                    <div className="font-semibold text-yellow-400">Authored Discs Not Supported</div>
+                    <div>
+                      Device playback currently supports standalone media files. Authored DVD and Blu-ray disc menus and disc structures are not supported for remote casting in this release.
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDevicePicker(false)}
+                    className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : !selectedDevice ? (
+              /* Device Discovery List */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-xs text-white/60">
+                  <span>Available Google Cast receivers:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDiscovering(true);
+                      void refreshDeviceList();
+                    }}
+                    className="flex items-center gap-1 hover:text-white transition"
+                    title="Refresh devices"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isDiscovering ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto space-y-2">
+                  {discoveredDevices.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-white/50 border border-[#262626] rounded-md bg-[#141414]">
+                      {isDiscovering ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <RefreshCw className="w-5 h-5 animate-spin text-white/40" />
+                          <span>Searching local network for Cast receivers...</span>
+                        </div>
+                      ) : (
+                        <span>No Cast devices found on your network. Make sure your receiver is powered on and connected to the same Wi-Fi.</span>
+                      )}
+                    </div>
+                  ) : (
+                    discoveredDevices.map((dev) => (
+                      <button
+                        key={dev.id}
+                        type="button"
+                        onClick={() => void handleSelectDevice(dev)}
+                        className="w-full flex items-center justify-between p-3 rounded-lg border border-[#2b2b2b] bg-[#1a1a1a] hover:bg-[#262626] hover:border-white/30 text-left transition group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Tv className="w-5 h-5 text-white/70 group-hover:text-white transition" />
+                          <div>
+                            <div className="text-xs font-semibold text-white">{dev.name}</div>
+                            <div className="text-[10px] text-white/50 capitalize">{dev.renderer_type || 'Google Cast'}</div>
+                          </div>
+                        </div>
+                        <span className="text-[11px] font-medium text-white/70 group-hover:text-white">
+                          Select →
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                {preflightError && (
+                  <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30 text-[11px] text-red-400">
+                    {preflightError}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Preflight and Confirmation Screen */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-[#252525]">
+                  <div>
+                    <span className="text-[11px] text-white/50">Target Receiver:</span>
+                    <div className="text-xs font-semibold text-white">{selectedDevice.name}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDevice(null);
+                      setPreflight(null);
+                      setPreflightError(null);
+                    }}
+                    className="text-[11px] text-white/60 hover:text-white underline transition"
+                  >
+                    Change Device
+                  </button>
+                </div>
+
+                {preflightLoading ? (
+                  <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-white/60">
+                    <RefreshCw className="w-6 h-6 animate-spin text-white/40" />
+                    <span>Checking media format compatibility...</span>
+                  </div>
+                ) : preflight ? (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-lg bg-[#141414] border border-[#252525] space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-white/60">Video Compatibility:</span>
+                        <span className={preflight.video_supported ? 'text-green-400 font-medium' : 'text-yellow-400 font-medium'}>
+                          {preflight.video_supported ? 'Direct Stream' : 'Transcode Required'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-white/60">Audio Compatibility:</span>
+                        <span className={preflight.audio_supported ? 'text-green-400 font-medium' : 'text-yellow-400 font-medium'}>
+                          {preflight.audio_supported ? 'Direct Stream' : 'Transcode Required'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-white/60">Subtitles:</span>
+                        <span className={preflight.subtitle_supported ? 'text-green-400 font-medium' : 'text-orange-400 font-medium'}>
+                          {preflight.subtitle_supported ? 'Supported' : 'Not supported by Cast'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Transcoding Approval Requirement */}
+                    {preflight.conversion_required && (
+                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
+                          <div className="text-xs text-white/90">
+                            <span className="font-semibold text-yellow-400">Conversion Required:</span>{' '}
+                            The media codec requires real-time video/audio transcoding to stream to this device.
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-white cursor-pointer pt-1 select-none">
+                          <input
+                            type="checkbox"
+                            checked={approveConversion}
+                            onChange={(e) => setApproveConversion(e.target.checked)}
+                            className="rounded border-[#444] text-red-600 focus:ring-0"
+                          />
+                          <span>Approve real-time media conversion</span>
+                        </label>
+                      </div>
+                    )}
+
+                    {/* Subtitle Limitation Notice & Acknowledgment */}
+                    {!preflight.subtitle_supported && Boolean(preflight.selected_subtitle) && (
+                      <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 text-orange-400 shrink-0 mt-0.5" />
+                          <div className="text-xs text-white/90">
+                            <span className="font-semibold text-orange-400">Subtitle Limitation:</span>{' '}
+                            Google Cast renderer streaming in libVLC does not support subtitle transmission. Subtitles will be dropped on the remote device.
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs text-white cursor-pointer pt-1 select-none">
+                          <input
+                            type="checkbox"
+                            checked={dropSubtitles}
+                            onChange={(e) => setDropSubtitles(e.target.checked)}
+                            className="rounded border-[#444] text-red-600 focus:ring-0"
+                          />
+                          <span>Acknowledge and stream without subtitles</span>
+                        </label>
+                      </div>
+                    )}
+
+                    {preflightError && (
+                      <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30 text-[11px] text-red-400">
+                        {preflightError}
+                      </div>
+                    )}
+
+                    {/* Action buttons */}
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDevice(null);
+                          setPreflight(null);
+                          setPreflightError(null);
+                        }}
+                        className="px-3 py-1.5 text-xs rounded border border-[#333] text-white/80 hover:bg-[#252525] hover:text-white transition"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          castActionLoading ||
+                          (preflight.conversion_required && !approveConversion) ||
+                          (!preflight.subtitle_supported && Boolean(preflight.selected_subtitle) && !dropSubtitles)
+                        }
+                        onClick={() => void handleStartCasting()}
+                        className="px-4 py-1.5 text-xs font-semibold rounded bg-[#e50914] text-white hover:bg-[#b80710] disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-2"
+                      >
+                        {castActionLoading ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Connecting...</span>
+                          </>
+                        ) : (
+                          <span>Start Playback on Device</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Playback Error Alert Modal */}
       {errorMessage && (

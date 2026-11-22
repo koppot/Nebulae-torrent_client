@@ -129,7 +129,66 @@ pub struct VlcLib {
             std::ffi::c_uint,
         ) -> c_int,
     >,
+    // Renderer discovery and casting
+    pub libvlc_renderer_discoverer_new:
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void>,
+    pub libvlc_renderer_discoverer_release: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub libvlc_renderer_discoverer_start: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+    pub libvlc_renderer_discoverer_stop: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub libvlc_renderer_discoverer_event_manager:
+        Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+    pub libvlc_renderer_discoverer_list_get:
+        Option<unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcRdDescription) -> usize>,
+    pub libvlc_renderer_discoverer_list_release:
+        Option<unsafe extern "C" fn(*mut *mut VlcRdDescription, usize)>,
+    pub libvlc_renderer_item_hold: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+    pub libvlc_renderer_item_release: Option<unsafe extern "C" fn(*mut c_void)>,
+    pub libvlc_renderer_item_name: Option<unsafe extern "C" fn(*const c_void) -> *const c_char>,
+    pub libvlc_renderer_item_type: Option<unsafe extern "C" fn(*const c_void) -> *const c_char>,
+    pub libvlc_renderer_item_icon_uri: Option<unsafe extern "C" fn(*const c_void) -> *const c_char>,
+    pub libvlc_renderer_item_flags: Option<unsafe extern "C" fn(*const c_void) -> c_int>,
+    pub libvlc_media_player_set_renderer:
+        Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int>,
+    pub libvlc_event_attach:
+        Option<unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void) -> c_int>,
+    pub libvlc_event_detach:
+        Option<unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void)>,
 }
+
+/// Mirror of libvlc_rd_description_t (C layout, header-verified).
+#[repr(C)]
+pub struct VlcRdDescription {
+    pub psz_name: *mut c_char,
+    pub psz_longname: *mut c_char,
+}
+
+pub const LIBVLC_RENDERER_CAN_AUDIO: c_int = 0x0001;
+pub const LIBVLC_RENDERER_CAN_VIDEO: c_int = 0x0002;
+
+pub const LIBVLC_RENDERER_DISCOVERER_ITEM_ADDED: c_int = 0x502;
+pub const LIBVLC_RENDERER_DISCOVERER_ITEM_DELETED: c_int = 0x503;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct VlcRendererItemEvent {
+    pub item: *mut c_void,
+}
+
+#[repr(C)]
+pub union VlcEventUnion {
+    pub item_added: VlcRendererItemEvent,
+    pub item_deleted: VlcRendererItemEvent,
+    pub padding: [usize; 8],
+}
+
+#[repr(C)]
+pub struct VlcEvent {
+    pub r#type: c_int,
+    pub p_obj: *mut c_void,
+    pub u: VlcEventUnion,
+}
+
+pub type VlcEventCallback = unsafe extern "C" fn(*const VlcEvent, *mut c_void);
 
 /// Mirror of libvlc_title_description_t (C layout, header-verified).
 #[repr(C)]
@@ -1225,6 +1284,22 @@ impl VlcLib {
             libvlc_video_set_crop_geometry: sym_opt!("libvlc_video_set_crop_geometry": unsafe extern "C" fn(*mut c_void, *const c_char)),
             libvlc_video_get_crop_geometry: sym_opt!("libvlc_video_get_crop_geometry": unsafe extern "C" fn(*mut c_void) -> *mut c_char),
             libvlc_video_take_snapshot: sym_opt!("libvlc_video_take_snapshot": unsafe extern "C" fn(*mut c_void, std::ffi::c_uint, *const c_char, std::ffi::c_uint, std::ffi::c_uint) -> c_int),
+            libvlc_renderer_discoverer_new: sym_opt!("libvlc_renderer_discoverer_new": unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void),
+            libvlc_renderer_discoverer_release: sym_opt!("libvlc_renderer_discoverer_release": unsafe extern "C" fn(*mut c_void)),
+            libvlc_renderer_discoverer_start: sym_opt!("libvlc_renderer_discoverer_start": unsafe extern "C" fn(*mut c_void) -> c_int),
+            libvlc_renderer_discoverer_stop: sym_opt!("libvlc_renderer_discoverer_stop": unsafe extern "C" fn(*mut c_void)),
+            libvlc_renderer_discoverer_event_manager: sym_opt!("libvlc_renderer_discoverer_event_manager": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
+            libvlc_renderer_discoverer_list_get: sym_opt!("libvlc_renderer_discoverer_list_get": unsafe extern "C" fn(*mut c_void, *mut *mut *mut VlcRdDescription) -> usize),
+            libvlc_renderer_discoverer_list_release: sym_opt!("libvlc_renderer_discoverer_list_release": unsafe extern "C" fn(*mut *mut VlcRdDescription, usize)),
+            libvlc_renderer_item_hold: sym_opt!("libvlc_renderer_item_hold": unsafe extern "C" fn(*mut c_void) -> *mut c_void),
+            libvlc_renderer_item_release: sym_opt!("libvlc_renderer_item_release": unsafe extern "C" fn(*mut c_void)),
+            libvlc_renderer_item_name: sym_opt!("libvlc_renderer_item_name": unsafe extern "C" fn(*const c_void) -> *const c_char),
+            libvlc_renderer_item_type: sym_opt!("libvlc_renderer_item_type": unsafe extern "C" fn(*const c_void) -> *const c_char),
+            libvlc_renderer_item_icon_uri: sym_opt!("libvlc_renderer_item_icon_uri": unsafe extern "C" fn(*const c_void) -> *const c_char),
+            libvlc_renderer_item_flags: sym_opt!("libvlc_renderer_item_flags": unsafe extern "C" fn(*const c_void) -> c_int),
+            libvlc_media_player_set_renderer: sym_opt!("libvlc_media_player_set_renderer": unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int),
+            libvlc_event_attach: sym_opt!("libvlc_event_attach": unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void) -> c_int),
+            libvlc_event_detach: sym_opt!("libvlc_event_detach": unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void)),
             lib,
             deps,
         }
@@ -1537,6 +1612,76 @@ impl VlcSession {
         }
     }
 
+    /// Open a playback session directing stream output to a remote renderer item (e.g. Chromecast).
+    pub fn open_renderer(
+        lib: &VlcLib,
+        shared: &std::sync::atomic::AtomicUsize,
+        path: &str,
+        renderer_item: usize,
+        perf_warning: bool,
+    ) -> Result<VlcSession, String> {
+        let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
+        unsafe {
+            let mut instance = shared.load(std::sync::atomic::Ordering::SeqCst) as *mut c_void;
+            if instance.is_null() {
+                let mut args = vec![
+                    CString::new("--no-osd").unwrap(),
+                    CString::new("--no-snapshot-preview").unwrap(),
+                ];
+                if let Some(plugin_dir) = std::env::var_os("VLC_PLUGIN_PATH") {
+                    if let Some(plugin_str) = plugin_dir.to_str() {
+                        if let Ok(arg) = CString::new(format!("--plugin-path={}", plugin_str)) {
+                            args.push(arg);
+                        }
+                    }
+                }
+                let argv: Vec<*const c_char> =
+                    args.iter().map(|a| a.as_ptr() as *const c_char).collect();
+                instance = (lib.libvlc_new)(argv.len() as c_int, argv.as_ptr());
+                if instance.is_null() {
+                    return Err("libvlc_new failed".into());
+                }
+                shared.store(instance as usize, std::sync::atomic::Ordering::SeqCst);
+            }
+
+            let media = (lib.libvlc_media_new_path)(instance, c_path.as_ptr());
+            if media.is_null() {
+                return Err(format!("libvlc could not open {path}"));
+            }
+            if !perf_warning {
+                if let Ok(opt) = CString::new(":sout-chromecast-show-perf-warning=0") {
+                    (lib.libvlc_media_add_option)(media, opt.as_ptr());
+                }
+            }
+            let mp = (lib.libvlc_media_player_new_from_media)(media);
+            if mp.is_null() {
+                (lib.libvlc_media_release)(media);
+                return Err("media player creation failed".into());
+            }
+            if let Some(set_renderer) = lib.libvlc_media_player_set_renderer {
+                if renderer_item != 0 {
+                    set_renderer(mp, renderer_item as *mut c_void);
+                }
+            }
+            let rc = (lib.libvlc_media_player_play)(mp);
+            if rc != 0 {
+                if let Some(set_renderer) = lib.libvlc_media_player_set_renderer {
+                    set_renderer(mp, std::ptr::null_mut());
+                }
+                (lib.libvlc_media_player_release)(mp);
+                (lib.libvlc_media_release)(media);
+                return Err(format!(
+                    "libvlc refused to play {path} on renderer (rc={rc})"
+                ));
+            }
+            Ok(VlcSession {
+                instance: instance as usize,
+                media: media as usize,
+                media_player: mp as usize,
+            })
+        }
+    }
+
     /// Tear down. Runs on the main thread on macOS (the vout view lives
     /// there); on other platforms any thread is fine.
     pub fn close(&self, lib: &VlcLib) {
@@ -1544,6 +1689,9 @@ impl VlcSession {
         let win_target = take_session_video_target(self.media_player);
         unsafe {
             if self.media_player != 0 {
+                if let Some(set_renderer) = lib.libvlc_media_player_set_renderer {
+                    set_renderer(self.media_player as *mut c_void, std::ptr::null_mut());
+                }
                 (lib.libvlc_media_player_stop)(self.media_player as *mut c_void);
                 // libvlc_media_player_stop is synchronous in VLC 3.x — it
                 // blocks until the player reaches Stopped. The polling loop
