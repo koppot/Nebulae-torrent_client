@@ -149,6 +149,7 @@ pub struct VlcLib {
     pub libvlc_renderer_item_flags: Option<unsafe extern "C" fn(*const c_void) -> c_int>,
     pub libvlc_media_player_set_renderer:
         Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int>,
+    pub libvlc_media_player_is_seekable: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
     pub libvlc_event_attach:
         Option<unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void) -> c_int>,
     pub libvlc_event_detach:
@@ -178,7 +179,7 @@ pub struct VlcRendererItemEvent {
 pub union VlcEventUnion {
     pub item_added: VlcRendererItemEvent,
     pub item_deleted: VlcRendererItemEvent,
-    pub padding: [usize; 8],
+    pub padding: [u8; 64],
 }
 
 #[repr(C)]
@@ -1298,6 +1299,7 @@ impl VlcLib {
             libvlc_renderer_item_icon_uri: sym_opt!("libvlc_renderer_item_icon_uri": unsafe extern "C" fn(*const c_void) -> *const c_char),
             libvlc_renderer_item_flags: sym_opt!("libvlc_renderer_item_flags": unsafe extern "C" fn(*const c_void) -> c_int),
             libvlc_media_player_set_renderer: sym_opt!("libvlc_media_player_set_renderer": unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int),
+            libvlc_media_player_is_seekable: sym_opt!("libvlc_media_player_is_seekable": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_event_attach: sym_opt!("libvlc_event_attach": unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void) -> c_int),
             libvlc_event_detach: sym_opt!("libvlc_event_detach": unsafe extern "C" fn(*mut c_void, c_int, VlcEventCallback, *mut c_void)),
             lib,
@@ -1618,7 +1620,7 @@ impl VlcSession {
         shared: &std::sync::atomic::AtomicUsize,
         path: &str,
         renderer_item: usize,
-        perf_warning: bool,
+        start_time_s: Option<f64>,
     ) -> Result<VlcSession, String> {
         let c_path = CString::new(path).map_err(|_| "bad path".to_string())?;
         unsafe {
@@ -1648,9 +1650,15 @@ impl VlcSession {
             if media.is_null() {
                 return Err(format!("libvlc could not open {path}"));
             }
-            if !perf_warning {
-                if let Ok(opt) = CString::new(":sout-chromecast-show-perf-warning=0") {
-                    (lib.libvlc_media_add_option)(media, opt.as_ptr());
+            // Always suppress native Chromecast performance warning popup so modal dialogs never block
+            if let Ok(opt) = CString::new(":sout-chromecast-show-perf-warning=0") {
+                (lib.libvlc_media_add_option)(media, opt.as_ptr());
+            }
+            if let Some(st) = start_time_s {
+                if st > 0.0 {
+                    if let Ok(opt) = CString::new(format!(":start-time={:.3}", st)) {
+                        (lib.libvlc_media_add_option)(media, opt.as_ptr());
+                    }
                 }
             }
             let mp = (lib.libvlc_media_player_new_from_media)(media);

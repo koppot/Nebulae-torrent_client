@@ -34,7 +34,6 @@ pub enum CastStatus {
     Discovering,
     Connecting,
     RequestIssued,
-    Playing,
     Error(String),
     Disconnected,
 }
@@ -75,54 +74,54 @@ impl DeviceRegistry {
                 if item.is_null() {
                     return;
                 }
-                if let Some(hold) = self.lib.libvlc_renderer_item_hold {
-                    hold(item);
-                }
-                let name = self
-                    .lib
-                    .libvlc_renderer_item_name
-                    .map(|f| {
-                        let p = f(item);
-                        if !p.is_null() {
-                            CStr::from_ptr(p).to_string_lossy().into_owned()
-                        } else {
-                            "Unknown Device".to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| "Unknown Device".to_string());
-                let renderer_type = self
-                    .lib
-                    .libvlc_renderer_item_type
-                    .map(|f| {
-                        let p = f(item);
-                        if !p.is_null() {
-                            CStr::from_ptr(p).to_string_lossy().into_owned()
-                        } else {
-                            "chromecast".to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| "chromecast".to_string());
-                let icon_uri = self.lib.libvlc_renderer_item_icon_uri.and_then(|f| {
-                    let p = f(item);
-                    if !p.is_null() {
-                        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
-                    } else {
-                        None
-                    }
-                });
-                let flags = self
-                    .lib
-                    .libvlc_renderer_item_flags
-                    .map(|f| f(item))
-                    .unwrap_or(0);
-                let can_audio = (flags & LIBVLC_RENDERER_CAN_AUDIO) != 0;
-                let can_video = (flags & LIBVLC_RENDERER_CAN_VIDEO) != 0;
-
                 let already_present = self
                     .devices
                     .values()
                     .any(|d| d.native_item == item as usize);
                 if !already_present {
+                    if let Some(hold) = self.lib.libvlc_renderer_item_hold {
+                        hold(item);
+                    }
+                    let name = self
+                        .lib
+                        .libvlc_renderer_item_name
+                        .map(|f| {
+                            let p = f(item);
+                            if !p.is_null() {
+                                CStr::from_ptr(p).to_string_lossy().into_owned()
+                            } else {
+                                "Unknown Device".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "Unknown Device".to_string());
+                    let renderer_type = self
+                        .lib
+                        .libvlc_renderer_item_type
+                        .map(|f| {
+                            let p = f(item);
+                            if !p.is_null() {
+                                CStr::from_ptr(p).to_string_lossy().into_owned()
+                            } else {
+                                "chromecast".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "chromecast".to_string());
+                    let icon_uri = self.lib.libvlc_renderer_item_icon_uri.and_then(|f| {
+                        let p = f(item);
+                        if !p.is_null() {
+                            Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+                        } else {
+                            None
+                        }
+                    });
+                    let flags = self
+                        .lib
+                        .libvlc_renderer_item_flags
+                        .map(|f| f(item))
+                        .unwrap_or(0);
+                    let can_audio = (flags & LIBVLC_RENDERER_CAN_AUDIO) != 0;
+                    let can_video = (flags & LIBVLC_RENDERER_CAN_VIDEO) != 0;
+
                     let id = format!("device-{}", uuid::Uuid::new_v4());
                     self.devices.insert(
                         id.clone(),
@@ -216,6 +215,14 @@ impl DiscoveryManager {
             started.elapsed().as_secs() < 25 && !self.active_discoverers.is_empty()
         } else {
             false
+        }
+    }
+
+    pub fn check_expiration(&mut self) {
+        if let Some(started) = self.started_at {
+            if started.elapsed().as_secs() >= 25 {
+                self.stop();
+            }
         }
     }
 
@@ -414,10 +421,14 @@ pub struct CastingSessionState {
     pub preflight: Option<CastPreflightResult>,
     pub last_local_position_ms: i64,
     pub last_media_path: Option<String>,
-    pub last_audio_track: i32,
-    pub last_subtitle_track: i32,
+    pub last_audio_track_id: i32,
+    pub last_audio_track_name: Option<String>,
+    pub last_audio_track_idx: usize,
+    pub last_subtitle_track_id: i32,
+    pub last_subtitle_track_name: Option<String>,
+    pub last_subtitle_track_idx: usize,
+    pub was_paused: bool,
     pub conversion_approved: bool,
-    pub drop_subtitles_approved: bool,
 }
 
 impl Default for CastingSessionState {
@@ -428,10 +439,14 @@ impl Default for CastingSessionState {
             preflight: None,
             last_local_position_ms: 0,
             last_media_path: None,
-            last_audio_track: -1,
-            last_subtitle_track: -1,
+            last_audio_track_id: -1,
+            last_audio_track_name: None,
+            last_audio_track_idx: 0,
+            last_subtitle_track_id: -1,
+            last_subtitle_track_name: None,
+            last_subtitle_track_idx: 0,
+            was_paused: false,
             conversion_approved: false,
-            drop_subtitles_approved: false,
         }
     }
 }
@@ -443,10 +458,14 @@ impl CastingSessionState {
         self.preflight = None;
         self.last_local_position_ms = 0;
         self.last_media_path = None;
-        self.last_audio_track = -1;
-        self.last_subtitle_track = -1;
+        self.last_audio_track_id = -1;
+        self.last_audio_track_name = None;
+        self.last_audio_track_idx = 0;
+        self.last_subtitle_track_id = -1;
+        self.last_subtitle_track_name = None;
+        self.last_subtitle_track_idx = 0;
+        self.was_paused = false;
         self.conversion_approved = false;
-        self.drop_subtitles_approved = false;
     }
 }
 
@@ -466,8 +485,11 @@ mod tests {
         state.status = CastStatus::RequestIssued;
         assert_eq!(state.status, CastStatus::RequestIssued);
 
-        state.status = CastStatus::Playing;
-        assert_eq!(state.status, CastStatus::Playing);
+        state.status = CastStatus::Error("Connection dropped".to_string());
+        assert_eq!(
+            state.status,
+            CastStatus::Error("Connection dropped".to_string())
+        );
 
         state.last_local_position_ms = 45000;
         state.conversion_approved = true;

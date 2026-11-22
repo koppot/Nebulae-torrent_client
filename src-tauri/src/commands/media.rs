@@ -3237,9 +3237,6 @@ pub fn player_poll(
             .casting_state
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if cast.status == crate::player::device::CastStatus::RequestIssued && time_ms > 0 {
-            cast.status = crate::player::device::CastStatus::Playing;
-        }
         let player_state = unsafe { (lib.libvlc_media_player_get_state)(mp as *mut c_void) };
         if player_state == 7 && cast.status != crate::player::device::CastStatus::Idle {
             let dev_name = cast
@@ -3906,6 +3903,12 @@ pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result
         return Ok(());
     }
     let lib = loaded_lib(&state)?;
+    if let Some(is_seekable) = lib.libvlc_media_player_is_seekable {
+        let seekable = unsafe { is_seekable(mp as *mut c_void) };
+        if seekable == 0 {
+            return Err("Media stream is currently not seekable".into());
+        }
+    }
     unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0)) };
     Ok(())
 }
@@ -4050,11 +4053,12 @@ pub fn player_device_discovery_stop(state: tauri::State<PlayerState>) -> Result<
 pub fn player_device_list(
     state: tauri::State<PlayerState>,
 ) -> Result<Vec<player::device::DiscoveredDevice>, String> {
-    let dm_guard = state
+    let mut dm_guard = state
         .discovery_manager
         .lock()
         .map_err(|_| "discovery state poisoned")?;
-    if let Some(dm) = dm_guard.as_ref() {
+    if let Some(dm) = dm_guard.as_mut() {
+        dm.check_expiration();
         Ok(dm.list_devices())
     } else {
         Ok(Vec::new())
@@ -4144,23 +4148,33 @@ pub fn player_device_preflight(
     let mut audio_supported = true;
     let mut conversion_required = false;
 
-    for v in &codec_info.video_codecs {
-        if !is_chromecast_supported_video(v) {
-            video_supported = false;
-            conversion_required = true;
+    if codec_info.video_codecs.is_empty() {
+        video_supported = false;
+        conversion_required = true;
+    } else {
+        for v in &codec_info.video_codecs {
+            if !is_chromecast_supported_video(v) {
+                video_supported = false;
+                conversion_required = true;
+            }
         }
     }
 
-    for a in &codec_info.audio_codecs {
-        if !is_chromecast_supported_audio(a) {
-            audio_supported = false;
-            conversion_required = true;
+    if codec_info.audio_codecs.is_empty() {
+        audio_supported = false;
+        conversion_required = true;
+    } else {
+        for a in &codec_info.audio_codecs {
+            if !is_chromecast_supported_audio(a) {
+                audio_supported = false;
+                conversion_required = true;
+            }
         }
     }
 
     let mut details = String::new();
     if !subtitle_supported {
-        details.push_str("Installed libVLC 3.0 Chromecast backend drops subtitles; remote playback cannot render subtitle tracks. ");
+        details.push_str("Selected subtitle track cannot be streamed or burned into the remote stream by the libVLC 3.0 Chromecast backend. Subtitle-enabled device playback is currently unavailable. Set Subtitles to Off in player controls to cast video and audio, or keep playback local to watch with subtitles. ");
     }
     if conversion_required {
         details.push_str("Media codecs require real-time conversion for Chromecast playback, which increases CPU and battery usage. ");
@@ -4189,17 +4203,21 @@ pub fn player_device_start(
     state: tauri::State<PlayerState>,
     device_id: String,
     approve_conversion: bool,
-    drop_subtitles: bool,
 ) -> Result<(), String> {
     let preflight = player_device_preflight(state.clone(), device_id.clone())?;
     if !preflight.is_supported_media {
         return Err(format!("Cannot cast media: {}", preflight.details));
     }
-    if preflight.conversion_required && !approve_conversion {
-        return Err("Real-time conversion is required for this media but was not approved".into());
+    if preflight.selected_subtitle.is_some() {
+        return Err(format!(
+            "Subtitle-enabled device playback is unavailable: selected subtitle track '{}' cannot be rendered on remote Cast device by libVLC 3.0. Turn Subtitles Off in player controls to cast video and audio, or keep playback local to watch with subtitles.",
+            preflight.selected_subtitle.as_deref().unwrap_or("active")
+        ));
     }
-    if !preflight.subtitle_supported && !drop_subtitles {
-        return Err("Subtitles cannot be cast with libVLC 3.0. Please confirm continuing without subtitles or cancel to retain local playback".into());
+    if preflight.conversion_required && !approve_conversion {
+        return Err(
+            "Real-time conversion is required for this media format but was not approved".into(),
+        );
     }
 
     let dm_guard = state
@@ -4216,7 +4234,17 @@ pub fn player_device_start(
     }
     drop(dm_guard);
 
-    let (current_pos_ms, media_path, active_audio, active_sub) = {
+    let (
+        current_pos_ms,
+        media_path,
+        active_audio_id,
+        active_audio_name,
+        active_audio_idx,
+        active_sub_id,
+        active_sub_name,
+        active_sub_idx,
+        was_paused,
+    ) = {
         let _mp_guard = state
             .media_player_cell
             .lock()
@@ -4232,17 +4260,34 @@ pub fn player_device_start(
             Some(p) => p,
             None => return Err("No media path currently loaded".into()),
         };
-        let audio = if mp != 0 {
-            unsafe { (lib.libvlc_audio_get_track)(mp as *mut c_void) }
+        let (audio_id, audio_name, audio_idx) = if mp != 0 {
+            let id = unsafe { (lib.libvlc_audio_get_track)(mp as *mut c_void) };
+            let list = unsafe { (lib.libvlc_audio_get_track_description)(mp as *mut c_void) };
+            let tracks = unsafe { tracks_from_list(&lib, list, id) };
+            let idx = tracks.iter().position(|t| t.id == id).unwrap_or(0);
+            let name = tracks.into_iter().find(|t| t.id == id).map(|t| t.name);
+            (id, name, idx)
         } else {
-            -1
+            (-1, None, 0)
         };
-        let sub = if mp != 0 {
-            unsafe { (lib.libvlc_video_get_spu)(mp as *mut c_void) }
+        let (sub_id, sub_name, sub_idx) = if mp != 0 {
+            let id = unsafe { (lib.libvlc_video_get_spu)(mp as *mut c_void) };
+            let list = unsafe { (lib.libvlc_video_get_spu_description)(mp as *mut c_void) };
+            let tracks = unsafe { tracks_from_list(&lib, list, id) };
+            let idx = tracks.iter().position(|t| t.id == id).unwrap_or(0);
+            let name = tracks.into_iter().find(|t| t.id == id).map(|t| t.name);
+            (id, name, idx)
         } else {
-            -1
+            (-1, None, 0)
         };
-        (pos, path, audio, sub)
+        let paused = if mp != 0 {
+            unsafe { (lib.libvlc_media_player_get_state)(mp as *mut c_void) == 4 }
+        } else {
+            false
+        };
+        (
+            pos, path, audio_id, audio_name, audio_idx, sub_id, sub_name, sub_idx, paused,
+        )
     };
 
     // Controlled teardown of local session
@@ -4254,20 +4299,29 @@ pub fn player_device_start(
         &state.shared_instance,
         &media_path,
         native_item,
-        !approve_conversion,
+        Some(current_pos_ms as f64 / 1000.0),
     ) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("player_device_start failed to open renderer: {e}, restoring local");
             let _ = start_playback_inner(&app, &state, &media_path, true, None, false);
-            if current_pos_ms > 0 {
-                let mp_fallback = *poison(&state.media_player);
-                if mp_fallback != 0 {
-                    unsafe {
+            let mp_fallback = *poison(&state.media_player);
+            if mp_fallback != 0 {
+                unsafe {
+                    if current_pos_ms > 0 {
                         (lib.libvlc_media_player_set_time)(
                             mp_fallback as *mut c_void,
                             current_pos_ms,
                         );
+                    }
+                    if was_paused {
+                        (lib.libvlc_media_player_pause)(mp_fallback as *mut c_void);
+                    }
+                    if active_audio_id > 0 {
+                        (lib.libvlc_audio_set_track)(mp_fallback as *mut c_void, active_audio_id);
+                    }
+                    if active_sub_id > 0 {
+                        (lib.libvlc_video_set_spu)(mp_fallback as *mut c_void, active_sub_id);
                     }
                 }
             }
@@ -4295,9 +4349,9 @@ pub fn player_device_start(
 
     let _ = player::set_overlay_hidden(&app, true);
 
-    if current_pos_ms > 1000 {
+    if was_paused {
         unsafe {
-            (lib.libvlc_media_player_set_time)(session.media_player as *mut c_void, current_pos_ms);
+            (lib.libvlc_media_player_pause)(session.media_player as *mut c_void);
         }
     }
 
@@ -4310,10 +4364,14 @@ pub fn player_device_start(
     cast.preflight = Some(preflight);
     cast.last_local_position_ms = current_pos_ms;
     cast.last_media_path = Some(media_path);
-    cast.last_audio_track = active_audio;
-    cast.last_subtitle_track = active_sub;
+    cast.last_audio_track_id = active_audio_id;
+    cast.last_audio_track_name = active_audio_name;
+    cast.last_audio_track_idx = active_audio_idx;
+    cast.last_subtitle_track_id = active_sub_id;
+    cast.last_subtitle_track_name = active_sub_name;
+    cast.last_subtitle_track_idx = active_sub_idx;
+    cast.was_paused = was_paused;
     cast.conversion_approved = approve_conversion;
-    cast.drop_subtitles_approved = drop_subtitles;
 
     Ok(())
 }
@@ -4323,7 +4381,7 @@ pub fn player_device_return_to_local(
     app: tauri::AppHandle,
     state: tauri::State<PlayerState>,
 ) -> Result<(), String> {
-    let (last_path, last_pos) = {
+    let (last_path, last_pos, audio_name, audio_idx, sub_name, sub_idx, was_paused) = {
         let cast = state
             .casting_state
             .lock()
@@ -4344,11 +4402,28 @@ pub fn player_device_return_to_local(
         } else {
             cast.last_local_position_ms
         };
+        let paused = if mp != 0 {
+            if let Some(l) = lib.as_ref() {
+                unsafe { (l.libvlc_media_player_get_state)(mp as *mut c_void) == 4 }
+            } else {
+                cast.was_paused
+            }
+        } else {
+            cast.was_paused
+        };
         let path = cast
             .last_media_path
             .clone()
             .or_else(|| poison(&state.current_path).clone());
-        (path, pos)
+        (
+            path,
+            pos,
+            cast.last_audio_track_name.clone(),
+            cast.last_audio_track_idx,
+            cast.last_subtitle_track_name.clone(),
+            cast.last_subtitle_track_idx,
+            paused,
+        )
     };
 
     let path = match last_path {
@@ -4360,12 +4435,36 @@ pub fn player_device_return_to_local(
 
     start_playback_inner(&app, &state, &path, true, None, false)?;
 
-    if last_pos > 0 {
-        let mp = *poison(&state.media_player);
-        if mp != 0 {
-            if let Ok(lib) = loaded_lib(&state) {
-                unsafe {
-                    (lib.libvlc_media_player_set_time)(mp as *mut c_void, last_pos);
+    let lib = loaded_lib(&state).ok();
+    let mp = *poison(&state.media_player);
+    if mp != 0 {
+        if let Some(l) = lib.as_ref() {
+            unsafe {
+                if last_pos > 0 {
+                    (l.libvlc_media_player_set_time)(mp as *mut c_void, last_pos);
+                }
+                if was_paused {
+                    (l.libvlc_media_player_pause)(mp as *mut c_void);
+                }
+                // Restore audio track by matching name or index
+                if let Some(ref target_name) = audio_name {
+                    let list = (l.libvlc_audio_get_track_description)(mp as *mut c_void);
+                    let tracks = tracks_from_list(l, list, -1);
+                    if let Some(matched) = tracks.iter().find(|t| &t.name == target_name) {
+                        (l.libvlc_audio_set_track)(mp as *mut c_void, matched.id);
+                    } else if audio_idx < tracks.len() {
+                        (l.libvlc_audio_set_track)(mp as *mut c_void, tracks[audio_idx].id);
+                    }
+                }
+                // Restore subtitle track by matching name or index
+                if let Some(ref target_name) = sub_name {
+                    let list = (l.libvlc_video_get_spu_description)(mp as *mut c_void);
+                    let tracks = tracks_from_list(l, list, -1);
+                    if let Some(matched) = tracks.iter().find(|t| &t.name == target_name) {
+                        (l.libvlc_video_set_spu)(mp as *mut c_void, matched.id);
+                    } else if sub_idx < tracks.len() {
+                        (l.libvlc_video_set_spu)(mp as *mut c_void, tracks[sub_idx].id);
+                    }
                 }
             }
         }
@@ -4883,6 +4982,51 @@ mod tests {
         ));
         let v3 = serde_json::to_value(&poll).unwrap();
         assert_eq!(v3["cast_status"]["error"], "Connection dropped");
+    }
+
+    #[test]
+    fn test_cast_status_no_false_receiver_confirmation() {
+        let cast = crate::player::device::CastingSessionState {
+            status: crate::player::device::CastStatus::RequestIssued,
+            ..Default::default()
+        };
+        let time_ms: i64 = 45000;
+        // Verify time advancement does NOT mutate RequestIssued to Playing
+        assert_eq!(
+            cast.status,
+            crate::player::device::CastStatus::RequestIssued
+        );
+        assert!(time_ms > 0);
+        assert_ne!(format!("{:?}", cast.status), "Playing");
+    }
+
+    #[test]
+    fn test_casting_state_preserves_audio_sub_and_pause() {
+        let mut cast = crate::player::device::CastingSessionState {
+            last_local_position_ms: 12345,
+            last_media_path: Some("/path/to/movie.mkv".to_string()),
+            last_audio_track_id: 2,
+            last_audio_track_name: Some("Japanese 5.1".to_string()),
+            last_audio_track_idx: 1,
+            last_subtitle_track_id: 3,
+            last_subtitle_track_name: Some("English".to_string()),
+            last_subtitle_track_idx: 2,
+            was_paused: true,
+            conversion_approved: true,
+            ..Default::default()
+        };
+
+        assert_eq!(cast.last_local_position_ms, 12345);
+        assert_eq!(cast.last_audio_track_name.as_deref(), Some("Japanese 5.1"));
+        assert_eq!(cast.last_subtitle_track_name.as_deref(), Some("English"));
+        assert!(cast.was_paused);
+
+        cast.reset();
+        assert_eq!(cast.last_local_position_ms, 0);
+        assert!(cast.last_audio_track_name.is_none());
+        assert!(cast.last_subtitle_track_name.is_none());
+        assert!(!cast.was_paused);
+        assert!(!cast.conversion_approved);
     }
 
     /// The frontend fences stale callbacks by `gen`; the field must ride

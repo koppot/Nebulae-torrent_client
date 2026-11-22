@@ -210,7 +210,6 @@ export default function PlayerOverlay() {
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [approveConversion, setApproveConversion] = useState(false);
-  const [dropSubtitles, setDropSubtitles] = useState(false);
   const [castStatus, setCastStatus] = useState<string | null>(null);
   const [castDeviceName, setCastDeviceName] = useState<string | null>(null);
   const [castActionLoading, setCastActionLoading] = useState(false);
@@ -392,7 +391,6 @@ export default function PlayerOverlay() {
     setPreflight(null);
     setPreflightError(null);
     setApproveConversion(false);
-    setDropSubtitles(false);
 
     if (player.isDisc) {
       return;
@@ -420,7 +418,6 @@ export default function PlayerOverlay() {
     setPreflightError(null);
     setPreflight(null);
     setApproveConversion(false);
-    setDropSubtitles(false);
 
     try {
       const result = await invoke<CastPreflight>('player_device_preflight', { deviceId: device.id });
@@ -440,7 +437,6 @@ export default function PlayerOverlay() {
       await invoke('player_device_start', {
         deviceId: selectedDevice.id,
         approveConversion,
-        dropSubtitles,
       });
       setShowDevicePicker(false);
       stopDiscovery();
@@ -451,7 +447,7 @@ export default function PlayerOverlay() {
     } finally {
       setCastActionLoading(false);
     }
-  }, [selectedDevice, approveConversion, dropSubtitles, stopDiscovery]);
+  }, [selectedDevice, approveConversion, stopDiscovery]);
 
   const handleReturnToLocal = useCallback(async () => {
     setCastActionLoading(true);
@@ -492,7 +488,6 @@ export default function PlayerOverlay() {
     setPreflight(null);
     setPreflightError(null);
     setApproveConversion(false);
-    setDropSubtitles(false);
     setCastStatus(null);
     setCastDeviceName(null);
     setCastActionLoading(false);
@@ -1681,18 +1676,14 @@ export default function PlayerOverlay() {
 
             <div className="space-y-1">
               <h3 className="text-white text-base font-semibold">
-                {castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting'
-                  ? `Playback requested on ${castDeviceName || 'device'}`
-                  : isCastError
+                {isCastError
                   ? 'Playback Error on Device'
-                  : `Playing on ${castDeviceName || 'device'}`}
+                  : `Playback requested on ${castDeviceName || 'device'}`}
               </h3>
               <p className="text-xs text-white/60">
-                {castStatus === 'request_issued' || castStatus === 'connecting' || castStatus === 'requesting'
-                  ? 'Establishing remote stream. Playback will begin momentarily.'
-                  : isCastError
+                {isCastError
                   ? castStatusText
-                  : 'Media stream is playing on your remote screen. Use the controls below to seek, pause, or adjust volume.'}
+                  : 'Local pipeline streaming. Use the controls below to pause, seek, adjust volume, or return playback to this computer.'}
               </p>
             </div>
 
@@ -1703,7 +1694,7 @@ export default function PlayerOverlay() {
                 onClick={handleReturnToLocal}
                 className="px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-medium border border-white/20 transition disabled:opacity-50"
               >
-                {castActionLoading ? 'Switching...' : 'Play on this Computer'}
+                {castActionLoading ? 'Returning...' : 'Return to Computer'}
               </button>
               <button
                 type="button"
@@ -1711,7 +1702,7 @@ export default function PlayerOverlay() {
                 onClick={handleDisconnectDevice}
                 className="px-4 py-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium transition disabled:opacity-50"
               >
-                Disconnect
+                Stop Casting
               </button>
             </div>
           </div>
@@ -2451,24 +2442,19 @@ export default function PlayerOverlay() {
                     )}
 
                     {/* Subtitle Limitation Notice & Acknowledgment */}
-                    {!preflight.subtitle_supported && Boolean(preflight.selected_subtitle) && (
-                      <div className="p-3 rounded-lg bg-orange-500/10 border border-orange-500/30 space-y-2">
+                    {/* Subtitle Limitation Notice */}
+                    {Boolean(preflight.selected_subtitle) && (
+                      <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 space-y-1 text-xs">
                         <div className="flex items-start gap-2">
-                          <AlertCircle className="w-4 h-4 text-orange-400 shrink-0 mt-0.5" />
-                          <div className="text-xs text-white/90">
-                            <span className="font-semibold text-orange-400">Subtitle Limitation:</span>{' '}
-                            Google Cast renderer streaming in libVLC does not support subtitle transmission. Subtitles will be dropped on the remote device.
+                          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                          <div className="text-white/90">
+                            <span className="font-semibold text-red-400">Subtitle Limitation:</span>{' '}
+                            The selected subtitle track ({preflight.selected_subtitle}) cannot be rendered on remote Cast devices by the libVLC 3.0 renderer. Subtitle-enabled device playback is currently unavailable.
                           </div>
                         </div>
-                        <label className="flex items-center gap-2 text-xs text-white cursor-pointer pt-1 select-none">
-                          <input
-                            type="checkbox"
-                            checked={dropSubtitles}
-                            onChange={(e) => setDropSubtitles(e.target.checked)}
-                            className="rounded border-[#444] text-red-600 focus:ring-0"
-                          />
-                          <span>Acknowledge and stream without subtitles</span>
-                        </label>
+                        <div className="text-[11px] text-white/60 pl-6">
+                          To stream to this device, turn Subtitles Off in player controls. To watch with subtitles, continue playing on this computer.
+                        </div>
                       </div>
                     )}
 
@@ -2496,10 +2482,15 @@ export default function PlayerOverlay() {
                         disabled={
                           castActionLoading ||
                           (preflight.conversion_required && !approveConversion) ||
-                          (!preflight.subtitle_supported && Boolean(preflight.selected_subtitle) && !dropSubtitles)
+                          Boolean(preflight.selected_subtitle)
                         }
                         onClick={() => void handleStartCasting()}
                         className="px-4 py-1.5 text-xs font-semibold rounded bg-[#e50914] text-white hover:bg-[#b80710] disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-2"
+                        title={
+                          preflight.selected_subtitle
+                            ? 'Subtitle-enabled casting is currently unavailable. Turn subtitles Off to cast.'
+                            : undefined
+                        }
                       >
                         {castActionLoading ? (
                           <>
