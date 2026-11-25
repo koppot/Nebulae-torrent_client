@@ -291,10 +291,10 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "==> Verifying git status --porcelain before build..."
-          $status = [string](git status --porcelain)
-          if ($status.Trim()) {
+          $rawStatus = git status --porcelain
+          if ($rawStatus) {
             Write-Host "WARNING: untracked or modified files present:"
-            Write-Host $status
+            Write-Host ($rawStatus | Out-String)
           } else {
             Write-Host "Worktree is 100% clean."
           }
