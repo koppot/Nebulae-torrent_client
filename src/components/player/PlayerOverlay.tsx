@@ -348,6 +348,15 @@ export default function PlayerOverlay() {
   // cancelling pendingResumeRef so a 1-tick spoofed set_title(0) announce on
   // unpatched libVLC cannot wipe saved resume state.
   const menuConfirmPollsRef = useRef(0);
+  // Resume seek state tracking (L-017):
+  // After leaving disc menu, wait until title has played 2s with position advancing,
+  // seek once, check after 1s that position is within 5s of target; if fell back to menu
+  // or position did not land, stop without retrying and log result.
+  const resumePlayStartTimeRef = useRef<number | null>(null);
+  const resumeInitialPosRef = useRef<number | null>(null);
+  const resumeSeekDispatchedAtRef = useRef<number | null>(null);
+  const resumeTargetVerifiedRef = useRef<boolean>(false);
+  const resumeFailedRef = useRef<boolean>(false);
   // Guards against popup-only / JumpTitle-1 Blu-rays where clicking Menu
   // restarts the active feature at 0:00 instead of opening an authored Top Menu.
   const menuReturnGuardRef = useRef<MenuReturnGuardState | null>(null);
@@ -364,6 +373,11 @@ export default function PlayerOverlay() {
     pendingResumeRef.current = null;
     pendingResumeTitleRef.current = null;
     justLeftMenuRef.current = false;
+    resumePlayStartTimeRef.current = null;
+    resumeInitialPosRef.current = null;
+    resumeSeekDispatchedAtRef.current = null;
+    resumeTargetVerifiedRef.current = false;
+    resumeFailedRef.current = false;
     if (manualSeekingTimerRef.current !== null) {
       window.clearTimeout(manualSeekingTimerRef.current);
     }
@@ -552,6 +566,11 @@ export default function PlayerOverlay() {
     initialResumeArmedRef.current = false;
     completedTitlesRef.current.clear();
     manualSeekingRef.current = false;
+    resumePlayStartTimeRef.current = null;
+    resumeInitialPosRef.current = null;
+    resumeSeekDispatchedAtRef.current = null;
+    resumeTargetVerifiedRef.current = false;
+    resumeFailedRef.current = false;
     if (manualSeekingTimerRef.current !== null) {
       window.clearTimeout(manualSeekingTimerRef.current);
       manualSeekingTimerRef.current = null;
@@ -726,7 +745,7 @@ export default function PlayerOverlay() {
           }).catch(() => {});
         }
       }
-      const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null;
+      const shouldAttemptResume = (justLeftMenuRef.current || !initialResumeArmedRef.current) && !p.at_menu && p.length_ms > 300_000 && pendingResumeRef.current === null && !resumeFailedRef.current;
       if (shouldAttemptResume) {
         initialResumeArmedRef.current = true;
         if (completedTitlesRef.current.has(p.title)) {
@@ -737,6 +756,11 @@ export default function PlayerOverlay() {
           if (savedMs >= 10000) {
             pendingResumeRef.current = savedMs;
             pendingResumeTitleRef.current = p.title;
+            resumePlayStartTimeRef.current = null;
+            resumeInitialPosRef.current = null;
+            resumeSeekDispatchedAtRef.current = null;
+            resumeTargetVerifiedRef.current = false;
+            resumeFailedRef.current = false;
             invoke('log_frontend', { message: `[resume-diag] ARM armed: gen=${player.gen} pendingResume=${savedMs} pendingTitle=${p.title}` }).catch(() => {});
           } else {
             invoke('log_frontend', { message: `[resume-diag] ARM no-save: gen=${player.gen} savedMs=${savedMs} < 10000, not arming` }).catch(() => {});
@@ -749,29 +773,83 @@ export default function PlayerOverlay() {
         // Log each waiting tick while length_ms is not yet available (DVD async).
         invoke('log_frontend', { message: `[resume-diag] ARM waiting: gen=${player.gen} title=${p.title} length_ms=${p.length_ms} playing=${p.playing} (need length_ms>300000)` }).catch(() => {});
       }
-      // Apply the pending resume: wait until the feature is confirmed playing
-      // (VLC may briefly report length before actually playing), then seek
-      // once and clear. Guards:
-      //   - not at_menu: don't seek a menu
-      //   - playing: feature is confirmed live
-      //   - length_ms > 300_000: still the right kind of title
-      //   - title matches: same episode/title we saved for (DVD multi-episode)
-      //   - time_ms < target + 5000: user hasn't already sought past the target
-      if (pendingResumeRef.current !== null) {
+
+      // Resume execution & verification (L-017):
+      // Keep resume. Never seek while at_menu is true. After leaving a disc menu,
+      // wait until the title has played 2 s with position advancing, seek once,
+      // check after 1 s that the position is within 5 s of the target, and if the
+      // disc fell back to the menu or the position did not land, stop without retrying
+      // and log the result.
+      if (pendingResumeRef.current !== null && !resumeFailedRef.current) {
         const titleMatch = pendingResumeTitleRef.current === p.title;
-        const guardPlaying = p.playing;
-        const guardLen = p.length_ms > 300_000;
-        const guardTime = p.time_ms < pendingResumeRef.current + 5000;
-        const guardMenu = !p.at_menu;
-        if (titleMatch && guardMenu && guardPlaying && guardLen && guardTime) {
-          const seekTarget = pendingResumeRef.current;
-          pendingResumeRef.current = null;
-          pendingResumeTitleRef.current = null;
-          invoke('log_frontend', { message: `[resume-diag] SEEK dispatching: gen=${player.gen} positionMs=${seekTarget} title=${p.title} time_ms=${p.time_ms}` }).catch(() => {});
-          invoke('player_seek', { positionMs: seekTarget }).catch(() => {});
-        } else {
-          // Log each blocked tick (bounded: clears on seek or at_menu cancel).
-          invoke('log_frontend', { message: `[resume-diag] APPLY blocked: gen=${player.gen} pending=${pendingResumeRef.current} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${guardPlaying} length_ok=${guardLen} time_ok=${guardTime} at_menu=${p.at_menu}` }).catch(() => {});
+        const target = pendingResumeRef.current;
+        const now = Date.now();
+
+        if (p.at_menu) {
+          // Never seek while at_menu is true
+          if (menuConfirmPollsRef.current >= 2) {
+            invoke('log_frontend', { message: `[resume-diag] CANCEL: gen=${player.gen} confirmed at menu, clearing pendingResume=${target}` }).catch(() => {});
+            pendingResumeRef.current = null;
+            pendingResumeTitleRef.current = null;
+            justLeftMenuRef.current = false;
+            initialResumeArmedRef.current = true;
+          }
+        } else if (resumeSeekDispatchedAtRef.current === null) {
+          // Phase 1: Wait until the title has played 2 s with position advancing
+          if (titleMatch && p.playing && p.length_ms > 300_000) {
+            if (resumeInitialPosRef.current === null) {
+              resumeInitialPosRef.current = p.time_ms;
+              resumePlayStartTimeRef.current = now;
+              invoke('log_frontend', { message: `[resume-diag] Playback started: initial_time_ms=${p.time_ms}, waiting for 2s of advancing playback` }).catch(() => {});
+            } else {
+              const posAdvanced = p.time_ms > resumeInitialPosRef.current;
+              const playedDurationMs = now - (resumePlayStartTimeRef.current ?? now);
+              if (posAdvanced && playedDurationMs >= 2000) {
+                // Criteria met: 2 s played with position advancing. Seek once!
+                resumeSeekDispatchedAtRef.current = now;
+                invoke('log_frontend', {
+                  message: `[resume-diag] SEEK dispatching: gen=${player.gen} positionMs=${target} title=${p.title} current_time_ms=${p.time_ms} played_duration_ms=${playedDurationMs}`
+                }).catch(() => {});
+                invoke('player_seek', { positionMs: target }).catch(() => {});
+              } else if (!posAdvanced) {
+                invoke('log_frontend', {
+                  message: `[resume-diag] Waiting for position to advance: current_time_ms=${p.time_ms} initial=${resumeInitialPosRef.current} played_ms=${playedDurationMs}`
+                }).catch(() => {});
+              }
+            }
+          } else {
+            invoke('log_frontend', { message: `[resume-diag] APPLY blocked: gen=${player.gen} pending=${target} title=${p.title} pendingTitle=${pendingResumeTitleRef.current} titleMatch=${titleMatch} playing=${p.playing} length_ok=${p.length_ms > 300_000} at_menu=${p.at_menu}` }).catch(() => {});
+          }
+        } else if (!resumeTargetVerifiedRef.current) {
+          // Phase 2: Check after 1 s that the position is within 5 s of the target
+          const sinceSeekMs = now - resumeSeekDispatchedAtRef.current;
+          if (sinceSeekMs >= 1000) {
+            resumeTargetVerifiedRef.current = true;
+            if (p.at_menu) {
+              invoke('log_frontend', {
+                message: `[resume-diag] SEEK FAILED: disc fell back to menu (at_menu=true). Aborting resume without retry.`
+              }).catch(() => {});
+              resumeFailedRef.current = true;
+              pendingResumeRef.current = null;
+              pendingResumeTitleRef.current = null;
+            } else {
+              const diff = Math.abs(p.time_ms - target);
+              if (diff <= 5000) {
+                invoke('log_frontend', {
+                  message: `[resume-diag] SEEK VERIFIED: landed at ${p.time_ms}ms (target ${target}ms, diff ${diff}ms <= 5000ms). Resume complete.`
+                }).catch(() => {});
+                pendingResumeRef.current = null;
+                pendingResumeTitleRef.current = null;
+              } else {
+                invoke('log_frontend', {
+                  message: `[resume-diag] SEEK FAILED: position did not land within 5s (current ${p.time_ms}ms, target ${target}ms, diff ${diff}ms > 5000ms). Aborting resume without retry.`
+                }).catch(() => {});
+                resumeFailedRef.current = true;
+                pendingResumeRef.current = null;
+                pendingResumeTitleRef.current = null;
+              }
+            }
+          }
         }
       }
       // Cancel pending resume only once the menu has confirmed across >=2 poll

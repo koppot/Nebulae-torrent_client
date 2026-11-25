@@ -1037,15 +1037,31 @@ pub fn disc_title_dump(disc_path: &str) -> Result<String, String> {
 /// Returns true if any clip has format == 7 (2160p UHD), color_space == 2 (BT.2020),
 /// or dynamic_range_type > 0 (HDR10/Dolby Vision/Philips HDR).
 pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
+    let t_start = std::time::Instant::now();
     let playlists = parse_disc_playlists(disc_path);
-    for pl in &playlists {
-        if pl.is_uhd {
-            return true;
-        }
+    let mpls_scan_ms = t_start.elapsed().as_millis();
+
+    // If the .mpls scan parsed playlists, it has inspected every video stream.
+    // Return immediately without running the slow bd_open fallback.
+    if !playlists.is_empty() {
+        let is_uhd = playlists.iter().any(|pl| pl.is_uhd);
+        tracing::info!(
+            "[disc-diag] is_disc_uhd_or_hdr: path='{}' playlists={} is_uhd={} (mpls_scan_ms={}ms, skipped bd_open fallback)",
+            disc_path,
+            playlists.len(),
+            is_uhd,
+            mpls_scan_ms
+        );
+        return is_uhd;
     }
 
+    tracing::warn!(
+        "[disc-diag] is_disc_uhd_or_hdr: .mpls scan found 0 playlists for '{}'; falling back to bd_open probe",
+        disc_path
+    );
+    let t_fallback = std::time::Instant::now();
     let _probe_guard = BD_PROBE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
+    let is_uhd = unsafe {
         let Ok(lib) = open_bluray_lib() else {
             return false;
         };
@@ -1115,7 +1131,16 @@ pub fn is_disc_uhd_or_hdr(disc_path: &str) -> bool {
         }
         bd_close(bd);
         is_uhd
-    }
+    };
+
+    tracing::info!(
+        "[disc-diag] is_disc_uhd_or_hdr: path='{}' fallback_is_uhd={} (bd_open_ms={}ms, total_ms={}ms)",
+        disc_path,
+        is_uhd,
+        t_fallback.elapsed().as_millis(),
+        t_start.elapsed().as_millis()
+    );
+    is_uhd
 }
 
 /// Resolve a Blu-ray disc root directory from either `<disc_root>` or
