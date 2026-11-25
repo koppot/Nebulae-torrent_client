@@ -696,9 +696,10 @@ Section Install
   ; Copy WebView2Loader.dll if present
   !ifexists "WebView2Loader.dll"
     File "/oname=$INSTDIR\WebView2Loader.dll" "WebView2Loader.dll"
-  !endif
-  !ifexists "resources\WebView2Loader.dll"
-    File "/oname=$INSTDIR\WebView2Loader.dll" "resources\WebView2Loader.dll"
+  !else
+    !ifexists "resources\WebView2Loader.dll"
+      File "/oname=$INSTDIR\WebView2Loader.dll" "resources\WebView2Loader.dll"
+    !endif
   !endif
 
   ; Copy resources

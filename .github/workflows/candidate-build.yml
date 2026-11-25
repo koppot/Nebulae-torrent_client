@@ -291,8 +291,8 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "==> Verifying git status --porcelain before build..."
-          $status = (git status --porcelain).Trim()
-          if ($status) {
+          $status = [string](git status --porcelain)
+          if ($status.Trim()) {
             Write-Host "WARNING: untracked or modified files present:"
             Write-Host $status
           } else {
@@ -413,7 +413,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
           Copy-Item -Path "nebulae.exe" -Destination "$portableDir\nebulae.exe"
           Copy-Item -Path "src-tauri\icons\icon.ico" -Destination "$portableDir\app.ico"
-          if (Test-Path "WebView2Loader.dll") {
+          if (Test-Path "src-tauri\resources\WebView2Loader.dll") {
+            Copy-Item -Path "src-tauri\resources\WebView2Loader.dll" -Destination "$portableDir\WebView2Loader.dll"
+          } elseif (Test-Path "src-tauri\WebView2Loader.dll") {
+            Copy-Item -Path "src-tauri\WebView2Loader.dll" -Destination "$portableDir\WebView2Loader.dll"
+          } elseif (Test-Path "WebView2Loader.dll") {
             Copy-Item -Path "WebView2Loader.dll" -Destination "$portableDir\WebView2Loader.dll"
           }
           Copy-Item -Path "src-tauri\resources" -Destination "$portableDir\resources" -Recurse
