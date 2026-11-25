@@ -79,6 +79,16 @@ src-tauri/vlc-runtime-build/
 src-tauri/resources/player/lib/
 src-tauri/resources/engine/transmission/
 src-tauri/resources/engine/tailscale/
+src-tauri/resources/geo/
 src-tauri/resources/geo/*.mmdb
+src-tauri/resources/licenses/
 src-tauri/resources/vlc/
 src-tauri/resources/jre/
+src-tauri/resources/WebView2Loader.dll
+src-tauri/WebView2Loader.dll
+WebView2Loader.dll
+jrex/
+*.tar.xz
+*.sha256
+candidate-source.txt
+WINDOWS-SIGNING-STATUS.txt

@@ -154,6 +154,7 @@ jobs:
 
           # Stage WebView2Loader.dll
           Copy-Item WebView2Loader.dll -Destination src-tauri/ -Force
+          Copy-Item WebView2Loader.dll -Destination src-tauri/resources/ -Force
 
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
@@ -280,6 +281,23 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
           tar.exe -xf patched-vlc-win64-3.0.23-complete.tar.xz -C src-tauri/resources/vlc
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
+
+          # Clean up downloaded archives so git status is completely clean
+          Remove-Item -Force geo-databases.tar.gz, licenses.tar.gz, vcrt140-x64.tar.gz, patched-vlc-win64-3.0.23-complete.tar.xz, WebView2Loader.dll -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force jrex, jre.zip -ErrorAction SilentlyContinue
+
+      - name: Verify clean worktree before compilation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "==> Verifying git status --porcelain before build..."
+          $status = (git status --porcelain).Trim()
+          if ($status) {
+            Write-Host "WARNING: untracked or modified files present:"
+            Write-Host $status
+          } else {
+            Write-Host "Worktree is 100% clean."
+          }
 
       # tauri.conf.json's "resources/**/*" glob copies hidden files too, so a
       # .DS_Store left by Finder in src-tauri/resources would end up inside the

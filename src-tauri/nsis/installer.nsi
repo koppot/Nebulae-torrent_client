@@ -693,6 +693,14 @@ Section Install
   File "${MAINBINARYSRCPATH}"
   File "/oname=$INSTDIR\app.ico" "${INSTALLERICON}"
 
+  ; Copy WebView2Loader.dll if present
+  !ifexists "WebView2Loader.dll"
+    File "/oname=$INSTDIR\WebView2Loader.dll" "WebView2Loader.dll"
+  !endif
+  !ifexists "resources\WebView2Loader.dll"
+    File "/oname=$INSTDIR\WebView2Loader.dll" "resources\WebView2Loader.dll"
+  !endif
+
   ; Copy resources
   {{#each resources_dirs}}
     CreateDirectory "$INSTDIR\\{{this}}"
@@ -831,6 +839,7 @@ Section Uninstall
   ; Copy main executable
   Delete "$INSTDIR\${MAINBINARYNAME}.exe"
   Delete "$INSTDIR\app.ico"
+  Delete "$INSTDIR\WebView2Loader.dll"
 
   ; Delete resources
   {{#each resources}}
