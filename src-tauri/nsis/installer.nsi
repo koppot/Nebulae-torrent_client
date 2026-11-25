@@ -693,15 +693,6 @@ Section Install
   File "${MAINBINARYSRCPATH}"
   File "/oname=$INSTDIR\app.ico" "${INSTALLERICON}"
 
-  ; Copy WebView2Loader.dll if present
-  !ifexists "WebView2Loader.dll"
-    File "/oname=$INSTDIR\WebView2Loader.dll" "WebView2Loader.dll"
-  !else
-    !ifexists "resources\WebView2Loader.dll"
-      File "/oname=$INSTDIR\WebView2Loader.dll" "resources\WebView2Loader.dll"
-    !endif
-  !endif
-
   ; Copy resources
   {{#each resources_dirs}}
     CreateDirectory "$INSTDIR\\{{this}}"
@@ -709,6 +700,10 @@ Section Install
   {{#each resources}}
     File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
   {{/each}}
+
+  ; Copy WebView2Loader.dll to install root
+  IfFileExists "$INSTDIR\resources\WebView2Loader.dll" 0 +2
+    CopyFiles /SILENT "$INSTDIR\resources\WebView2Loader.dll" "$INSTDIR\WebView2Loader.dll"
 
   ; Copy external binaries
   {{#each binaries}}
