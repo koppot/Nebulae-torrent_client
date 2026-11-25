@@ -1,6 +1,6 @@
 {
-  "staged_at_utc": "2026-11-06T21:01:37Z",
-  "git_rev": "85a9198",
+  "staged_at_utc": "2026-11-14T14:53:39Z",
+  "git_rev": "eaf1553",
   "vlc_version": "3.0.23",
   "target_arch": "arm64",
   "sources": {
@@ -29,116 +29,106 @@
         "current_version": "4.0.0",
         "compatibility_version": "4.0.0",
         "min_macos": "11.0",
-        "sha256_source": "352231528bdf1ebbafa7992d697b6395a53a2f3b58d0093d08e18b5436617a74",
-        "sha256_bundled": "f5320f219bc8f96808c7f277f10dacbc7038657511177cda517ea5030e2c5ed2",
+        "sha256_source": "ae733a2c467f25b9fa11a7ce024b83694cb5b0c4c9ac0518a60dee4f2c654068",
+        "sha256_bundled": "c01e0d1dfed603f87a283b9858ae120687eeb61bc9ca49a679e2bd625642556f",
         "origin": "not a Homebrew keg"
       },
       {
         "name": "libfontconfig.1.dylib",
-        "current_version": "18.0.0",
-        "compatibility_version": "18.0.0",
-        "min_macos": "26.0",
-        "sha256_source": "e1f5e06e8339b42f0e1af11cc77979ef6a8f48ffa7588e4dc243e4bd69ea656d",
-        "sha256_bundled": "829a80fcac8cc60a76f61aacff6439fef4184970685ffd43079c4f1b9da78ddb",
-        "origin": "homebrew",
-        "homebrew_formula": "fontconfig",
-        "homebrew_version": "2.18.3"
+        "current_version": "15.0.0",
+        "compatibility_version": "15.0.0",
+        "min_macos": "11.0",
+        "sha256_source": "40e18e4a90a379c0d69269b815b2232b160c184f3094fc48e7c4122458fef729",
+        "sha256_bundled": "d75613cb3caabda440c92d4b640b26e4863715af0507b0cd80c7ab735298bad0",
+        "origin": "not a Homebrew keg"
       },
       {
         "name": "libfreetype.6.dylib",
         "current_version": "27.6.0",
         "compatibility_version": "27.0.0",
-        "min_macos": "26.0",
-        "sha256_source": "e4b41d886673fd1c282764a3113224d83b09bd705d12db7c36366fb04b7592dc",
-        "sha256_bundled": "344ede59bdf32d87dfc49569f3a4921b3d2040db7c26ea4b353502002929d8ac",
-        "origin": "homebrew",
-        "homebrew_formula": "freetype",
-        "homebrew_version": "2.14.3"
+        "min_macos": "11.0",
+        "sha256_source": "b16a13f017795fe0f68541f5e2380a0ed01864860cd41ee63b34266d4f332a7b",
+        "sha256_bundled": "e993f5ca10a9e198019bee0717f5d63a507b1de6e4175036540e6a20b3a6f2e8",
+        "origin": "not a Homebrew keg"
       },
       {
         "name": "libpng16.16.dylib",
         "current_version": "76.0.0",
         "compatibility_version": "76.0.0",
-        "min_macos": "26.0",
-        "sha256_source": "ec95a41f112fac5e0b077f129bccc67acf9b5ad1a01f56cc0ecebae2a8727ff2",
-        "sha256_bundled": "0e2762fc3b9a6e40881eaddd9d17651648332af03b1909200100e173cb118595",
-        "origin": "homebrew",
-        "homebrew_formula": "libpng",
-        "homebrew_version": "1.6.59"
+        "min_macos": "11.0",
+        "sha256_source": "7a1a76e5e581983e2f0ceaa3893eea59d65d8a78df0af23da342a1967861804c",
+        "sha256_bundled": "903f37139bc4bf21c95d0daf86091073fdb439de328a55083948749a9d70b921",
+        "origin": "not a Homebrew keg"
       },
       {
         "name": "libudfread.3.dylib",
         "current_version": "3.0.0",
         "compatibility_version": "3.0.0",
-        "min_macos": "26.0",
-        "sha256_source": "0f382113c23df0289924812740263baf8b6fc43097d49ebc637c03bf72f510ad",
-        "sha256_bundled": "3c9732ad09b0d7bd42dd988d74fd8a910e92dcc2f323e934218c65917597dff9",
-        "origin": "homebrew",
-        "homebrew_formula": "libudfread",
-        "homebrew_version": "1.2.0"
+        "min_macos": "11.0",
+        "sha256_source": "c02ab9721a9062f411bdaee4bc951474be280f7fdba2b90d10123f409afba8d3",
+        "sha256_bundled": "f7e9b6b8f522d604d0c988e079c2cc2d11db9f3c4064d2da0d3b14c8205a4db7",
+        "origin": "not a Homebrew keg"
       },
       {
         "name": "libintl.8.dylib",
-        "current_version": "13.6.0",
-        "compatibility_version": "13.0.0",
-        "min_macos": "26.0",
-        "sha256_source": "0c6d618e75fea85cc3d631e164a71766fba9341d19ce1f723300c52e63037c51",
-        "sha256_bundled": "c6488deb60e2e85966f00485ec2ad7f3e7390eeeff11d8bf22b39e5319a506a4",
-        "origin": "homebrew",
-        "homebrew_formula": "gettext",
-        "homebrew_version": "1.0"
+        "current_version": "11.0.0",
+        "compatibility_version": "11.0.0",
+        "min_macos": "11.0",
+        "sha256_source": "c1f88fd875cbd1f9d76e7904d3173feb2891643ff007058be4b38628889a017d",
+        "sha256_bundled": "fce548fcb4b78e7a0645acf46c0c8f2956ac652edf53792c4bff7a1a02e5580e",
+        "origin": "not a Homebrew keg"
       }
     ]
   },
   "files": [
     {
       "path": "vlc/bundled-libraries.json",
-      "sha256": "a06523780c10e49f37309b2d3649afccbf7c890d41785a022f410f3746b3703e",
+      "sha256": "10c6dad8a81563fd55662d1a3320cb7c8fe92ebc44cb80031d0669c26d712ddb",
       "source": "nebulae-notice"
     },
     {
       "path": "vlc/lib/libbluray-awt-j2se-1.5.0.jar",
-      "sha256": "90ec27ca518b80d83359ae9a1683fe5590e6058fa1127c479cd839291cfc42e9",
+      "sha256": "14b6e921914a6396d6db7589a5bab69b6b329f03111a5201edb1a8a3d5765259",
       "source": "libbluray-build"
     },
     {
       "path": "vlc/lib/libbluray-j2se-1.5.0.jar",
-      "sha256": "c06a552d8a707175ecd8188382768179186dffa7f585feda42e3b058fe101a37",
+      "sha256": "51ab28887186cd247ae90d1a56a13393a336f4203c0307605adc86c7553c8105",
       "source": "libbluray-build"
     },
     {
       "path": "vlc/lib/libbluray.4.dylib",
-      "sha256": "f5320f219bc8f96808c7f277f10dacbc7038657511177cda517ea5030e2c5ed2",
+      "sha256": "c01e0d1dfed603f87a283b9858ae120687eeb61bc9ca49a679e2bd625642556f",
       "source": "libbluray-build"
     },
     {
       "path": "vlc/lib/libfontconfig.1.dylib",
-      "sha256": "829a80fcac8cc60a76f61aacff6439fef4184970685ffd43079c4f1b9da78ddb",
+      "sha256": "d75613cb3caabda440c92d4b640b26e4863715af0507b0cd80c7ab735298bad0",
       "source": "homebrew-relocated"
     },
     {
       "path": "vlc/lib/libfreetype.6.dylib",
-      "sha256": "344ede59bdf32d87dfc49569f3a4921b3d2040db7c26ea4b353502002929d8ac",
+      "sha256": "e993f5ca10a9e198019bee0717f5d63a507b1de6e4175036540e6a20b3a6f2e8",
       "source": "homebrew-relocated"
     },
     {
       "path": "vlc/lib/libintl.8.dylib",
-      "sha256": "c6488deb60e2e85966f00485ec2ad7f3e7390eeeff11d8bf22b39e5319a506a4",
+      "sha256": "fce548fcb4b78e7a0645acf46c0c8f2956ac652edf53792c4bff7a1a02e5580e",
       "source": "homebrew-relocated"
     },
     {
       "path": "vlc/lib/libpng16.16.dylib",
-      "sha256": "0e2762fc3b9a6e40881eaddd9d17651648332af03b1909200100e173cb118595",
+      "sha256": "903f37139bc4bf21c95d0daf86091073fdb439de328a55083948749a9d70b921",
       "source": "homebrew-relocated"
     },
     {
       "path": "vlc/lib/libudfread.3.dylib",
-      "sha256": "3c9732ad09b0d7bd42dd988d74fd8a910e92dcc2f323e934218c65917597dff9",
+      "sha256": "f7e9b6b8f522d604d0c988e079c2cc2d11db9f3c4064d2da0d3b14c8205a4db7",
       "source": "homebrew-relocated"
     },
     {
       "path": "vlc/lib/libvlc.5.dylib",
-      "sha256": "948ff97b054ab6426bd2a145f701831d8146837b6ff571b9f08a0280a443dce7",
+      "sha256": "838f1efdd1fed1dbd23a93151c2123b2e1162da6d899eb60adb78cb983d66bd9",
       "source": "custom-build"
     },
     {
@@ -148,32 +138,7 @@
     },
     {
       "path": "vlc/licenses/README.txt",
-      "sha256": "b436ce60d1e1d12544a9b6cc439122abbec44588a73d3d030ec9b4e3efacd547",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/fontconfig-2.18.3/AUTHORS",
-      "sha256": "db6d73a160bb2de10268f88ef60aae91771fefdeee4992b791c76ce6592a4a4b",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/fontconfig-2.18.3/COPYING",
-      "sha256": "51a51aa9823704fd90bccc616cdd17ebabb5b2b3e9cbde886ca02c7002288067",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/freetype-2.14.3/LICENSE.TXT",
-      "sha256": "bd36c8b474855fa294c2ec5c184544478ef3720aad37d65a6296a4f264fd2d3b",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/gettext-1.0/AUTHORS",
-      "sha256": "167b04ed012e59c2d2cfc87d420d8c8a8f5c528ef1fd068598b36d57f39db203",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/gettext-1.0/COPYING",
-      "sha256": "e79e9c8a0c85d735ff98185918ec94ed7d175efc377012787aebcf3b80f0d90b",
+      "sha256": "4dde11ba9ab21254edcabf40d4979f8621dfe7308246d531226756b26602217b",
       "source": "nebulae-notice"
     },
     {
@@ -184,21 +149,6 @@
     {
       "path": "vlc/licenses/libbluray-1.5.0/SOURCE.txt",
       "sha256": "64756b7904de993d79c423baed865cf75af73d2b1cc1b9604960a1cbf8467ff6",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/libpng-1.6.59/AUTHORS",
-      "sha256": "b55efa9a0bb709187cfb609860e926535b462a28bbf61b4294bc2e724747cb8e",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/libpng-1.6.59/LICENSE",
-      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526",
-      "source": "nebulae-notice"
-    },
-    {
-      "path": "vlc/licenses/libudfread-1.2.0/COPYING",
-      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
       "source": "nebulae-notice"
     },
     {
@@ -218,12 +168,17 @@
     },
     {
       "path": "vlc/licenses/vlc-3.0.23/bluray-menu-first.patch",
-      "sha256": "da8b41151b617149d6b1927a99a24bf4fa439a3dd470375483f105550a8f75bb",
+      "sha256": "9f2e37a9450b84a0ac6c1962b9054f180f6d37697b3919749a4fd69e5810de29",
       "source": "nebulae-notice"
     },
     {
       "path": "vlc/licenses/vlc-3.0.23/bluray-playlist-id.patch",
       "sha256": "13535494e9f5cbe71f8b66fc04ea4cdae40542097c038c45988d1693b0544dd0",
+      "source": "nebulae-notice"
+    },
+    {
+      "path": "vlc/licenses/vlc-3.0.23/d3d11-hdr-sdr-tonemap.patch",
+      "sha256": "1b046e7ea822b8e215b7c4d1977d03e3deb5d5ab763940c37077cf57fb4da0b4",
       "source": "nebulae-notice"
     },
     {
@@ -953,7 +908,7 @@
     },
     {
       "path": "vlc/plugins/liblibbluray_plugin.dylib",
-      "sha256": "298dbb0b140a6b5fecca504a012d1bbe8cbd852808eef58c5f97fb42fe73de93",
+      "sha256": "1a4be0671e5666b6b517ef10ae90e1d093d9f2c7cdb64a156a20f71edb9b3ce4",
       "source": "custom-build"
     },
     {
