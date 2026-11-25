@@ -782,7 +782,9 @@ pub fn run() {
             _ => {}
         })
         .on_menu_event(app_menu::handle_menu_event)
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler({
+            let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static> =
+                Box::new(tauri::generate_handler![
             // Diagnostics & Recovery
             commands::diagnostics::get_engine_init_error,
             commands::diagnostics::log_frontend,
@@ -1029,7 +1031,18 @@ pub fn run() {
             updater::get_available_update,
             updater::download_and_install_update,
             updater::get_update_staged,
-        ])
+            ]);
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                let cmd = invoke.message.command().to_string();
+                let t0 = std::time::Instant::now();
+                let res = handler(invoke);
+                let elapsed_ms = t0.elapsed().as_millis();
+                if elapsed_ms > 200 {
+                    tracing::warn!("[perf] Tauri command '{}' took {}ms (>200ms)", cmd, elapsed_ms);
+                }
+                res
+            }
+        })
         .build(tauri::generate_context!())
         .expect("Error while building Nebulae application");
 

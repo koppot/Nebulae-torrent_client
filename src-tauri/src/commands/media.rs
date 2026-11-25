@@ -922,6 +922,7 @@ fn start_playback_inner(
     state
         .bypass_menu
         .store(bypass_menu, std::sync::atomic::Ordering::SeqCst);
+    let t_resolve_start = std::time::Instant::now();
     let resolved = if let Some(feature) = explicit_feature {
         // Explicit resume: the caller already resolved the feature file.
         // Treat it as a plain file path so resolve_playback cannot redirect
@@ -948,10 +949,11 @@ fn start_playback_inner(
         match resolve_playback(file_path) {
             Ok(r) => {
                 tracing::info!(
-                    "player_open: resolved '{}' (disc: {}, external: {})",
+                    "player_open: resolved '{}' (disc: {}, external: {}) in {}ms",
                     r.resolved_path,
                     r.is_disc,
-                    r.external
+                    r.external,
+                    t_resolve_start.elapsed().as_millis()
                 );
                 r
             }
@@ -967,12 +969,20 @@ fn start_playback_inner(
 
     match player::ensure_overlay(app) {
         Ok(view) => {
+            let t_overlay_ms = t_start_playback.elapsed().as_millis();
             tracing::info!(
                 "[perf] ensure_overlay: elapsed={}ms view={view:#x}",
-                t_start_playback.elapsed().as_millis()
+                t_overlay_ms
             );
+            let t_load_lib = std::time::Instant::now();
             let lib = match loaded_lib(state) {
-                Ok(l) => l,
+                Ok(l) => {
+                    tracing::info!(
+                        "[perf] loaded_lib: elapsed={}ms",
+                        t_load_lib.elapsed().as_millis()
+                    );
+                    l
+                }
                 Err(e) => {
                     tracing::error!("player_open: libvlc load failed: {e}");
                     return Err(e);
@@ -1022,11 +1032,17 @@ fn start_playback_inner(
                     // HDR: detect UHD / HDR content from disc metadata or file path,
                     // and apply extended-dynamic-range headroom and BT.2100 PQ colorspace
                     // to the VLC-owned video layer (CAOpenGLLayer).
+                    let t_uhd_probe = std::time::Instant::now();
                     let is_uhd_disc = if resolved.is_disc {
                         crate::player::bluray_meta::is_disc_uhd_or_hdr(&resolved.resolved_path)
                     } else {
                         false
                     };
+                    tracing::info!(
+                        "[perf] is_disc_uhd_or_hdr: elapsed={}ms is_uhd={}",
+                        t_uhd_probe.elapsed().as_millis(),
+                        is_uhd_disc
+                    );
                     let is_hdr_file = {
                         let p_lower = resolved.resolved_path.to_ascii_lowercase();
                         p_lower.contains("2160p")
@@ -1036,6 +1052,10 @@ fn start_playback_inner(
                     state.is_hdr.store(
                         is_uhd_disc || is_hdr_file,
                         std::sync::atomic::Ordering::SeqCst,
+                    );
+                    tracing::info!(
+                        "[perf] start_playback_inner total: elapsed={}ms",
+                        t_start_playback.elapsed().as_millis()
                     );
 
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1289,6 +1309,7 @@ fn start_playback_inner(
                                     }
                                 };
                                 let watch_started = std::time::Instant::now();
+                                let mut menu_retry_count: u32 = 0;
                                 let mut sleep_ms = progress.next_poll_ms(0);
                                 loop {
                                     std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
@@ -1390,6 +1411,13 @@ fn start_playback_inner(
                                         menu_watch::Decision::Wait => {}
                                         menu_watch::Decision::Reached => {
                                             // Outcome A: authored menu reached and held
+                                            let menu_first_effective = menu_retry_count == 0;
+                                            tracing::info!(
+                                                "[menu-diag] Time from Play to menu visible: {}ms; menu-first effective: {} (retries={})",
+                                                t_ms,
+                                                if menu_first_effective { "YES" } else { "NO" },
+                                                menu_retry_count
+                                            );
                                             tracing::info!(
                                             "[menu-diag] menu watcher (session_gen={menu_gen}): disc reached authored menu at T+{t_ms}ms (held for {}ms) [Outcome A]",
                                             menu_watch::MENU_CONFIRM_MS
@@ -1439,8 +1467,9 @@ fn start_playback_inner(
                                             }
                                         }
                                         menu_watch::Decision::RetryMenu => {
+                                            menu_retry_count += 1;
                                             tracing::info!(
-                                            "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at T+{t_ms}ms (current title {kind:?})"
+                                            "[menu-diag] menu watcher (session_gen={menu_gen}): retrying INPUT_NAV_MENU / set_title at T+{t_ms}ms (current title {kind:?}, retry #{menu_retry_count})"
                                         );
                                             nav_menu();
                                         }

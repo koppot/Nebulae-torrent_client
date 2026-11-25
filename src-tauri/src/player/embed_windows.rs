@@ -1057,7 +1057,7 @@ unsafe fn map_mouse_lparam(
     surface: HWND,
     target: HWND,
     lparam: LPARAM,
-) -> Result<(LPARAM, POINT, RECT), InputDisposition> {
+) -> Result<(LPARAM, POINT, RECT, RECT, bool), InputDisposition> {
     let (px, py) = unpack_mouse_lparam(lparam.0);
     let mut pt = POINT {
         x: px as i32,
@@ -1078,8 +1078,9 @@ unsafe fn map_mouse_lparam(
     ) {
         return Err(InputDisposition::OutsideTarget);
     }
-    if should_scale_uhd_bluray_mouse() {
-        let active_rect = find_vlc_video_output_rect_in_target(target).unwrap_or(target_rect);
+    let active_rect = find_vlc_video_output_rect_in_target(target).unwrap_or(target_rect);
+    let scaled = should_scale_uhd_bluray_mouse();
+    if scaled {
         let (sx, sy) = scale_uhd_bluray_menu_point(
             pt.x,
             pt.y,
@@ -1092,7 +1093,7 @@ unsafe fn map_mouse_lparam(
         pt.y = sy;
     }
     let mapped = LPARAM(((pt.x as u16 as u32) | ((pt.y as u16 as u32) << 16)) as isize);
-    Ok((mapped, pt, target_rect))
+    Ok((mapped, pt, target_rect, active_rect, scaled))
 }
 
 fn mouse_point_lparam(x: f64, y: f64) -> LPARAM {
@@ -1116,7 +1117,9 @@ unsafe fn log_move_disposition(
     target: Option<HWND>,
     raw: (f64, f64),
     pt: Option<POINT>,
-    rect: Option<RECT>,
+    client_rect: Option<RECT>,
+    video_rect: Option<RECT>,
+    scaled: bool,
 ) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1141,15 +1144,22 @@ unsafe fn log_move_disposition(
         let pt_str = pt
             .map(|p| format!("({},{})", p.x, p.y))
             .unwrap_or_else(|| "none".to_string());
-        let rect_str = rect
-            .map(|r| format!("{:?}", r))
+        let client_str = client_rect
+            .map(|r| format!("{}x{}", r.right - r.left, r.bottom - r.top))
             .unwrap_or_else(|| "none".to_string());
+        let video_str = video_rect
+            .map(|r| format!("{}x{}", r.right - r.left, r.bottom - r.top))
+            .unwrap_or_else(|| "none".to_string());
+        let forwarded = disp == InputDisposition::Posted;
         tracing::info!(
-            "[menu-input] forward_mouse_move: raw=({:.1}, {:.1}) mapped={} target_bounds={} disp={:?} target_hwnd={:?} class={:?}",
+            "[menu-input] forward_mouse_move: raw=({:.1}, {:.1}) mapped={} client_size={} video_size={} scaled={} forwarded={} disp={:?} target_hwnd={:?} class={:?}",
             raw.0,
             raw.1,
             pt_str,
-            rect_str,
+            client_str,
+            video_str,
+            scaled,
+            forwarded,
             disp,
             target_raw,
             class_name
@@ -1168,17 +1178,26 @@ unsafe fn post_vlc_mouse_move(
         Some(t) => t,
         None => {
             log_child_hierarchy(surface);
-            log_move_disposition(InputDisposition::NoTarget, None, raw, None, None);
+            log_move_disposition(
+                InputDisposition::NoTarget,
+                None,
+                raw,
+                None,
+                None,
+                None,
+                false,
+            );
             return InputDisposition::NoTarget;
         }
     };
-    let (mapped, pt, target_rect) = match map_mouse_lparam(surface, target, lparam) {
-        Ok(v) => v,
-        Err(disp) => {
-            log_move_disposition(disp, Some(target), raw, None, None);
-            return disp;
-        }
-    };
+    let (mapped, pt, target_rect, active_rect, scaled) =
+        match map_mouse_lparam(surface, target, lparam) {
+            Ok(v) => v,
+            Err(disp) => {
+                log_move_disposition(disp, Some(target), raw, None, None, None, false);
+                return disp;
+            }
+        };
     let disp = match PostMessageW(Some(target), WM_MOUSEMOVE, wparam, mapped) {
         Ok(_) => InputDisposition::Posted,
         Err(e) => {
@@ -1186,7 +1205,15 @@ unsafe fn post_vlc_mouse_move(
             InputDisposition::NativeApiFailure
         }
     };
-    log_move_disposition(disp, Some(target), raw, Some(pt), Some(target_rect));
+    log_move_disposition(
+        disp,
+        Some(target),
+        raw,
+        Some(pt),
+        Some(target_rect),
+        Some(active_rect),
+        scaled,
+    );
     disp
 }
 
@@ -1206,18 +1233,19 @@ unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM, raw: (f64, f64)) -
         }
     };
     let class_name = get_window_class_name(target);
-    let (mapped, pt, target_rect) = match map_mouse_lparam(surface, target, lparam) {
-        Ok(v) => v,
-        Err(disp) => {
-            tracing::warn!(
-                "[menu-input] click rejected: disposition={:?} target HWND={:?} class={:?}",
-                disp,
-                target.0,
-                class_name
-            );
-            return disp;
-        }
-    };
+    let (mapped, pt, target_rect, active_rect, scaled) =
+        match map_mouse_lparam(surface, target, lparam) {
+            Ok(v) => v,
+            Err(disp) => {
+                tracing::warn!(
+                    "[menu-input] click rejected: disposition={:?} target HWND={:?} class={:?}",
+                    disp,
+                    target.0,
+                    class_name
+                );
+                return disp;
+            }
+        };
     const MK_LBUTTON: usize = 0x0001;
     let mut disp = InputDisposition::Posted;
     if let Err(e) = PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), mapped) {
@@ -1230,13 +1258,23 @@ unsafe fn post_vlc_mouse_click(surface: HWND, lparam: LPARAM, raw: (f64, f64)) -
         tracing::warn!("[menu-input] click WM_LBUTTONUP failed: {e}");
         disp = InputDisposition::NativeApiFailure;
     }
+    let forwarded = disp == InputDisposition::Posted;
+    let client_w = target_rect.right - target_rect.left;
+    let client_h = target_rect.bottom - target_rect.top;
+    let video_w = active_rect.right - active_rect.left;
+    let video_h = active_rect.bottom - active_rect.top;
     tracing::info!(
-        "[menu-input] forward_mouse_click: raw=({:.1}, {:.1}) mapped=({},{}) target_bounds={:?} disp={:?} target_hwnd={:?} class={:?}",
+        "[menu-input] forward_mouse_click: raw=({:.1}, {:.1}) mapped=({},{}) client_size=({}x{}) video_size=({}x{}) scaled={} forwarded={} disp={:?} target_hwnd={:?} class={:?}",
         raw.0,
         raw.1,
         pt.x,
         pt.y,
-        target_rect,
+        client_w,
+        client_h,
+        video_w,
+        video_h,
+        scaled,
+        forwarded,
         disp,
         target.0,
         class_name

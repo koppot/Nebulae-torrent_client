@@ -1743,28 +1743,54 @@ impl VlcSession {
             .name("vlc-teardown".into())
             .spawn(move || {
                 let t = std::time::Instant::now();
+                tracing::info!("[perf] vlc-teardown: started (mp={mp:#x}, md={md:#x})");
                 unsafe {
                     if mp != 0 {
+                        let t_stop = std::time::Instant::now();
                         (lib.libvlc_media_player_stop)(mp as *mut c_void);
+                        tracing::info!(
+                            "[perf] vlc-teardown: libvlc_media_player_stop elapsed={}ms",
+                            t_stop.elapsed().as_millis()
+                        );
                         #[cfg(target_os = "windows")]
                         {
+                            let t_hwnd = std::time::Instant::now();
                             (lib.libvlc_media_player_set_hwnd)(
                                 mp as *mut c_void,
                                 std::ptr::null_mut(),
                             );
+                            tracing::info!(
+                                "[perf] vlc-teardown: libvlc_media_player_set_hwnd elapsed={}ms",
+                                t_hwnd.elapsed().as_millis()
+                            );
                         }
+                        let t_rel = std::time::Instant::now();
                         (lib.libvlc_media_player_release)(mp as *mut c_void);
+                        tracing::info!(
+                            "[perf] vlc-teardown: libvlc_media_player_release elapsed={}ms",
+                            t_rel.elapsed().as_millis()
+                        );
                     }
                     if md != 0 {
+                        let t_md = std::time::Instant::now();
                         (lib.libvlc_media_release)(md as *mut c_void);
+                        tracing::info!(
+                            "[perf] vlc-teardown: libvlc_media_release elapsed={}ms",
+                            t_md.elapsed().as_millis()
+                        );
                     }
                 }
                 #[cfg(target_os = "windows")]
                 if let Some(target) = win_target {
+                    let t_surf = std::time::Instant::now();
                     crate::player::embed_windows::release_session_surface(target);
+                    tracing::info!(
+                        "[perf] vlc-teardown: release_session_surface elapsed={}ms",
+                        t_surf.elapsed().as_millis()
+                    );
                 }
                 tracing::info!(
-                    "[perf] vlc-teardown thread: elapsed={}ms",
+                    "[perf] vlc-teardown thread: total elapsed={}ms",
                     t.elapsed().as_millis()
                 );
             })

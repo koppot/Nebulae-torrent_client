@@ -57,10 +57,18 @@ pub fn spawn_telemetry_loop(
                     if let Some(ui) = ui_torrents {
                         let has_changed = last_emitted_torrents.as_ref() != Some(&ui);
                         if has_changed || heartbeat_due {
+                            let t_emit = Instant::now();
                             let _ = app_handle.emit(
                                 "nebulae://telemetry",
                                 serde_json::json!({ "remote": remote_scope, "torrents": &ui }),
                             );
+                            let emit_ms = t_emit.elapsed().as_millis();
+                            if emit_ms > 200 {
+                                tracing::warn!(
+                                    "[perf] Telemetry emit 'nebulae://telemetry' took {}ms (>200ms)",
+                                    emit_ms
+                                );
+                            }
                             last_emitted_torrents = Some(ui);
                             last_emitted_at = Instant::now();
                         }
