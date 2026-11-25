@@ -643,7 +643,7 @@ mod tests {
     fn status_response_serializes_engine_status_contract() {
         let status = StatusResponse {
             name: "nebulae-server".to_string(),
-            version: "0.2.8".to_string(),
+            version: "0.2.9".to_string(),
             engine: "transmission".to_string(),
             active_torrents: 3,
             paused_torrents: 2,

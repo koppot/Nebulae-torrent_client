@@ -12,7 +12,8 @@ pub fn spawn_telemetry_loop(
     scoped: Arc<crate::engine::ScopedEngine>,
 ) {
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        // Polling cadence: 1000 ms, completion-aware, with skipped missed ticks
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut last_emitted_torrents: Option<Vec<TorrentItem>> = None;

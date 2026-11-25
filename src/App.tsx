@@ -551,45 +551,81 @@ export const App: React.FC = () => {
 
     // Listen for live opened URIs / files from macOS LaunchServices or secondary process
     const unlistenFns: Array<() => void> = [];
+    let isDisposed = false;
 
-    // Real-time 500ms push telemetry from Rust engine (sanitizes instantaneous
-    // rates and preserves existing detail arrays like files and trackers)
-    listen<{ remote: boolean; torrents: import('./types').TorrentItem[] }>(
-      'nebulae://telemetry',
-      (event) => {
-        const payload = event.payload;
-        // Ignore a list that belongs to the other tab's engine (in flight during a tab switch).
+    // Prevents late asynchronous listen registrations from leaking after unmount
+    const safeListen = <T,>(event: string, handler: (e: { payload: T }) => void) => {
+      listen<T>(event, handler)
+        .then((unlisten) => {
+          if (isDisposed) {
+            unlisten();
+          } else {
+            unlistenFns.push(unlisten);
+          }
+        })
+        .catch(() => {});
+    };
+
+    // Telemetry throttling: single latest pending snapshot per frame while visible
+    let latestPendingSnapshot: { remote: boolean; torrents: import('./types').TorrentItem[] } | null = null;
+    let telemetryRafId: number | null = null;
+    let lastAcceptedTelemetryAt = Date.now();
+
+    const drainPendingTelemetry = () => {
+      if (latestPendingSnapshot && !document.hidden) {
+        const payload = latestPendingSnapshot;
+        latestPendingSnapshot = null;
         if (payload?.torrents && payload.remote === (scopeRef.current === 'remote')) {
           useTorrentStore.getState().applyTorrentTelemetry(payload.torrents);
         }
-      },
-    )
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+      }
+    };
 
-    // Relaxed background heartbeat fallback
+    safeListen<{ remote: boolean; torrents: import('./types').TorrentItem[] }>(
+      'nebulae://telemetry',
+      (event) => {
+        if (event.payload) {
+          lastAcceptedTelemetryAt = Date.now();
+          latestPendingSnapshot = event.payload;
+          if (telemetryRafId === null) {
+            telemetryRafId = requestAnimationFrame(() => {
+              telemetryRafId = null;
+              drainPendingTelemetry();
+            });
+          }
+        }
+      },
+    );
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && latestPendingSnapshot) {
+        drainPendingTelemetry();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Fallback heartbeat: invoke list_torrents ONLY when no valid telemetry has arrived for at least 6 seconds
     const torrentPollInterval = setInterval(() => {
-      fetchTorrents();
+      if (Date.now() - lastAcceptedTelemetryAt >= 6000) {
+        fetchTorrents();
+      }
     }, 5000);
 
-    listen<string>('nebulae://open-uri', (event) => {
+    safeListen<string>('nebulae://open-uri', (event) => {
       if (event.payload) {
         void dispatchOpenPaths([event.payload]);
       }
-    })
-      .then((unlisten) => {
-        unlistenFns.push(unlisten);
-        // Drain only after the live listener is ready, so a second-instance or
-        // LaunchServices event cannot land in the gap before subscription.
-        invoke<string[]>('get_pending_open_payloads')
-          .then((payloads) => {
-            if (payloads?.length) void dispatchOpenPaths(payloads);
-          })
-          .catch(() => {});
+    });
+
+    // Drain only after the live listener is ready, so a second-instance or
+    // LaunchServices event cannot land in the gap before subscription.
+    invoke<string[]>('get_pending_open_payloads')
+      .then((payloads) => {
+        if (payloads?.length) void dispatchOpenPaths(payloads);
       })
       .catch(() => {});
 
-    listen<{ request_token?: string | null; title?: string | null; reason?: string }>(
+    safeListen<{ request_token?: string | null; title?: string | null; reason?: string }>(
       'nebulae://adc-delivery-failed',
       (event) => {
         const reason = event.payload?.reason?.trim() || 'ADC website delivery failed.';
@@ -601,51 +637,39 @@ export const App: React.FC = () => {
           }),
         );
       },
-    )
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    );
 
-    listen('nebulae://adc-torrent-added', () => {
+    safeListen('nebulae://adc-torrent-added', () => {
       void useTorrentStore.getState().fetchTorrents();
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
-    listen<import('./types').TorrentOperationSnapshot>(
+    safeListen<import('./types').TorrentOperationSnapshot>(
       'nebulae://torrent-operation',
       (event) => {
         if (event.payload) {
           useTorrentStore.getState().handleOperationEvent(event.payload);
         }
       },
-    )
-      .then((unlisten) => {
-        unlistenFns.push(unlisten);
-        // Install the event listener before fetching the initial snapshot
-        void useTorrentStore.getState().fetchActiveOperations();
-      })
-      .catch(() => {});
+    );
+    // Install the event listener before fetching the initial snapshot
+    void useTorrentStore.getState().fetchActiveOperations();
 
-    listen('nebulae://media-updated', () => {
+    safeListen('nebulae://media-updated', () => {
       void useLibraryStore.getState().loadPreferences();
       void useTorrentStore.getState().fetchTorrents();
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
     // Tray menu actions that open specific windows
-    listen<string>('nebulae://tray-action', (event) => {
+    safeListen<string>('nebulae://tray-action', (event) => {
       if (event.payload === 'add-torrent') {
         useUiStore.getState().setShowAddTorrent(true);
       } else if (event.payload === 'create-torrent') {
         useUiStore.getState().setShowCreateTorrent(true);
       }
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
     // Native application menu actions (File, Edit, View, Window, Help)
-    listen<string>('nebulae://menu-action', (event) => {
+    safeListen<string>('nebulae://menu-action', (event) => {
       const ui = useUiStore.getState();
       const torrents = useTorrentStore.getState();
       switch (event.payload) {
@@ -702,28 +726,20 @@ export const App: React.FC = () => {
           });
           break;
       }
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
     // Listen for native OS drag & drop events emitted by Tauri
-    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', () => {
+    safeListen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', () => {
       setIsDragging(true);
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
-    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-over', () => {
+    safeListen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-over', () => {
       setIsDragging(true);
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
-    listen<void>('tauri://drag-leave', () => {
+    safeListen<void>('tauri://drag-leave', () => {
       setIsDragging(false);
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
     const onOpenPaths = (event: Event) => {
       const paths = (event as CustomEvent<string[]>).detail;
@@ -731,24 +747,20 @@ export const App: React.FC = () => {
     };
     window.addEventListener('nebulae:open-paths', onOpenPaths);
 
-    listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
+    safeListen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
       setIsDragging(false);
       const paths = event.payload?.paths;
       if (paths && paths.length > 0) {
         void dispatchOpenPaths(paths);
       }
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
-    listen<string[]>('nebulae://paths-dropped', (event) => {
+    safeListen<string[]>('nebulae://paths-dropped', (event) => {
       setIsDragging(false);
       if (event.payload?.length) {
         void dispatchOpenPaths(event.payload);
       }
-    })
-      .then((unlisten) => unlistenFns.push(unlisten))
-      .catch(() => {});
+    });
 
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get('view');
@@ -805,6 +817,12 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
+      isDisposed = true;
+      if (telemetryRafId !== null) {
+        cancelAnimationFrame(telemetryRafId);
+        telemetryRafId = null;
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(torrentPollInterval);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('nebulae:open-paths', onOpenPaths);

@@ -455,6 +455,7 @@ interface PeersTabPanelProps {
   peers: PeerTelemetry[];
   isLoading?: boolean;
   error?: string | null;
+  isStale?: boolean;
   onRetry?: () => void;
   torrentStatus?: string;
   settings: PeeringSettings | null;
@@ -471,6 +472,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
   peers,
   isLoading = false,
   error = null,
+  isStale = false,
   onRetry,
   torrentStatus,
   settings,
@@ -725,6 +727,26 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
         </div>
       )}
 
+      {/* Stale peers warning notice when refresh failed but last-good rows are retained */}
+      {(error || isStale) && sorted.length > 0 && (
+        <div className="flex items-center justify-between px-3 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-sans">
+          <div className="flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>Showing retained peer observations{error ? ` · update failed: ${error}` : ' (retained)'}</span>
+          </div>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="flex items-center gap-1 px-2 py-0.5 bg-[#262626] hover:bg-[#333333] text-white rounded text-[11px] transition"
+            >
+              <RotateCw className="w-3 h-3" />
+              <span>Retry</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Peer table */}
       <div className="overflow-x-auto border border-[#262626] rounded flex-1">
         <table className="w-full text-left border-collapse text-xs">
@@ -760,7 +782,7 @@ export const PeersTabPanel: React.FC<PeersTabPanelProps> = ({
                   </div>
                 </td>
               </tr>
-            ) : error ? (
+            ) : error && sorted.length === 0 ? (
               <tr>
                 <td colSpan={colCount} className="py-8 text-center text-[#e50914] font-sans text-xs">
                   <div className="flex flex-col items-center justify-center gap-2">

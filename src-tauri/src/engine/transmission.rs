@@ -344,7 +344,52 @@ pub struct TransmissionRpcClient {
     rpc_url: std::sync::RwLock<String>,
     auth_header: Option<String>,
     session_id: Mutex<Option<String>>,
-    client: reqwest::blocking::Client,
+    read_client: reqwest::blocking::Client,
+    mutation_client: reqwest::blocking::Client,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcPolicy {
+    /// Interactive local read (peers, torrent details): total budget 5s, connect timeout at most 1s,
+    /// at most 1 transport retry only on connection establishment failure after 100ms.
+    InteractiveLocal,
+    /// Background local overview/history read: total budget 3s, connect timeout at most 1s, no transport retry.
+    BackgroundLocal,
+    /// Mutations: operation-specific total budget (default 30s), connect timeout 5s, no transport retry.
+    Mutation,
+}
+
+impl RpcPolicy {
+    pub fn total_budget(&self) -> Duration {
+        match self {
+            RpcPolicy::InteractiveLocal => Duration::from_secs(5),
+            RpcPolicy::BackgroundLocal => Duration::from_secs(3),
+            RpcPolicy::Mutation => Duration::from_secs(30),
+        }
+    }
+
+    pub fn connect_timeout(&self) -> Duration {
+        match self {
+            RpcPolicy::InteractiveLocal => Duration::from_secs(1),
+            RpcPolicy::BackgroundLocal => Duration::from_secs(1),
+            RpcPolicy::Mutation => Duration::from_secs(5),
+        }
+    }
+
+    pub fn max_connect_retries(&self) -> usize {
+        match self {
+            RpcPolicy::InteractiveLocal => 1,
+            RpcPolicy::BackgroundLocal => 0,
+            RpcPolicy::Mutation => 0,
+        }
+    }
+
+    pub fn retry_delay(&self) -> Duration {
+        match self {
+            RpcPolicy::InteractiveLocal => Duration::from_millis(100),
+            _ => Duration::ZERO,
+        }
+    }
 }
 
 /// `ids` in Transmission RPC accepts NUMBERS (session ids) or strings
@@ -463,10 +508,18 @@ impl TransmissionRpcClient {
             None
         };
 
-        let client = reqwest::blocking::Client::builder()
+        // Shared connection pool with no_proxy for local daemon traffic
+        let read_client = reqwest::blocking::Client::builder()
             .no_proxy()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(1))
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
+        let mutation_client = reqwest::blocking::Client::builder()
+            .no_proxy()
             .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
 
@@ -474,7 +527,8 @@ impl TransmissionRpcClient {
             rpc_url: std::sync::RwLock::new(format!("http://127.0.0.1:{port}/transmission/rpc")),
             auth_header: auth,
             session_id: Mutex::new(None),
-            client,
+            read_client,
+            mutation_client,
         }
     }
 
@@ -488,79 +542,70 @@ impl TransmissionRpcClient {
         }
     }
 
-    /// Low-level RPC call handler with automatic CSRF session-id negotiation.
-    pub fn request(&self, method: &str, arguments: Option<Value>) -> Result<Value, String> {
-        self.request_internal(method, arguments, true)
-    }
-
-    /// RPC call handler without transport retry for non-idempotent or destructive calls.
-    pub fn request_no_retry(
+    /// Low-level RPC call handler with explicit request policy, monotonic absolute deadlines,
+    /// bounded retries, and CSRF session-id negotiation within the remaining budget.
+    pub fn request_with_policy(
         &self,
         method: &str,
         arguments: Option<Value>,
+        policy: RpcPolicy,
     ) -> Result<Value, String> {
-        self.request_internal(method, arguments, false)
-    }
-
-    fn request_internal(
-        &self,
-        method: &str,
-        arguments: Option<Value>,
-        retry_on_transport: bool,
-    ) -> Result<Value, String> {
+        let deadline = std::time::Instant::now() + policy.total_budget();
         let payload = json!({
             "method": method,
             "arguments": arguments.unwrap_or_else(|| json!({}))
         });
 
-        for attempt in 0..2 {
-            // Bounded retry on transport errors: the daemon may be briefly
-            // unreachable (watchdog restart backoff after a crash, or the
-            // first seconds after a relaunch). Re-sending is safe for idempotent
-            // calls — but must NOT be performed on destructive calls like
-            // torrent-remove, where retry could send duplicate operations or
-            // mask in-flight deletions.
-            let mut resp = None;
-            let mut last_err = String::new();
-            let wait_delays: &[u64] = if retry_on_transport {
-                &[0u64, 1000, 2000, 2500, 3000]
-            } else {
-                &[0u64]
+        let mut connect_retries = 0;
+        let mut csrf_retried = false;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "Transmission RPC '{method}' timed out after {:?}",
+                    policy.total_budget()
+                ));
+            }
+
+            // Lock discipline: copy url and session_id, drop locks before HTTP I/O
+            let url = self
+                .rpc_url
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
+            let session_id = self.session_id.lock().unwrap().clone();
+
+            let client = match policy {
+                RpcPolicy::Mutation => &self.mutation_client,
+                _ => &self.read_client,
             };
-            for &wait_ms in wait_delays {
-                if wait_ms > 0 {
-                    std::thread::sleep(Duration::from_millis(wait_ms));
-                }
-                let session_id = self.session_id.lock().unwrap().clone();
-                let url = self
-                    .rpc_url
-                    .read()
-                    .map(|g| g.clone())
-                    .unwrap_or_else(|_| "http://127.0.0.1:9091/transmission/rpc".to_string());
-                let mut retry_req = self.client.post(&url).json(&payload);
-                if let Some(ref sid) = session_id {
-                    retry_req = retry_req.header("X-Transmission-Session-Id", sid);
-                }
-                if let Some(ref auth) = self.auth_header {
-                    retry_req = retry_req.header("Authorization", auth);
-                }
-                match retry_req.send() {
-                    Ok(r) => {
-                        resp = Some(r);
-                        break;
-                    }
-                    Err(e) => {
-                        if e.is_timeout() {
-                            last_err = format!("Transmission RPC timeout: {e}");
-                        } else {
-                            last_err = format!("Transmission RPC connection error: {e}");
+
+            let mut req = client.post(&url).json(&payload).timeout(remaining);
+            if let Some(ref sid) = session_id {
+                req = req.header("X-Transmission-Session-Id", sid);
+            }
+            if let Some(ref auth) = self.auth_header {
+                req = req.header("Authorization", auth);
+            }
+
+            let resp = match req.send() {
+                Ok(r) => r,
+                Err(e) => {
+                    // Retry only on connection establishment failure within remaining budget
+                    if e.is_connect() && connect_retries < policy.max_connect_retries() {
+                        connect_retries += 1;
+                        let delay = policy.retry_delay();
+                        let rem_after_delay =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if rem_after_delay > delay {
+                            std::thread::sleep(delay);
+                            continue;
                         }
                     }
+                    // Response timeout (e.is_timeout()) or retries exhausted: do NOT retry
+                    return Err(format!("Transmission RPC connection error: {e}"));
                 }
-            }
-            let resp = match resp {
-                Some(r) => r,
-                None => return Err(last_err),
             };
 
             // Handle 409 Conflict CSRF token handshake
@@ -568,8 +613,10 @@ impl TransmissionRpcClient {
                 if let Some(header_val) = resp.headers().get("X-Transmission-Session-Id") {
                     if let Ok(new_sid) = header_val.to_str() {
                         *self.session_id.lock().unwrap() = Some(new_sid.to_string());
-                        if attempt == 0 {
-                            continue; // Retry once with the new CSRF token
+                        if !csrf_retried {
+                            csrf_retried = true;
+                            // Replay once within same budget without resetting deadline
+                            continue;
                         }
                     }
                 }
@@ -600,21 +647,33 @@ impl TransmissionRpcClient {
                 .cloned()
                 .unwrap_or_else(|| json!({})));
         }
+    }
 
-        Err("Transmission RPC request failed after retry".to_string())
+    /// Legacy convenience wrapper defaulting to Mutation policy.
+    pub fn request(&self, method: &str, arguments: Option<Value>) -> Result<Value, String> {
+        self.request_with_policy(method, arguments, RpcPolicy::Mutation)
+    }
+
+    /// RPC call handler without transport retry for non-idempotent or destructive calls.
+    pub fn request_no_retry(
+        &self,
+        method: &str,
+        arguments: Option<Value>,
+    ) -> Result<Value, String> {
+        self.request_with_policy(method, arguments, RpcPolicy::Mutation)
     }
 
     pub fn session_get(&self) -> Result<Value, String> {
-        self.request("session-get", None)
+        self.request_with_policy("session-get", None, RpcPolicy::BackgroundLocal)
     }
 
     pub fn session_set(&self, args: Value) -> Result<(), String> {
-        self.request("session-set", Some(args))?;
+        self.request_with_policy("session-set", Some(args), RpcPolicy::Mutation)?;
         Ok(())
     }
 
     pub fn session_stats(&self) -> Result<Value, String> {
-        self.request("session-stats", None)
+        self.request_with_policy("session-stats", None, RpcPolicy::BackgroundLocal)
     }
 
     /// Test the peer port with an optional address family. Transmission 4.1.3
@@ -627,7 +686,7 @@ impl TransmissionRpcClient {
             let args = proto
                 .map(|p| json!({ "ip_protocol": p }))
                 .unwrap_or_else(|| json!({}));
-            match self.request("port-test", Some(args)) {
+            match self.request_with_policy("port-test", Some(args), RpcPolicy::InteractiveLocal) {
                 Ok(res) => Ok(parse_port_test_result(&res)),
                 // Stock Transmission 4.1.3 (Windows MSI) returns "No Response (0)"
                 // when its port-test probe gets no reply. That is NOT a definitive
@@ -640,7 +699,11 @@ impl TransmissionRpcClient {
                 // Some stock builds also reject the ip_protocol parameter
                 // outright. Retry without it so we still get a verdict.
                 Err(_) if proto.is_some() => {
-                    let res = self.request("port-test", Some(json!({})))?;
+                    let res = self.request_with_policy(
+                        "port-test",
+                        Some(json!({})),
+                        RpcPolicy::InteractiveLocal,
+                    )?;
                     Ok(parse_port_test_result(&res))
                 }
                 Err(e) => Err(e),
@@ -660,15 +723,33 @@ impl TransmissionRpcClient {
         // so we still get a verdict when possible.
         try_with(None)
     }
+
     /// Strict single-family port test: the verdict is `None` unless the daemon
     /// answered the explicitly requested address family with a boolean.
     pub fn port_test_family(&self, ip_protocol: &str) -> Option<bool> {
-        self.request("port-test", Some(json!({ "ip_protocol": ip_protocol })))
-            .ok()
-            .and_then(|res| parse_port_test_result(&res))
+        self.request_with_policy(
+            "port-test",
+            Some(json!({ "ip_protocol": ip_protocol })),
+            RpcPolicy::InteractiveLocal,
+        )
+        .ok()
+        .and_then(|res| parse_port_test_result(&res))
     }
 
     pub fn torrent_get(&self, ids: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
+        let policy = if ids.is_some() {
+            RpcPolicy::InteractiveLocal
+        } else {
+            RpcPolicy::BackgroundLocal
+        };
+        self.torrent_get_with_policy(ids, policy)
+    }
+
+    pub fn torrent_get_with_policy(
+        &self,
+        ids: Option<Vec<Value>>,
+        policy: RpcPolicy,
+    ) -> Result<Vec<Value>, String> {
         let fields = if ids.is_some() {
             vec![
                 "id",
@@ -759,7 +840,25 @@ impl TransmissionRpcClient {
             args["ids"] = json!(id_list);
         }
 
-        let res = self.request("torrent-get", Some(args))?;
+        let res = self.request_with_policy("torrent-get", Some(args), policy)?;
+        let torrents = res
+            .get("torrents")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(torrents)
+    }
+
+    /// Narrow peer RPC helper: requests only fields required for PeerTelemetry conversion and identity.
+    /// Excludes heavy files and fileStats arrays to prevent payload explosion and JSON decode latency.
+    pub fn torrent_get_peers(&self, id: &str) -> Result<Vec<Value>, String> {
+        let fields = vec!["id", "hashString", "peers", "peerStats"];
+        let args = json!({
+            "fields": fields,
+            "ids": [rpc_id(id)],
+        });
+        let res =
+            self.request_with_policy("torrent-get", Some(args), RpcPolicy::InteractiveLocal)?;
         let torrents = res
             .get("torrents")
             .and_then(|t| t.as_array())
@@ -992,7 +1091,11 @@ impl TransmissionRpcClient {
     /// Fetch only the peer arrays for all torrents, avoiding the large file
     /// and tracker fields included by `torrent_get(None)`.
     pub fn torrent_peers_all(&self) -> Result<Vec<Value>, String> {
-        let res = self.request("torrent-get", Some(json!({ "fields": ["id", "peers"] })))?;
+        let res = self.request_with_policy(
+            "torrent-get",
+            Some(json!({ "fields": ["id", "peers"] })),
+            RpcPolicy::BackgroundLocal,
+        )?;
         Ok(res
             .get("torrents")
             .and_then(Value::as_array)
@@ -3945,9 +4048,13 @@ impl TorrentEngine for TransmissionTorrentEngine {
         const EMA_ALPHA: f64 = 0.3; // smoothing factor — 30% new sample, 70% history
         const MIN_OBSERVATIONS_FOR_STABILITY: u32 = 3;
 
-        let mut torrents = self.rpc_client.torrent_get(Some(vec![rpc_id(id)]))?;
+        // Narrow peer RPC: fetches only peers & peerStats without heavy files or fileStats
+        let mut torrents = self.rpc_client.torrent_get_peers(id)?;
         if torrents.is_empty() {
-            if let Ok(all) = self.rpc_client.torrent_get(None) {
+            if let Ok(all) = self
+                .rpc_client
+                .torrent_get_with_policy(None, RpcPolicy::InteractiveLocal)
+            {
                 if let Some(matched) = all.into_iter().find(|t| {
                     t.get("hashString")
                         .and_then(|h| h.as_str())
@@ -3959,7 +4066,7 @@ impl TorrentEngine for TransmissionTorrentEngine {
                             .unwrap_or(false)
                 }) {
                     if let Some(real_id) = matched.get("id").and_then(|v| v.as_i64()) {
-                        torrents = self.rpc_client.torrent_get(Some(vec![json!(real_id)]))?;
+                        torrents = self.rpc_client.torrent_get_peers(&real_id.to_string())?;
                     }
                 }
             }

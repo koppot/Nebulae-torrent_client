@@ -1,6 +1,6 @@
 [package]
 name = "nebulae-server"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Headless Nebulae server: wraps Transmission RPC behind a token-authenticated REST API for remote management from the Nebulae desktop client."
 publish = false

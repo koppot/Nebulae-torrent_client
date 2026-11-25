@@ -18,6 +18,41 @@ struct SequentialResponse {
     sequential_download: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePolicy {
+    /// Remote interactive read (e.g. details, inspector): total budget 10s,
+    /// connect timeout at most 3s, at most 1 connect retry after 200ms within budget.
+    InteractiveRead,
+    /// Remote background read (e.g. overview loop): total budget 5s, connect timeout at most 3s, no retry.
+    BackgroundRead,
+    /// Remote mutation: operation-specific budget (30s), no transport retry.
+    Mutation,
+}
+
+impl RemotePolicy {
+    pub fn total_budget(&self) -> Duration {
+        match self {
+            RemotePolicy::InteractiveRead => Duration::from_secs(10),
+            RemotePolicy::BackgroundRead => Duration::from_secs(5),
+            RemotePolicy::Mutation => Duration::from_secs(30),
+        }
+    }
+
+    pub fn max_connect_retries(&self) -> usize {
+        match self {
+            RemotePolicy::InteractiveRead => 1,
+            _ => 0,
+        }
+    }
+
+    pub fn retry_delay(&self) -> Duration {
+        match self {
+            RemotePolicy::InteractiveRead => Duration::from_millis(200),
+            _ => Duration::ZERO,
+        }
+    }
+}
+
 pub struct RemoteServerEngine {
     base_url: String,
     token: String,
@@ -28,7 +63,7 @@ pub struct RemoteServerEngine {
 impl RemoteServerEngine {
     pub fn new(base_url: String, token: String) -> Self {
         let client = reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
@@ -40,26 +75,126 @@ impl RemoteServerEngine {
         }
     }
 
+    pub fn send_with_policy(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        policy: RemotePolicy,
+    ) -> Result<reqwest::blocking::Response, String> {
+        let deadline = std::time::Instant::now() + policy.total_budget();
+        let mut connect_retries = 0;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "nebulae-server: request to {path} timed out after {:?}",
+                    policy.total_budget()
+                ));
+            }
+
+            let request = self
+                .client
+                .request(method.clone(), format!("{}{}", self.base_url, path))
+                .bearer_auth(&self.token)
+                .timeout(remaining);
+
+            let response = match request.send() {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() && connect_retries < policy.max_connect_retries() {
+                        connect_retries += 1;
+                        let delay = policy.retry_delay();
+                        let rem_after_delay =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if rem_after_delay > delay {
+                            std::thread::sleep(delay);
+                            continue;
+                        }
+                    }
+                    return Err(format!("nebulae-server: request failed: {e}"));
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().unwrap_or_default();
+                return Err(format!(
+                    "nebulae-server: HTTP {status}: {}",
+                    body.lines().next().unwrap_or("no details")
+                ));
+            }
+            return Ok(response);
+        }
+    }
+
     fn send(
         &self,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::blocking::Response, String> {
-        let response = self
-            .client
-            .request(method, format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token)
-            .send()
-            .map_err(|e| format!("nebulae-server: request failed: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().unwrap_or_default();
-            return Err(format!(
-                "nebulae-server: HTTP {status}: {}",
-                body.lines().next().unwrap_or("no details")
-            ));
+        self.send_with_policy(method, path, RemotePolicy::BackgroundRead)
+    }
+
+    pub fn unit_with_policy(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<String>,
+        policy: RemotePolicy,
+    ) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + policy.total_budget();
+        let mut connect_retries = 0;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "nebulae-server: mutation {path} timed out after {:?}",
+                    policy.total_budget()
+                ));
+            }
+
+            let request = self
+                .client
+                .request(method.clone(), format!("{}{}", self.base_url, path))
+                .bearer_auth(&self.token)
+                .timeout(remaining);
+
+            let request = match body.as_ref() {
+                Some(b) => request
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(b.clone()),
+                None => request,
+            };
+
+            let response = match request.send() {
+                Ok(r) => r,
+                Err(e) => {
+                    if e.is_connect() && connect_retries < policy.max_connect_retries() {
+                        connect_retries += 1;
+                        let delay = policy.retry_delay();
+                        let rem_after_delay =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        if rem_after_delay > delay {
+                            std::thread::sleep(delay);
+                            continue;
+                        }
+                    }
+                    return Err(format!("nebulae-server: request failed: {e}"));
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().unwrap_or_default();
+                return Err(format!(
+                    "nebulae-server: HTTP {status}: {}",
+                    text.lines().next().unwrap_or("no details")
+                ));
+            }
+            return Ok(());
         }
-        Ok(response)
     }
 
     fn unit(
@@ -68,28 +203,7 @@ impl RemoteServerEngine {
         path: &str,
         body: Option<String>,
     ) -> Result<(), String> {
-        let request = self
-            .client
-            .request(method, format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token);
-        let request = match body {
-            Some(b) => request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(b),
-            None => request,
-        };
-        let response = request
-            .send()
-            .map_err(|e| format!("nebulae-server: request failed: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().unwrap_or_default();
-            return Err(format!(
-                "nebulae-server: HTTP {status}: {}",
-                text.lines().next().unwrap_or("no details")
-            ));
-        }
-        Ok(())
+        self.unit_with_policy(method, path, body, RemotePolicy::Mutation)
     }
 }
 

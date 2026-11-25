@@ -147,6 +147,20 @@ export interface OperationTombstone {
   torrent_id: string;
   revision: number;
   timestamp: number;
+  type?: 'move' | 'remove';
+  destination?: string;
+}
+
+// In-flight read coalescing and pending mutation tracking
+let inFlightFetch: Promise<void> | null = null;
+let needsFollowupRefresh = false;
+let fetchScopeGeneration = 0;
+const pendingMutations = new Set<string>();
+
+export function invalidateTorrentFetches() {
+  fetchScopeGeneration++;
+  inFlightFetch = null;
+  needsFollowupRefresh = false;
 }
 
 export interface TerminalNotice {
@@ -204,7 +218,7 @@ interface TorrentState {
   isLoading: boolean;
   filesLoadingId: string | null;
   filesError: string | null;
-  fetchTorrents: () => Promise<void>;
+  fetchTorrents: (forceFollowup?: boolean) => Promise<void>;
   /** Drops the displayed list when the Manager/Server scope changes. */
   clearTorrents: () => void;
   applyTorrentTelemetry: (incoming: TorrentItem[]) => void;
@@ -250,7 +264,7 @@ interface TorrentState {
   dismissTerminalNotice: () => void;
 }
 
-function areTorrentsEqual(a: TorrentItem, b: TorrentItem): boolean {
+export function areTorrentsSemanticallyEqual(a: TorrentItem, b: TorrentItem): boolean {
   return (
     a.id === b.id &&
     a.info_hash === b.info_hash &&
@@ -258,14 +272,22 @@ function areTorrentsEqual(a: TorrentItem, b: TorrentItem): boolean {
     a.progress === b.progress &&
     a.download_rate === b.download_rate &&
     a.upload_rate === b.upload_rate &&
+    a.current_download_rate === b.current_download_rate &&
+    a.current_upload_rate === b.current_upload_rate &&
+    a.avg_download_rate === b.avg_download_rate &&
+    a.avg_upload_rate === b.avg_upload_rate &&
+    a.eta_seconds === b.eta_seconds &&
+    a.total_bytes === b.total_bytes &&
     a.downloaded_bytes === b.downloaded_bytes &&
     a.uploaded_bytes === b.uploaded_bytes &&
-    a.eta_seconds === b.eta_seconds &&
     a.seeds === b.seeds &&
     a.peers === b.peers &&
     a.ratio === b.ratio &&
+    a.is_media === b.is_media &&
     a.category === b.category &&
     a.save_path === b.save_path &&
+    a.added_on === b.added_on &&
+    a.last_checked === b.last_checked &&
     a.name === b.name &&
     a.errorString === b.errorString &&
     a.sequential_download === b.sequential_download &&
@@ -277,6 +299,8 @@ function areTorrentsEqual(a: TorrentItem, b: TorrentItem): boolean {
     a.trackers === b.trackers
   );
 }
+
+export const areTorrentsEqual = areTorrentsSemanticallyEqual;
 
 export const useTorrentStore = create<TorrentState>((set, get) => ({
   torrents: [],
@@ -295,10 +319,52 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     const sanitized = sanitizeTorrentRates(incoming, prevTorrents);
     const reconciled = reconcileRecheckState(sanitized);
 
+    const tombstones = get().tombstones;
+    const activeOps = get().activeOperations;
+
+    // Filter out deleted torrents (tombstoned or with an active remove operation)
+    // and protect moved paths against stale reads
+    const safeReconciled = reconciled
+      .filter((t) => {
+        const hasRemoveTombstone = Object.values(tombstones).some(
+          (tb) =>
+            (tb.type === 'remove' || (!tb.type && !tb.destination)) &&
+            (tb.torrent_id === t.id ||
+              (t.info_hash && tb.torrent_id.toLowerCase() === t.info_hash.toLowerCase()))
+        );
+        const hasActiveRemove = Boolean(
+          (activeOps[t.id] && activeOps[t.id].kind?.type === 'remove') ||
+          (t.info_hash && activeOps[t.info_hash.toLowerCase()]?.kind?.type === 'remove')
+        );
+        return !hasRemoveTombstone && !hasActiveRemove;
+      })
+      .map((t) => {
+        const activeMove =
+          (activeOps[t.id]?.kind?.type === 'move' ? activeOps[t.id] : undefined) ||
+          (t.info_hash && activeOps[t.info_hash.toLowerCase()]?.kind?.type === 'move'
+            ? activeOps[t.info_hash.toLowerCase()]
+            : undefined);
+        const moveDest =
+          activeMove?.destination ||
+          (activeMove?.kind?.type === 'move' ? activeMove.kind.destination : undefined);
+        if (moveDest) {
+          return { ...t, save_path: moveDest };
+        }
+        const moveTombstone = Object.values(tombstones).find(
+          (tb) =>
+            tb.destination &&
+            (tb.torrent_id === t.id ||
+              (t.info_hash && tb.torrent_id.toLowerCase() === t.info_hash.toLowerCase()))
+        );
+        if (moveTombstone?.destination) {
+          return { ...t, save_path: moveTombstone.destination };
+        }
+        return t;
+      });
+
     // Retain rows with active operations that have not reached a terminal outcome
     // (phase !== 'complete') even if the engine stops reporting them.
-    const activeOps = get().activeOperations;
-    const retainedTorrents: TorrentItem[] = [...reconciled];
+    const retainedTorrents: TorrentItem[] = [...safeReconciled];
     for (const prev of prevTorrents) {
       const op = activeOps[prev.id] || (prev.info_hash ? activeOps[prev.info_hash.toLowerCase()] : undefined);
       if (op && op.phase !== 'complete') {
@@ -401,18 +467,43 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     }
   },
 
-  clearTorrents: () => set({ torrents: [], selectedId: null, isLoading: false }),
+  clearTorrents: () => {
+    invalidateTorrentFetches();
+    set({ torrents: [], selectedId: null, isLoading: false });
+  },
 
-  fetchTorrents: async () => {
-    if (get().torrents.length === 0) {
-      set({ isLoading: true });
+  fetchTorrents: async (forceFollowup = false) => {
+    if (inFlightFetch) {
+      if (forceFollowup) {
+        needsFollowupRefresh = true;
+      }
+      return inFlightFetch;
     }
-    try {
-      const data = await invoke<TorrentItem[]>('list_torrents');
-      get().applyTorrentTelemetry(data);
-    } catch {
-      set({ isLoading: false });
-    }
+
+    const scopeGen = fetchScopeGeneration;
+    inFlightFetch = (async () => {
+      if (get().torrents.length === 0) {
+        set({ isLoading: true });
+      }
+      try {
+        const data = await invoke<TorrentItem[]>('list_torrents');
+        if (scopeGen === fetchScopeGeneration) {
+          get().applyTorrentTelemetry(data);
+        }
+      } catch {
+        if (scopeGen === fetchScopeGeneration) {
+          set({ isLoading: false });
+        }
+      } finally {
+        inFlightFetch = null;
+        if (needsFollowupRefresh && scopeGen === fetchScopeGeneration) {
+          needsFollowupRefresh = false;
+          void get().fetchTorrents(false);
+        }
+      }
+    })();
+
+    return inFlightFetch;
   },
 
   setSelectedId: (selectedId) => {
@@ -428,33 +519,39 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   },
 
   pauseTorrent: async (id: string) => {
+    if (pendingMutations.has(id)) return;
+    pendingMutations.add(id);
     try {
       await invoke('pause_torrent', { id });
+      set({
+        torrents: get().torrents.map((t) =>
+          t.id === id ? { ...t, status: 'Paused', download_rate: 0, upload_rate: 0 } : t
+        ),
+      });
+      await get().fetchTorrents(true);
     } catch (err) {
-      console.warn('pause_torrent failed:', err);
+      console.error('pause_torrent failed:', err);
+    } finally {
+      pendingMutations.delete(id);
     }
-    set({
-      torrents: get().torrents.map((t) =>
-        t.id === id ? { ...t, status: 'Paused', download_rate: 0, upload_rate: 0 } : t
-      ),
-    });
-    // Pull engine truth immediately so the optimistic state is never
-    // reverted by the next telemetry/poll tick (owner-reported 5-10s lag).
-    await get().fetchTorrents();
   },
 
   resumeTorrent: async (id: string) => {
+    if (pendingMutations.has(id)) return;
+    pendingMutations.add(id);
     try {
       await invoke('resume_torrent', { id });
+      set({
+        torrents: get().torrents.map((t) =>
+          t.id === id ? { ...t, status: t.progress >= 1.0 ? 'Seeding' : 'Downloading' } : t
+        ),
+      });
+      await get().fetchTorrents(true);
     } catch (err) {
-      console.warn('resume_torrent failed:', err);
+      console.error('resume_torrent failed:', err);
+    } finally {
+      pendingMutations.delete(id);
     }
-    set({
-      torrents: get().torrents.map((t) =>
-        t.id === id ? { ...t, status: t.progress >= 1.0 ? 'Seeding' : 'Downloading' } : t
-      ),
-    });
-    await get().fetchTorrents();
   },
 
   pauseAll: async () => {
@@ -466,7 +563,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
     set({
       torrents: get().torrents.map((t) => ({ ...t, status: 'Paused', download_rate: 0, upload_rate: 0 })),
     });
-    await get().fetchTorrents();
+    await get().fetchTorrents(true);
   },
 
   resumeAll: async () => {
@@ -481,7 +578,7 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
         status: t.progress >= 1.0 ? 'Seeding' : 'Downloading',
       })),
     });
-    await get().fetchTorrents();
+    await get().fetchTorrents(true);
   },
 
   removeTorrent: async (id: string, deleteFiles?: boolean) => {
@@ -728,6 +825,8 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
           torrent_id: op.torrent_id,
           revision: op.revision,
           timestamp: Date.now(),
+          type: op.kind?.type,
+          destination: op.kind?.type === 'move' ? (op.destination || op.kind.destination) : undefined,
         };
 
         if (op.kind?.type === 'remove') {

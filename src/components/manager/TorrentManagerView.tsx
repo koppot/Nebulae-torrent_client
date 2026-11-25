@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
 import { openInPlayer } from '../../lib/playerStore';
 import { useTorrentStore } from '../../stores/torrentStore';
@@ -196,6 +197,101 @@ function formatElapsed(ms: number): string {
   return `${mins}m ${secs}s`;
 }
 
+const SpeedHistoryGraph: React.FC<{
+  selectedTorrent: TorrentItem;
+}> = ({ selectedTorrent }) => {
+  const [speedHistory, setSpeedHistory] = useState<Array<{ dl: number; ul: number }>>([]);
+  const selectedIdRef = useRef(selectedTorrent.id);
+  selectedIdRef.current = selectedTorrent.id;
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const { torrents: current } = useTorrentStore.getState();
+      const sel =
+        current.find((t) => t.id === selectedIdRef.current) || current[0];
+      if (sel) {
+        setSpeedHistory((prev) =>
+          [...prev, { dl: sel.download_rate, ul: sel.upload_rate }].slice(-40)
+        );
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="flex flex-col h-full space-y-2">
+      <div className="flex items-center justify-between text-[11px] font-mono px-1 text-slate-400">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 text-adc-cyan">
+            <span className="w-2.5 h-2.5 rounded-full bg-adc-cyan" />
+            <span>Down: {formatSpeed(selectedTorrent.download_rate)}</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-adc-emerald">
+            <span className="w-2.5 h-2.5 rounded-full bg-adc-emerald" />
+            <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
+          </div>
+        </div>
+        <span className="text-[10px]">Instantaneous Transfer Rates (1s samples)</span>
+      </div>
+
+      <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">
+        {speedHistory.length < 2 ? (
+          <div className="w-full h-full flex items-center justify-center text-slate-500 font-sans text-xs">
+            Gathering throughput telemetry...
+          </div>
+        ) : (
+          <svg className="w-full h-full" viewBox="0 0 500 120" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="dlGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.0" />
+              </linearGradient>
+              <linearGradient id="ulGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10B981" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+
+            {(() => {
+              const maxSpeed = Math.max(
+                ...speedHistory.map((s) => Math.max(s.dl, s.ul)),
+                1024 * 50
+              );
+              const w = 500;
+              const h = 120;
+              const step = w / Math.max(speedHistory.length - 1, 1);
+
+              const dlPoints = speedHistory.map((s, i) => [
+                i * step,
+                h - (s.dl / maxSpeed) * (h - 15),
+              ]);
+              const ulPoints = speedHistory.map((s, i) => [
+                i * step,
+                h - (s.ul / maxSpeed) * (h - 15),
+              ]);
+
+              const dlD = `M ${dlPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
+              const dlArea = `${dlD} L ${w},${h} L 0,${h} Z`;
+
+              const ulD = `M ${ulPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
+              const ulArea = `${ulD} L ${w},${h} L 0,${h} Z`;
+
+              return (
+                <>
+                  <path d={dlArea} fill="url(#dlGrad)" />
+                  <path d={dlD} fill="none" stroke="#06B6D4" strokeWidth="2" />
+                  <path d={ulArea} fill="url(#ulGrad)" />
+                  <path d={ulD} fill="none" stroke="#10B981" strokeWidth="2" />
+                </>
+              );
+            })()}
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const TorrentManagerView: React.FC = () => {
   const [now, setNow] = useState(() => Date.now());
   const {
@@ -222,7 +318,33 @@ export const TorrentManagerView: React.FC = () => {
     dismissOperation,
     terminalNotice,
     dismissTerminalNotice,
-  } = useTorrentStore();
+  } = useTorrentStore(
+    useShallow((s) => ({
+      torrents: s.torrents,
+      selectedId: s.selectedId,
+      setSelectedId: s.setSelectedId,
+      filesLoadingId: s.filesLoadingId,
+      filesError: s.filesError,
+      fetchTorrentDetails: s.fetchTorrentDetails,
+      pauseTorrent: s.pauseTorrent,
+      resumeTorrent: s.resumeTorrent,
+      forceRecheck: s.forceRecheck,
+      reannounce: s.reannounce,
+      renameTorrent: s.renameTorrent,
+      renameTorrentFile: s.renameTorrentFile,
+      renameTorrentFolder: s.renameTorrentFolder,
+      setFilePriority: s.setFilePriority,
+      setFilesPriority: s.setFilesPriority,
+      toggleSequential: s.toggleSequential,
+      setTorrentLimits: s.setTorrentLimits,
+      setLocation: s.setLocation,
+      selectDownloadDirectory: s.selectDownloadDirectory,
+      activeOperations: s.activeOperations,
+      dismissOperation: s.dismissOperation,
+      terminalNotice: s.terminalNotice,
+      dismissTerminalNotice: s.dismissTerminalNotice,
+    }))
+  );
 
   const hasInFlightOperations = useMemo(() => {
     return Object.values(activeOperations).some(
@@ -247,7 +369,18 @@ export const TorrentManagerView: React.FC = () => {
     setManagerTrackerFilter,
     searchQuery,
     setDeleteModalTarget,
-  } = useUiStore();
+  } = useUiStore(
+    useShallow((s) => ({
+      activeManagerTab: s.activeManagerTab,
+      setActiveManagerTab: s.setActiveManagerTab,
+      managerCategoryFilter: s.managerCategoryFilter,
+      setManagerCategoryFilter: s.setManagerCategoryFilter,
+      managerTrackerFilter: s.managerTrackerFilter,
+      setManagerTrackerFilter: s.setManagerTrackerFilter,
+      searchQuery: s.searchQuery,
+      setDeleteModalTarget: s.setDeleteModalTarget,
+    }))
+  );
 
   const {
     peers,
@@ -255,10 +388,23 @@ export const TorrentManagerView: React.FC = () => {
     clearPeers,
     isLoading: isPeersLoading,
     error: peersError,
+    isStale: isPeersStale,
     settings: peeringSettings,
     fetchSettings,
     saveSettings,
-  } = usePeeringStore();
+  } = usePeeringStore(
+    useShallow((s) => ({
+      peers: s.peers,
+      fetchPeers: s.fetchPeers,
+      clearPeers: s.clearPeers,
+      isLoading: s.isLoading,
+      error: s.error,
+      isStale: s.isStale,
+      settings: s.settings,
+      fetchSettings: s.fetchSettings,
+      saveSettings: s.saveSettings,
+    }))
+  );
   const { engineMode, settings } = useSettingsStore();
   // In rtorrent-server mode the GUI hides options the rtorrent engine cannot
   // fulfill instead of offering actions that only produce errors.
@@ -356,7 +502,6 @@ export const TorrentManagerView: React.FC = () => {
 
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  const [speedHistory, setSpeedHistory] = useState<Array<{ dl: number; ul: number }>>([]);
   const [limitsModal, setLimitsModal] = useState<{
     isOpen: boolean;
     id: string;
@@ -371,29 +516,29 @@ export const TorrentManagerView: React.FC = () => {
     ratioLimit: -1,
   });
 
-
-
   // Filtered list — declared BEFORE the keyboard effect below, whose deps
-  // reference it during render.
-  const filteredTorrents = torrents.filter((t) => {
-    if (searchQuery && !t.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false;
-    }
-    if (managerCategoryFilter === 'downloading') return t.status === 'Downloading';
-    if (managerCategoryFilter === 'seeding') return t.status === 'Seeding';
-    if (managerCategoryFilter === 'completed') return t.status === 'Completed';
-    if (managerCategoryFilter === 'paused') return t.status === 'Paused';
-    if (managerCategoryFilter === 'media') return t.is_media;
-    if (managerTrackerFilter) {
-      const hosts = (t.trackers ?? []).map((tr) => trackerHost(tr.url));
-      return hosts.includes(managerTrackerFilter);
-    }
-    return true;
-  });
+  // reference it during render. Memoized to avoid re-running on unaffected store changes.
+  const filteredTorrents = useMemo(() => {
+    return torrents.filter((t) => {
+      if (searchQuery && !t.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+        return false;
+      }
+      if (managerCategoryFilter === 'downloading') return t.status === 'Downloading';
+      if (managerCategoryFilter === 'seeding') return t.status === 'Seeding';
+      if (managerCategoryFilter === 'completed') return t.status === 'Completed';
+      if (managerCategoryFilter === 'paused') return t.status === 'Paused';
+      if (managerCategoryFilter === 'media') return t.is_media;
+      if (managerTrackerFilter) {
+        const hosts = (t.trackers ?? []).map((tr) => trackerHost(tr.url));
+        return hosts.includes(managerTrackerFilter);
+      }
+      return true;
+    });
+  }, [torrents, searchQuery, managerCategoryFilter, managerTrackerFilter]);
 
   // qBittorrent-style tracker list for the left sidebar: unique tracker
   // hosts across all torrents, with torrent counts and aggregate health.
-  const trackerEntries = (() => {
+  const trackerEntries = useMemo(() => {
     const map = new Map<string, { count: number; healthy: number }>();
     for (const t of torrents) {
       const hosts = new Set((t.trackers ?? []).map((tr) => trackerHost(tr.url)).filter(Boolean));
@@ -408,7 +553,7 @@ export const TorrentManagerView: React.FC = () => {
     return Array.from(map.entries())
       .map(([host, { count, healthy }]) => ({ host, count, healthy }))
       .sort((a, b) => b.count - a.count);
-  })();
+  }, [torrents]);
 
   type SortField =
     | 'name'
@@ -560,16 +705,40 @@ export const TorrentManagerView: React.FC = () => {
     }
   }, [selectedId, displayedTorrents, setSelectedId]);
 
-  // Periodic peer query targeting active selected torrent
+  // Periodic peer query targeting active selected torrent: completion-aware with visibility pausing
   useEffect(() => {
     const targetId = selectedTorrent?.id;
     const targetHash = selectedTorrent?.info_hash;
     if ((activeManagerTab === 'peers' || activeManagerTab === 'peer-history') && targetId && targetHash) {
-      fetchPeers(targetId);
-      const interval = setInterval(() => {
-        fetchPeers(targetId);
-      }, 2500);
-      return () => clearInterval(interval);
+      let timerId: ReturnType<typeof setTimeout> | null = null;
+      let isCancelled = false;
+
+      const poll = async () => {
+        if (isCancelled) return;
+        if (!document.hidden && targetId) {
+          try {
+            await fetchPeers(targetId);
+          } catch {}
+        }
+        if (!isCancelled) {
+          timerId = setTimeout(poll, 2500);
+        }
+      };
+
+      void poll();
+
+      const handleVisibility = () => {
+        if (!document.hidden && targetId) {
+          void fetchPeers(targetId);
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibility);
+
+      return () => {
+        isCancelled = true;
+        if (timerId) clearTimeout(timerId);
+        document.removeEventListener('visibilitychange', handleVisibility);
+      };
     } else if (!targetId) {
       clearPeers();
     }
@@ -628,27 +797,6 @@ export const TorrentManagerView: React.FC = () => {
     };
   })();
 
-  // Sample the selected torrent's average rates on a fixed 1s cadence.
-  // Triggering on value CHANGE froze the timeline during quiet periods
-  // (rates sit at exactly 0 when no transfer is active, so deps never
-  // changed and the graph stopped advancing) — a graph must tick even
-  // when speeds are zero. The traced values are since-transfer-began
-  // averages, so the line moves slowly and honestly.
-  const selectedIdRef = useRef(selectedId);
-  selectedIdRef.current = selectedId;
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const { torrents: current } = useTorrentStore.getState();
-      const sel =
-        current.find((t) => t.id === selectedIdRef.current) || current[0];
-      if (sel) {
-        setSpeedHistory((prev) =>
-          [...prev, { dl: sel.download_rate, ul: sel.upload_rate }].slice(-40)
-        );
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // One-shot re-announce when a torrent's trackers recover after a full
   // outage: the seeds/peers columns otherwise keep showing the frozen
@@ -2181,6 +2329,7 @@ export const TorrentManagerView: React.FC = () => {
                   peers={peers}
                   isLoading={isPeersLoading}
                   error={peersError}
+                  isStale={isPeersStale}
                   onRetry={() => selectedTorrent && fetchPeers(selectedTorrent.id)}
                   torrentStatus={selectedTorrent?.status}
                   settings={peeringSettings}
@@ -2200,76 +2349,7 @@ export const TorrentManagerView: React.FC = () => {
                 />
               ) : (
                 /* Speed Graph Tab */
-                <div className="flex flex-col h-full space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-mono px-1 text-slate-400">
-                    <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-1.5 text-adc-cyan">
-                        <span className="w-2.5 h-2.5 rounded-full bg-adc-cyan" />
-                        <span>Down: {formatSpeed(selectedTorrent.download_rate)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-adc-emerald">
-                        <span className="w-2.5 h-2.5 rounded-full bg-adc-emerald" />
-                        <span>Up: {formatSpeed(selectedTorrent.upload_rate)}</span>
-                      </div>
-                    </div>
-                    <span className="text-[10px]">Instantaneous Transfer Rates (1s samples)</span>
-                  </div>
-
-                  <div className="flex-1 w-full rounded bg-[#0B0F19] border border-[#262626] p-2 relative overflow-hidden flex items-end">
-                    {speedHistory.length < 2 ? (
-                      <div className="w-full h-full flex items-center justify-center text-slate-500 font-sans text-xs">
-                        Gathering throughput telemetry...
-                      </div>
-                    ) : (
-                      <svg className="w-full h-full" viewBox="0 0 500 120" preserveAspectRatio="none">
-                        <defs>
-                          <linearGradient id="dlGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#06B6D4" stopOpacity="0.4" />
-                            <stop offset="100%" stopColor="#06B6D4" stopOpacity="0.0" />
-                          </linearGradient>
-                          <linearGradient id="ulGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#10B981" stopOpacity="0.4" />
-                            <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
-                          </linearGradient>
-                        </defs>
-
-                        {(() => {
-                          const maxSpeed = Math.max(
-                            ...speedHistory.map((s) => Math.max(s.dl, s.ul)),
-                            1024 * 50
-                          );
-                          const w = 500;
-                          const h = 120;
-                          const step = w / Math.max(speedHistory.length - 1, 1);
-
-                          const dlPoints = speedHistory.map((s, i) => [
-                            i * step,
-                            h - (s.dl / maxSpeed) * (h - 15),
-                          ]);
-                          const ulPoints = speedHistory.map((s, i) => [
-                            i * step,
-                            h - (s.ul / maxSpeed) * (h - 15),
-                          ]);
-
-                          const dlD = `M ${dlPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
-                          const dlArea = `${dlD} L ${w},${h} L 0,${h} Z`;
-
-                          const ulD = `M ${ulPoints.map((p) => `${p[0]},${p[1]}`).join(' L ')}`;
-                          const ulArea = `${ulD} L ${w},${h} L 0,${h} Z`;
-
-                          return (
-                            <>
-                              <path d={dlArea} fill="url(#dlGrad)" />
-                              <path d={dlD} fill="none" stroke="#06B6D4" strokeWidth="2" />
-                              <path d={ulArea} fill="url(#ulGrad)" />
-                              <path d={ulD} fill="none" stroke="#10B981" strokeWidth="2" />
-                            </>
-                          );
-                        })()}
-                      </svg>
-                    )}
-                  </div>
-                </div>
+                <SpeedHistoryGraph selectedTorrent={selectedTorrent} />
               )
             ) : (
               <div className="text-[#a3a3a3] text-xs">No torrent selected</div>

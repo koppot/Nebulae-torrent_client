@@ -8,11 +8,15 @@ interface PeeringState {
   activeTorrentId: string | null;
   isLoading: boolean;
   error: string | null;
+  isStale: boolean;
   fetchSettings: () => Promise<void>;
   saveSettings: (settings: PeeringSettings) => Promise<void>;
-  fetchPeers: (torrentId: string) => Promise<void>;
+  fetchPeers: (torrentId: string, scopeKey?: string) => Promise<void>;
   clearPeers: () => void;
 }
+
+let selectionToken = 0;
+const activeRequests = new Map<string, Promise<void>>();
 
 export const usePeeringStore = create<PeeringState>((set, get) => ({
   settings: null,
@@ -20,6 +24,7 @@ export const usePeeringStore = create<PeeringState>((set, get) => ({
   activeTorrentId: null,
   isLoading: false,
   error: null,
+  isStale: false,
 
   fetchSettings: async () => {
     try {
@@ -50,27 +55,54 @@ export const usePeeringStore = create<PeeringState>((set, get) => ({
   },
 
   clearPeers: () => {
-    set({ activeTorrentId: null, peers: [], isLoading: false, error: null });
+    selectionToken++;
+    activeRequests.clear();
+    set({ activeTorrentId: null, peers: [], isLoading: false, error: null, isStale: false });
   },
 
-  fetchPeers: async (torrentId: string) => {
+  fetchPeers: async (torrentId: string, scopeKey = 'local') => {
     const isNew = get().activeTorrentId !== torrentId;
     if (isNew) {
-      set({ activeTorrentId: torrentId, peers: [], isLoading: true, error: null });
+      selectionToken++;
+      set({ activeTorrentId: torrentId, peers: [], isLoading: true, error: null, isStale: false });
     } else {
-      set({ activeTorrentId: torrentId, error: null });
+      set({ error: null });
     }
 
-    try {
-      const res = await invoke<PeerTelemetry[]>('get_peer_telemetry', { torrentId });
-      // Guard against race condition: only update if activeTorrentId matches
-      if (get().activeTorrentId === torrentId) {
-        set({ peers: res, isLoading: false, error: null });
-      }
-    } catch (err: unknown) {
-      if (get().activeTorrentId === torrentId) {
-        set({ peers: [], isLoading: false, error: String(err) });
-      }
+    const currentToken = selectionToken;
+    const requestKey = `${scopeKey}:${torrentId}:${currentToken}`;
+
+    // Coalesce identical in-flight reads
+    const existingPromise = activeRequests.get(requestKey);
+    if (existingPromise) {
+      return existingPromise;
     }
+
+    const promise = (async () => {
+      try {
+        const res = await invoke<PeerTelemetry[]>('get_peer_telemetry', { torrentId });
+        // Guard against race conditions and A-to-B-to-A selection changes
+        if (selectionToken === currentToken && get().activeTorrentId === torrentId) {
+          set({ peers: res, isLoading: false, error: null, isStale: false });
+        }
+      } catch (err: unknown) {
+        if (selectionToken === currentToken && get().activeTorrentId === torrentId) {
+          // Keep last-good peers on same-selection refresh failure; mark them stale with safe error text
+          const existingPeers = get().peers;
+          const safeError = err instanceof Error ? err.message : String(err);
+          set({
+            peers: existingPeers,
+            isLoading: false,
+            error: safeError,
+            isStale: existingPeers.length > 0,
+          });
+        }
+      } finally {
+        activeRequests.delete(requestKey);
+      }
+    })();
+
+    activeRequests.set(requestKey, promise);
+    return promise;
   },
 }));
