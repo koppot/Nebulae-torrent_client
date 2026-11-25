@@ -20,7 +20,7 @@ on:
 jobs:
   build-candidate:
     permissions:
-      contents: read
+      contents: write
     env:
       WINDOWS_SIGN_PROVIDER: ${{ vars.WINDOWS_SIGN_PROVIDER }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -133,12 +133,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "==> Fetching internal candidate build assets from build-assets-v028-candidate..."
-          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "vcrt140-x64.tar.gz"
-          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "geo-databases.tar.gz"
-          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "licenses.tar.gz"
-          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "patched-vlc-win64-3.0.23-complete.tar.xz"
-          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "WebView2Loader.dll"
+          Write-Host "==> Fetching internal candidate build assets from build-assets-v028-candidate (id: 449252695)..."
+          $releaseId = "449252695"
+          $assets = gh api repos/koppot/Nebulae-torrent_client/releases/$releaseId/assets | ConvertFrom-Json
+          foreach ($asset in $assets) {
+              Write-Host "Downloading $($asset.name)..."
+              curl.exe -fL -s -H "Authorization: token $env:GH_TOKEN" -H "Accept: application/octet-stream" "https://api.github.com/repos/koppot/Nebulae-torrent_client/releases/assets/$($asset.id)" -o $asset.name
+              if (-not (Test-Path $asset.name)) { throw "Failed to download $($asset.name)" }
+          }
 
           # Extract GeoIP databases
           Write-Host "==> Staging GeoIP databases..."
