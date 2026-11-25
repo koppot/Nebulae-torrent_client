@@ -127,6 +127,32 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Fetch Windows Candidate Assets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Write-Host "==> Fetching internal candidate build assets from build-assets-v028-candidate..."
+          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "vcrt140-x64.tar.gz"
+          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "geo-databases.tar.gz"
+          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "licenses.tar.gz"
+          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "patched-vlc-win64-3.0.23-complete.tar.xz"
+          gh release download build-assets-v028-candidate --repo koppot/Nebulae-torrent_client --pattern "WebView2Loader.dll"
+
+          # Extract GeoIP databases
+          Write-Host "==> Staging GeoIP databases..."
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/geo | Out-Null
+          tar.exe -xzf geo-databases.tar.gz -C src-tauri/resources/geo
+
+          # Extract licenses
+          Write-Host "==> Staging licenses..."
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/licenses | Out-Null
+          tar.exe -xzf licenses.tar.gz -C src-tauri/resources
+
+          # Stage WebView2Loader.dll
+          Copy-Item WebView2Loader.dll -Destination src-tauri/ -Force
+
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -248,12 +274,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $url = 'https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip'
-          Invoke-WebRequest -Uri $url -OutFile vlc.zip
-          Expand-Archive -Path vlc.zip -DestinationPath vlcextract
+          Write-Host "==> Staging Patched VLC 3.0.23 (Blu-ray navigation + menu-first + HDR tonemapping)..."
           New-Item -ItemType Directory -Force -Path src-tauri/resources/vlc | Out-Null
-          Get-ChildItem -Path vlcextract/vlc-3.0.21 -Exclude '*.exe','*.txt','*.nsi','*.html' |
-            Copy-Item -Destination src-tauri/resources/vlc -Recurse -Force
+          tar.exe -xf patched-vlc-win64-3.0.23-complete.tar.xz -C src-tauri/resources/vlc
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
 
       # tauri.conf.json's "resources/**/*" glob copies hidden files too, so a
@@ -364,6 +387,21 @@ jobs:
             throw "FATAL: candidate installer or its signature missing!"
           }
 
+          # Prepare Windows portable ZIP: nebulae.exe + app.ico + WebView2Loader.dll + resources/
+          Write-Host "==> Building Windows portable candidate ZIP..."
+          $portableDir = "Nebulae-Windows-x64-portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item -Path "nebulae.exe" -Destination "$portableDir\nebulae.exe"
+          Copy-Item -Path "src-tauri\icons\icon.ico" -Destination "$portableDir\app.ico"
+          if (Test-Path "WebView2Loader.dll") {
+            Copy-Item -Path "WebView2Loader.dll" -Destination "$portableDir\WebView2Loader.dll"
+          }
+          Copy-Item -Path "src-tauri\resources" -Destination "$portableDir\resources" -Recurse
+          Compress-Archive -Path "$portableDir\*" -DestinationPath "Nebulae-Windows-x64-portable.zip" -Force
+          $portableHash = (Get-FileHash -Path 'Nebulae-Windows-x64-portable.zip' -Algorithm SHA256).Hash.ToLower()
+          "$portableHash  Nebulae-Windows-x64-portable.zip" | Out-File -FilePath 'Nebulae-Windows-x64-portable.zip.sha256' -Encoding utf8
+          Write-Host "Portable ZIP generated: Nebulae-Windows-x64-portable.zip ($portableHash)"
+
       - name: Prepare candidate artifacts (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -405,6 +443,7 @@ jobs:
           path: |
             candidate-source.txt
             ${{ matrix.artifact_name }}*
+            Nebulae-Windows-x64-portable*
             Nebulae-Linux*
             nebulae-linux*
             nebulae.exe*

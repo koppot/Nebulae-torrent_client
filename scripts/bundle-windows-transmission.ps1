@@ -1,4 +1,4 @@
-# scripts/bundle-windows-transmission.ps1
+﻿# scripts/bundle-windows-transmission.ps1
 # Bundles transmission-daemon binary + required DLLs for Windows x64.
 # Pattern: docs/task-transmission-engine-and-adc-alignment.md Phase A1,
 #          mirrors bundle-windows-mpv.ps1 exactly.
@@ -129,20 +129,26 @@ if (Test-Path $PatchedSourceDaemon) {
         $Copied++
     }
 } else {
-Get-ChildItem -Path $DaemonDir -Filter "*.dll" | ForEach-Object {
-    $lname = $_.Name.ToLower()
-    $isSystem = $false
-    foreach ($prefix in $SystemDllPrefixes) {
-        if ($lname.StartsWith($prefix)) { $isSystem = $true; break }
+    # Copy only the required daemon dependencies from the MSI.
+    # Exclude Qt6 GUI client libraries (Qt6Core, Qt6Gui, Qt6Widgets, Qt6Network, Qt6DBus, Qt6Svg, dbus-1)
+    # which are unnecessary bloat for transmission-daemon.exe.
+    $TransmissionRequiredDlls = @("libcrypto-3-x64.dll", "libssl-3-x64.dll", "libcurl.dll", "zlib.dll")
+    foreach ($dllName in $TransmissionRequiredDlls) {
+        $found = Get-ChildItem -Path $DaemonDir -Filter $dllName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            Copy-Item -Path $found.FullName -Destination "$ResourceDir\$dllName" -Force
+            Write-Host "    Copied: $dllName"
+            $Copied++
+        }
     }
-    if (-not $isSystem) {
-        Copy-Item -Path $_.FullName -Destination "$ResourceDir\$($_.Name)" -Force
-        Write-Host "    Copied: $($_.Name)"
-        $Copied++
-    }
-}
 }
 Write-Host "    Total DLLs copied: $Copied"
+
+# Stage MSVC runtime DLLs if package archive is present
+if (Test-Path "vcrt140-x64.tar.gz") {
+    Write-Host "==> Staging MSVC runtime DLLs into $ResourceDir..."
+    tar.exe -xzf vcrt140-x64.tar.gz -C $ResourceDir
+}
 
 # Probe binary to check whether it contains runtime identity override hooks
 $daemonBytes = [System.IO.File]::ReadAllBytes("$ResourceDir\transmission-daemon.exe")
