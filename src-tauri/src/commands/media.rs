@@ -3488,19 +3488,12 @@ pub fn player_menu_mouse_move(
     }
     #[cfg(target_os = "windows")]
     {
-        let t_mm = std::time::Instant::now();
-        let _disp = crate::player::embed_windows::forward_mouse_move(&app, x, y)?;
-        let elapsed = t_mm.elapsed().as_micros();
-        // Sample every ~100 calls (counter mod 100 == 0) to get typical cost
-        // without flooding the log. forward_mouse_move uses PostMessageW which
-        // should be sub-millisecond; if we see >5ms here it indicates contention
-        // or find_vlc_video_main_window is walking a large window tree.
-        if elapsed > 1000 {
-            tracing::warn!(
-                "[perf] player_menu_mouse_move: forward_mouse_move took {}µs",
-                elapsed
-            );
-        }
+        // B4 (0.2.9-rc): enqueue the move on the Windows mouse-move worker and
+        // return at once, so the walk/map/post can no longer run on (or hang)
+        // the main UI thread. The worker logs forward cost when > 1000µs; moves
+        // were already best-effort (the disposition was not acted on by the
+        // caller). Clicks stay synchronous and still return their disposition.
+        crate::player::embed_windows::forward_mouse_move_async(&app, x, y);
     }
     #[cfg(target_os = "linux")]
     {

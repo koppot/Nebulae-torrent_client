@@ -1886,6 +1886,57 @@ pub fn forward_mouse_move(app: &AppHandle, x: f64, y: f64) -> Result<InputDispos
     Ok(disp)
 }
 
+// B4 (0.2.9-rc): mouse MOVES are forwarded on a dedicated worker thread with
+// latest-value coalescing (single-slot, drop-oldest queue). The synchronous
+// Tauri command (main thread) only enqueues; the full find_vlc_video_main_window
+// walk + PostMessageW runs here, so a slow or hung forward can no longer freeze
+// the UI thread (Task 5 §16: the main thread went silent for >2 min right after
+// the first forwarded move). Clicks stay synchronous so they keep returning the
+// real InputDisposition.
+static MOUSE_MOVE_PENDING: std::sync::Mutex<Option<(AppHandle, f64, f64)>> =
+    std::sync::Mutex::new(None);
+static MOUSE_MOVE_KICK: std::sync::Condvar = std::sync::Condvar::new();
+static MOUSE_MOVE_WORKER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+pub fn forward_mouse_move_async(app: &AppHandle, x: f64, y: f64) {
+    MOUSE_MOVE_WORKER.get_or_init(|| {
+        let _ = std::thread::Builder::new()
+            .name("vlc-menu-mouse-move".into())
+            .spawn(|| loop {
+                let job = {
+                    let mut pending = match MOUSE_MOVE_PENDING.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    loop {
+                        if let Some(job) = pending.take() {
+                            break job;
+                        }
+                        pending = match MOUSE_MOVE_KICK.wait(pending) {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                    }
+                };
+                let t = std::time::Instant::now();
+                let disp = forward_mouse_move(&job.0, job.1, job.2);
+                let elapsed = t.elapsed().as_micros();
+                if elapsed > 1000 {
+                    tracing::warn!(
+                        "[perf] mouse-move worker: forward_mouse_move took {}µs (disp {:?})",
+                        elapsed,
+                        disp
+                    );
+                }
+            });
+    });
+    // Latest-value coalescing: replace any not-yet-consumed move.
+    if let Ok(mut pending) = MOUSE_MOVE_PENDING.lock() {
+        *pending = Some((app.clone(), x, y));
+    }
+    MOUSE_MOVE_KICK.notify_one();
+}
+
 pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<InputDisposition, String> {
     let hwnd_val = app
         .state::<crate::player::PlayerState>()
