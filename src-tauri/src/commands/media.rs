@@ -2085,6 +2085,21 @@ pub async fn player_open(
     player_open_inner(&app, &state, file_path, resume, None, false).await
 }
 
+/// 0.2.9-rc (Task 4 §13): identifies the most recent open_lock holder so a
+/// slow waiter can log who held it. 0 = none yet, 1 = player_open,
+/// 2 = stop_session, 3 = other. The id is set by the holder right after it
+/// acquires and is left in place after release (read as "previous holder").
+pub static OPEN_LOCK_LAST_HOLDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn open_lock_holder_name(id: u8) -> &'static str {
+    match id {
+        1 => "player_open",
+        2 => "stop_session",
+        3 => "other",
+        _ => "none",
+    }
+}
+
 pub async fn player_open_inner(
     app: &tauri::AppHandle,
     state: &PlayerState,
@@ -2094,14 +2109,24 @@ pub async fn player_open_inner(
     bypass_menu: bool,
 ) -> Result<PlayerOpenResult, String> {
     let t_open_entry = std::time::Instant::now();
-    let _open_guard = state.open_lock.lock().await;
+    // 0.2.9-rc: log the entry line BEFORE acquiring open_lock, so a long wait
+    // is visible as the gap between this line and the "acquired" line instead
+    // of being invisible between two consecutive lines (Task 4 §13).
     tracing::info!(
         "[lifecycle-diag] player_open entry: path='{file_path}' (resume={resume}, bypass_menu={bypass_menu})"
     );
-    tracing::info!(
-        "[perf] open_lock acquired: waited={}ms",
-        t_open_entry.elapsed().as_millis()
-    );
+    let _open_guard = state.open_lock.lock().await;
+    let waited_ms = t_open_entry.elapsed().as_millis();
+    if waited_ms > 500 {
+        tracing::warn!(
+            "[perf] open_lock acquired: waited={}ms (previous holder: {})",
+            waited_ms,
+            open_lock_holder_name(OPEN_LOCK_LAST_HOLDER.load(std::sync::atomic::Ordering::SeqCst))
+        );
+    } else {
+        tracing::info!("[perf] open_lock acquired: waited={}ms", waited_ms);
+    }
+    OPEN_LOCK_LAST_HOLDER.store(1, std::sync::atomic::Ordering::SeqCst);
     stop_session(app, state);
     *poison(&state.current_path) = Some(file_path.clone());
     // An explicit resume must not sit through the disc's first-play flow
