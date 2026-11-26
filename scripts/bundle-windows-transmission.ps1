@@ -106,9 +106,18 @@ if (Test-Path $PatchedSourceDaemon) {
     Write-Host "==> Using verified patched transmission-daemon.exe from source build: $PatchedSourceDaemon"
     Copy-Item -Path $PatchedSourceDaemon -Destination "$ResourceDir\transmission-daemon.exe" -Force
 } else {
-    # Copy daemon exe to resource dir from extracted MSI
-    Write-Host "==> Copying transmission-daemon.exe from MSI..."
-    Copy-Item -Path $DaemonExe.FullName -Destination "$ResourceDir\transmission-daemon.exe" -Force
+    # Never ship the stock MSI daemon (the rev2/rev3 regression). Fall back to
+    # the frozen, checksum-verified 0.2.8 patched daemon only.
+    $FrozenDaemon = Join-Path $PSScriptRoot "inputs\transmission-daemon-patched-0.2.8.exe"
+    if (-not (Test-Path $FrozenDaemon)) {
+        throw "No patched daemon available (source build failed and frozen 0.2.8 daemon not found at $FrozenDaemon). Refusing to bundle the stock MSI daemon."
+    }
+    $frozenHash = (Get-FileHash -Algorithm SHA256 $FrozenDaemon).Hash.ToLower()
+    if ($frozenHash -ne '26b644d7fb5310ab74a358944f76e6dbe847d224b6df633e20b6ba591bd80795') {
+        throw "frozen daemon checksum mismatch: got $frozenHash"
+    }
+    Write-Host "==> Falling back to the frozen 0.2.8 patched daemon (26b644d7, checksum verified)."
+    Copy-Item -Path $FrozenDaemon -Destination "$ResourceDir\transmission-daemon.exe" -Force
 }
 
 # Copy required DLLs from the same directory as the daemon.
@@ -150,22 +159,22 @@ if (Test-Path "vcrt140-x64.tar.gz") {
     tar.exe -xzf vcrt140-x64.tar.gz -C $ResourceDir
 }
 
-# Probe binary to check whether it contains runtime identity override hooks
+# Release gate: the staged daemon MUST contain all four Nebulae patch markers.
+# A stock MSI daemon (the rev2/rev3 regression) fails the build here.
+$requiredMarkers = @('NEBULAE_INTEREST_KEEPALIVE',
+                     'TRANSMISSION_PEER_ID_PREFIX',
+                     'TRANSMISSION_PEER_ID_SUFFIX',
+                     'TRANSMISSION_USER_AGENT')
 $daemonBytes = [System.IO.File]::ReadAllBytes("$ResourceDir\transmission-daemon.exe")
-$needle = [System.Text.Encoding]::ASCII.GetBytes("TRANSMISSION_PEER_ID_PREFIX")
-$hasPatch = $false
-for ($i = 0; $i -le ($daemonBytes.Length - $needle.Length); $i++) {
-    $matched = $true
-    for ($j = 0; $j -lt $needle.Length; $j++) {
-        if ($daemonBytes[$i + $j] -ne $needle[$j]) { $matched = $false; break }
-    }
-    if ($matched) { $hasPatch = $true; break }
+# Latin1 (codepage 28591) maps bytes 1:1, so the whole ~8 MB scan is one
+# ordinal .Contains per marker (milliseconds) instead of an interpreted
+# per-byte PowerShell loop (minutes).
+$daemonText = [System.Text.Encoding]::GetEncoding(28591).GetString($daemonBytes)
+$missingMarkers = @($requiredMarkers | Where-Object { -not $daemonText.Contains($_) })
+if ($missingMarkers.Count -gt 0) {
+    throw "transmission-daemon.exe is missing Nebulae patch markers: $($missingMarkers -join ', '). Refusing to bundle a stock daemon."
 }
-if ($hasPatch) {
-    Write-Host "    Capability check: transmission-daemon.exe contains TRANSMISSION_PEER_ID_PREFIX hook."
-} else {
-    Write-Host "    Capability check: transmission-daemon.exe lacks runtime identity hooks (will report stock identity)."
-}
+Write-Host "    Capability check: transmission-daemon.exe contains all 4 Nebulae patch markers."
 
 Write-Host ""
 Write-Host "==> Resource directory contents:"
