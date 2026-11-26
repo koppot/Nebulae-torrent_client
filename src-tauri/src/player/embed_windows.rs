@@ -1101,8 +1101,16 @@ unsafe fn map_mouse_lparam(
     ) {
         return Err(InputDisposition::OutsideTarget);
     }
-    let active_rect = find_vlc_video_output_rect_in_target(target).unwrap_or(target_rect);
+    // B2 (0.2.9-rc): 58d71a8 made the recursive "VLC video output" rect walk
+    // unconditional. It is cleared as the cause of the multi-second stalls
+    // (Task 5 §6) but is a pure per-event cost for every non-UHD menu move;
+    // run it only when UHD scaling can actually apply (the rev2 behavior).
     let scaled = should_scale_uhd_bluray_mouse();
+    let active_rect = if scaled {
+        find_vlc_video_output_rect_in_target(target).unwrap_or(target_rect)
+    } else {
+        target_rect
+    };
     if scaled {
         let (sx, sy) = scale_uhd_bluray_menu_point(
             pt.x,
