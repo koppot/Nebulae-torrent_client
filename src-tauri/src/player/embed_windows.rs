@@ -24,9 +24,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, LoadCursorW, RegisterClassExW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_HREDRAW,
-    CS_VREDRAW, GWLP_WNDPROC, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW,
+    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, LoadCursorW,
+    RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS,
+    CS_HREDRAW, CS_VREDRAW, GWLP_WNDPROC, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW,
     SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
     SW_SHOWNA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_DISPLAYCHANGE, WM_ERASEBKGND,
     WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
@@ -738,7 +738,11 @@ pub fn set_overlay_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                         let _ = ShowWindow(slot_h, SW_SHOWNA);
                     }
                 }
-                let _ = ShowWindow(video_hwnd, SW_SHOW);
+                let _ = ShowWindow(video_hwnd, SW_SHOWNA);
+                // C13 (D9): SW_SHOWNA, not SW_SHOW. This show runs on the player-open
+                // path and must not activate the surface; every other surface show in
+                // this file already uses SW_SHOWNA. An activating show here could pull
+                // the surface (not the controls) to the foreground over another app.
                 // Perform one-time Z-order arrangement when showing playback, outside position handlers.
                 let (cx, cy, cw, ch) = get_client_rect_in_screen(main_h);
                 if cw > 0 && ch > 0 {
@@ -1390,7 +1394,22 @@ unsafe extern "system" fn overlay_wndproc(
             // Instead, activate main_hwnd and synchronize the video surface directly behind it.
             if let Some(app) = overlay_app_handle() {
                 if let Ok(main_h) = main_hwnd(app) {
-                    let _ = SetForegroundWindow(main_h);
+                    // C13 (D9): never yank Nebulae to the foreground over another
+                    // application. If the main window is hidden or minimized while
+                    // the surface still receives a click (e.g. the surface was left
+                    // visible over a borderless game), activating Nebulae here would
+                    // minimize the game; suppress it and log so the Windows repro
+                    // produces evidence.
+                    let visible = IsWindowVisible(main_h).as_bool();
+                    let iconic = IsIconic(main_h).as_bool();
+                    if crate::player::surface_click_may_reforeground(visible, iconic) {
+                        let _ = SetForegroundWindow(main_h);
+                    } else {
+                        tracing::info!(
+                            visible, iconic,
+                            "[focus-guard] WM_MOUSEACTIVATE re-foreground suppressed (main hidden or minimized)"
+                        );
+                    }
                     update_video_surface_position(main_h);
                 }
             }

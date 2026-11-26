@@ -247,6 +247,33 @@ impl Default for FramingState {
     }
 }
 
+/// C13 (D9): a mouse click landing on the video surface may pull the main
+/// window back to the foreground only when the main window is actually shown
+/// and not minimized. If the surface is ever left visible while the main
+/// window is hidden or iconic (for example over a borderless game), activating
+/// Nebulae would minimize or cover the other application, so it is suppressed.
+pub fn surface_click_may_reforeground(main_visible: bool, main_iconic: bool) -> bool {
+    main_visible && !main_iconic
+}
+
+#[cfg(test)]
+mod c13_focus_guard_tests {
+    use super::surface_click_may_reforeground;
+
+    #[test]
+    fn surface_click_reforegrounds_only_when_main_is_shown_and_not_minimized() {
+        // Normal case: main window shown and restored — a click on the video
+        // surface may re-foreground the app (direct user interaction).
+        assert!(surface_click_may_reforeground(true, false));
+        // Surface still visible while the main window is minimized (e.g. over
+        // a borderless game): activating Nebulae would minimize the game.
+        assert!(!surface_click_may_reforeground(true, true));
+        // Main window hidden (player closed but surface leaked visible).
+        assert!(!surface_click_may_reforeground(false, false));
+        assert!(!surface_click_may_reforeground(false, true));
+    }
+}
+
 #[cfg(test)]
 mod framing_state_tests {
     use super::letterbox::{BarObservation, Bars};
