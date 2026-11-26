@@ -56,6 +56,30 @@ export interface TorrentContentFileMatch {
   matched_rel_path: string | null;
 }
 
+// F-2 staged add: one file or folder rename the user made in the Add Torrent
+// file tree, applied to the PAUSED torrent before it starts. `path` is the
+// full current path (Transmission files[].name format, including the torrent's
+// root folder for multi-file torrents); `name` is the new NAME of that entry.
+export interface StagedTorrentRename {
+  path: string;
+  name: string;
+  is_folder: boolean;
+  file_index: number;
+}
+
+// Everything the Add Torrent dialog staged while the torrent did not exist
+// yet. The backend adds the torrent PAUSED, applies these edits, then starts
+// it (add paused -> rename -> filter -> start; task order section 3).
+export interface StagedTorrentAdd {
+  source: string;
+  download_dir?: string | null;
+  bytes?: number[] | null;
+  root_name?: string | null;
+  renames: StagedTorrentRename[];
+  excluded_files: number[];
+  start_after_apply: boolean;
+}
+
 export interface TorrentContentMatch {
   torrent_name: string;
   is_multi_file: boolean;

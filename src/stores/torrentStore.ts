@@ -6,6 +6,7 @@ import type {
   TorrentContentMatch,
   TorrentRenameEntry,
   TorrentOperationSnapshot,
+  StagedTorrentAdd,
 } from '../types/index.ts';
 import { invoke } from '@tauri-apps/api/core';
 import { createLatestGate, mergeFileStats } from '../lib/torrentFiles.ts';
@@ -232,6 +233,7 @@ interface TorrentState {
   resumeAll: () => Promise<void>;
   removeTorrent: (id: string, deleteFiles?: boolean) => Promise<void>;
   addTorrent: (source: string, downloadDir?: string, bytes?: number[]) => Promise<void>;
+  addTorrentStaged: (staged: StagedTorrentAdd) => Promise<string>;
   inspectTorrent: (source?: string, bytes?: number[]) => Promise<InspectTorrentResult>;
   matchTorrentContent: (source: string, downloadDir: string) => Promise<TorrentContentMatch>;
   applyTorrentRenames: (downloadDir: string, renames: TorrentRenameEntry[]) => Promise<number>;
@@ -991,6 +993,16 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   addTorrent: async (source: string, downloadDir?: string, bytes?: number[]) => {
     await invoke('add_torrent', { source, downloadDir, bytes });
     await get().fetchTorrents();
+  },
+
+  // F-2 staged add: the torrent is added PAUSED, the user's name and
+  // file-selection edits are applied, then it starts (if requested). Returns
+  // the new torrent id. On failure the torrent exists PAUSED (the backend
+  // error text says so) and nothing downloads until it is started.
+  addTorrentStaged: async (staged: StagedTorrentAdd) => {
+    const id = await invoke<string>('add_torrent_staged', { staged });
+    await get().fetchTorrents();
+    return id;
   },
 
   inspectTorrent: async (source?: string, bytes?: number[]) => {

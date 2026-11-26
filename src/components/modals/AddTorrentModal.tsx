@@ -3,9 +3,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { useUiStore } from '../../stores/uiStore';
 import { useTorrentStore } from '../../stores/torrentStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { InspectTorrentResult, TorrentContentMatch, FileWithPath } from '../../types';
+import { InspectTorrentResult, TorrentContentMatch, FileWithPath, StagedTorrentRename } from '../../types';
 import { errorMessage as toErrorMessage } from '../../utils/errors';
 import { readTorrentFileAsDataUrl } from '../../utils/openPath';
+import AddTorrentFileTree from './AddTorrentFileTree';
 import {
   X,
   Plus,
@@ -32,7 +33,7 @@ export const AddTorrentModal: React.FC = () => {
     addTorrentRejection,
     setAddTorrentRejection,
   } = useUiStore();
-  const { addTorrent, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
+  const { addTorrent, addTorrentStaged, inspectTorrent, matchTorrentContent, applyTorrentRenames, selectTorrentFile, selectDownloadDirectory } = useTorrentStore();
   const { settings, addRecentDirectory, engineMode } = useSettingsStore();
 
   const [inputMode, setInputMode] = useState<'file' | 'magnet'>('file');
@@ -61,6 +62,27 @@ export const AddTorrentModal: React.FC = () => {
   const [contentMatch, setContentMatch] = useState<TorrentContentMatch | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
   const [renameInputs, setRenameInputs] = useState<Record<number, string>>({});
+
+  // F-2 staged add state (name + file selection + renames applied after the
+  // torrent is added paused). Reset whenever a different torrent is inspected.
+  const [stagedRootName, setStagedRootName] = useState('');
+  const [stagedExcluded, setStagedExcluded] = useState<Set<number>>(new Set());
+  const [stagedRenames, setStagedRenames] = useState<StagedTorrentRename[]>([]);
+
+  // The staged flow needs the Transmission engine (batch file selection +
+  // torrent-rename-path). Remote/server engines keep the plain add path.
+  const stagingSupported =
+    !isRemoteEngine &&
+    (settings.engine || 'transmission') === 'transmission' &&
+    !!inspectPreview &&
+    inspectPreview.files.length > 0;
+
+  useEffect(() => {
+    setStagedRootName(inspectPreview?.name ?? '');
+    setStagedExcluded(new Set());
+    setStagedRenames([]);
+  }, [inspectPreview]);
+
 
   // Only .torrent and .adc metainfo files may be added; everything else is
   // rejected instead of being accepted as if it were a torrent.
@@ -168,7 +190,24 @@ export const AddTorrentModal: React.FC = () => {
           await applyTorrentRenames(targetDir, renames);
         }
       }
-      await addTorrent(source, targetDir, selectedFileBytes || undefined);
+      // F-2 staged add (Transmission engine): add PAUSED, apply the user's
+      // name/selection/rename edits, then start (if requested). Any engine
+      // keeps working through the plain add path below.
+      if (stagingSupported && inspectPreview) {
+        const trimmedRoot = stagedRootName.trim();
+        await addTorrentStaged({
+          source,
+          download_dir: targetDir || null,
+          bytes: selectedFileBytes || null,
+          root_name:
+            trimmedRoot !== '' && trimmedRoot !== inspectPreview.name ? trimmedRoot : null,
+          renames: stagedRenames,
+          excluded_files: Array.from(stagedExcluded),
+          start_after_apply: startImmediately,
+        });
+      } else {
+        await addTorrent(source, targetDir, selectedFileBytes || undefined);
+      }
       if (targetDir && !isRemoteEngine) {
         await addRecentDirectory(targetDir);
       }
@@ -179,6 +218,9 @@ export const AddTorrentModal: React.FC = () => {
       setInspectPreview(null);
       setContentMatch(null);
       setRenameInputs({});
+      setStagedRootName('');
+      setStagedExcluded(new Set());
+      setStagedRenames([]);
       completeAddTorrentSource();
     } catch (err: unknown) {
       setErrorMessage(toErrorMessage(err, 'Failed to add torrent'));
@@ -214,7 +256,11 @@ export const AddTorrentModal: React.FC = () => {
     settings.download_directory,
     contentMatch,
     renameInputs,
+    stagedRootName,
+    stagedExcluded,
+    stagedRenames,
     addTorrent,
+    addTorrentStaged,
     applyTorrentRenames,
     addRecentDirectory,
     setShowAddTorrent,
@@ -634,7 +680,26 @@ export const AddTorrentModal: React.FC = () => {
                   )}
                 </div>
 
-                {showFilePreviewList && inspectPreview.files.length > 0 && (
+                {showFilePreviewList && inspectPreview.files.length > 0 && stagingSupported && (
+                  <div className="border-t border-[#2a2a2a] pt-1.5">
+                    <AddTorrentFileTree
+                      torrentName={inspectPreview.name}
+                      files={inspectPreview.files.map((f) => ({
+                        index: f.index,
+                        name: f.name,
+                        size_bytes: f.size_bytes,
+                      }))}
+                      rootName={stagedRootName}
+                      onRootNameChange={setStagedRootName}
+                      excluded={stagedExcluded}
+                      onExcludedChange={setStagedExcluded}
+                      renames={stagedRenames}
+                      onRenamesChange={setStagedRenames}
+                    />
+                  </div>
+                )}
+
+                {showFilePreviewList && inspectPreview.files.length > 0 && !stagingSupported && (
                   <div className="max-h-36 overflow-y-auto space-y-1 font-mono text-[11px] border-t border-[#2a2a2a] pt-1.5 pr-1">
                     {inspectPreview.files.slice(0, 25).map((f) => (
                       <div
@@ -833,8 +898,14 @@ export const AddTorrentModal: React.FC = () => {
               <input
                 type="checkbox"
                 checked={startImmediately}
+                disabled={!stagingSupported}
+                title={
+                  stagingSupported
+                    ? undefined
+                    : 'For this engine the start behaviour follows the do-not-start-automatically setting.'
+                }
                 onChange={(e) => setStartImmediately(e.target.checked)}
-                className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0"
+                className="rounded border-[#333333] bg-[#1f1f1f] text-[#e50914] focus:ring-0 disabled:opacity-50"
               />
               <span className="text-white">Start torrent immediately</span>
             </label>
