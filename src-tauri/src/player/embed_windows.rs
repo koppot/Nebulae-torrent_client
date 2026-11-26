@@ -981,8 +981,13 @@ unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
         }
     }
     let target = find_vlc_window_in_tree(parent)?;
-    if let Ok(mut guard) = VLC_INPUT_HWND_CACHE.lock() {
-        *guard = Some((slot_val, target.0 as isize));
+    // Only cache the parent-tree fallback when there is no slot: with a live
+    // slot a failed slot walk may succeed on the next event, and a cached
+    // fallback would mask it.
+    if slot_val == 0 {
+        if let Ok(mut guard) = VLC_INPUT_HWND_CACHE.lock() {
+            *guard = Some((0, target.0 as isize));
+        }
     }
     Some(target)
 }
@@ -1938,6 +1943,11 @@ pub fn forward_mouse_move_async(app: &AppHandle, x: f64, y: f64) {
 }
 
 pub fn forward_mouse_click(app: &AppHandle, x: f64, y: f64) -> Result<InputDisposition, String> {
+    // A queued older hover must not land after this click and move the menu
+    // highlight away from the clicked button.
+    if let Ok(mut pending) = MOUSE_MOVE_PENDING.lock() {
+        pending.take();
+    }
     let hwnd_val = app
         .state::<crate::player::PlayerState>()
         .overlay_view

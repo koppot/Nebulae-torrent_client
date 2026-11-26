@@ -2086,9 +2086,9 @@ pub async fn player_open(
 }
 
 /// 0.2.9-rc (Task 4 §13): identifies the most recent open_lock holder so a
-/// slow waiter can log who held it. 0 = none yet, 1 = player_open,
-/// 2 = stop_session, 3 = other. The id is set by the holder right after it
-/// acquires and is left in place after release (read as "previous holder").
+/// slow waiter can log who held it. open_lock is taken only by
+/// player_open_inner, so the id is 0 (none yet) or 1 (player_open); stop_session
+/// does not take the lock. It stays set after release (read as "previous holder").
 pub static OPEN_LOCK_LAST_HOLDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 fn open_lock_holder_name(id: u8) -> &'static str {
