@@ -100,6 +100,18 @@ static RETIRED_VIDEO_SLOTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 const MAX_RETIRED_SLOTS_QUEUE: usize = 64;
 
+/// B3 (0.2.9-rc): cache of the VLC input HWND keyed by the ACTIVE_VIDEO_SLOT
+/// value that produced it, so a mouse move does not re-walk the child window
+/// tree on every event. Invalidated by slot change, a destroyed HWND, or the
+/// retire sweep.
+static VLC_INPUT_HWND_CACHE: Mutex<Option<(isize, isize)>> = Mutex::new(None);
+
+fn invalidate_vlc_input_hwnd_cache() {
+    if let Ok(mut guard) = VLC_INPUT_HWND_CACHE.lock() {
+        *guard = None;
+    }
+}
+
 /// Must only be called on the Win32 main UI thread that created the slot HWNDs.
 unsafe fn sweep_retired_slots() {
     let slots = match RETIRED_VIDEO_SLOTS.lock() {
@@ -113,6 +125,7 @@ unsafe fn sweep_retired_slots() {
         }
         let _ =
             ACTIVE_VIDEO_SLOT.compare_exchange(raw as isize, 0, Ordering::SeqCst, Ordering::SeqCst);
+        invalidate_vlc_input_hwnd_cache();
         let hwnd = HWND(raw as _);
         if IsWindow(Some(hwnd)).as_bool() {
             let _ = DestroyWindow(hwnd);
@@ -134,6 +147,7 @@ pub(crate) fn release_session_surface(slot_hwnd: usize) {
         Ordering::SeqCst,
         Ordering::SeqCst,
     );
+    invalidate_vlc_input_hwnd_cache();
     {
         let mut guard = match RETIRED_VIDEO_SLOTS.lock() {
             Ok(g) => g,
@@ -943,15 +957,34 @@ unsafe fn find_vlc_window_in_tree(container: HWND) -> Option<HWND> {
 
 unsafe fn find_vlc_video_main_window(parent: HWND) -> Option<HWND> {
     let slot_val = ACTIVE_VIDEO_SLOT.load(Ordering::Acquire);
+    // B3 (0.2.9-rc): serve from the cache when the slot key still matches and
+    // the HWND is alive; fall back to the walk otherwise.
+    if let Ok(guard) = VLC_INPUT_HWND_CACHE.lock() {
+        if let Some((cached_slot, cached_hwnd)) = *guard {
+            if cached_slot == slot_val && cached_hwnd != 0 {
+                let hwnd = HWND(cached_hwnd as _);
+                if IsWindow(Some(hwnd)).as_bool() {
+                    return Some(hwnd);
+                }
+            }
+        }
+    }
     if slot_val != 0 {
         let slot_hwnd = HWND(slot_val as _);
         if IsWindow(Some(slot_hwnd)).as_bool() {
             if let Some(target) = find_vlc_window_in_tree(slot_hwnd) {
+                if let Ok(mut guard) = VLC_INPUT_HWND_CACHE.lock() {
+                    *guard = Some((slot_val, target.0 as isize));
+                }
                 return Some(target);
             }
         }
     }
-    find_vlc_window_in_tree(parent)
+    let target = find_vlc_window_in_tree(parent)?;
+    if let Ok(mut guard) = VLC_INPUT_HWND_CACHE.lock() {
+        *guard = Some((slot_val, target.0 as isize));
+    }
+    Some(target)
 }
 
 fn is_vlc_input_window_class(name: &str) -> bool {
