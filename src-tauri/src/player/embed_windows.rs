@@ -243,6 +243,29 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
 
         let _ = ShowWindow(video_hwnd, SW_SHOWNA);
 
+        // B1 (0.2.9-rc): a333d1d made this SetWindowPos unconditional, so every
+        // activation/resize/wndproc pass re-issues a synchronous SetWindowPos even
+        // when nothing changed. Skip entirely when geometry and Z-order are already
+        // exactly what we want; otherwise issue the minimal call. a333d1d's Z-order
+        // purpose (video directly behind main) is preserved.
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV};
+        let mut cur = RECT::default();
+        let geometry_same = GetWindowRect(video_hwnd, &mut cur).is_ok()
+            && cur.left == cx
+            && cur.top == cy
+            && (cur.right - cur.left) == cw
+            && (cur.bottom - cur.top) == ch;
+        let zorder_same = GetWindow(video_hwnd, GW_HWNDPREV)
+            .map(|above| above == main_h)
+            .unwrap_or(false);
+        if geometry_same && zorder_same {
+            return;
+        }
+        let flags = if geometry_same {
+            SWP_NOACTIVATE.0 | SWP_NOMOVE.0 | SWP_NOSIZE.0
+        } else {
+            SWP_NOACTIVATE.0
+        };
         // Position video_hwnd directly behind main_h in Z-order.
         let _ = SetWindowPos(
             video_hwnd,
@@ -251,7 +274,7 @@ pub(crate) fn update_video_surface_position(main_h: HWND) {
             cy,
             cw,
             ch,
-            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0),
+            SET_WINDOW_POS_FLAGS(flags),
         );
     }
 }
