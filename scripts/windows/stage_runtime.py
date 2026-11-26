@@ -64,6 +64,18 @@ CUSTOM_EXPORTS = (
     "libvlc_media_player_get_bluray_playlist_id",
 )
 
+# Task 5: files the 0.2.8 baseline shipped that exist in neither the official
+# stock zip nor the modified VLC tree (measured: absent from both current
+# inputs; present in the published 0.2.8 installer). Frozen in
+# inputs/vlc-baseline-extras/ with SHA-256 pins re-verified at staging time.
+VLC_BASELINE_EXTRAS = {
+    "libssp-0.dll": "adb36d5586464b3728ca066e92f41a9b2419f2a99a044b50e6e8a5da45414a84",
+    "plugins/codec/liba52_plugin.dll": "c445468770cc6a2586fe0238904e636c9b650e9d74cf6b45cb4b5a1f99806085",
+    "plugins/codec/libdca_plugin.dll": "bbfef63caef5c52fa51a0596f9a1224cb4a350d8f62e4de3d2e0f0af9a38c9b4",
+    "plugins/codec/liblibmpeg2_plugin.dll": "e9570d70f64f954a7df0b80d99116142d512f0e2ff7f799021fd8001a8b14c91",
+}
+BASELINE_EXTRAS_DIR = Path(__file__).resolve().parent / "inputs" / "vlc-baseline-extras"
+
 # The Direct3D 11 video output is the one stock VLC plugin Nebulae replaces: the stock one converts
 # PQ/HLG with a Hable curve scaled for 10000 cd/m2, which leaves UHD material far too dark on an SDR
 # display. The replacement is built reproducibly by build-d3d11-plugin.sh from
@@ -170,6 +182,17 @@ class Recorder:
         shutil.copyfile(src, dst)
         self.add(dst, source)
 
+    def replace(self, src: Path, dst: Path, source: str) -> None:
+        """Overwrite a previously staged file (patched overlay over stock tree)."""
+        if not dst.exists():
+            fail(f"{self.rel(dst)}: replace target does not exist")
+        shutil.copyfile(src, dst)
+        rel = self.rel(dst)
+        # Clear the seen-set first or add() fails with "staged twice".
+        self.seen.discard(rel)
+        self.files = [f for f in self.files if f["path"] != rel]
+        self.add(dst, source)
+
     def write(self, rel: str, data: bytes, source: str) -> Path:
         dst = self.root / msi_reader.safe_rel(rel)
         if dst.exists():
@@ -190,7 +213,8 @@ def _check_member_name(name: str) -> PurePosixPath:
 
 
 def extract_zip(zip_path: Path, dest: Path, strip_prefix: str, rec: Recorder, source: str,
-                deny_dirs: tuple[str, ...] = (), deny_files: frozenset[str] | set = frozenset()) -> int:
+                deny_dirs: tuple[str, ...] = (), deny_files: frozenset[str] | set = frozenset(),
+                deny_basenames: frozenset[str] | set = frozenset()) -> int:
     """Extract members under STRIP_PREFIX into DEST. Returns the file count."""
     count = 0
     with zipfile.ZipFile(zip_path) as zf:
@@ -207,6 +231,8 @@ def extract_zip(zip_path: Path, dest: Path, strip_prefix: str, rec: Recorder, so
             if not sub or sub.startswith(deny_dirs):
                 continue
             if "/" not in sub and sub in deny_files:  # top-level files only
+                continue
+            if sub.rsplit("/", 1)[-1] in deny_basenames:  # forbidden jars at any depth
                 continue
             target = dest / sub
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -372,6 +398,19 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
     provenance = _vlc_provenance(patched)
     dest.mkdir(parents=True, exist_ok=True)
 
+    # Task 1: clean installs of rev2/rev3 missed 224 stock files because only
+    # the modified tree was staged. Stage the complete official stock tree
+    # first, then overlay the modified build on top of it. The 1.4.0 BD-J jars
+    # are filtered at any depth so the stock pair cannot survive next to the
+    # 1.5.0 pair. Measured on the pinned zip: 570 files staged after filtering.
+    stock = fetch_inputs.ensure("vlc-win64", inputs["vlc-win64"], cache)
+    n_stock = extract_zip(stock, dest, VLC_PREFIX, rec,
+                          "vlc-3.0.23-win64.zip (official, SHA-256 pinned)",
+                          VLC_DENY_DIRS, VLC_DENY_FILES,
+                          deny_basenames=FORBIDDEN_BD_JARS)
+    if n_stock < 560:
+        fail(f"suspiciously few stock VLC files staged: {n_stock}")
+
     has_plugins_dir = (patched / "plugins").is_dir()
     if require_modified:
         if not has_plugins_dir:
@@ -394,16 +433,52 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
                 if rel.name in VLC_DENY_FILES:
                     continue
                 target = dest / rel
-                rec.copy(f, target, provenance)
+                if target.exists():
+                    rec.replace(f, target, provenance)
+                else:
+                    rec.copy(f, target, provenance)
     else:
-        # Structured single-directory modified packaging
-        rec.copy(patched / "libvlc.dll", dest / "libvlc.dll", provenance)
-        rec.copy(patched / "libvlccore.dll", dest / "libvlccore.dll", provenance)
+        # Structured single-directory modified packaging: the stock tree now
+        # exists under dest, so these three files are replaces, not copies.
+        rec.replace(patched / "libvlc.dll", dest / "libvlc.dll", provenance)
+        rec.replace(patched / "libvlccore.dll", dest / "libvlccore.dll", provenance)
         access_dir = dest / "plugins" / "access"
-        rec.copy(lb_plugin, access_dir / "liblibbluray_plugin.dll", provenance)
+        rec.replace(lb_plugin, access_dir / "liblibbluray_plugin.dll", provenance)
         for jar in REQUIRED_BD_JARS:
             jar_src = patched / "plugins" / "access" / jar if (patched / "plugins" / "access" / jar).is_file() else patched / jar
             rec.copy(jar_src, access_dir / jar, provenance)
+
+    # Gate: the modified bluray plugin must have survived the overlay — a
+    # stock plugin staged by the stock tree and never replaced must fail here.
+    staged_plugin = dest / "plugins" / "access" / "liblibbluray_plugin.dll"
+    if not staged_plugin.is_file():
+        fail("staged tree has no liblibbluray_plugin.dll after overlay")
+    plugin_recs = [f for f in rec.files if f["path"] == rec.rel(staged_plugin)]
+    if not plugin_recs or plugin_recs[-1]["source"] != provenance:
+        fail(f"staged bluray plugin did not come from the modified overlay "
+             f"(recorded source: {plugin_recs[-1]['source'] if plugin_recs else 'none'})")
+
+    # Gate: the staged d3d11 plugin must be the accepted UHD fix (the lock
+    # pins e1be02cd...9993, 401,920 B) — a future stock-extract order change
+    # must not be able to reintroduce the stock plugin.
+    check_d3d11_plugin(dest)
+
+    # Task 5 (user instruction): restore the files 0.2.8 shipped that exist in
+    # neither the stock zip nor the modified VLC tree. They are frozen in this
+    # repository (inputs/vlc-baseline-extras/) with SHA-256 pins taken from
+    # the published 0.2.8 installer baseline.
+    for extra_rel, extra_hash in sorted(VLC_BASELINE_EXTRAS.items()):
+        src = BASELINE_EXTRAS_DIR / Path(extra_rel).name
+        if not src.is_file():
+            fail(f"frozen 0.2.8 baseline input missing: {src}")
+        got = sha256_file(src)
+        if got != extra_hash:
+            fail(f"frozen 0.2.8 baseline input {src.name} failed its SHA-256 pin: {got}")
+        target = dest / extra_rel
+        if target.exists():
+            rec.replace(src, target, "0.2.8 baseline frozen input (repo-pinned)")
+        else:
+            rec.copy(src, target, "0.2.8 baseline frozen input (repo-pinned)")
 
     if patches_dir and patches_dir.is_dir():
         lic = rec.root / "resources" / "licenses" / "vlc-3.0.23" / "patches"
