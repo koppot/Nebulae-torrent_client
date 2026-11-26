@@ -58,6 +58,21 @@ pub trait TorrentEngine: Send + Sync {
         let _ = self.pause_torrent(&id);
         Ok(id)
     }
+    /// Add a torrent from a source string (file path, magnet or URL)
+    /// guaranteed to be added in the paused state (F-2 staged add: the user
+    /// names and filters the content BEFORE the torrent starts). Default:
+    /// add, then pause — mirrors add_torrent_from_bytes_paused. Engines
+    /// whose add RPC has a "paused" field (Transmission) override this so
+    /// the torrent never starts at all.
+    fn add_torrent_paused(
+        &self,
+        source: &str,
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        let id = self.add_torrent(source, download_dir)?;
+        let _ = self.pause_torrent(&id);
+        Ok(id)
+    }
     fn remove_torrent(&self, id: &str, delete_files: bool) -> Result<(), String>;
     fn pause_torrent(&self, id: &str) -> Result<(), String>;
     fn resume_torrent(&self, id: &str) -> Result<(), String>;

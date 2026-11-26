@@ -850,6 +850,7 @@ pub fn run() {
             commands::torrent::rename_torrent_folder,
             commands::torrent::inspect_torrent_file,
             commands::torrent::add_torrent_bytes,
+            commands::torrent::add_torrent_staged,
             commands::torrent::create_torrent_file,
             commands::torrent::export_torrent_file,
             commands::torrent::save_torrent_file_as,

@@ -844,6 +844,132 @@ pub async fn add_torrent_bytes(
 }
 
 // ---------------------------------------------------------------------------
+// F-2 staged add (task order section 3): add the torrent PAUSED, apply the
+// user's name and file-selection choices from the Add Torrent dialog, then
+// start. Every engine operation used here already exists (torrent-rename-path
+// via rename_torrent/_file/_folder, files-wanted/unwanted via
+// set_files_priority, torrent-start via resume_torrent); this command only
+// sequences them so the content layout is correct before the first byte
+// moves. No new RPC method and no daemon-side change.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StagedTorrentRename {
+    /// Full path inside the torrent whose NAME changes, relative to the save
+    /// destination and INCLUDING the torrent's root folder for multi-file
+    /// torrents (the same format Transmission's files[].name uses). The root
+    /// itself is renamed with root_name instead.
+    pub path: String,
+    /// The new NAME (not path) for that entry.
+    pub name: String,
+    /// True for folders (rename_torrent_folder), false for files
+    /// (rename_torrent_file by index).
+    pub is_folder: bool,
+    /// File index for file renames (matches the metainfo/RPC file order).
+    #[serde(default)]
+    pub file_index: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StagedTorrentAdd {
+    pub source: String,
+    #[serde(default)]
+    pub download_dir: Option<String>,
+    #[serde(default)]
+    pub bytes: Option<Vec<u8>>,
+    /// Rename the torrent's root (its top-level name / folder).
+    #[serde(default)]
+    pub root_name: Option<String>,
+    /// File and folder renames, ordered deepest-first (children before their
+    /// parent folders) so each rename still finds the original path.
+    #[serde(default)]
+    pub renames: Vec<StagedTorrentRename>,
+    /// File indices the user excluded (everything else stays wanted).
+    #[serde(default)]
+    pub excluded_files: Vec<u32>,
+    /// Start the torrent after every staged edit applied successfully.
+    #[serde(default)]
+    pub start_after_apply: bool,
+}
+
+#[tauri::command]
+pub async fn add_torrent_staged(
+    staged: StagedTorrentAdd,
+    engine: State<'_, SharedEngine>,
+) -> Result<String, String> {
+    let engine = engine.inner().clone();
+    let download_dir = resolve_engine_download_dir(staged.download_dir)?;
+    tokio::task::spawn_blocking(move || {
+        // 1. Add PAUSED so nothing downloads before the content is correct.
+        let id = match staged.bytes {
+            Some(raw) if !raw.is_empty() => {
+                engine.add_torrent_from_bytes_paused(&raw, download_dir.as_deref())?
+            }
+            _ => engine.add_torrent_paused(&staged.source, download_dir.as_deref())?,
+        };
+
+        // 2. Apply the staged edits. File and folder renames must arrive
+        // deepest-first (the frontend orders them): each rename re-resolves
+        // the CURRENT path, so a child must be renamed before its parent
+        // folder changes. The root rename goes LAST because the folder paths
+        // sent by the frontend still carry the old root prefix.
+        let mut apply_errors: Vec<String> = Vec::new();
+        for r in &staged.renames {
+            let result = if r.is_folder {
+                engine.rename_torrent_folder(&id, &r.path, &r.name)
+            } else {
+                engine.rename_torrent_file(&id, r.file_index, &r.name)
+            };
+            if let Err(e) = result {
+                apply_errors.push(format!("rename '{}' to '{}': {}", r.path, r.name, e));
+            }
+        }
+        if !staged.excluded_files.is_empty() {
+            if let Err(e) = engine.set_files_priority(&id, &staged.excluded_files, 0) {
+                apply_errors.push(format!(
+                    "exclude {} file(s): {e}",
+                    staged.excluded_files.len()
+                ));
+            }
+        }
+        if let Some(root) = staged
+            .root_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Err(e) = engine.rename_torrent(&id, root) {
+                apply_errors.push(format!("rename root to '{root}': {e}"));
+            }
+        }
+
+        // 3. Start only if every staged edit applied. On any failure the
+        // torrent stays PAUSED (nothing downloads with the wrong layout);
+        // the user can fix it in the torrent's Files tab or remove it.
+        if apply_errors.is_empty() {
+            if staged.start_after_apply {
+                if let Err(e) = engine.resume_torrent(&id) {
+                    return Err(format!(
+                        "torrent '{id}' was added and prepared but could not be started: {e}"
+                    ));
+                }
+            }
+            Ok(id)
+        } else {
+            Err(format!(
+                "The torrent was added PAUSED, but {} staged change(s) failed: {}. \
+                 Nothing downloads until it is started; fix the names or selection in the \
+                 torrent's Files tab, or remove the torrent.",
+                apply_errors.len(),
+                apply_errors.join("; ")
+            ))
+        }
+    })
+    .await
+    .map_err(|e| format!("add_torrent_staged task failed: {e}"))?
+}
+
+// ---------------------------------------------------------------------------
 // Rename-on-add: match existing content to a torrent's expected layout.
 //
 // File and folder names are part of a torrent's info-hash, so they cannot be

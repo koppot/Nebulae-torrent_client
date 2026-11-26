@@ -3268,114 +3268,21 @@ impl TorrentEngine for TransmissionTorrentEngine {
     }
 
     fn add_torrent(&self, source: &str, download_dir: Option<&str>) -> Result<String, String> {
-        if self.kill_switch_active.load(Ordering::SeqCst) {
-            return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
-        }
-
-        let trimmed = source.trim();
-        let lower = trimmed.to_ascii_lowercase();
-
-        if lower.starts_with("adc:") {
-            let torrent_id = crate::commands::adc_download::parse_adc_uri(&lower)?;
-            let bytes =
-                crate::commands::adc_download::fetch_adc_torrent_bytes_sync(torrent_id, &self.db)?;
-            return self.add_torrent_from_bytes(&bytes, download_dir);
-        }
-
-        // 1. Check if source is base64 encoded
-        let b64_candidate = if lower.starts_with("data:") {
-            lower.find(";base64,").map(|idx| &trimmed[idx + 8..])
-        } else if lower.starts_with("base64:") {
-            Some(&trimmed["base64:".len()..])
-        } else if !lower.starts_with("magnet:")
-            && !lower.starts_with("http://")
-            && !lower.starts_with("https://")
-            && !trimmed.contains('/')
-            && !trimmed.contains('\\')
-            && trimmed.len() > 100
-        {
-            Some(trimmed)
-        } else {
-            None
-        };
-
-        if let Some(b64) = b64_candidate {
-            if let Ok(decoded) = crate::utils::paths::decode_base64_data(b64) {
-                return self.add_torrent_from_bytes(&decoded, download_dir);
-            }
-        }
-
-        // 2. Check if source is a local file path
-        if !lower.starts_with("magnet:")
-            && !lower.starts_with("http://")
-            && !lower.starts_with("https://")
-        {
-            let norm_path = crate::utils::paths::normalize_source_path(trimmed);
-            if norm_path.is_file() {
-                if let Ok(bytes) = std::fs::read(&norm_path) {
-                    return self.add_torrent_from_bytes(&bytes, download_dir);
-                }
-            }
-
-            // Check if trimmed is relative to user's Downloads directory
-            if let Some(dl_dir) = dirs::download_dir() {
-                let candidate = dl_dir.join(trimmed);
-                if candidate.is_file() {
-                    if let Ok(bytes) = std::fs::read(&candidate) {
-                        return self.add_torrent_from_bytes(&bytes, download_dir);
-                    }
-                }
-            }
-
-            // Check if trimmed is relative to the target download_dir
-            if let Some(dir) = download_dir {
-                let candidate = std::path::Path::new(dir).join(trimmed);
-                if candidate.is_file() {
-                    if let Ok(bytes) = std::fs::read(&candidate) {
-                        return self.add_torrent_from_bytes(&bytes, download_dir);
-                    }
-                }
-            }
-
-            // If it is not a URL and not a found file on disk, return an explicit error
-            // instead of sending an unresolvable bare filename to Transmission RPC that
-            // triggers "Transmission RPC call 'torrent-add' failed: unrecognized info".
-            return Err(format!(
-                "Torrent file not found: '{}'. Please select or drag the .torrent file again.",
-                trimmed
-            ));
-        }
-
-        // 3. Magnet or HTTP(S) URL
-        let dest = normalize_download_dir(download_dir)?;
-        let do_not_start = self
-            .db
-            .get_setting("user_settings_json")
-            .ok()
-            .flatten()
-            .and_then(|raw| {
-                serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok()
-            })
-            .map(|s| s.do_not_start_automatically)
-            .unwrap_or(false);
-
-        let mut args = json!({
-            "filename": trimmed,
-            "paused": do_not_start
-        });
-        if let Some(ref d) = dest {
-            args["download-dir"] = json!(d);
-        }
-
-        let (hash, duplicate) = self.rpc_client.torrent_add_ex(args)?;
-        // Re-adding a torrent Transmission already has must not rewrite it.
-        if !duplicate {
-            self.apply_racing_mode_on_add(&hash);
-        }
-        info!("Added torrent {hash} via Transmission sidecar (active download)");
-        Ok(hash)
+        add_torrent_impl(self, source, download_dir, false)
     }
 
+    /// F-2 staged add: same resolution as add_torrent but the torrent is
+    /// added PAUSED (the "paused" field of the existing torrent-add RPC, the
+    /// same field the do-not-start setting already uses — no new RPC method,
+    /// no daemon-side change). The staged rename/selection apply and the
+    /// start happen afterwards from commands::torrent::add_torrent_staged.
+    fn add_torrent_paused(
+        &self,
+        source: &str,
+        download_dir: Option<&str>,
+    ) -> Result<String, String> {
+        add_torrent_impl(self, source, download_dir, true)
+    }
     fn add_torrent_from_bytes(
         &self,
         bytes: &[u8],
@@ -4771,6 +4678,125 @@ impl TorrentEngine for TransmissionTorrentEngine {
 
 fn parse_port_test_result(arguments: &Value) -> Option<bool> {
     arguments.get("port-is-open").and_then(Value::as_bool)
+}
+
+fn add_torrent_impl(
+    engine: &TransmissionTorrentEngine,
+    source: &str,
+    download_dir: Option<&str>,
+    force_paused: bool,
+) -> Result<String, String> {
+    if engine.kill_switch_active.load(Ordering::SeqCst) {
+        return Err("Cannot add torrent while VPN Kill Switch is active".to_string());
+    }
+
+    let trimmed = source.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let from_bytes = |bytes: &[u8]| -> Result<String, String> {
+        if force_paused {
+            engine.add_torrent_from_bytes_paused(bytes, download_dir)
+        } else {
+            engine.add_torrent_from_bytes(bytes, download_dir)
+        }
+    };
+
+    if lower.starts_with("adc:") {
+        let torrent_id = crate::commands::adc_download::parse_adc_uri(&lower)?;
+        let bytes =
+            crate::commands::adc_download::fetch_adc_torrent_bytes_sync(torrent_id, &engine.db)?;
+        return from_bytes(&bytes);
+    }
+
+    // 1. Check if source is base64 encoded
+    let b64_candidate = if lower.starts_with("data:") {
+        lower.find(";base64,").map(|idx| &trimmed[idx + 8..])
+    } else if lower.starts_with("base64:") {
+        Some(&trimmed["base64:".len()..])
+    } else if !lower.starts_with("magnet:")
+        && !lower.starts_with("http://")
+        && !lower.starts_with("https://")
+        && !trimmed.contains('/')
+        && !trimmed.contains('\\')
+        && trimmed.len() > 100
+    {
+        Some(trimmed)
+    } else {
+        None
+    };
+
+    if let Some(b64) = b64_candidate {
+        if let Ok(decoded) = crate::utils::paths::decode_base64_data(b64) {
+            return from_bytes(&decoded);
+        }
+    }
+
+    // 2. Check if source is a local file path
+    if !lower.starts_with("magnet:")
+        && !lower.starts_with("http://")
+        && !lower.starts_with("https://")
+    {
+        let norm_path = crate::utils::paths::normalize_source_path(trimmed);
+        if norm_path.is_file() {
+            if let Ok(bytes) = std::fs::read(&norm_path) {
+                return from_bytes(&bytes);
+            }
+        }
+
+        // Check if trimmed is relative to user's Downloads directory
+        if let Some(dl_dir) = dirs::download_dir() {
+            let candidate = dl_dir.join(trimmed);
+            if candidate.is_file() {
+                if let Ok(bytes) = std::fs::read(&candidate) {
+                    return from_bytes(&bytes);
+                }
+            }
+        }
+
+        // Check if trimmed is relative to the target download_dir
+        if let Some(dir) = download_dir {
+            let candidate = std::path::Path::new(dir).join(trimmed);
+            if candidate.is_file() {
+                if let Ok(bytes) = std::fs::read(&candidate) {
+                    return from_bytes(&bytes);
+                }
+            }
+        }
+
+        // If it is not a URL and not a found file on disk, return an explicit error
+        // instead of sending an unresolvable bare filename to Transmission RPC that
+        // triggers "Transmission RPC call 'torrent-add' failed: unrecognized info".
+        return Err(format!(
+            "Torrent file not found: '{}'. Please select or drag the .torrent file again.",
+            trimmed
+        ));
+    }
+
+    // 3. Magnet or HTTP(S) URL
+    let dest = normalize_download_dir(download_dir)?;
+    let do_not_start = engine
+        .db
+        .get_setting("user_settings_json")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<crate::commands::settings::UserSettings>(&raw).ok())
+        .map(|s| s.do_not_start_automatically)
+        .unwrap_or(false);
+
+    let mut args = json!({
+        "filename": trimmed,
+        "paused": force_paused || do_not_start
+    });
+    if let Some(ref d) = dest {
+        args["download-dir"] = json!(d);
+    }
+
+    let (hash, duplicate) = engine.rpc_client.torrent_add_ex(args)?;
+    // Re-adding a torrent Transmission already has must not rewrite it.
+    if !duplicate {
+        engine.apply_racing_mode_on_add(&hash);
+    }
+    info!("Added torrent {hash} via Transmission sidecar (active download)");
+    Ok(hash)
 }
 
 #[cfg(test)]
