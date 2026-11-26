@@ -50,6 +50,23 @@ pub const WINDOW_MS: u64 = 15_000;
 /// than the roughly half-second a rejected `set_title` report survives.
 pub const MENU_CONFIRM_MS: u64 = 1_000;
 
+/// How long an unconfirmed menu report (title report says menu, demuxer ground
+/// truth says closed) holds the retry grid before retries resume. Must be
+/// longer than [`RETRY_EVERY_MS`] so the hold actually suppresses the first
+/// grid retries, and short enough to leave retries inside [`WINDOW_MS`].
+///
+/// B4/B5 evidence (rev3 session logs, measured): with the old code the watcher
+/// logged "current title Menu, has_menu=true" at T+200ms and then retried
+/// INPUT_NAV_MENU every 2 s without the demuxer ever confirming —
+/// `menu_open = Some(false)` persisted 10–12 s. Each retry re-enters and
+/// resets the menu, delaying its own confirmation (one run confirmed only at
+/// T+10.6 s after 5 retries; another never confirmed in 12 s). While the
+/// unconfirmed report stands, the menu is likely already up and the
+/// `BD_EVENT_MENU` flag lags, so a retry hurts more than it helps; the
+/// mechanism is inferred (labelled), the logs are measured. Validation on
+/// Windows is part of the §24 test plan.
+pub const MENU_LAG_GRACE_MS: u64 = 4_000;
+
 /// `bypass_menu` of the session the fallback reopens.
 pub const FALLBACK_BYPASS_MENU: bool = true;
 
@@ -103,6 +120,7 @@ pub struct Progress {
     skipped_at_ms: Option<u64>,
     retry_after_skip_pending: bool,
     menu_since_ms: Option<u64>,
+    menu_lag_since_ms: Option<u64>,
     feature_retry_at_ms: Option<u64>,
     next_cadence_ms: u64,
 }
@@ -113,6 +131,7 @@ impl Default for Progress {
             skipped_at_ms: None,
             retry_after_skip_pending: false,
             menu_since_ms: None,
+            menu_lag_since_ms: None,
             feature_retry_at_ms: None,
             next_cadence_ms: RETRY_EVERY_MS,
         }
@@ -174,9 +193,19 @@ pub enum Decision {
 /// - Once the title has left First Play after that skip, the menu is requested
 ///   again right away; otherwise requests repeat on the fixed
 ///   [`RETRY_EVERY_MS`] grid.
+/// - While the title report says the menu but the demuxer's ground truth says
+///   closed (`at_menu && menu_open == Some(false)` on a menu disc), the grid is
+///   held for [`MENU_LAG_GRACE_MS`]: `BD_EVENT_MENU` lags the real menu and
+///   every retry re-enters and resets it, delaying its own confirmation (B4/B5,
+///   rev3 logs). After the grace, retries resume on the grid so a menu that
+///   genuinely failed still gets attempts inside [`WINDOW_MS`]. The hold never
+///   delays the First Play skip or the prompt post-skip menu request.
 pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     if s.menu_really_open() {
         progress.feature_retry_at_ms = None;
+        // The unconfirmed streak (lag hold) is over: any later unconfirmed
+        // report gets a fresh MENU_LAG_GRACE_MS.
+        progress.menu_lag_since_ms = None;
         let since = *progress.menu_since_ms.get_or_insert(now_ms);
         return if now_ms.saturating_sub(since) >= MENU_CONFIRM_MS {
             Decision::Reached
@@ -223,6 +252,18 @@ pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
             progress.feature_retry_at_ms = Some(now_ms);
         }
         return Decision::RetryMenu;
+    }
+    // B4/B5 lag hold (see MENU_LAG_GRACE_MS): the report says menu, the
+    // demuxer has not confirmed yet. Hold the grid — a retry would restart a
+    // menu that is probably already up. Placed after the skip and the prompt
+    // post-skip request so neither is ever delayed by the hold.
+    if s.at_menu && s.has_menu && !s.feature_active && s.menu_open == Some(false) {
+        let since = *progress.menu_lag_since_ms.get_or_insert(now_ms);
+        if now_ms.saturating_sub(since) < MENU_LAG_GRACE_MS {
+            return Decision::Wait;
+        }
+    } else {
+        progress.menu_lag_since_ms = None;
     }
     if now_ms >= progress.next_cadence_ms {
         progress.next_cadence_ms = (now_ms / RETRY_EVERY_MS + 1) * RETRY_EVERY_MS;
@@ -385,11 +426,17 @@ mod tests {
     // the fast cadence must really be faster.
     const _: () = assert!(MENU_CONFIRM_MS >= 2 * OBSERVED_FALSE_REPORT_MS);
     const _: () = assert!(FAST_POLL_MS < POLL_MS);
+    // The lag hold must outlast a grid slot (else it would change nothing),
+    // sit on the poll grid, and still leave retries inside the window.
+    const _: () = assert!(MENU_LAG_GRACE_MS > RETRY_EVERY_MS);
+    const _: () = assert!(MENU_LAG_GRACE_MS.is_multiple_of(POLL_MS));
+    const _: () = assert!(MENU_LAG_GRACE_MS + 2 * RETRY_EVERY_MS < WINDOW_MS);
 
     #[test]
     fn timing_constants_match_the_documented_bounds() {
         assert_eq!(WINDOW_MS, 15_000);
         assert_eq!(RETRY_EVERY_MS, 2_000);
+        assert_eq!(MENU_LAG_GRACE_MS, 4_000);
         assert_eq!(WINDOW_MS % POLL_MS, 0);
         assert_eq!(RETRY_EVERY_MS % POLL_MS, 0);
     }
@@ -441,16 +488,80 @@ mod tests {
         // reporting the menu title (the set_title announce does not revert
         // while First Play runs), so the report holds past MENU_CONFIRM_MS.
         // With the demuxer's ground truth present and saying "menu not open",
-        // the watch must not end no matter how long the report holds; the
-        // request repeats on the grid instead.
+        // the watch must not end no matter how long the report holds.
+        //
+        // B4/B5 (rev3 logs, measured): the retries themselves made it worse —
+        // each one re-entered and reset the menu, so the ground truth stayed
+        // "closed" for 10-12 s (one run confirmed only at T+10.6 s after 5
+        // retries, another never in 12 s). The lag hold suppresses the first
+        // grid retries (2 s and 4 s); retries resume after MENU_LAG_GRACE_MS
+        // and still fill the rest of the window.
         let events = run(|_| sample_with_menu_open(TitleKind::Menu, Some(false)));
         assert!(!decisions(&events).contains(&Decision::Reached));
         assert!(!decisions(&events).contains(&Decision::SkipFirstPlay));
         assert_eq!(
             times(&events),
-            vec![2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 14_000]
+            vec![4_200, 6_000, 8_000, 10_000, 12_000, 14_000]
         );
         assert!(decisions(&events).iter().all(|d| *d == Decision::RetryMenu));
+    }
+
+    #[test]
+    fn the_lag_grace_lets_a_late_menu_confirmation_end_the_watch_promptly() {
+        // The rev3 fix: the menu is already up shortly after the initial
+        // request and BD_EVENT_MENU arrives late. The old code retried at 2 s
+        // and restarted the menu; with the hold, the confirmation that arrives
+        // during the grace ends the watch at the normal confirm time and no
+        // retry is ever sent.
+        let events = run(|t| {
+            if t < 1_000 {
+                sample_with_menu_open(TitleKind::Menu, Some(false))
+            } else {
+                sample_with_menu_open(TitleKind::Menu, Some(true))
+            }
+        });
+        assert_eq!(events, vec![(1_000 + MENU_CONFIRM_MS, Decision::Reached)]);
+    }
+
+    #[test]
+    fn the_lag_hold_restarts_when_the_unconfirmed_state_breaks() {
+        let menu_false = || sample_with_menu_open(TitleKind::Menu, Some(false));
+        let menu_true = || sample_with_menu_open(TitleKind::Menu, Some(true));
+        let mut p = Progress::default();
+        // 200: the unconfirmed report starts; held.
+        assert_eq!(decide(&mut p, 200, menu_false()), Decision::Wait);
+        // 1000: still inside the grace (a grid tick at 1000 would be Wait
+        // anyway; the point is the hold, not the grid).
+        assert_eq!(decide(&mut p, 1_000, menu_false()), Decision::Wait);
+        // 1200: the ground truth confirms for one poll — the state breaks.
+        assert_eq!(decide(&mut p, 1_200, menu_true()), Decision::Wait);
+        // 1400: closed again; the grace restarts from zero.
+        assert_eq!(decide(&mut p, 1_400, menu_false()), Decision::Wait);
+        // 4600: 3200 ms into the restarted grace — a grid tick is held.
+        assert_eq!(decide(&mut p, 4_600, menu_false()), Decision::Wait);
+        // 5600: 4200 ms — past the grace, the request goes out on the grid.
+        assert_eq!(decide(&mut p, 5_600, menu_false()), Decision::RetryMenu);
+    }
+
+    #[test]
+    fn a_spoofed_menu_report_with_closed_ground_truth_does_not_delay_the_first_play_skip() {
+        // B3 combined with the patched module: the rejected set_title
+        // announces the menu while First Play runs and BD_EVENT_MENU says
+        // closed. The lag hold only governs grid retries; the skip must still
+        // fire as soon as the length is known.
+        let events = run(|t| {
+            if t <= 599 {
+                Sample {
+                    at_menu: true,
+                    ..sample_with_menu_open(FIRST_PLAY_UNKNOWN, Some(false))
+                }
+            } else {
+                sample_with_menu_open(FIRST_PLAY, Some(false))
+            }
+        });
+        assert_eq!(events[0], (600, Decision::SkipFirstPlay));
+        assert_eq!(skips(&events), 1);
+        assert!(!decisions(&events).contains(&Decision::Reached));
     }
 
     #[test]
@@ -473,8 +584,9 @@ mod tests {
     #[test]
     fn menu_open_vetoes_a_spoofed_report_until_the_menu_really_opens() {
         // Masked at first (report spoofed, ground truth says closed), then the
-        // retry lands and the menu really opens: confirmation runs from the
-        // real opening, not from the first spoofed report.
+        // menu really opens: confirmation runs from the real opening, not from
+        // the first spoofed report. The lag hold keeps the grid quiet until
+        // then, so no retry lands while the spoofed report stands.
         let events = run(|t| {
             if t < 4_000 {
                 sample_with_menu_open(TitleKind::Menu, Some(false))
@@ -483,7 +595,8 @@ mod tests {
             }
         });
         // Confirmation starts when the menu really opens (t=4000 poll), so
-        // the watch ends at 4000 + MENU_CONFIRM_MS, not one poll later.
+        // the watch ends at 4000 + MENU_CONFIRM_MS, not one poll later. No
+        // retry fires before that (the hold covers the 2 s grid tick).
         assert_eq!(
             events.last(),
             Some(&(4_000 + MENU_CONFIRM_MS, Decision::Reached))
