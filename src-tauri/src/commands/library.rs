@@ -178,13 +178,22 @@ pub fn set_torrent_poster(
 }
 
 /// Retrieve the persisted poster path or URL for a torrent.
+/// 0.2.9-rc (W-5): moved off the main thread — Task 5 §7 measured this command
+/// taking 1.3–3.0 s on the rev3 session start, and a synchronous Tauri command
+/// runs on the main thread, so the DB-lock wait blocked the UI. The DB wait
+/// now happens on a worker thread.
 #[tauri::command]
-pub fn get_torrent_poster(
+pub async fn get_torrent_poster(
     info_hash: String,
     db: State<'_, Arc<Database>>,
 ) -> Result<Option<String>, String> {
-    db.get_torrent_poster(&info_hash)
-        .map_err(|e| format!("get_torrent_poster: {e}"))
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        db.get_torrent_poster(&info_hash)
+            .map_err(|e| format!("get_torrent_poster: {e}"))
+    })
+    .await
+    .map_err(|e| format!("get_torrent_poster: join error: {e}"))?
 }
 
 /// Unified metadata and poster saving command supporting Downloaded (info-hash)

@@ -190,8 +190,17 @@ fn linux_status() -> Result<AssociationStatus, String> {
     Ok(status("Linux", flags, "Queried XDG desktop defaults. False means this Nebulae desktop entry is not the selected default."))
 }
 
+/// 0.2.9-rc (W-5): moved off the main thread — Task 5 §7 measured this command
+/// taking 1,324 ms on the rev3 session start (Windows registry reads), and a
+/// synchronous Tauri command runs on the main thread, blocking the UI.
 #[tauri::command]
-pub fn check_associations_status() -> Result<AssociationStatus, String> {
+pub async fn check_associations_status() -> Result<AssociationStatus, String> {
+    tauri::async_runtime::spawn_blocking(check_associations_status_impl)
+        .await
+        .map_err(|e| format!("check_associations_status: join error: {e}"))?
+}
+
+fn check_associations_status_impl() -> Result<AssociationStatus, String> {
     #[cfg(target_os = "windows")]
     {
         windows_associations(false)
@@ -277,7 +286,7 @@ pub fn register_protocol_associations() -> Result<AssociationStatus, String> {
                 String::from_utf8_lossy(&out.stderr)
             ));
         }
-        check_associations_status()
+        check_associations_status_impl()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
