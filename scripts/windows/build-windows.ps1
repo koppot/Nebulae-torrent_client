@@ -36,6 +36,8 @@ if ($active -ne 'stable-x86_64-pc-windows-gnu') {
 # Chocolatey rustc/cargo was measured first on PATH (2026-11-26); the Chocolatey
 # binaries ignore RUSTUP_TOOLCHAIN and would silently build with the wrong
 # toolchain (same failure class as the macOS Homebrew shadowing).
+# Process-local only: put the rustup shims first so Chocolatey copies cannot shadow them.
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 foreach ($tool in 'rustc', 'cargo') {
     $src = (Get-Command $tool -ErrorAction SilentlyContinue).Source
     if ($src -and $src -notlike '*\.cargo\bin\*') {
@@ -101,6 +103,10 @@ if ($conf.version -ne $ExpectedVersion) {
 Write-Host "==> Version gate passed: $($conf.version)."
 
 # --- 5. Compile gates (must pass BEFORE packaging). ---
+# Native tools write progress to stderr; with ErrorActionPreference=Stop, PowerShell
+# 5.1 turns the first 2>&1 stderr line into a terminating NativeCommandError, so the
+# gates would "fail" on cargo's normal output. Judge them by exit code only.
+$ErrorActionPreference = "Continue"
 Push-Location (Join-Path $repoRoot "src-tauri")
 try {
     cargo check 2>&1 | ForEach-Object { Write-Host "    $_" }
@@ -117,6 +123,7 @@ try {
 } finally {
     Pop-Location
 }
+$ErrorActionPreference = "Stop"
 Write-Host "==> Compile gates passed (cargo check, cargo clippy, frontend typecheck)."
 
 # --- 6. Stop after the gates. ---

@@ -108,7 +108,7 @@ if (Test-Path $PatchedSourceDaemon) {
 } else {
     # Never ship the stock MSI daemon (the rev2/rev3 regression). Fall back to
     # the frozen, checksum-verified 0.2.8 patched daemon only.
-    $FrozenDaemon = Join-Path $PSScriptRoot "inputs\transmission-daemon-patched-0.2.8.exe"
+    $FrozenDaemon = Join-Path (Split-Path $PSScriptRoot -Parent) "inputs\transmission-daemon-patched-0.2.8.exe"
     if (-not (Test-Path $FrozenDaemon)) {
         throw "No patched daemon available (source build failed and frozen 0.2.8 daemon not found at $FrozenDaemon). Refusing to bundle the stock MSI daemon."
     }
