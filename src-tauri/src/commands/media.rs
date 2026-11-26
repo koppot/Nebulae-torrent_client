@@ -4053,8 +4053,19 @@ pub fn player_toggle_pause(state: tauri::State<PlayerState>) -> Result<(), Strin
     Ok(())
 }
 
+/// 0.2.9-rc (W-2/L-017): bounded wait for seekability. The is_seekable gate is
+/// KEPT; when the stream reports not-seekable, the check is retried for up to
+/// SEEKABLE_WAIT_MS before failing, so the frontend's one-shot resume seek is
+/// not burned by an early unseekable window right after playback starts. The
+/// command is async and the sleeps run on the async runtime — nothing blocks
+/// the main thread; each attempt takes the short-lived media_player_cell lock.
+const SEEKABLE_WAIT_MS: u64 = 2000;
+
 #[tauri::command]
-pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result<(), String> {
+pub async fn player_seek(
+    state: tauri::State<'_, PlayerState>,
+    position_ms: i64,
+) -> Result<(), String> {
     if let Ok(coord) = state.output_coordinator.lock() {
         if coord.active_output == player::output::ActiveOutputKind::AirPlay {
             drop(coord);
@@ -4062,23 +4073,41 @@ pub fn player_seek(state: tauri::State<PlayerState>, position_ms: i64) -> Result
         }
     }
 
-    let _mp_guard = state
-        .media_player_cell
-        .lock()
-        .map_err(|_| "player state poisoned")?;
-    let mp = *poison(&state.media_player);
-    if mp == 0 {
-        return Ok(());
-    }
-    let lib = loaded_lib(&state)?;
-    if let Some(is_seekable) = lib.libvlc_media_player_is_seekable {
-        let seekable = unsafe { is_seekable(mp as *mut c_void) };
-        if seekable == 0 {
-            return Err("Media stream is currently not seekable".into());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(SEEKABLE_WAIT_MS);
+    loop {
+        {
+            let _mp_guard = state
+                .media_player_cell
+                .lock()
+                .map_err(|_| "player state poisoned")?;
+            let mp = *poison(&state.media_player);
+            if mp == 0 {
+                return Ok(());
+            }
+            let lib = loaded_lib(&state)?;
+            let seekable = lib
+                .libvlc_media_player_is_seekable
+                .map(|f| unsafe { f(mp as *mut c_void) });
+            match seekable {
+                // Gate kept: confirmed not seekable.
+                Some(0) if std::time::Instant::now() >= deadline => {
+                    return Err("Media stream is currently not seekable".into());
+                }
+                // Gate kept: not seekable yet — bounded retry on the runtime.
+                Some(0) => {}
+                // Seekable (or no is_seekable symbol): seek once.
+                _ => unsafe {
+                    (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0));
+                },
+            }
+            if matches!(seekable, Some(0)) {
+                // fall through to the bounded sleep below
+            } else {
+                return Ok(());
+            }
         }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    unsafe { (lib.libvlc_media_player_set_time)(mp as *mut c_void, position_ms.max(0)) };
-    Ok(())
 }
 
 #[tauri::command]
