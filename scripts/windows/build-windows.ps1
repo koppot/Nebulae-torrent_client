@@ -97,13 +97,17 @@ try {
 }
 Push-Location $repoRoot
 try {
-    pnpm typecheck 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { throw "frontend typecheck failed" }
+    pnpm exec tsc --noEmit 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) { throw "frontend typecheck (tsc --noEmit) failed" }
 } finally {
     Pop-Location
 }
 Write-Host "==> Compile gates passed (cargo check, cargo clippy, frontend typecheck)."
 
-# --- 6. Hand off to the bundle script (packaging). ---
-& (Join-Path $repoRoot "scripts\bundle-windows.ps1")
-Write-Host "==> Entry script complete. Record the installer name, size, SHA-256 and gate results to Notion."
+# --- 6. Stop after the gates. ---
+# This repo has no single packaging entry point (scripts/bundle-windows.ps1 does
+# not exist; scripts/build-windows.ps1 installs software and must not be used).
+# Packaging is the Antigravity 0.2.8 procedure: bundle-windows-transmission.ps1
+# (with NEBULAE_REQUIRE_PATCHED_DAEMON=1), VLC runtime staged with
+# scripts/windows/stage_runtime.py, then "pnpm tauri build --bundles nsis".
+Write-Host "==> All gates passed for $CommitSha. Run the packaging steps, then record installer name, size, SHA-256 and gate results to Notion."
