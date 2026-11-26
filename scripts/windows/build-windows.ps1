@@ -32,7 +32,22 @@ $active = ($activeRaw -split "`r?`n" | Where-Object { $_.Trim() -ne '' } | Selec
 if ($active -ne 'stable-x86_64-pc-windows-gnu') {
     throw "toolchain pin failed: raw rustup output was: $activeRaw"
 }
-Write-Host "==> Toolchain pinned: $active"
+# The pin only binds if cargo/rustc are the RUSTUP SHIMS. On this machine a
+# Chocolatey rustc/cargo was measured first on PATH (2026-11-26); the Chocolatey
+# binaries ignore RUSTUP_TOOLCHAIN and would silently build with the wrong
+# toolchain (same failure class as the macOS Homebrew shadowing).
+foreach ($tool in 'rustc', 'cargo') {
+    $src = (Get-Command $tool -ErrorAction SilentlyContinue).Source
+    if ($src -and $src -notlike '*\.cargo\bin\*') {
+        throw "toolchain shadowing: $tool resolves to $src, not a rustup shim in `~\.cargo\bin. " +
+              "Remove the other $tool from PATH (e.g. the Chocolatey one) or put " +
+              "`$env:USERPROFILE\.cargo\bin FIRST on PATH, then re-run."
+    }
+}
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+    throw "pnpm not found. Install it first: npm install -g pnpm  (or: winget install pnpm.pnpm). Node alone is not enough."
+}
+Write-Host "==> Toolchain pinned: $active (rustup shims verified on PATH)"
 
 # --- 2. Commit + clean tree gates. ---
 $head = (git rev-parse HEAD).Trim()
