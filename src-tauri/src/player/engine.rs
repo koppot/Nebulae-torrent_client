@@ -1732,14 +1732,28 @@ impl VlcSession {
     /// pointers while they are being torn down here.
     ///
     /// `lib` must be an `Arc` so it stays alive until the thread finishes.
-    pub fn close_in_background(self, lib: std::sync::Arc<VlcLib>) {
+    ///
+    /// `teardown_in_flight` (B7 0.2.9-rc) is incremented before the thread
+    /// spawns and decremented when it finishes (or immediately if the spawn
+    /// fails), so a new open can wait for the teardown instead of colliding
+    /// with it inside libvlc's object locks. The caller passes
+    /// `&PlayerState::teardown_in_flight`.
+    pub fn close_in_background(
+        self,
+        lib: std::sync::Arc<VlcLib>,
+        teardown_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         // Transfer raw pointer values as plain usize so they cross the thread
         // boundary without triggering Send checks on *mut c_void.
         let mp = self.media_player;
         let md = self.media;
         #[cfg(target_os = "windows")]
         let win_target = take_session_video_target(mp);
-        std::thread::Builder::new()
+        // Count the teardown BEFORE spawning so a waiter can never miss it
+        // (the thread may finish fast).
+        teardown_in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let thread_counter = std::sync::Arc::clone(&teardown_in_flight);
+        let spawned = std::thread::Builder::new()
             .name("vlc-teardown".into())
             .spawn(move || {
                 let t = std::time::Instant::now();
@@ -1793,10 +1807,17 @@ impl VlcSession {
                     "[perf] vlc-teardown thread: total elapsed={}ms",
                     t.elapsed().as_millis()
                 );
-            })
-            .ok(); // If the thread fails to spawn, the pointers leak but the
-                   // app does not freeze. The old close() path is still
-                   // available for callers that need synchronous teardown.
+                // Release the waiter (see teardown_in_flight) LAST, after
+                // every libvlc call and surface release is done.
+                thread_counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            // If the thread fails to spawn, the pointers leak but the app
+            // does not freeze. Release the waiter so an open does not wait
+            // for a teardown that will never run.
+            teardown_in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            tracing::warn!("[perf] vlc-teardown: thread failed to spawn; pointers leak");
+        }
     }
 }
 

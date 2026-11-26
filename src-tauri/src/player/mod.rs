@@ -121,6 +121,17 @@ pub struct PlayerState {
     /// Serializes session open and teardown calls so concurrent open requests
     /// cannot race and create duplicate concurrent playback sessions.
     pub open_lock: tokio::sync::Mutex<()>,
+    /// How many VLC teardowns (stop+release) are currently running on
+    /// background "vlc-teardown" threads (Windows only; the sync macOS/Linux
+    /// close path never increments this). B7 0.2.9-rc: a new open waits for
+    /// this to reach 0 before touching libvlc, because every session shares
+    /// ONE libvlc instance and calling into it while the old stop is still
+    /// inside libvlc's object locks blocks the open for the whole teardown
+    /// (BD-J stop measured at 9-20 s, once 37 s). Incremented by
+    /// VlcSession::close_in_background before the thread spawns, decremented
+    /// when the thread finishes (or immediately if it failed to spawn).
+    /// Arc so the background thread can own a clone (the thread needs 'static).
+    pub teardown_in_flight: std::sync::Arc<AtomicUsize>,
     /// Encoded black-bar cropping state.
     pub framing: Mutex<FramingState>,
     /// Last poll transition state logged: (gen, title, at_menu, playing) for bounded diagnostics.

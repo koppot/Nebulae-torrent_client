@@ -845,7 +845,7 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
             {
                 // Offload the slow VLC stop+release to a background OS thread.
                 // The Arc<VlcLib> keeps the library alive until teardown finishes.
-                session.close_in_background(std::sync::Arc::clone(lib));
+                session.close_in_background(lib, std::sync::Arc::clone(&state.teardown_in_flight));
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -2091,6 +2091,12 @@ pub async fn player_open(
 /// does not take the lock. It stays set after release (read as "previous holder").
 pub static OPEN_LOCK_LAST_HOLDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
+/// How long a new open waits for an in-flight background VLC teardown before
+/// proceeding anyway (B7 0.2.9-rc). Budget covers the worst measured teardown
+/// with margin (37,129 ms on rev2; the typical BD-J stop is 9-20 s). After the
+/// budget the open proceeds and logs that libvlc contention is possible.
+const TEARDOWN_WAIT_BUDGET_MS: u64 = 45_000;
+
 fn open_lock_holder_name(id: u8) -> &'static str {
     match id {
         1 => "player_open",
@@ -2128,6 +2134,45 @@ pub async fn player_open_inner(
     }
     OPEN_LOCK_LAST_HOLDER.store(1, std::sync::atomic::Ordering::SeqCst);
     stop_session(app, state);
+    // B7 0.2.9-rc: the outgoing session's VLC stop+release may still be
+    // running on a "vlc-teardown" background thread (Windows BD-J stop
+    // measured at 9-20 s, once 37 s). Every session shares ONE libvlc
+    // instance, so calling into libvlc now would block inside libvlc's
+    // object locks until that stop finishes — an invisible wait that looks
+    // exactly like the measured freeze. Wait here instead, off the UI
+    // thread, bounded and logged, so the new session's libvlc calls run
+    // uncontended. macOS/Linux tear down synchronously inside stop_session,
+    // so the counter is 0 there and this loop never waits.
+    let t_teardown_wait = std::time::Instant::now();
+    let mut teardown_wait_logged = false;
+    loop {
+        let in_flight = state
+            .teardown_in_flight
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if in_flight == 0 {
+            break;
+        }
+        let waited = t_teardown_wait.elapsed().as_millis();
+        if waited >= TEARDOWN_WAIT_BUDGET_MS as u128 {
+            tracing::warn!(
+                "[perf] open: teardown wait budget expired at {waited}ms (in flight: {in_flight}); proceeding — libvlc contention possible"
+            );
+            break;
+        }
+        if !teardown_wait_logged {
+            tracing::info!(
+                "[perf] open: waiting for in-flight vlc teardown (in flight: {in_flight})"
+            );
+            teardown_wait_logged = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    if teardown_wait_logged {
+        tracing::info!(
+            "[perf] open: teardown wait finished: elapsed={}ms",
+            t_teardown_wait.elapsed().as_millis()
+        );
+    }
     *poison(&state.current_path) = Some(file_path.clone());
     // An explicit resume must not sit through the disc's first-play flow
     // (FBI warning → menu chain): resolve the disc's main feature file and
