@@ -186,20 +186,6 @@ pub fn decide(progress: &mut Progress, now_ms: u64, s: Sample) -> Decision {
     }
     progress.menu_since_ms = None;
 
-    // 0.2.9-rc (user instruction): when the title already IS the authored menu
-    // (libvlc reports a Menu title and the disc has one) and the demuxer has
-    // not proven otherwise, treat the menu as confirmed — the hold-for-
-    // MENU_CONFIRM_MS rule applies, but INPUT_NAV_MENU / set_title is NOT
-    // repeated over an already-showing menu.
-    if s.at_menu && s.has_menu && s.menu_open != Some(false) {
-        let since = *progress.menu_since_ms.get_or_insert(now_ms);
-        return if now_ms.saturating_sub(since) >= MENU_CONFIRM_MS {
-            Decision::Reached
-        } else {
-            Decision::Wait
-        };
-    }
-
     if !s.has_menu && s.feature_active {
         return Decision::PlainPlayback;
     }
