@@ -67,5 +67,39 @@ class TestEntryScriptGates(unittest.TestCase):
         self.assertIn("dirty", s)
 
 
+class TestVerifyPackageGate(unittest.TestCase):
+    """build-windows.ps1 stops after the compile gates; verify-package.ps1 is
+    the enforced packaging gate. These tests keep it wired and parseable."""
+
+    def test_verify_package_exists_and_parses(self):
+        pwsh = "/opt/homebrew/bin/pwsh"
+        path = REPO / "scripts/windows/verify-package.ps1"
+        self.assertTrue(path.is_file())
+        if not Path(pwsh).is_file():
+            self.skipTest("pwsh not available on this machine")
+        script = (
+            "$tok=$null; $errs=$null;"
+            "[void][System.Management.Automation.Language.Parser]::ParseFile("
+            f"'{path}',[ref]$tok,[ref]$errs);"
+            "'PARSE_ERRORS=' + $errs.Count"
+        )
+        r = subprocess.run([pwsh, "-NoProfile", "-Command", script],
+                           capture_output=True, text=True)
+        self.assertIn("PARSE_ERRORS=0", r.stdout, r.stdout + r.stderr)
+
+    def test_verify_package_runs_all_three_packaging_gates(self):
+        s = read("scripts/windows/verify-package.ps1")
+        self.assertIn("verify_installer.py", s)
+        self.assertIn("verify-clean-build.ps1", s)
+        self.assertIn("verify-baseline.ps1", s)
+        # Every gate failure must be fatal: each step checks $LASTEXITCODE.
+        self.assertEqual(s.count("$LASTEXITCODE -ne 0"), 3)
+
+    def test_build_windows_does_not_claim_a_general_pass(self):
+        s = read("scripts/windows/build-windows.ps1")
+        self.assertIn("NOT VERIFIED until verify-package.ps1 passes", s)
+        self.assertNotIn("All gates passed", s)
+
+
 if __name__ == "__main__":
     unittest.main()
