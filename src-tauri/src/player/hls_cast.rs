@@ -19,12 +19,12 @@
 //! (called when the player session ends or the app exits).
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 pub const TARGET_SEGMENT_S: u32 = 4;
 pub const PLAYLIST_NAME: &str = "index.m3u8";
@@ -88,45 +88,89 @@ fn read_pts(p: &[u8]) -> u64 {
 /// stream ids 0xE0..=0xEF; the transcode emits only H.264 video there).
 /// `None` when no video PES with a PTS is present.
 pub fn scan_pts(ts: &[u8]) -> Option<(u64, u64, u32)> {
-    let mut first = None;
-    let mut max: u64 = 0;
-    let mut frames: u32 = 0;
-    let mut off = 0;
-    while off + TS_PACKET <= ts.len() {
-        let p = &ts[off..off + TS_PACKET];
-        off += TS_PACKET;
+    let mut scan = PtsScan::default();
+    for p in ts.as_chunks::<TS_PACKET>().0 {
+        scan.packet(p);
+    }
+    scan.finish()
+}
+
+#[derive(Default)]
+struct PtsScan {
+    first: Option<u64>,
+    max: u64,
+    frames: u32,
+}
+
+impl PtsScan {
+    /// One 188-byte transport packet.
+    fn packet(&mut self, p: &[u8]) {
         if p[0] != 0x47 || p[1] & 0x40 == 0 {
-            continue;
+            return;
         }
         let afc = (p[3] >> 4) & 3;
         if afc & 1 == 0 {
-            continue;
+            return;
         }
         let mut i = 4;
         if afc == 3 {
             i += 1 + p[4] as usize;
         }
         if i + 14 > TS_PACKET || p[i] != 0 || p[i + 1] != 0 || p[i + 2] != 1 {
-            continue;
+            return;
         }
         if !(0xE0..=0xEF).contains(&p[i + 3]) || p[i + 7] & 0x80 == 0 {
-            continue;
+            return;
         }
         let pts = read_pts(&p[i + 9..i + 14]);
-        frames += 1;
-        match first {
+        self.frames += 1;
+        match self.first {
             None => {
-                first = Some(pts);
-                max = pts;
+                self.first = Some(pts);
+                self.max = pts;
             }
             Some(f) => {
-                if pts.wrapping_sub(f) % PTS_WRAP > max.wrapping_sub(f) % PTS_WRAP {
-                    max = pts;
+                if pts.wrapping_sub(f) % PTS_WRAP > self.max.wrapping_sub(f) % PTS_WRAP {
+                    self.max = pts;
                 }
             }
         }
     }
-    first.map(|f| (f, max, frames))
+
+    fn finish(self) -> Option<(u64, u64, u32)> {
+        self.first.map(|f| (f, self.max, self.frames))
+    }
+}
+
+/// `scan_pts` over a segment file in 96 KiB reads, so a 26 MB segment is
+/// never held in memory. `None` for a missing, empty, non-regular (symlink)
+/// or video-less file.
+pub fn scan_pts_file(path: &Path) -> Option<(u64, u64, u32)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.len() == 0 {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; TS_PACKET * 512];
+    let mut scan = PtsScan::default();
+    loop {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match f.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return None,
+            }
+        }
+        for p in buf[..filled].as_chunks::<TS_PACKET>().0 {
+            scan.packet(p);
+        }
+        if filled < buf.len() {
+            break;
+        }
+    }
+    scan.finish()
 }
 
 /// One finished segment as seen by the playlist builder.
@@ -138,6 +182,9 @@ pub struct Seg {
     pub own_ticks: u64,
     /// Video frames (PES) in the segment.
     pub frames: u32,
+    /// An earlier segment had no usable video and was left out, so the
+    /// stream is not continuous across the gap before this one.
+    pub after_skip: bool,
 }
 
 /// Playlist from measured data. Normally a segment lasts until the next
@@ -161,9 +208,13 @@ pub fn build_playlist(segs: &[Seg], ended: bool) -> String {
         let n = segs.get(i + 1)?;
         Some(n.first_pts.wrapping_sub(segs[i].first_pts) % PTS_WRAP)
     };
+    let skip_after = |i: usize| segs.get(i + 1).is_some_and(|n| n.after_skip);
     let mut ratios: Vec<u64> = (0..segs.len())
         .filter_map(|i| {
             let g = gap(i)?;
+            if skip_after(i) {
+                return None;
+            }
             let f = segs[i].frames as u64;
             (f > 0 && g > 0 && g <= max_ticks && (1500..=7000).contains(&(g / f))).then(|| g / f)
         })
@@ -177,6 +228,14 @@ pub fn build_playlist(segs: &[Seg], ended: bool) -> String {
         let agrees =
             |d: u64| d > 0 && d <= max_ticks && d * 2 >= expected && d <= expected * 2 + 4 * 90_000;
         let (dur_ticks, brk) = match gap(i) {
+            Some(_) if skip_after(i) => (
+                if expected > 0 {
+                    expected
+                } else {
+                    s.own_ticks.clamp(FRAME_TICKS, max_ticks)
+                },
+                true,
+            ),
             Some(d) if agrees(d) => (d, false),
             Some(_) if expected > 0 => (expected, true),
             Some(_) => (TARGET_SEGMENT_S as u64 * 90_000, true),
@@ -211,13 +270,32 @@ pub fn build_playlist(segs: &[Seg], ended: bool) -> String {
     out
 }
 
+/// (first_pts, own_ticks, frames)
+type PtsInfo = (u64, u64, u32);
+
 struct Shared {
     root: PathBuf,
     ended: Box<dyn Fn() -> bool + Send + Sync>,
     /// segment name -> (first_pts, own_ticks, frames) for finished segments.
-    cache: Mutex<HashMap<String, (u64, u64, u32)>>,
+    /// `None`: a finished segment with no usable video (skipped).
+    cache: Mutex<HashMap<String, Option<PtsInfo>>>,
     stop: AtomicBool,
     active: AtomicUsize,
+    max_bytes: u64,
+    on_limit: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    limit_hit: AtomicBool,
+}
+
+/// Total size of the regular files directly inside `dir`.
+pub fn dir_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| std::fs::symlink_metadata(e.path()).ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
 }
 
 impl Shared {
@@ -232,6 +310,7 @@ impl Shared {
         names.sort();
         let count = names.len();
         let mut out = Vec::new();
+        let mut after_skip = false;
         for (i, n) in names.into_iter().enumerate() {
             let last = i + 1 == count;
             let known = self
@@ -240,50 +319,130 @@ impl Shared {
                 .unwrap_or_else(|p| p.into_inner())
                 .get(&n)
                 .copied();
-            let (first, own, frames) = match known {
+            let entry = match known {
                 Some(v) => v,
                 None => {
-                    let Some(bytes) = read_segment(&self.root.join(&n)) else {
-                        break;
-                    };
-                    let Some((f, m, frames)) = scan_pts(&bytes) else {
-                        break;
-                    };
-                    let own = m.wrapping_sub(f) % PTS_WRAP + FRAME_TICKS;
-                    // The newest segment may still be growing; cache only
-                    // finished ones.
+                    let v = scan_pts_file(&self.root.join(&n)).map(|(f, m, frames)| {
+                        (f, m.wrapping_sub(f) % PTS_WRAP + FRAME_TICKS, frames)
+                    });
+                    // The newest segment may still be growing (or not yet
+                    // written); cache only finished ones.
                     if !last || ended {
+                        if v.is_none() {
+                            tracing::warn!(
+                                "[hls-cast] {n} has no usable video; skipped with a discontinuity"
+                            );
+                        }
                         self.cache
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
-                            .insert(n.clone(), (f, own, frames));
+                            .insert(n.clone(), v);
                     }
-                    (f, own, frames)
+                    v
                 }
             };
-            out.push(Seg {
-                name: n,
-                first_pts: first,
-                own_ticks: own,
-                frames,
-            });
+            match entry {
+                Some((first, own, frames)) => {
+                    out.push(Seg {
+                        name: n,
+                        first_pts: first,
+                        own_ticks: own,
+                        frames,
+                        after_skip,
+                    });
+                    after_skip = false;
+                }
+                None if last && !ended => {}
+                None => after_skip = true,
+            }
         }
         out
     }
 
     fn playlist(&self) -> String {
         let ended = (self.ended)();
-        build_playlist(&self.segments(ended), ended)
+        let mut out = build_playlist(&self.segments(ended), ended);
+        if ended && self.limit_hit.load(Ordering::SeqCst) {
+            out.push_str(&format!(
+                "# nebulae: the stream stopped early at the {} MiB scratch-disk limit\n",
+                self.max_bytes >> 20
+            ));
+        }
+        out
+    }
+
+    /// Past the scratch-disk limit: log it and run the stop callback once.
+    fn enforce_limit(&self) {
+        if dir_bytes(&self.root) <= self.max_bytes || self.limit_hit.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        tracing::error!(
+            "[hls-cast] scratch directory passed {} MiB; stopping the encoder (the stream ends early)",
+            self.max_bytes >> 20
+        );
+        let cb = self
+            .on_limit
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(cb) = cb {
+            cb();
+        }
     }
 }
 
-fn read_segment(path: &Path) -> Option<Vec<u8>> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.is_file() || meta.len() == 0 {
-        return None;
+/// Directory-name prefix of every segment scratch directory.
+pub const SCRATCH_PREFIX: &str = "nebulae-cast-";
+
+/// Delete scratch directories left behind by a crashed session: name starts
+/// with `nebulae-cast-`, a real directory (not a symlink), not `keep`, holds
+/// only files this module writes, and nothing in it changed for `max_age`.
+/// Returns how many were removed.
+pub fn sweep_orphans(
+    base: &Path,
+    max_age: Duration,
+    now: SystemTime,
+    keep: Option<&Path>,
+) -> usize {
+    let mut removed = 0;
+    for e in std::fs::read_dir(base).into_iter().flatten().flatten() {
+        let path = e.path();
+        let is_ours = e
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(SCRATCH_PREFIX));
+        if !is_ours || keep == Some(path.as_path()) {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let mut newest = meta.modified().ok();
+        let mut only_ours = true;
+        for c in std::fs::read_dir(&path).into_iter().flatten().flatten() {
+            let name = c.file_name().to_string_lossy().into_owned();
+            let cm = std::fs::symlink_metadata(c.path()).ok();
+            if !cm.as_ref().is_some_and(|m| m.is_file())
+                || !(is_segment_name(&name) || name.ends_with(".m3u8"))
+            {
+                only_ours = false;
+                break;
+            }
+            newest = newest.max(cm.and_then(|m| m.modified().ok()));
+        }
+        let Some(newest) = newest else { continue };
+        let idle = now.duration_since(newest).unwrap_or(Duration::ZERO);
+        if only_ours && idle >= max_age && std::fs::remove_dir_all(&path).is_ok() {
+            tracing::info!("[hls-cast] removed orphaned scratch {}", path.display());
+            removed += 1;
+        }
     }
-    std::fs::read(path).ok()
+    removed
 }
+
 pub struct LanServer {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -299,6 +458,19 @@ impl LanServer {
         port: u16,
         ended: Box<dyn Fn() -> bool + Send + Sync>,
     ) -> std::io::Result<Self> {
+        Self::start_with_limit(root, bind, port, ended, u64::MAX, Box::new(|| {}))
+    }
+
+    /// As `start`, and when `root` grows past `max_bytes` run `on_limit`
+    /// once (it must make `ended` become true, i.e. stop the encoder).
+    pub fn start_with_limit(
+        root: PathBuf,
+        bind: IpAddr,
+        port: u16,
+        ended: Box<dyn Fn() -> bool + Send + Sync>,
+        max_bytes: u64,
+        on_limit: Box<dyn FnOnce() + Send>,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::new(bind, port))
             .or_else(|_| TcpListener::bind(SocketAddr::new(bind, 0)))?;
         listener.set_nonblocking(true)?;
@@ -309,6 +481,9 @@ impl LanServer {
             cache: Mutex::new(HashMap::new()),
             stop: AtomicBool::new(false),
             active: AtomicUsize::new(0),
+            max_bytes,
+            on_limit: Mutex::new(Some(on_limit)),
+            limit_hit: AtomicBool::new(false),
         });
         let sh = shared.clone();
         let thread = std::thread::Builder::new()
@@ -337,8 +512,15 @@ impl LanServer {
         format!("http://{host}:{}/{PLAYLIST_NAME}", self.addr.port())
     }
 
-    /// Stop accepting, join the accept thread, wait (bounded) for in-flight
-    /// requests so the `ended` callback is never called after this returns.
+    /// True once the scratch-disk limit stopped the encoder.
+    pub fn limit_hit(&self) -> bool {
+        self.shared.limit_hit.load(Ordering::SeqCst)
+    }
+
+    /// Stop accepting, join the accept thread and wait (bounded, 3 s) for
+    /// in-flight requests. A request that outlives the wait can still call
+    /// `ended`, so the owner must make that callback safe on its own (see
+    /// `disc_restream::PlayerGate`) before releasing what it reads.
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
@@ -358,7 +540,12 @@ impl Drop for LanServer {
 }
 
 fn accept_loop(listener: TcpListener, sh: Arc<Shared>) {
+    let mut next_limit_check = Instant::now();
     while !sh.stop.load(Ordering::SeqCst) {
+        if sh.max_bytes != u64::MAX && Instant::now() >= next_limit_check {
+            sh.enforce_limit();
+            next_limit_check = Instant::now() + Duration::from_secs(2);
+        }
         match listener.accept() {
             Ok((stream, peer)) => {
                 if !is_lan_peer(peer.ip()) {
@@ -432,15 +619,32 @@ fn parse_range(h: &str, len: u64) -> Option<(u64, u64)> {
 
 fn handle(mut s: TcpStream, sh: &Shared) -> std::io::Result<()> {
     s.set_nonblocking(false)?;
-    s.set_read_timeout(Some(Duration::from_secs(5)))?;
+    // Short read timeout so an idle connection notices `stop` quickly; the
+    // request head itself still has 5 s in total.
+    s.set_read_timeout(Some(Duration::from_millis(250)))?;
     s.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let started = Instant::now();
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
         if buf.len() > 8192 {
             return respond(&mut s, "431 Too Large", "text/plain", "", true, b"");
         }
-        let n = s.read(&mut tmp)?;
+        let n = match s.read(&mut tmp) {
+            Ok(n) => n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if sh.stop.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(5) {
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if n == 0 {
             return Ok(());
         }
@@ -521,9 +725,10 @@ fn handle(mut s: TcpStream, sh: &Shared) -> std::io::Result<()> {
     s.flush()
 }
 
-/// Fallback bind address when no LAN interface is found.
+/// Loopback address (tests and the dry-run hook).
+#[cfg(test)]
 pub fn loopback() -> IpAddr {
-    IpAddr::V4(Ipv4Addr::LOCALHOST)
+    IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
 }
 
 #[cfg(test)]
@@ -649,6 +854,7 @@ mod tests {
             first_pts: p,
             own_ticks: 4 * 90_000,
             frames: 0,
+            after_skip: false,
         };
         let segs = vec![
             s("seg-00000000.ts", 0),
@@ -683,6 +889,7 @@ mod tests {
             first_pts: p,
             own_ticks: 0,
             frames,
+            after_skip: false,
         };
         let segs = vec![
             mk("seg-00000000.ts", 0, 120),
@@ -823,6 +1030,172 @@ mod tests {
             "positive durations"
         );
         srv.stop();
+    }
+
+    #[test]
+    fn video_less_segment_is_skipped_with_a_discontinuity_not_truncated() {
+        let dir = tmpdir("skip");
+        let ts = |i: usize, start: u64| {
+            std::fs::write(
+                dir.join(format!("seg-{i:08}.ts")),
+                make_ts(start, 120, 3003),
+            )
+            .unwrap()
+        };
+        ts(0, 0);
+        // Segment 1 has no video PES at all (audio-only / garbage).
+        std::fs::write(dir.join("seg-00000001.ts"), vec![0u8; 188 * 40]).unwrap();
+        ts(2, 8 * 90_000);
+        ts(3, 12 * 90_000);
+        ts(4, 16 * 90_000);
+        let mut srv = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| true)).unwrap();
+        let (_, body) = get(srv.addr, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let pl = String::from_utf8(body).unwrap();
+        assert!(!pl.contains("seg-00000001.ts"), "{pl}");
+        for n in [
+            "seg-00000000.ts",
+            "seg-00000002.ts",
+            "seg-00000003.ts",
+            "seg-00000004.ts",
+        ] {
+            assert!(pl.contains(n), "listed after the skip, no truncation: {pl}");
+        }
+        assert!(
+            pl.contains("#EXT-X-DISCONTINUITY\n#EXTINF:4.000,\nseg-00000002.ts"),
+            "{pl}"
+        );
+        assert!(
+            !pl.contains("EXTINF:8"),
+            "gap over the skip not credited: {pl}"
+        );
+        assert!(pl.trim_end().ends_with("#EXT-X-ENDLIST"), "{pl}");
+        srv.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_scan_matches_the_in_memory_scan_across_chunk_edges() {
+        let dir = tmpdir("scan");
+        // 600 packets: more than one 512-packet read.
+        let bytes = make_ts(5_000, 600, 3003);
+        let p = dir.join("seg-00000000.ts");
+        std::fs::write(&p, &bytes).unwrap();
+        assert_eq!(scan_pts_file(&p), scan_pts(&bytes));
+        assert_eq!(scan_pts_file(&p).map(|x| x.2), Some(600));
+        assert_eq!(scan_pts_file(&dir.join("missing.ts")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idle_connection_does_not_hold_stop_for_the_join_window() {
+        let dir = tmpdir("idle");
+        let mut srv = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| false)).unwrap();
+        let _idle = TcpStream::connect(srv.addr).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let t = Instant::now();
+        srv.stop();
+        assert!(
+            t.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(srv.shared.active.load(Ordering::SeqCst), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scratch_limit_stops_the_encoder_once_and_says_so() {
+        let dir = tmpdir("limit");
+        for i in 0..3 {
+            std::fs::write(
+                dir.join(format!("seg-{i:08}.ts")),
+                make_ts(i * 360_000, 120, 3003),
+            )
+            .unwrap();
+        }
+        let stopped = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (s2, c2) = (stopped.clone(), calls.clone());
+        let s3 = stopped.clone();
+        let mut srv = LanServer::start_with_limit(
+            dir.clone(),
+            loopback(),
+            0,
+            Box::new(move || s3.load(Ordering::SeqCst)),
+            5_000,
+            Box::new(move || {
+                c2.fetch_add(1, Ordering::SeqCst);
+                s2.store(true, Ordering::SeqCst);
+            }),
+        )
+        .unwrap();
+        let t = Instant::now();
+        while !srv.limit_hit() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(srv.limit_hit());
+        std::thread::sleep(Duration::from_millis(2300));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "stop callback runs once");
+        let (_, body) = get(srv.addr, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let pl = String::from_utf8(body).unwrap();
+        assert!(
+            pl.contains("#EXT-X-ENDLIST") && pl.contains("scratch-disk limit"),
+            "{pl}"
+        );
+        srv.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn under_the_limit_nothing_is_stopped() {
+        let dir = tmpdir("under");
+        std::fs::write(dir.join("seg-00000000.ts"), make_ts(0, 4, 3003)).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c2 = calls.clone();
+        let mut srv = LanServer::start_with_limit(
+            dir.clone(),
+            loopback(),
+            0,
+            Box::new(|| false),
+            1 << 30,
+            Box::new(move || {
+                c2.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!srv.limit_hit() && calls.load(Ordering::SeqCst) == 0);
+        srv.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sweep_removes_only_old_orphans_and_never_the_active_or_foreign() {
+        let base = tmpdir("sweep");
+        let mk = |name: &str, files: &[&str]| {
+            let d = base.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            for f in files {
+                std::fs::write(d.join(f), b"x").unwrap();
+            }
+            d
+        };
+        let old = mk("nebulae-cast-old", &["seg-00000000.ts", "vlc-index.m3u8"]);
+        let active = mk("nebulae-cast-active", &["seg-00000000.ts"]);
+        let foreign = mk("nebulae-cast-userdata", &["thesis.docx"]);
+        let other = mk("somebody-else", &["seg-00000000.ts"]);
+        std::fs::write(base.join("nebulae-cast-file"), b"x").unwrap();
+        let age = Duration::from_secs(12 * 3600);
+        // Nothing is old yet.
+        assert_eq!(sweep_orphans(&base, age, SystemTime::now(), None), 0);
+        assert!(old.exists());
+        // 13 h later: only the old orphan (the active one is kept by name).
+        let later = SystemTime::now() + Duration::from_secs(13 * 3600);
+        assert_eq!(sweep_orphans(&base, age, later, Some(&active)), 2 - 1);
+        assert!(!old.exists());
+        assert!(active.exists() && foreign.exists() && other.exists());
+        assert!(base.join("nebulae-cast-file").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(unix)]

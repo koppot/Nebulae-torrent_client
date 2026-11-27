@@ -38,7 +38,8 @@ use crate::player::PlayerState;
 
 use std::ffi::CString;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 /// Locks a possibly-poisoned mutex, preferring the data over the guard
 /// (same policy as the player commands; poll/teardown data is advisory).
@@ -48,6 +49,40 @@ fn poison<T>(g: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Default TCP port for the local HTTP restream.
 pub const DEFAULT_PORT: u16 = 18123;
+
+/// Per-session cap on the HLS scratch directory. The chain writes about
+/// 2.5 Mbps video + 192 kbps audio = ~1.2 GB per hour (calculated 1.1-1.3;
+/// measured on the Glass Fleet D1 ISO: 556 s, ~70 MB, largest segment
+/// 26 MB), so 6 GiB holds ~4.5 h of feature, longer than any disc title.
+/// Past it the encoder is stopped and the playlist says so.
+pub const SCRATCH_LIMIT_BYTES: u64 = 6 << 30;
+
+/// Scratch directories untouched this long are treated as orphans of a
+/// crashed session and swept on the next start.
+const ORPHAN_AGE: Duration = Duration::from_secs(12 * 3600);
+
+/// The restream player pointer, shared with the LAN server's callbacks.
+/// `with` holds the lock while it calls, and `close` takes the same lock,
+/// so once `close` returns no callback can be inside libvlc or call it
+/// later: a connection thread that outlives the server's join cannot touch a
+/// released player.
+pub struct PlayerGate(Mutex<Option<usize>>);
+
+impl PlayerGate {
+    fn new(mp: usize) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Some(mp))))
+    }
+
+    /// `None` once closed.
+    pub fn with<T>(&self, f: impl FnOnce(usize) -> T) -> Option<T> {
+        let g = poison(&self.0);
+        (*g).map(f)
+    }
+
+    pub fn close(&self) {
+        *poison(&self.0) = None;
+    }
+}
 
 /// What the frontend needs to hand the stream to a receiver or the user.
 #[derive(Clone, serde::Serialize)]
@@ -85,6 +120,8 @@ pub struct DiscRestream {
     pub title_index: i32,
     /// HLS mode only: the LAN server and the segment scratch directory.
     pub lan: Option<hls_cast::LanServer>,
+    /// HLS mode only: guards the player pointer the LAN callbacks read.
+    pub gate: Option<Arc<PlayerGate>>,
     pub scratch: Option<std::path::PathBuf>,
     pub renderer_set: bool,
 }
@@ -119,15 +156,12 @@ pub fn build_restream_mrl(
 /// Best-effort primary LAN IPv4 for the receiver URL: connect a UDP socket
 /// to a public address (no packet is sent; connect() only picks a route)
 /// and read the local endpoint.
-fn primary_lan_ipv4() -> Option<String> {
+fn primary_lan_ipv4() -> Option<std::net::IpAddr> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
     let local = sock.local_addr().ok()?;
-    if local.is_ipv4() {
-        Some(local.ip().to_string())
-    } else {
-        None
-    }
+    (local.is_ipv4() && !local.ip().is_loopback() && !local.ip().is_unspecified())
+        .then(|| local.ip())
 }
 
 /// Start streaming the current disc's main feature. Requires an ACTIVE
@@ -153,6 +187,14 @@ pub fn start(
     if instance == 0 {
         return Err("No active playback session: start the disc locally first".into());
     }
+    // A receiver can only reach a LAN address; a loopback-only bind would
+    // hand it a URL that never works, so refuse instead.
+    let lan_ip = match mode {
+        RestreamMode::Renderer { .. } => None,
+        _ => Some(primary_lan_ipv4().ok_or(
+            "No LAN network address found: connect to a network so the receiver can reach this computer",
+        )?),
+    };
 
     let is_bluray = engine::current_session_is_bluray();
     let (title_index, duration_ms, dvd_title_number) = {
@@ -201,6 +243,11 @@ pub fn start(
     }
     let scratch = match mode {
         RestreamMode::Hls => {
+            let swept =
+                hls_cast::sweep_orphans(&std::env::temp_dir(), ORPHAN_AGE, SystemTime::now(), None);
+            if swept > 0 {
+                tracing::info!("[disc-restream] swept {swept} orphaned scratch dir(s)");
+            }
             let d = std::env::temp_dir().join(format!("nebulae-cast-{}", uuid::Uuid::new_v4()));
             if let Err(e) = std::fs::create_dir_all(&d) {
                 unsafe { (lib.libvlc_media_release)(media) };
@@ -293,28 +340,44 @@ pub fn start(
 
     // HLS: serve the segments on ONE LAN interface; the playlist is built
     // from the PTS in the segment files and ends when the encoder ends.
-    let host = primary_lan_ipv4();
+    let host = lan_ip.map(|ip| ip.to_string());
     let mut lan = None;
-    if let (RestreamMode::Hls, Some(dir)) = (&mode, &scratch) {
-        let bind = host
-            .as_deref()
-            .and_then(|h| h.parse().ok())
-            .unwrap_or_else(hls_cast::loopback);
-        let lib_end = lib.clone();
-        let mp_addr = mp as usize;
+    let mut gate = None;
+    if let (RestreamMode::Hls, Some(dir), Some(bind)) = (&mode, &scratch, lan_ip) {
+        let g = PlayerGate::new(mp as usize);
+        let (lib_end, g_end) = (lib.clone(), g.clone());
         let ended = Box::new(move || {
-            // 5 Stopped, 6 Ended, 7 Error. The server is stopped before the
-            // player is released (see stop()), so mp_addr is live here.
-            matches!(
-                unsafe {
-                    (lib_end.libvlc_media_player_get_state)(mp_addr as *mut std::os::raw::c_void)
-                },
-                5..=7
-            )
+            // 5 Stopped, 6 Ended, 7 Error. A closed gate means the player is
+            // gone: report ended.
+            g_end
+                .with(|mp| {
+                    matches!(
+                        unsafe {
+                            (lib_end.libvlc_media_player_get_state)(mp as *mut std::os::raw::c_void)
+                        },
+                        5..=7
+                    )
+                })
+                .unwrap_or(true)
         });
-        match hls_cast::LanServer::start(dir.clone(), bind, port, ended) {
+        let (lib_lim, g_lim) = (lib.clone(), g.clone());
+        let on_limit = Box::new(move || {
+            g_lim.with(|mp| unsafe {
+                (lib_lim.libvlc_media_player_stop)(mp as *mut std::os::raw::c_void)
+            });
+        });
+        gate = Some(g.clone());
+        match hls_cast::LanServer::start_with_limit(
+            dir.clone(),
+            bind,
+            port,
+            ended,
+            SCRATCH_LIMIT_BYTES,
+            on_limit,
+        ) {
             Ok(s) => lan = Some(s),
             Err(e) => {
+                g.close();
                 unsafe {
                     (lib.libvlc_media_player_stop)(mp);
                     (lib.libvlc_media_player_release)(mp);
@@ -338,31 +401,27 @@ pub fn start(
         RestreamMode::Renderer { .. } => "renderer",
     };
 
-    // A poisoned slot must not leak the already-playing player: release the
-    // handles before surfacing the error.
-    let stored = match state.disc_restream.lock() {
-        Ok(mut slot) => {
-            *slot = Some(DiscRestream {
-                media_player: mp as usize,
-                media: media as usize,
-                port: served_port,
-                title_index,
-                lan,
-                scratch,
-                renderer_set,
-            });
-            true
-        }
-        Err(_) => {
-            unsafe {
-                (lib.libvlc_media_player_stop)(mp);
-                (lib.libvlc_media_player_release)(mp);
-                (lib.libvlc_media_release)(media);
-            }
-            false
-        }
+    // A poisoned slot must not leak the already-playing player: tear it
+    // down before surfacing the error.
+    let rs = DiscRestream {
+        media_player: mp as usize,
+        media: media as usize,
+        port: served_port,
+        title_index,
+        lan,
+        gate,
+        scratch,
+        renderer_set,
     };
-    if !stored {
+    let rejected = match state.disc_restream.lock() {
+        Ok(mut slot) => {
+            *slot = Some(rs);
+            None
+        }
+        Err(_) => Some(rs),
+    };
+    if let Some(rs) = rejected {
+        teardown(rs, Some(lib.clone()));
         return Err("player state poisoned: restream player released, not started".into());
     }
     tracing::info!(
@@ -385,37 +444,50 @@ pub fn stop(state: &PlayerState) {
         .map_err(|_| "player state poisoned")
         .ok()
         .and_then(|mut g| g.take());
-    let Some(mut rs) = existing else { return };
-    // The LAN server's "ended" callback reads the player: stop it (joins) FIRST.
-    if let Some(mut lan) = rs.lan.take() {
-        lan.stop();
-    }
+    let Some(rs) = existing else { return };
     // Poisoned lock still yields the data (same policy as `poison` above);
     // the handles MUST be released or the HTTP stream keeps serving.
     let lib = {
         let guard = state.lib.lock().unwrap_or_else(|p| p.into_inner());
         guard.as_ref().cloned()
     };
-    let Some(lib) = lib else {
-        tracing::error!(
-            "[disc-restream] lib unavailable; restream handles not released (port={})",
-            rs.port
-        );
-        return;
-    };
-    let mp_ptr = rs.media_player as *mut std::os::raw::c_void;
-    let media_ptr = rs.media as *mut std::os::raw::c_void;
-    unsafe {
-        if rs.renderer_set {
-            if let Some(set) = lib.libvlc_media_player_set_renderer {
-                set(mp_ptr, std::ptr::null_mut());
+    teardown(rs, lib);
+}
+
+/// Release everything a restream owns, in the only safe order: stop serving,
+/// close the gate (no LAN callback can reach the player afterwards, even from
+/// a connection that outlived the server's join), release the player, then
+/// delete the scratch directory. The scratch directory is deleted on EVERY
+/// path, including a missing libvlc handle.
+fn teardown(mut rs: DiscRestream, lib: Option<Arc<engine::VlcLib>>) {
+    if let Some(mut lan) = rs.lan.take() {
+        lan.stop();
+    }
+    if let Some(g) = rs.gate.take() {
+        g.close();
+    }
+    let scratch = rs.scratch.take();
+    match lib {
+        Some(lib) => {
+            let mp_ptr = rs.media_player as *mut std::os::raw::c_void;
+            let media_ptr = rs.media as *mut std::os::raw::c_void;
+            unsafe {
+                if rs.renderer_set {
+                    if let Some(set) = lib.libvlc_media_player_set_renderer {
+                        set(mp_ptr, std::ptr::null_mut());
+                    }
+                }
+                (lib.libvlc_media_player_stop)(mp_ptr);
+                (lib.libvlc_media_player_release)(mp_ptr);
+                (lib.libvlc_media_release)(media_ptr);
             }
         }
-        (lib.libvlc_media_player_stop)(mp_ptr);
-        (lib.libvlc_media_player_release)(mp_ptr);
-        (lib.libvlc_media_release)(media_ptr);
+        None => tracing::error!(
+            "[disc-restream] lib unavailable; restream handles not released (port={})",
+            rs.port
+        ),
     }
-    if let Some(d) = rs.scratch.take() {
+    if let Some(d) = scratch {
         let _ = std::fs::remove_dir_all(d);
     }
     tracing::info!(
@@ -460,6 +532,71 @@ mod tests {
             build_restream_mrl("/Discs/Fuuka", true, Some(2)),
             format!("bluray://{}", engine::encode_mrl_path("/Discs/Fuuka"))
         );
+    }
+
+    #[test]
+    fn closed_gate_never_calls_the_player_and_close_waits_for_a_call_in_flight() {
+        let g = PlayerGate::new(7);
+        assert_eq!(g.with(|mp| mp + 1), Some(8));
+        let in_call = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (g2, c2) = (g.clone(), in_call.clone());
+        let t = std::thread::spawn(move || {
+            g2.with(|_| {
+                c2.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(150));
+                c2.store(false, Ordering::SeqCst);
+            })
+        });
+        while !in_call.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        g.close();
+        assert!(
+            !in_call.load(Ordering::SeqCst),
+            "close() returned while a callback was still inside the player"
+        );
+        t.join().unwrap();
+        let mut called = false;
+        assert_eq!(
+            g.with(|_| {
+                called = true;
+            }),
+            None
+        );
+        assert!(!called);
+    }
+
+    #[test]
+    fn stop_deletes_the_scratch_dir_even_without_a_libvlc_handle() {
+        let state = PlayerState::default();
+        assert!(state.lib.lock().unwrap().is_none());
+        let dir = std::env::temp_dir().join(format!("nebulae-cast-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("seg-00000000.ts"), b"x").unwrap();
+        *state.disc_restream.lock().unwrap() = Some(DiscRestream {
+            media_player: 0,
+            media: 0,
+            port: 0,
+            title_index: 0,
+            lan: None,
+            gate: Some(PlayerGate::new(0)),
+            scratch: Some(dir.clone()),
+            renderer_set: false,
+        });
+        stop(&state);
+        assert!(!dir.exists(), "scratch leaked");
+        assert!(state.disc_restream.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn scratch_cap_covers_the_estimated_hourly_rate() {
+        // ~2.5 Mbps video + 192 kbps audio, per hour, in bytes.
+        let per_hour = (2_500_000u64 + 192_000) / 8 * 3600;
+        assert!(
+            (1_000_000_000..1_350_000_000).contains(&per_hour),
+            "{per_hour}"
+        );
+        assert!(SCRATCH_LIMIT_BYTES / per_hour >= 4, "cap holds >= 4 h");
     }
 
     #[test]
