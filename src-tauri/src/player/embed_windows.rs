@@ -1823,12 +1823,33 @@ pub fn window_minimize_native(app: &AppHandle) -> Result<(), String> {
     if minimize_to_tray_enabled(app) {
         if let Some(win) = app.get_webview_window("main") {
             let _ = win.hide();
+            // D16: hiding (not minimizing) removes the taskbar button by
+            // design; log it so a "vanished from the taskbar" report can be
+            // attributed to the minimize-to-tray setting immediately.
+            tracing::info!(
+                "[win-state] minimize: minimize-to-tray enabled -> window hidden (no taskbar button; restore via tray)"
+            );
             return Ok(());
         }
         return Err("main window not found".into());
     }
     if let Some(win) = app.get_webview_window("main") {
-        return win.minimize().map_err(|e| format!("minimize: {e}"));
+        let result = win.minimize().map_err(|e| format!("minimize: {e}"));
+        // D16: record the post-action state so the Windows repro shows whether
+        // the window is actually iconic and still has a taskbar button.
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+                tracing::info!(
+                    "[win-state] minimize: ok={} iconic={} visible={} taskbar_visible={}",
+                    result.is_ok(),
+                    IsIconic(hwnd).as_bool(),
+                    IsWindowVisible(hwnd).as_bool(),
+                    win.is_visible().unwrap_or(false)
+                );
+            }
+        }
+        return result;
     }
     let hwnd = main_hwnd(app)?;
     unsafe {
@@ -1846,11 +1867,26 @@ pub fn window_maximize_toggle_native(app: &AppHandle) -> Result<(), String> {
                 IsZoomed(hwnd).as_bool()
             })
             .unwrap_or_else(|_| win.is_maximized().unwrap_or(false));
-        if zoomed {
-            return win.unmaximize().map_err(|e| format!("unmaximize: {e}"));
+        let result = if zoomed {
+            win.unmaximize().map_err(|e| format!("unmaximize: {e}"))
         } else {
-            return win.maximize().map_err(|e| format!("maximize: {e}"));
+            win.maximize().map_err(|e| format!("maximize: {e}"))
+        };
+        // D16: log the post-toggle state so "maximize broken" repros show the
+        // realized geometry state, not just the API result.
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsZoomed};
+                tracing::info!(
+                    "[win-state] maximize-toggle: was_zoomed={} ok={} now_zoomed={} iconic={}",
+                    zoomed,
+                    result.is_ok(),
+                    IsZoomed(hwnd).as_bool(),
+                    IsIconic(hwnd).as_bool()
+                );
+            }
         }
+        return result;
     }
     let hwnd = main_hwnd(app)?;
     unsafe {
