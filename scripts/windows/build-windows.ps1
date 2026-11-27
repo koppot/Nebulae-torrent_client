@@ -32,12 +32,8 @@ param(
     # checkout, measured writable on Supermicro: Authenticated Users Modify).
     [string]$CargoHome = "",
     # Optional: the accepted baseline installer (e.g. the corrected v0.2.8
-    # setup). When given, the payload is compared against the freshly built
-    # candidate's payload by scripts\windows\verify-baseline.ps1 after
-    # packaging; every difference must be classified in
-    # scripts\baseline-allow\windows.tsv. Without it the gate is NOT RUN and
-    # the build output says so — the release checklist keeps the candidate
-    # blocked until the comparison is run.
+    # setup). This script does NOT run the baseline gate itself; pass the
+    # same path to scripts\windows\verify-package.ps1 after packaging.
     [string]$BaselineSetup = ""
 )
 
@@ -310,15 +306,15 @@ Write-Host "==> Compile gates passed (cargo check, cargo clippy, frontend typech
 # (with NEBULAE_REQUIRE_PATCHED_DAEMON=1), VLC runtime staged with
 # scripts/windows/stage_runtime.py, then the tauri build.
 $pnpmStr = ($pnpmCmd -join ' ')
-Write-Host "==> All gates passed for $CommitSha. Packaging: stage the VLC runtime with scripts/windows/stage_runtime.py, run the daemon bundle step (NEBULAE_REQUIRE_PATCHED_DAEMON=1), then: $pnpmStr tauri build --bundles nsis. Record installer name, size, SHA-256 and gate results to Notion."
+Write-Host "==> Build-time gates passed for $CommitSha. This does NOT verify any installer. Packaging: stage the VLC runtime with scripts/windows/stage_runtime.py (with --frozen-daemon), run the daemon bundle step, then: $pnpmStr tauri build --bundles nsis."
 
-# --- 7. Baseline-diff gate (optional until a candidate installer exists) ---
-# Run AFTER packaging once the candidate setup.exe exists:
-#   powershell -File scripts\windows\verify-baseline.ps1 `
-#       -BaselineSetup <accepted baseline> -CandidateSetup <new setup>
-if ([string]::IsNullOrWhiteSpace($BaselineSetup)) {
-    Write-Host "==> baseline-diff gate: NOT RUN (no -BaselineSetup given; the release checklist keeps the candidate blocked until scripts\windows\verify-baseline.ps1 passes)"
-} else {
-    Write-Host "==> baseline-diff gate: run AFTER packaging, then the gate must pass before delivery:"
-    Write-Host "    powershell -File scripts\windows\verify-baseline.ps1 -BaselineSetup `"$BaselineSetup`" -CandidateSetup <new setup.exe>"
-}
+# --- 7. Packaging gates: NOT RUN by this script; run verify-package.ps1 ---
+# After the installer exists, ONE command runs every packaging gate
+# (verify_installer.py incl. the JRE 21.0.13+9 / 315-file identity,
+# verify-clean-build.ps1, verify-baseline.ps1) and exits non-zero on any
+# failure. The candidate is NOT VERIFIED until it passes:
+#   powershell -File scripts\windows\verify-package.ps1 `
+#       -Installer <new setup.exe> `
+#       -BuiltExe src-tauri\target\release\nebulae.exe `
+#       -BaselineSetup <accepted baseline setup.exe>
+Write-Host "==> NOT VERIFIED until verify-package.ps1 passes (installer payload, JRE identity, clean provenance, baseline diff)."
