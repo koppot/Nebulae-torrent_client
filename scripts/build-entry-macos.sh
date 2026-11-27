@@ -25,13 +25,14 @@
 # (tauri.conf.json stays unmodified). It never creates or imports a key.
 set -euo pipefail
 
-COMMIT=""; VERSION=""; TARGET="aarch64-apple-darwin"; OUT=""
+COMMIT=""; VERSION=""; TARGET="aarch64-apple-darwin"; OUT=""; SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --commit) COMMIT="$2"; shift 2 ;;
         --version) VERSION="$2"; shift 2 ;;
         --target) TARGET="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
+        --sign-identity) SIGN_IDENTITY="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -163,6 +164,27 @@ if ! ./scripts/verify-macos-app.sh "$APP_DIR"; then
     echo "WARNING: verify-macos-app.sh reported findings on the x86_64 leg (reported, not fatal, as in release.yml)"
 fi
 
+# --- 6d. Optional signing (default: unsigned) --------------------------------
+# --sign-identity "<name>" (or env APPLE_SIGNING_IDENTITY) seals the app
+# inside-out with scripts/sign-macos-app.sh, using the identity already in
+# the user's keychain. No identity or secret lives in the repo. The previous
+# delivered candidate was signed with an Apple Development certificate
+# (fingerprint E3A26A990308798F8DE4B7C49A3E27BFEF192623, team 2YJ32CEY87);
+# a PUBLIC release additionally needs a Developer ID certificate and
+# notarization — neither is available here, and this script does neither.
+if [ -n "$SIGN_IDENTITY" ]; then
+    command -v codesign >/dev/null 2>&1 || { echo "REFUSED: codesign not found" >&2; exit 1; }
+    ./scripts/sign-macos-app.sh "$APP_DIR" "$SIGN_IDENTITY"
+    # Verify AFTER signing and BEFORE the dmg is packaged (twice: script
+    # internal check above, and the strict check here).
+    codesign --verify --deep --strict "$APP_DIR" || { echo "FAIL: codesign --verify --deep --strict after signing" >&2; exit 1; }
+    echo "==> Signed with '$SIGN_IDENTITY' and verified (deep, strict)."
+    if ! ./scripts/verify-macos-app.sh "$APP_DIR"; then
+        if [ "$TARGET" = "aarch64-apple-darwin" ]; then echo "FAIL: verify-macos-app.sh after signing" >&2; exit 1; fi
+        echo "WARNING: verify-macos-app.sh reported findings after signing on the x86_64 leg (reported, not fatal)"
+    fi
+fi
+
 # --- 7. DMG + app zip (release.yml "Prepare and upload named artifact") ----
 mkdir -p "$OUT"
 TAURI_DMG=$(find "src-tauri/target/$TARGET" -name "*.dmg" -type f | head -n 1)
@@ -202,5 +224,10 @@ echo "app zip: $OUT/$DMG_NAME-app.zip"
 echo "commit: $HEAD_SHA  target: $TARGET  version: $VERSION"
 echo "jre: Temurin 21.0.13+9 (pinned, scripts/jre-pins.json key $JRE_KEY)"
 echo "dmg root gate: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png, .VolumeIcon.icns (package-macos-dmg.sh verified all of these on the final image)"
+if [ -n "$SIGN_IDENTITY" ]; then
+echo "signing: identity '$SIGN_IDENTITY' (codesign --verify --deep --strict passed before packaging)"
+else
+echo "signing: UNSIGNED (pass --sign-identity or set APPLE_SIGNING_IDENTITY to seal)"
+fi
 } | tee "$OUT/BUILD-RECORD.txt"
 echo "Record installer name, size, SHA-256, gate results and duration on the Task 5 report page."
