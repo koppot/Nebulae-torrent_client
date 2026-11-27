@@ -16,11 +16,54 @@ on:
         description: 'Exact source SHA/ref to build (the agreed candidate)'
         required: true
         type: string
+      legs:
+        description: 'Comma-separated legs to build: linux, macos-arm64, macos-x64, windows'
+        required: false
+        type: string
+        default: 'linux'
 
 jobs:
-  build-candidate:
+  # Selects the legs named in the "legs" input (default: linux only), so a
+  # dispatch builds exactly what the owner asked for.
+  plan:
+    runs-on: ubuntu-22.04
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        shell: bash
+        env:
+          LEGS: ${{ github.event.inputs.legs }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+          all_legs = {
+              "linux": {"platform": "ubuntu-22.04", "target": "x86_64-unknown-linux-gnu", "args": "",
+                        "artifact_name": "Nebulae-Linux-x86_64", "jre_key": "linux-x64"},
+              "macos-arm64": {"platform": "macos-latest", "target": "aarch64-apple-darwin",
+                              "args": "--target aarch64-apple-darwin",
+                              "artifact_name": "Nebulae-macOS-arm64.dmg", "jre_key": "mac-aarch64"},
+              "macos-x64": {"platform": "macos-latest", "target": "x86_64-apple-darwin",
+                            "args": "--target x86_64-apple-darwin",
+                            "artifact_name": "Nebulae-macOS-x64.dmg", "jre_key": "mac-x64"},
+              "windows": {"platform": "windows-latest", "target": "x86_64-pc-windows-msvc", "args": "",
+                          "artifact_name": "Nebulae-Setup-x64.exe", "jre_key": "windows-x64"},
+          }
+          wanted = [x.strip() for x in (os.environ.get("LEGS") or "linux").split(",") if x.strip()]
+          unknown = [x for x in wanted if x not in all_legs]
+          if unknown or not wanted:
+              sys.exit("unknown or empty legs %r (known: %s)" % (unknown or wanted, ", ".join(all_legs)))
+          print("matrix=" + json.dumps({"include": [all_legs[x] for x in wanted]}))
+          PY
+
+  build-candidate:
+    needs: plan
+    # Build only: this job never creates a release or a tag and never touches
+    # latest.json or an updater asset, so it needs read access only.
+    permissions:
+      contents: read
     env:
       WINDOWS_SIGN_PROVIDER: ${{ vars.WINDOWS_SIGN_PROVIDER }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -32,24 +75,7 @@ jobs:
       CANDIDATE_REF: ${{ github.event.inputs.ref }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: 'ubuntu-22.04'
-            target: 'x86_64-unknown-linux-gnu'
-            args: ''
-            artifact_name: 'Nebulae-Linux-x86_64'
-          - platform: 'macos-latest'
-            target: 'aarch64-apple-darwin'
-            args: '--target aarch64-apple-darwin'
-            artifact_name: 'Nebulae-macOS-arm64.dmg'
-          - platform: 'macos-latest'
-            target: 'x86_64-apple-darwin'
-            args: '--target x86_64-apple-darwin'
-            artifact_name: 'Nebulae-macOS-x64.dmg'
-          - platform: 'windows-latest'
-            target: 'x86_64-pc-windows-msvc'
-            args: ''
-            artifact_name: 'Nebulae-Setup-x64.exe'
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -190,31 +216,12 @@ jobs:
           ./scripts/bundle-macos-vlc.sh "${{ matrix.target }}"
           ls src-tauri/resources/vlc
 
-      - name: Bundle JRE (BD-J/UHD menus)
+      # Pinned Temurin 21.0.13+9 (size + SHA-256 in scripts/jre-pins.json), the
+      # same JRE the Windows kit ships. A download that does not match fails the
+      # job; there is no "latest" fallback.
+      - name: Bundle JRE (BD-J/UHD menus, pinned Temurin 21.0.13+9)
         shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then OS=windows; EXT=zip; else OS=linux; EXT=tar.gz; [ "$RUNNER_OS" = "macOS" ] && OS=mac || true; fi
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then A=aarch64; else A=x64; fi
-          else
-            A=x64
-          fi
-          curl -fL -o jre.$EXT "https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$A/jre/hotspot/normal/eclipse"
-          mkdir -p jrex src-tauri/resources/jre
-          if [ "$EXT" = "zip" ]; then
-            unzip -q jre.$EXT -d jrex || tar xf jre.$EXT -C jrex
-          else
-            tar xzf jre.$EXT -C jrex
-          fi
-          HOME_DIR=$(find jrex -type d -name Home -path '*Contents*' | head -1 || true)
-          if [ -z "$HOME_DIR" ]; then
-            BIN_DIR=$(find jrex -type d -name bin | head -1)
-            HOME_DIR=$(dirname "$BIN_DIR")
-          fi
-          cp -a "$HOME_DIR"/. src-tauri/resources/jre/
-          chmod -R u+rwX,go+rX src-tauri/resources/jre || true
-          test -e src-tauri/resources/jre/bin/java || { echo "JRE staging failed"; find jrex | head -20; exit 1; }
-          ls src-tauri/resources/jre/bin | head -3
+        run: ./scripts/bundle-jre.sh "${{ matrix.jre_key }}"
 
       - name: Setup Go (macOS builds tailscale from source tag)
         if: runner.os == 'macOS'
