@@ -52,6 +52,11 @@ pub struct VlcLib {
     pub libvlc_media_player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     pub libvlc_media_player_set_time: unsafe extern "C" fn(*mut c_void, i64),
     pub libvlc_media_player_set_position: unsafe extern "C" fn(*mut c_void, f32),
+    /// Playback position as a fraction (0.0–1.0) of the current item. Used by
+    /// the poll timing fallback to derive a plausible time on discs whose
+    /// dvdnav time reports jump or go negative. Optional: kept Option so an
+    /// unexpectedly old runtime still loads.
+    pub libvlc_media_player_get_position: Option<unsafe extern "C" fn(*mut c_void) -> f32>,
     pub libvlc_media_player_get_length: unsafe extern "C" fn(*mut c_void) -> i64,
     // DVD/Blu-ray navigation: titles map to disc features, title 0 is the
     // menu domain on DVD (dvdnav); chapters are per-title.
@@ -576,6 +581,68 @@ pub unsafe fn snapshot_titles(lib: &VlcLib, mp: usize) -> Option<(Vec<TitleSnaps
     }
     (lib.libvlc_title_descriptions_release)(titles, n);
     Some((out, current))
+}
+
+/// Which path `resolve_poll_timing` used for the reported time/length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollTimingSource {
+    /// libvlc's own get_time/get_length, unchanged.
+    Direct,
+    /// get_length reported 0 on a real title; the title snapshot's duration
+    /// for that title is reported instead.
+    TitleDurationFallback,
+    /// The time report was implausible (negative or beyond the length) and
+    /// was derived from the playback position fraction instead.
+    PositionFractionFallback,
+}
+
+/// Resolve poll timing for discs that misreport length or time.
+///
+/// Glass Fleet (2006) D1 ISO: `libvlc_media_player_get_length` reads 0 for
+/// the whole feature while the title list carries the correct 7,213,066 ms
+/// duration, and dvdnav's time reports can jump or go negative (broken VOB
+/// PTS). This is a strictly-when-broken fallback: discs that report normally
+/// are untouched.
+///
+/// - length == 0 on a real title (> 0) and the snapshot's CURRENT title
+///   matches: report that title's duration as the length.
+/// - with a usable length (> 0), a negative time or a time beyond
+///   length + 1 s is garbage: derive time = position * length when a
+///   position fraction in (0, 1] is available.
+pub(crate) fn resolve_poll_timing(
+    time_ms: i64,
+    length_ms: i64,
+    title: i32,
+    snapshot: Option<(&[TitleSnapshot], i32)>,
+    position: Option<f32>,
+) -> (i64, i64, PollTimingSource) {
+    let mut length = length_ms;
+    let mut time = time_ms;
+    let mut source = PollTimingSource::Direct;
+
+    if length == 0 && title > 0 {
+        if let Some((titles, current)) = snapshot {
+            if current == title {
+                if let Some(t) = titles.get(title as usize) {
+                    if t.duration_ms > 0 {
+                        length = t.duration_ms;
+                        source = PollTimingSource::TitleDurationFallback;
+                    }
+                }
+            }
+        }
+    }
+
+    if length > 0 && (time < 0 || time > length + 1000) {
+        if let Some(p) = position {
+            if p > 0.0 && p <= 1.0 {
+                time = (p * length as f32) as i64;
+                source = PollTimingSource::PositionFractionFallback;
+            }
+        }
+    }
+
+    (time, length, source)
 }
 
 /// Classify the player's current title. `Unknown` when libvlc has no list.
@@ -1252,6 +1319,7 @@ impl VlcLib {
             libvlc_media_player_get_time: sym!("libvlc_media_player_get_time": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_set_time: sym!("libvlc_media_player_set_time": unsafe extern "C" fn(*mut c_void, i64)),
             libvlc_media_player_set_position: sym!("libvlc_media_player_set_position": unsafe extern "C" fn(*mut c_void, f32)),
+            libvlc_media_player_get_position: sym_opt!("libvlc_media_player_get_position": unsafe extern "C" fn(*mut c_void) -> f32),
             libvlc_media_player_get_length: sym!("libvlc_media_player_get_length": unsafe extern "C" fn(*mut c_void) -> i64),
             libvlc_media_player_get_title_count: sym!("libvlc_media_player_get_title_count": unsafe extern "C" fn(*mut c_void) -> c_int),
             libvlc_media_player_get_title: sym!("libvlc_media_player_get_title": unsafe extern "C" fn(*mut c_void) -> c_int),
@@ -1862,6 +1930,91 @@ mod tests {
         let path = "/Volumes/Media/Fuuka (2017)/FUUKA_CS_D1";
         let encoded = encode_mrl_path(path);
         assert_eq!(encoded, "/Volumes/Media/Fuuka%20%282017%29/FUUKA_CS_D1");
+    }
+
+    // --- resolve_poll_timing: zero-length and time-jump fallbacks ----------
+
+    fn feature_titles() -> Vec<TitleSnapshot> {
+        vec![
+            snap(Some("Menu"), 0, 0),
+            snap(Some("Feature"), 0, 7_213_066),
+        ]
+    }
+
+    #[test]
+    fn poll_timing_direct_when_libvlc_reports_normally() {
+        let titles = feature_titles();
+        let (t, l, src) = resolve_poll_timing(82_000, 7_213_066, 1, Some((&titles, 1)), Some(0.01));
+        assert_eq!((t, l), (82_000, 7_213_066));
+        assert_eq!(src, PollTimingSource::Direct);
+    }
+
+    #[test]
+    fn poll_timing_falls_back_to_title_duration_on_zero_length() {
+        // Glass Fleet D1: get_length=0 for the whole feature, title list has
+        // the correct duration (measured 2026-11-27).
+        let titles = feature_titles();
+        let (t, l, src) = resolve_poll_timing(1_557_340, 0, 1, Some((&titles, 1)), None);
+        assert_eq!((t, l), (1_557_340, 7_213_066));
+        assert_eq!(src, PollTimingSource::TitleDurationFallback);
+    }
+
+    #[test]
+    fn poll_timing_zero_length_untouched_without_a_matching_snapshot() {
+        // Current title mismatch, missing snapshot entry, or zero duration:
+        // report libvlc's values as-is rather than inventing a length.
+        let titles = feature_titles();
+        let (t, l, src) = resolve_poll_timing(1_557_340, 0, 1, Some((&titles, 0)), None);
+        assert_eq!((t, l), (1_557_340, 0));
+        assert_eq!(src, PollTimingSource::Direct);
+
+        let empty: Vec<TitleSnapshot> = vec![];
+        let (_t, l, src) = resolve_poll_timing(1_557_340, 0, 1, Some((&empty, 1)), None);
+        assert_eq!(l, 0);
+        assert_eq!(src, PollTimingSource::Direct);
+
+        let zero = vec![snap(Some("Feature"), 0, 0)];
+        let (t, l, src) = resolve_poll_timing(1_557_340, 0, 0, Some((&zero, 0)), None);
+        assert_eq!((t, l), (1_557_340, 0));
+        assert_eq!(src, PollTimingSource::Direct);
+    }
+
+    #[test]
+    fn poll_timing_negative_time_is_derived_from_position_fraction() {
+        let titles = feature_titles();
+        // dvdnav jump: time went negative while the position fraction is sane.
+        let (t, l, src) = resolve_poll_timing(-1, 0, 1, Some((&titles, 1)), Some(0.25));
+        assert_eq!((t, l), (1_803_266, 7_213_066)); // 0.25 * 7_213_066 = 1,803,266.5 -> 1_803_266
+        assert_eq!(src, PollTimingSource::PositionFractionFallback);
+    }
+
+    #[test]
+    fn poll_timing_time_beyond_length_is_derived_from_position_fraction() {
+        let titles = feature_titles();
+        // dvdnav jump: time reported past the end of the feature.
+        let (t, l, src) =
+            resolve_poll_timing(9_000_000, 7_213_066, 1, Some((&titles, 1)), Some(0.5));
+        assert_eq!((t, l), (3_606_533, 7_213_066));
+        assert_eq!(src, PollTimingSource::PositionFractionFallback);
+    }
+
+    #[test]
+    fn poll_timing_keeps_garbage_time_when_no_position_is_available() {
+        // Without get_position (older runtime) the length fallback still
+        // applies; the time is reported as libvlc gave it rather than
+        // derived from nothing.
+        let titles = feature_titles();
+        let (t, l, src) = resolve_poll_timing(9_000_000, 0, 1, Some((&titles, 1)), None);
+        assert_eq!((t, l), (9_000_000, 7_213_066));
+        assert_eq!(src, PollTimingSource::TitleDurationFallback);
+    }
+
+    #[test]
+    fn poll_timing_ignores_out_of_range_position_fractions() {
+        let titles = feature_titles();
+        let (_t, l, src) = resolve_poll_timing(-1, 0, 1, Some((&titles, 1)), Some(1.5));
+        assert_eq!(src, PollTimingSource::TitleDurationFallback);
+        assert_eq!(l, 7_213_066);
     }
 
     fn snap(name: Option<&str>, flags: u32, duration_ms: i64) -> TitleSnapshot {

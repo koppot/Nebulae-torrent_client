@@ -136,6 +136,10 @@ pub struct PlayerState {
     pub framing: Mutex<FramingState>,
     /// Last poll transition state logged: (gen, title, at_menu, playing) for bounded diagnostics.
     pub last_logged_poll_state: Mutex<Option<(u64, i32, bool, bool)>>,
+    /// Last (session_gen, title) for which a poll length/time fallback was
+    /// logged, so the fallback diagnostic is logged once per title, not once
+    /// per second.
+    pub last_length_fallback_log: Mutex<Option<(u64, i32)>>,
     /// DVD title the viewer just asked for with the step-title control. The
     /// main-feature lock (`feature_lock`) takes it so that it follows the
     /// viewer instead of pulling playback back. Cleared with every session.

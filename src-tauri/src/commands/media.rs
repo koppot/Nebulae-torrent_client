@@ -776,6 +776,7 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     tracing::info!("[lifecycle-diag] stop_session: session_gen={gen} (session teardown)");
     // Reset poll diagnostic tracker for fresh session
     *poison(&state.last_logged_poll_state) = None;
+    *poison(&state.last_length_fallback_log) = None;
     *poison(&state.feature_lock_request) = None;
     // Reset casting state if an active cast was attached
     {
@@ -3366,6 +3367,44 @@ pub fn player_poll(
     framing_tick(app, &state, &lib, mp, title, at_menu, playing);
 
     let cur_gen = state.session_gen.load(std::sync::atomic::Ordering::SeqCst) as u64;
+
+    // Zero-length / time-jump fallback (Glass Fleet-class discs): when
+    // libvlc reports length 0 on a real title, report the title snapshot's
+    // duration instead; when the time report is garbage (negative or beyond
+    // the length), derive it from the position fraction. No-ops on discs
+    // that report normally.
+    let position_needed = time_ms < 0 || (length_ms > 0 && time_ms > length_ms + 1000);
+    let poll_snapshot = if (length_ms == 0 && title > 0) || position_needed {
+        unsafe { engine::snapshot_titles(&lib, mp) }
+    } else {
+        None
+    };
+    let position = if position_needed {
+        lib.libvlc_media_player_get_position
+            .map(|f| unsafe { f(mp as *mut c_void) })
+    } else {
+        None
+    };
+    let (time_ms, length_ms, timing_src) = engine::resolve_poll_timing(
+        time_ms,
+        length_ms,
+        title,
+        poll_snapshot.as_ref().map(|(t, c)| (t.as_slice(), *c)),
+        position,
+    );
+    if timing_src != engine::PollTimingSource::Direct {
+        let mut guard = match state.last_length_fallback_log.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if *guard != Some((cur_gen, title)) {
+            *guard = Some((cur_gen, title));
+            tracing::info!(
+                "[poll-timing] session_gen={cur_gen} title={title}: {timing_src:?} fallback engaged — time_ms={time_ms} length_ms={length_ms} (raw time/length misreported by this disc)"
+            );
+        }
+    }
+
     let should_log_poll = {
         let mut guard = match state.last_logged_poll_state.lock() {
             Ok(g) => g,
