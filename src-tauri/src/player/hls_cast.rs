@@ -13,8 +13,11 @@
 //! here from the video PTS actually present in each segment, and the LAN
 //! server serves that playlist plus the segment files.
 //!
-//! The server is deliberately tiny: GET/HEAD only, two path shapes
-//! (`/index.m3u8` and `/seg-<8 digits>.ts`), peers must be private/loopback
+//! The server is deliberately tiny: GET/HEAD only, two path shapes under a
+//! per-session random token (`/<token>/index.m3u8` and
+//! `/<token>/seg-<8 digits>.ts`; the token is compared in constant time and
+//! no CORS header is sent: AVPlayer and the other native HLS clients do not
+//! use CORS, and nothing in this app fetches the stream from a web page), peers must be private/loopback
 //! addresses, bound to one interface (not 0.0.0.0), stopped by `stop()`
 //! (called when the player session ends or the app exits).
 use std::collections::HashMap;
@@ -47,6 +50,22 @@ pub fn build_sout_chain(dir: &Path) -> Result<String, String> {
 acodec=mp4a,ab=192,channels=2,samplerate=44100}}:std{{access=livehttp{{seglen={TARGET_SEGMENT_S},delsegs=false,numsegs=0,\
 index=\"{d}/vlc-index.m3u8\",index-url=seg-########.ts}},mux=ts{{use-key-frames}},dst=\"{d}/seg-########.ts\"}}"
     ))
+}
+
+/// 128 random bits as 32 hex chars (a v4 UUID carries 122).
+fn new_token() -> String {
+    let a = uuid::Uuid::new_v4().as_u128();
+    let b = uuid::Uuid::new_v4().as_u128();
+    format!("{:032x}", a ^ b.rotate_left(61))
+}
+
+/// Compare without stopping at the first differing byte.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
 }
 
 /// `seg-` + 8 digits + `.ts` and nothing else.
@@ -281,6 +300,7 @@ struct Shared {
     cache: Mutex<HashMap<String, Option<PtsInfo>>>,
     stop: AtomicBool,
     active: AtomicUsize,
+    token: String,
     max_bytes: u64,
     on_limit: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     limit_hit: AtomicBool,
@@ -502,6 +522,7 @@ impl LanServer {
             cache: Mutex::new(HashMap::new()),
             stop: AtomicBool::new(false),
             active: AtomicUsize::new(0),
+            token: new_token(),
             max_bytes,
             on_limit: Mutex::new(Some(on_limit)),
             limit_hit: AtomicBool::new(false),
@@ -536,7 +557,16 @@ impl LanServer {
     }
 
     pub fn playlist_url(&self, host: &str) -> String {
-        format!("http://{host}:{}/{PLAYLIST_NAME}", self.addr.port())
+        format!(
+            "http://{host}:{}/{}/{PLAYLIST_NAME}",
+            self.addr.port(),
+            self.shared.token
+        )
+    }
+
+    /// The per-session secret that prefixes every served path.
+    pub fn token(&self) -> &str {
+        &self.shared.token
     }
 
     /// True once the scratch-disk limit stopped the encoder.
@@ -614,7 +644,7 @@ fn respond(
 ) -> std::io::Result<()> {
     write!(
         s,
-        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{extra}\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
         body.len()
     )?;
     if !head {
@@ -693,7 +723,12 @@ fn handle(mut s: TcpStream, sh: &Shared) -> std::io::Result<()> {
         );
     }
     let path = target.split(['?', '#']).next().unwrap_or("");
-    let name = path.strip_prefix('/').unwrap_or("");
+    // Every path is /<token>/<name>; anything else (wrong or missing token
+    // included) gets the same 404 as an unknown file.
+    let name = match path.strip_prefix('/').and_then(|p| p.split_once('/')) {
+        Some((tok, name)) if ct_eq(tok.as_bytes(), sh.token.as_bytes()) => name,
+        _ => return respond(&mut s, "404 Not Found", "text/plain", "", head, b""),
+    };
     if name == PLAYLIST_NAME {
         let body = sh.playlist();
         return respond(
@@ -734,7 +769,7 @@ fn handle(mut s: TcpStream, sh: &Shared) -> std::io::Result<()> {
     f.seek(SeekFrom::Start(start))?;
     write!(
         s,
-        "HTTP/1.1 {status}\r\nContent-Type: video/mp2t\r\nContent-Length: {n}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{extra}\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: video/mp2t\r\nContent-Length: {n}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n{extra}\r\n"
     )?;
     if !head {
         let mut left = n;
@@ -802,6 +837,11 @@ mod tests {
         let head = String::from_utf8_lossy(&all[..split]).into_owned();
         let body = all.get(split + 4..).unwrap_or(&[]).to_vec();
         (head, body)
+    }
+
+    /// `@T` in the request stands for this server's token.
+    fn tget(srv: &LanServer, req: &str) -> (String, Vec<u8>) {
+        get(srv.addr, &req.replace("@T", srv.token()))
     }
 
     fn tmpdir(tag: &str) -> PathBuf {
@@ -957,7 +997,7 @@ mod tests {
         );
         let a = srv.addr;
 
-        let (h, body) = get(a, "GET /index.m3u8 HTTP/1.1\r\nHost: x\r\n\r\n");
+        let (h, body) = tget(&srv, "GET /@T/index.m3u8 HTTP/1.1\r\nHost: x\r\n\r\n");
         let pl = String::from_utf8(body).unwrap();
         assert!(
             h.starts_with("HTTP/1.1 200") && h.contains("application/vnd.apple.mpegurl"),
@@ -972,16 +1012,16 @@ mod tests {
             "{pl}"
         );
 
-        let (h, body) = get(a, "GET /seg-00000001.ts HTTP/1.1\r\n\r\n");
+        let (h, body) = tget(&srv, "GET /@T/seg-00000001.ts HTTP/1.1\r\n\r\n");
         assert!(
             h.starts_with("HTTP/1.1 200") && h.contains("video/mp2t"),
             "{h}"
         );
         assert_eq!(body, std::fs::read(dir.join("seg-00000001.ts")).unwrap());
 
-        let (h, body) = get(
-            a,
-            "GET /seg-00000001.ts HTTP/1.1\r\nRange: bytes=188-375\r\n\r\n",
+        let (h, body) = tget(
+            &srv,
+            "GET /@T/seg-00000001.ts HTTP/1.1\r\nRange: bytes=188-375\r\n\r\n",
         );
         assert!(
             h.starts_with("HTTP/1.1 206") && h.contains("Content-Range: bytes 188-375/752"),
@@ -989,25 +1029,25 @@ mod tests {
         );
         assert_eq!(body.len(), 188);
 
-        let (h, body) = get(a, "HEAD /seg-00000000.ts HTTP/1.1\r\n\r\n");
+        let (h, body) = tget(&srv, "HEAD /@T/seg-00000000.ts HTTP/1.1\r\n\r\n");
         assert!(h.starts_with("HTTP/1.1 200") && body.is_empty());
 
         for req in [
             "GET /../secret.txt HTTP/1.1\r\n\r\n",
             "GET /secret.txt HTTP/1.1\r\n\r\n",
             "GET /%2e%2e/secret.txt HTTP/1.1\r\n\r\n",
-            "GET /seg-00000000.ts/../secret.txt HTTP/1.1\r\n\r\n",
+            "GET /@T/seg-00000000.ts/../secret.txt HTTP/1.1\r\n\r\n",
             "GET //etc/passwd HTTP/1.1\r\n\r\n",
-            "GET /seg-00000009.ts HTTP/1.1\r\n\r\n",
+            "GET /@T/seg-00000009.ts HTTP/1.1\r\n\r\n",
         ] {
-            let (h, _) = get(a, req);
+            let (h, _) = tget(&srv, req);
             assert!(h.starts_with("HTTP/1.1 404"), "{req:?} -> {h}");
         }
-        let (h, _) = get(a, "POST /index.m3u8 HTTP/1.1\r\n\r\n");
+        let (h, _) = tget(&srv, "POST /index.m3u8 HTTP/1.1\r\n\r\n");
         assert!(h.starts_with("HTTP/1.1 405"), "{h}");
 
         ended.store(true, Ordering::SeqCst);
-        let (_, body) = get(a, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let (_, body) = tget(&srv, "GET /@T/index.m3u8 HTTP/1.1\r\n\r\n");
         let pl = String::from_utf8(body).unwrap();
         assert!(
             pl.contains("seg-00000002.ts") && pl.contains("#EXT-X-ENDLIST"),
@@ -1032,7 +1072,7 @@ mod tests {
         };
         let mut srv =
             LanServer::start(PathBuf::from(&dir), loopback(), 0, Box::new(|| true)).unwrap();
-        let (_, body) = get(srv.addr, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let (_, body) = tget(&srv, "GET /@T/index.m3u8 HTTP/1.1\r\n\r\n");
         let pl = String::from_utf8(body).unwrap();
         let durs: Vec<f64> = pl
             .lines()
@@ -1056,7 +1096,88 @@ mod tests {
             !durs.is_empty() && durs.iter().all(|d| *d > 0.0),
             "positive durations"
         );
+        // Every listed segment must come back byte-identical over HTTP with
+        // the token, and the same request without it must be refused.
+        let names: Vec<&str> = pl.lines().filter(|l| l.starts_with("seg-")).collect();
+        for n in &names {
+            let (h, body) = tget(&srv, &format!("GET /@T/{n} HTTP/1.1\r\n\r\n"));
+            assert!(h.starts_with("HTTP/1.1 200"), "{n}: {h}");
+            assert_eq!(body, std::fs::read(Path::new(&dir).join(n)).unwrap(), "{n}");
+        }
+        let (h, _) = get(srv.addr, "GET /seg-00000000.ts HTTP/1.1\r\n\r\n");
+        assert!(h.starts_with("HTTP/1.1 404"), "untokenized request: {h}");
+        println!(
+            "HLS_HTTP ok segments_fetched={} untokenized=404",
+            names.len()
+        );
         srv.stop();
+    }
+
+    #[test]
+    fn token_is_required_constant_time_and_no_cors_is_sent() {
+        let dir = tmpdir("token");
+        std::fs::write(dir.join("seg-00000000.ts"), make_ts(0, 4, 3003)).unwrap();
+        std::fs::write(dir.join("seg-00000001.ts"), make_ts(360_000, 4, 3003)).unwrap();
+        let mut srv = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| true)).unwrap();
+        let tok = srv.token().to_string();
+        assert_eq!(tok.len(), 32);
+        assert!(tok.bytes().all(|b| b.is_ascii_hexdigit()));
+        let other = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| true)).unwrap();
+        assert_ne!(tok, other.token(), "per-session");
+        assert!(srv
+            .playlist_url("192.168.1.5")
+            .contains(&format!("/{tok}/index.m3u8")));
+        let a = srv.addr;
+        let (h, _) = get(a, &format!("GET /{tok}/index.m3u8 HTTP/1.1\r\n\r\n"));
+        assert!(h.starts_with("HTTP/1.1 200"), "{h}");
+        assert!(
+            !h.to_ascii_lowercase().contains("access-control"),
+            "no CORS header: {h}"
+        );
+        let (h, _) = get(a, &format!("GET /{tok}/seg-00000000.ts HTTP/1.1\r\n\r\n"));
+        assert!(
+            h.starts_with("HTTP/1.1 200") && !h.to_ascii_lowercase().contains("access-control")
+        );
+        let wrong = format!("{}0", &tok[..31]);
+        for req in [
+            "GET /index.m3u8 HTTP/1.1\r\n\r\n".to_string(),
+            "GET /seg-00000000.ts HTTP/1.1\r\n\r\n".to_string(),
+            format!("GET /{wrong}/index.m3u8 HTTP/1.1\r\n\r\n"),
+            format!("GET /{wrong}/seg-00000000.ts HTTP/1.1\r\n\r\n"),
+            format!("GET /{}/index.m3u8 HTTP/1.1\r\n\r\n", &tok[..16]),
+            format!("GET /{tok}x/index.m3u8 HTTP/1.1\r\n\r\n"),
+            format!("GET /{}/index.m3u8 HTTP/1.1\r\n\r\n", tok.to_uppercase()),
+            format!("GET /{tok}/ HTTP/1.1\r\n\r\n"),
+            format!("GET /{tok} HTTP/1.1\r\n\r\n"),
+        ] {
+            let (h, b) = get(a, &req);
+            assert!(
+                h.starts_with("HTTP/1.1 404") && b.is_empty(),
+                "{req:?} -> {h}"
+            );
+        }
+        // A token from another session does not open this one.
+        let (h, _) = get(
+            a,
+            &format!("GET /{}/index.m3u8 HTTP/1.1\r\n\r\n", other.token()),
+        );
+        assert!(h.starts_with("HTTP/1.1 404"), "{h}");
+        let (h, _) = get(a, &format!("POST /{tok}/index.m3u8 HTTP/1.1\r\n\r\n"));
+        assert!(h.starts_with("HTTP/1.1 405"), "{h}");
+        let (h, _) = get(a, &format!("OPTIONS /{tok}/index.m3u8 HTTP/1.1\r\n\r\n"));
+        assert!(h.starts_with("HTTP/1.1 405"), "no CORS preflight: {h}");
+        srv.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ct_eq_compares_whole_values() {
+        assert!(ct_eq(b"abc", b"abc"));
+        assert!(ct_eq(b"", b""));
+        assert!(!ct_eq(b"abc", b"abd"));
+        assert!(!ct_eq(b"abc", b"ab"));
+        assert!(!ct_eq(b"ab", b"abc"));
+        assert!(!ct_eq(b"", b"a"));
     }
 
     #[test]
@@ -1076,7 +1197,7 @@ mod tests {
         ts(3, 12 * 90_000);
         ts(4, 16 * 90_000);
         let mut srv = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| true)).unwrap();
-        let (_, body) = get(srv.addr, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let (_, body) = tget(&srv, "GET /@T/index.m3u8 HTTP/1.1\r\n\r\n");
         let pl = String::from_utf8(body).unwrap();
         assert!(!pl.contains("seg-00000001.ts"), "{pl}");
         for n in [
@@ -1163,7 +1284,7 @@ mod tests {
         assert!(srv.limit_hit());
         std::thread::sleep(Duration::from_millis(2300));
         assert_eq!(calls.load(Ordering::SeqCst), 1, "stop callback runs once");
-        let (_, body) = get(srv.addr, "GET /index.m3u8 HTTP/1.1\r\n\r\n");
+        let (_, body) = tget(&srv, "GET /@T/index.m3u8 HTTP/1.1\r\n\r\n");
         let pl = String::from_utf8(body).unwrap();
         assert!(
             pl.contains("#EXT-X-ENDLIST") && pl.contains("scratch-disk limit"),
@@ -1232,7 +1353,7 @@ mod tests {
         std::fs::write(dir.join("target.bin"), "secret").unwrap();
         std::os::unix::fs::symlink(dir.join("target.bin"), dir.join("seg-00000000.ts")).unwrap();
         let mut srv = LanServer::start(dir.clone(), loopback(), 0, Box::new(|| false)).unwrap();
-        let (h, _) = get(srv.addr, "GET /seg-00000000.ts HTTP/1.1\r\n\r\n");
+        let (h, _) = tget(&srv, "GET /@T/seg-00000000.ts HTTP/1.1\r\n\r\n");
         assert!(h.starts_with("HTTP/1.1 404"), "{h}");
         srv.stop();
         let _ = std::fs::remove_dir_all(&dir);

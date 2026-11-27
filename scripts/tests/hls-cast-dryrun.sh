@@ -39,8 +39,13 @@ echo "==> VLC wrote $NSEG segments ($ZERO zero-byte); VLC's own index durations 
 grep EXTINF "$OUT/vlc-index.m3u8" | sed 's/#EXTINF://; s/,//' | awk '{n++; if($1<0)neg++; s+=$1} END{printf "    entries=%d negative=%d sum=%.1fs\n", n, neg+0, s}'
 [ "$ZERO" = 0 ] || { echo "FAIL: zero-byte segments after a clean exit" >&2; exit 1; }
 
-LINE=$(cd "$ROOT/src-tauri" && NEBULAE_HLS_DIR="$OUT" "$CARGO" test --lib real_segment_dir -- --ignored --nocapture 2>&1 | grep HLS_REAL)
+TEST_OUT=$(cd "$ROOT/src-tauri" && NEBULAE_HLS_DIR="$OUT" "$CARGO" test --lib real_segment_dir -- --ignored --nocapture 2>&1)
+LINE=$(echo "$TEST_OUT" | grep HLS_REAL)
 echo "==> $LINE"
+# The served URLs carry a per-session token; the test fetched every segment
+# over HTTP with it (byte-identical) and checked that no token gets a 404.
+HTTP_LINE=$(echo "$TEST_OUT" | grep '^HLS_HTTP ok') || { echo "FAIL: tokenized HTTP check did not pass" >&2; echo "$TEST_OUT" | tail -20 >&2; exit 1; }
+echo "==> $HTTP_LINE"
 SUM=$(echo "$LINE" | sed 's/.*total_s=\([0-9.]*\).*/\1/')
 DEC=$(cd "$OUT" && ffmpeg -v error -allowed_extensions ALL -i served.m3u8 -f null - -stats 2>&1 | tr '\r' '\n' | grep -o 'time=[0-9:.]*' | tail -1 | sed 's/time=//')
 echo "==> ffmpeg decoded the served playlist to $DEC (playlist sum ${SUM}s)"
