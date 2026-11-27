@@ -791,12 +791,12 @@ mod windows_impl {
         // Upper line: Upload rate in vibrant Warm Amber/Orange (BGR 0x0032AAFF = RGB 255, 170, 50)
         let _ = SetTextColor(mem_dc, COLORREF(0x0032AAFF));
         let up_wide: Vec<u16> = up_line.encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x, layout.up_y, &up_wide);
+        let _ = TextOutW(mem_dc, text_x, up_y, &up_wide);
 
         // Lower line: Download rate in vibrant Aqua/Cyan (BGR 0x00FFDC3C = RGB 60, 220, 255)
         let _ = SetTextColor(mem_dc, COLORREF(0x00FFDC3C));
         let down_wide: Vec<u16> = down_line.encode_utf16().collect();
-        let _ = TextOutW(mem_dc, text_x, layout.down_y, &down_wide);
+        let _ = TextOutW(mem_dc, text_x, down_y, &down_wide);
 
         let _ = GdiFlush();
 
