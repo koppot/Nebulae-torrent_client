@@ -2902,6 +2902,35 @@ export default function PlayerOverlay() {
                         </div>
                       )}
 
+                      {/* Experimental: libvlc renderer cast of the current file.
+                          It transcodes, so it is separate from the no-conversion
+                          path above and labelled as such. */}
+                      <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 space-y-2 text-xs">
+                        <div className="text-white/90">
+                          <span className="font-semibold text-yellow-400">Experimental cast:</span>{' '}
+                          libvlc transcodes this file and sends it to the receiver. Local playback is paused. The receiver may refuse or stall; errors are shown here.
+                        </div>
+                        {discRestreamError ? <div className="text-red-400">{discRestreamError}</div> : null}
+                        {discRestream && discCastChannel === 'renderer' ? (
+                          <button
+                            type="button"
+                            onClick={() => void stopDiscRestream()}
+                            className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition"
+                          >
+                            Stop casting
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={discCastLoading !== null}
+                            onClick={() => void startCastRenderer(selectedDevice)}
+                            className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
+                          >
+                            {discCastLoading === selectedDevice.id ? 'Starting…' : 'Cast (experimental)'}
+                          </button>
+                        )}
+                      </div>
+
                       {/* Action buttons */}
                       <div className="flex justify-end gap-2 pt-2">
                         <button
