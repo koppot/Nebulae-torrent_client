@@ -80,3 +80,20 @@ python scripts\windows\verify_installer.py --installer $Installer --manifest "$S
 ```
 Required exit code 0. Never edit expected-values.json to make a row pass.
 
+## Allowed downloads, and what is not allowed
+
+Allowed (all hash-gated or fetched by the pinned tool; none of them is an install of software on the machine):
+- the Temurin 21.0.13+9 JRE zip into C:\nebulae-cache by fetch_inputs.py (size and SHA-256 pinned in inputs.lock.json);
+- project JavaScript dependencies by pnpm from the frozen lockfile (integrity hashes in pnpm-lock.yaml);
+- the WebView2 offline installer file and the NSIS tool, fetched by the Tauri bundler during `tauri build` (the NSIS tool is already cached; the WebView2 file is only packaged into the installer, never run);
+- Rust crates from the lockfile into C:\nebulae-build-029\cargo-home.
+Not allowed without the user's approval: installing or updating any program (including `npm install -g pnpm`, rustup toolchains, Chocolatey packages), Windows Defender exclusions, registry changes, creating or changing services, scheduled tasks, firewall rules, or environment variables outside the PowerShell session. `scripts\bundle-windows-transmission.ps1` adds a Defender exclusion and must NOT be run.
+
+## Not rehearsed
+
+Rehearsed on macOS (measured): `fetch_inputs.py`, `stage_runtime.py` with the flags in step 5, the PE audit and `verify_installer.py` on the staged tree, the kit unit tests.
+NOT rehearsed anywhere: the robocopy step, `build-windows.ps1` on this exact checkout, `tauri build` and the WebView2 download, and `verify_installer.py --installer` on a freshly built installer. The first failure may occur in one of those steps. Report it with the full output and stop; do not fix it.
+
+## Note on command lines
+
+Each command above is complete as written. A "." at the end of a sentence in a prompt is punctuation, not an argument: `fetch_inputs.py` has no positional arguments and `... --skip-optional .` fails with "unrecognized arguments".
