@@ -174,5 +174,65 @@ class TestPowerShellTwin(unittest.TestCase):
         self.assertIn("PARSE_ERRORS=0", r.stdout, r.stdout + r.stderr)
 
 
+class TestTokenNeverOnArgv(unittest.TestCase):
+    """The GEO_ASSETS_TOKEN value must never appear in a git command line
+    (process lists) or in script output. A fake `git` earlier on PATH
+    records its argv; both fetch scripts must pass only the literal variable
+    name to the credential helper, expanded by the helper's sh at runtime."""
+
+    TOKEN = "dummy-token-DO-NOT-LEAK-0f3e"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.fakebin = Path(self.tmp.name) / "bin"
+        self.fakebin.mkdir()
+        (self.fakebin / "git").write_text(
+            "#!/bin/sh\n"
+            'printf "%s\\n" "$@" >> "$FAKE_GIT_LOG"\n'
+            "exit 0\n"
+        )
+        (self.fakebin / "git").chmod(0o755)
+        self.log = Path(self.tmp.name) / "argv.log"
+
+    def run_sh(self):
+        env = dict(os.environ,
+                   PATH=f"{self.fakebin}:{os.environ['PATH']}",
+                   GEO_ASSETS_TOKEN=self.TOKEN,
+                   FAKE_GIT_LOG=str(self.log))
+        env.pop("NEBULAE_GEO_ASSETS_DIR", None)
+        return subprocess.run(["bash", str(FETCH_SH), "--geo-dir", str(Path(self.tmp.name) / "out")],
+                              capture_output=True, text=True, env=env)
+
+    def run_ps1(self):
+        pwsh = "/opt/homebrew/bin/pwsh"
+        if not Path(pwsh).is_file():
+            self.skipTest("pwsh not available on this machine")
+        env = dict(os.environ,
+                   PATH=f"{self.fakebin}:{os.environ['PATH']}",
+                   GEO_ASSETS_TOKEN=self.TOKEN,
+                   FAKE_GIT_LOG=str(self.log))
+        env.pop("NEBULAE_GEO_ASSETS_DIR", None)
+        # pwsh on unix resolves `git` through PATH; the fake git logs argv.
+        script = f"& '{FETCH_PS1}' -GeoDir '{Path(self.tmp.name) / 'out-ps1'}'"
+        return subprocess.run([pwsh, "-NoProfile", "-Command", script],
+                              capture_output=True, text=True, env=env)
+
+    def assert_no_leak(self, r):
+        self.assertNotEqual(r.returncode, 0)  # fake HEAD never matches the pin
+        argv = self.log.read_text() if self.log.exists() else ""
+        self.assertIn("credential.helper", argv, "fake git saw no helper arg")
+        self.assertIn("$GEO_ASSETS_TOKEN", argv,
+                      "helper must carry the literal variable name, expanded by sh")
+        self.assertNotIn(self.TOKEN, argv, "TOKEN VALUE LEAKED INTO ARGV")
+        self.assertNotIn(self.TOKEN, r.stdout + r.stderr, "TOKEN VALUE LEAKED INTO OUTPUT")
+
+    def test_sh_token_never_on_argv(self):
+        self.assert_no_leak(self.run_sh())
+
+    def test_ps1_token_never_on_argv(self):
+        self.assert_no_leak(self.run_ps1())
+
+
 if __name__ == "__main__":
     unittest.main()

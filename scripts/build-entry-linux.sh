@@ -59,11 +59,18 @@ pnpm install --frozen-lockfile
 pnpm tauri build --bundles deb,rpm
 
 # The built binary must report a CLEAN source (build.rs stamps -clean/-dirty).
-BUILD_ID_IN_BIN=$(strings -a src-tauri/target/release/nebulae 2>/dev/null | grep -m1 -o '[0-9a-f]\{40\}-\(clean\|dirty\)' || true)
-case "$BUILD_ID_IN_BIN" in
-    *-clean) echo "==> Built provenance: $BUILD_ID_IN_BIN" ;;
-    *) echo "FAIL: the built Linux binary reports build_id '$BUILD_ID_IN_BIN' (expected <sha>-clean); not delivered" >&2; exit 1 ;;
-esac
+# Search for the EXPECTED full "<commit>-clean" id first; the generic
+# pattern is only a reporting fallback (a stale first match must not decide
+# the provenance check).
+BUILD_ID_IN_BIN=$(strings -a src-tauri/target/release/nebulae 2>/dev/null | grep -m1 -o "$HEAD_SHA-\(clean\|dirty\)" || true)
+if [ -z "$BUILD_ID_IN_BIN" ]; then
+    BUILD_ID_IN_BIN=$(strings -a src-tauri/target/release/nebulae 2>/dev/null | grep -m1 -o '[0-9a-f]\{40\}-\(clean\|dirty\)' || true)
+fi
+if [ "$BUILD_ID_IN_BIN" = "$HEAD_SHA-clean" ]; then
+    echo "==> Built provenance: $BUILD_ID_IN_BIN"
+else
+    echo "FAIL: the built Linux binary reports build_id '$BUILD_ID_IN_BIN' (expected $HEAD_SHA-clean); not delivered" >&2; exit 1
+fi
 [ -z "$(git status --porcelain)" ] || { echo "REFUSED: the worktree is dirty after the build:" >&2; git status --porcelain >&2; exit 1; }
 
 for f in src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/rpm/*.rpm; do

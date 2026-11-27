@@ -27,8 +27,15 @@ if (-not $found) {
     # strings.exe (Sysinternals) may be absent; fall back to a raw scan.
     $bytes = [System.IO.File]::ReadAllBytes($BuiltExe)
     $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-    $m = [regex]::Match($text, '([0-9a-f]{40})-(clean|dirty)')
-    if ($m.Success) { $found = $m.Groups[1].Value + "-" + $m.Groups[2].Value }
+    # Search for the EXPECTED full id first: a generic first match could be
+    # a stale string embedded by a dependency. The generic pattern is only a
+    # reporting fallback; the equality checks below still decide.
+    $m = [regex]::Match($text, [regex]::Escape($expected))
+    if ($m.Success) { $found = $expected }
+    else {
+        $m = [regex]::Match($text, '([0-9a-f]{40})-(clean|dirty)')
+        if ($m.Success) { $found = $m.Groups[1].Value + "-" + $m.Groups[2].Value }
+    }
 }
 if (-not $found) { throw "FAIL: could not read the embedded build_id from $BuiltExe" }
 

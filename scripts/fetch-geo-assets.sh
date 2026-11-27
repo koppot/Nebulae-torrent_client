@@ -63,12 +63,16 @@ else
     trap 'rm -rf "$TMP"' EXIT
     echo "==> Shallow-fetching $REPO at $COMMIT (temp clone, deleted afterwards)"
     if [ -n "${GEO_ASSETS_TOKEN:-}" ]; then
-        # Token goes to git via a credential helper only: it is never part of
-        # a URL, never printed, and the temp clone is deleted below.
+        # Token goes to git via a credential helper only. The helper string
+        # is passed SINGLE-QUOTED: argv carries the literal name
+        # $GEO_ASSETS_TOKEN, and the helper's sh expands it from the
+        # inherited environment at call time. The token value is therefore
+        # never part of a command line (invisible in process lists), never
+        # printed, and the temp clone is deleted below.
         git -C "$TMP" init -q
         git -C "$TMP" remote add origin "https://github.com/$REPO.git"
         GIT_TERMINAL_PROMPT=0 git -C "$TMP" \
-            -c 'credential.helper=!f() { echo "username=x-access-token"; echo "password='"$GEO_ASSETS_TOKEN"'"; }; f' \
+            -c 'credential.helper=!f() { echo "username=x-access-token"; echo "password=$GEO_ASSETS_TOKEN"; }; f' \
             fetch --depth 1 origin "$COMMIT" -q
         git -C "$TMP" checkout -q FETCH_HEAD
         SRC_DIR="$TMP"

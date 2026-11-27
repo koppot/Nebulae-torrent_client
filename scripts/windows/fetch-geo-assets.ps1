@@ -17,11 +17,14 @@
 # dirty. Installs nothing.
 [CmdletBinding()]
 param(
-    [string]$GeoDir = (Join-Path (Get-Location) "src-tauri\resources\geo")
+    [string]$GeoDir = ""
 )
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+# Default relative to the REPO ROOT, not the current directory: run from
+# anywhere, the databases always stage into this checkout's geo dir.
+if (-not $GeoDir) { $GeoDir = Join-Path $repoRoot "src-tauri\resources\geo" }
 $lockPath = Join-Path $PSScriptRoot "geo-assets.lock.json"
 if (-not (Test-Path $lockPath)) { $lockPath = Join-Path $repoRoot "scripts\geo-assets.lock.json" }
 $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
@@ -65,7 +68,12 @@ else {
             New-Item -ItemType Directory -Force -Path $tmp | Out-Null
             git -C $tmp init -q
             git -C $tmp remote add origin $url
-            $helper = "!f() { echo username=x-access-token; echo password=$env:GEO_ASSETS_TOKEN; }; f"
+            # SINGLE-quoted: argv carries the literal name $GEO_ASSETS_TOKEN
+            # and the helper's sh expands it from the inherited environment
+            # at call time, so the token value never appears in a command
+            # line (invisible in process lists), is never printed, and the
+            # temp clone is deleted below.
+            $helper = '!f() { echo username=x-access-token; echo "password=$GEO_ASSETS_TOKEN"; }; f'
             $env:GIT_TERMINAL_PROMPT = "0"
             git -C $tmp -c "credential.helper=$helper" fetch --depth 1 origin $lock.commit -q
             git -C $tmp checkout -q FETCH_HEAD
@@ -85,9 +93,12 @@ else {
                     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
                     git -C $tmp init -q
                     git -C $tmp remote add origin $url
-                    $helper = "!f() { echo username=x-access-token; echo password=$env:GEO_ASSETS_TOKEN; }; f"
+                    $helper = '!f() { echo username=x-access-token; echo "password=$GEO_ASSETS_TOKEN"; }; f'
                     git -C $tmp -c "credential.helper=$helper" fetch --depth 1 origin $lock.commit -q
                     git -C $tmp checkout -q FETCH_HEAD
+                    # Do not leave the token in the environment for later
+                    # build steps (cargo, tauri, child processes).
+                    Remove-Item Env:GEO_ASSETS_TOKEN -ErrorAction SilentlyContinue
                 }
             }
             if ($LASTEXITCODE -ne 0 -and -not (Test-Path (Join-Path $tmp ".git"))) { throw "REFUSED: could not clone $($lock.repo) (no stored credentials). Provide GEO_ASSETS_TOKEN or NEBULAE_GEO_ASSETS_DIR." }
