@@ -167,6 +167,18 @@ def check_vlc():
 
 def check_transmission():
     base = os.path.join(res, "engine", "transmission")
+    daemon = os.path.join(base, "transmission-daemon")
+    if os.path.isfile(daemon):
+        blob = open(daemon, "rb").read()
+        markers = [b"NEBULAE_INTEREST_KEEPALIVE", b"TRANSMISSION_PEER_ID_PREFIX",
+                   b"TRANSMISSION_PEER_ID_SUFFIX", b"TRANSMISSION_USER_AGENT"]
+        missing = [m.decode() for m in markers if m not in blob]
+        if missing:
+            problems.append("transmission-daemon is missing Nebulae patch markers: %s" % ", ".join(missing))
+        else:
+            print("Transmission daemon: all 4 Nebulae patch markers present")
+    else:
+        problems.append("engine/transmission/transmission-daemon is missing from the app")
     path = os.path.join(base, "bundled-libraries.json")
     if not os.path.isfile(path):
         print("note: no bundled-libraries.json for the Transmission daemon")
