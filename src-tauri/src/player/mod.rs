@@ -16,6 +16,7 @@ pub mod airplay_macos;
 pub mod device;
 pub mod disc_restream;
 pub mod engine;
+pub mod hls_cast;
 pub mod output;
 
 #[cfg(target_os = "macos")]
