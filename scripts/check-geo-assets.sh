@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 GEO_DIR="$REPO_ROOT/src-tauri/resources/geo"
-if [ "$1" = "--dir" ] && [ -n "${2:-}" ]; then GEO_DIR="$2"; shift 2; fi
+if [ "${1:-}" = "--dir" ] && [ -n "${2:-}" ]; then GEO_DIR="$2"; shift 2; fi
 [ -d "$GEO_DIR" ] || { echo "REFUSED (geo): directory $GEO_DIR does not exist" >&2; exit 1; }
 
 python3 - "$GEO_DIR" "$SCRIPT_DIR/geo-assets.lock.json" <<'EOF'

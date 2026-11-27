@@ -55,6 +55,13 @@ class TestCheckGate(unittest.TestCase):
         return subprocess.run(["bash", str(CHECK_SH), "--dir", str(geo_dir)],
                               capture_output=True, text=True)
 
+    def test_gate_runs_with_no_arguments(self):
+        # build-entry-macos.sh and build-entry-linux.sh call the gate bare.
+        # Under set -u a bare call must not die on an unbound $1 (exit code
+        # still depends on whether the repo's geo dir is staged).
+        r = subprocess.run(["bash", str(CHECK_SH)], capture_output=True, text=True)
+        self.assertNotIn("unbound variable", r.stderr, r.stderr)
+
     def test_gate_accepts_correct_files(self):
         with tempfile.TemporaryDirectory() as td:
             geo = Path(td)
