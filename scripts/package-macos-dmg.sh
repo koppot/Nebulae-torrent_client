@@ -46,6 +46,7 @@ OUTPUT=""
 ICON_FILE="$REPO_ROOT/src-tauri/icons/icon.icns"
 LAYOUT_DMG=""
 BACKGROUND_FILE="$REPO_ROOT/assets/dmg-background.png"
+README_FILE="$REPO_ROOT/docs/macos-install-readme.txt"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -54,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --icon) ICON_FILE="$2"; shift 2 ;;
         --layout-from) LAYOUT_DMG="$2"; shift 2 ;;
         --background) BACKGROUND_FILE="$2"; shift 2 ;;
+        --readme) README_FILE="$2"; shift 2 ;;
         *) fail "Unknown argument: $1" ;;
     esac
 done
@@ -108,6 +110,12 @@ log "=== Packaging DMG: $(basename "$OUTPUT") ==="
 # --- Stage the payload --------------------------------------------------------
 ditto "$APP_DIR" "$STAGING_DIR/Nebulae.app"
 ln -s /Applications "$STAGING_DIR/Applications"
+
+# --- In-package install instructions (READ ME FIRST.txt at the dmg root) ----
+if [[ ! -f "$README_FILE" ]]; then
+    fail "READ ME FIRST source missing: $README_FILE (docs/macos-install-readme.txt)"
+fi
+cp "$README_FILE" "$STAGING_DIR/READ ME FIRST.txt"
 
 # --- Background image: Finder renders it as the mounted window backdrop ---
 mkdir -p "$STAGING_DIR/.background"
@@ -173,10 +181,30 @@ FINDER_HEX="$(xattr -px com.apple.FinderInfo "$verify_mnt" | tr -d ' \n')" ||
 CUSTOM_FLAG=$((16#${FINDER_HEX:16:2}${FINDER_HEX:18:2}))
 (( CUSTOM_FLAG & 0x0400 )) ||
     fail "Volume custom-icon flag (kHasCustomIcon) not set on the final DMG"
+
+# --- DMG ROOT GATE: everything the user must see at the volume root ----------
+log "Verifying final DMG root contents..."
+[[ -d "$verify_mnt/Nebulae.app" ]] ||
+    fail "Nebulae.app missing from the final DMG root"
+[[ -L "$verify_mnt/Applications" ]] ||
+    fail "Applications shortcut missing from the final DMG root"
+[[ -f "$verify_mnt/READ ME FIRST.txt" ]] ||
+    fail "READ ME FIRST.txt missing from the final DMG root"
+cmp -s "$README_FILE" "$verify_mnt/READ ME FIRST.txt" ||
+    fail "READ ME FIRST.txt differs from the repo copy ($README_FILE)"
+[[ -f "$verify_mnt/.background/background.png" ]] ||
+    fail ".background/background.png missing from the final DMG"
+cmp -s "$BACKGROUND_FILE" "$verify_mnt/.background/background.png" ||
+    fail ".background/background.png differs from $BACKGROUND_FILE"
+APPLEDOUBLE=$(find "$verify_mnt" -name '._*' -type f | wc -l | tr -d ' ')
+[[ "$APPLEDOUBLE" -eq 0 ]] ||
+    fail "$APPLEDOUBLE AppleDouble (._*) files in the final DMG payload"
+
 hdiutil detach "$verify_mnt" || fail "Could not detach after verification"
 verify_mnt=""
 MNT_CLEANED=1
 log "DMG volume icon verified (embedded + flag set)."
+log "DMG ROOT GATE OK: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png, .VolumeIcon.icns; no AppleDouble files."
 
 # --- Outer .dmg FILE icon (Finder metadata; see limitation above) --------------
 log "Setting custom icon on final DMG file..."
