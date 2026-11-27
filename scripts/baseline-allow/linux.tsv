@@ -1,0 +1,11 @@
+# Linux baseline-diff allow list — gate: build-entry-linux.sh --baseline <accepted.deb>
+# Baseline: the accepted previous deb (record on the Task 5 page). Every
+# difference must match one entry here (exact path or "dir/" prefix);
+# anything unlisted FAILS. Geo is pinned and deliberately NOT listed: any
+# geo drift fails the gate.
+usr/lib/nebulae/resources/jre/	Temurin 21.0.13+9 rebuild noise (same pin both sides)
+usr/lib/nebulae/resources/vlc/	VLC runtime rebuild noise; totals reviewed
+usr/lib/nebulae/resources/engine/	tailscale/transmission updates between baselines
+usr/lib/nebulae/resources/licenses/	license tree updates
+usr/bin/nebulae	version and code changes between the baseline commit and this candidate
+DEBIAN/	package control files (version, size, checksums change per release)

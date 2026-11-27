@@ -30,7 +30,15 @@ param(
     # Where cargo writes its registry cache. Optional; use it to keep
     # CARGO_HOME out of another user's profile (e.g. a directory next to the
     # checkout, measured writable on Supermicro: Authenticated Users Modify).
-    [string]$CargoHome = ""
+    [string]$CargoHome = "",
+    # Optional: the accepted baseline installer (e.g. the corrected v0.2.8
+    # setup). When given, the payload is compared against the freshly built
+    # candidate's payload by scripts\windows\verify-baseline.ps1 after
+    # packaging; every difference must be classified in
+    # scripts\baseline-allow\windows.tsv. Without it the gate is NOT RUN and
+    # the build output says so — the release checklist keeps the candidate
+    # blocked until the comparison is run.
+    [string]$BaselineSetup = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -303,3 +311,14 @@ Write-Host "==> Compile gates passed (cargo check, cargo clippy, frontend typech
 # scripts/windows/stage_runtime.py, then the tauri build.
 $pnpmStr = ($pnpmCmd -join ' ')
 Write-Host "==> All gates passed for $CommitSha. Packaging: stage the VLC runtime with scripts/windows/stage_runtime.py, run the daemon bundle step (NEBULAE_REQUIRE_PATCHED_DAEMON=1), then: $pnpmStr tauri build --bundles nsis. Record installer name, size, SHA-256 and gate results to Notion."
+
+# --- 7. Baseline-diff gate (optional until a candidate installer exists) ---
+# Run AFTER packaging once the candidate setup.exe exists:
+#   powershell -File scripts\windows\verify-baseline.ps1 `
+#       -BaselineSetup <accepted baseline> -CandidateSetup <new setup>
+if ([string]::IsNullOrWhiteSpace($BaselineSetup)) {
+    Write-Host "==> baseline-diff gate: NOT RUN (no -BaselineSetup given; the release checklist keeps the candidate blocked until scripts\windows\verify-baseline.ps1 passes)"
+} else {
+    Write-Host "==> baseline-diff gate: run AFTER packaging, then the gate must pass before delivery:"
+    Write-Host "    powershell -File scripts\windows\verify-baseline.ps1 -BaselineSetup `"$BaselineSetup`" -CandidateSetup <new setup.exe>"
+}

@@ -1,0 +1,14 @@
+# Windows baseline-diff allow list — gate: scripts/windows/verify-baseline.ps1
+# Baseline: the CORRECTED v0.2.8 installer payload (the rules page lists it
+# as the accepted Windows baseline). Differences are matched by exact path
+# or directory prefix; anything unlisted FAILS.
+# The v0.2.8 -> 0.2.9 candidate changes below are seeded from the measured
+# three-way comparison (Task 5 section 4) and must be re-reviewed at gate
+# time against the baseline-diff report.
+resources/vlc/	0.2.9 carries the staged VLC runtime (Task 1 manifest); totals reviewed
+resources/jre/	Temurin rebuild noise (pinned 21.0.13+9 both sides)
+resources/engine/	tailscale/transmission updates between baselines
+resources/licenses/	license tree updates (gettext-0.21/libiconv-1.17 measured)
+resources/geo/	EXCEPT this one: geo is pinned and must match — DELETE this line before a real gate run so geo drift fails
+$PLUGINSDIR/	NSIS payload differences between installer generations
+nebulae.exe	version and code changes between the baseline commit and this candidate

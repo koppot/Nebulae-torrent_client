@@ -13,11 +13,12 @@
 # Usage: ./scripts/build-entry-linux.sh --commit <SHA> --version 0.2.9
 set -eu
 
-COMMIT=""; VERSION=""
+COMMIT=""; VERSION=""; BASELINE="${NEBULAE_BASELINE_DEB:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --commit) COMMIT="$2"; shift 2 ;;
         --version) VERSION="$2"; shift 2 ;;
+        --baseline) BASELINE="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -69,4 +70,31 @@ for f in src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bund
     [ -f "$f" ] || continue
     echo "==> artifact: $f  size $(stat -c%s "$f")  sha256 $(sha256sum "$f" | awk '{print $1}')"
 done
+
+# Baseline-diff gate (completeness rules item 1). --baseline <accepted.deb>
+# (or NEBULAE_BASELINE_DEB): the deb payload is extracted with dpkg-deb into
+# a temp dir and compared against the new deb payload by relative path; every
+# difference must be classified in scripts/baseline-allow/linux.tsv.
+BASELINE_STATUS="NOT RUN (no baseline passed)"
+if [ -n "$BASELINE" ]; then
+    [ -f "$BASELINE" ] || { echo "FAIL: baseline deb not found: $BASELINE" >&2; exit 1; }
+    command -v dpkg-deb >/dev/null 2>&1 || { echo "FAIL: dpkg-deb not available" >&2; exit 1; }
+    NEW_DEB=$(ls src-tauri/target/release/bundle/deb/*.deb | head -n 1)
+    TMPB=$(mktemp -d /tmp/nebulae-baseline.XXXXXX)
+    dpkg-deb -x "$BASELINE" "$TMPB/baseline"
+    dpkg-deb -x "$NEW_DEB" "$TMPB/candidate"
+    if ./scripts/baseline_diff.py \
+        --baseline "$TMPB/baseline" \
+        --candidate "$TMPB/candidate" \
+        --allow scripts/baseline-allow/linux.tsv \
+        --report "$(dirname "$NEW_DEB")/baseline-diff.md"; then
+        BASELINE_STATUS="PASS vs $(basename "$BASELINE")"
+    else
+        echo "FAIL: baseline-diff gate — differences not classified in scripts/baseline-allow/linux.tsv (report: $(dirname "$NEW_DEB")/baseline-diff.md)" >&2
+        rm -rf "$TMPB"
+        exit 1
+    fi
+    rm -rf "$TMPB"
+fi
+echo "==> baseline-diff gate: $BASELINE_STATUS"
 echo "Record artifact names, sizes, SHA-256s, gate results and duration on the Task 5 report page."
