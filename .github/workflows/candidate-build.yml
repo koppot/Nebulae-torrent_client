@@ -168,11 +168,6 @@ jobs:
               if (-not (Test-Path $asset.name)) { throw "Failed to download $($asset.name)" }
           }
 
-          # Extract GeoIP databases
-          Write-Host "==> Staging GeoIP databases..."
-          New-Item -ItemType Directory -Force -Path src-tauri/resources/geo | Out-Null
-          tar.exe -xzf geo-databases.tar.gz -C src-tauri/resources/geo
-
           # Extract licenses
           Write-Host "==> Staging licenses..."
           New-Item -ItemType Directory -Force -Path src-tauri/resources/licenses | Out-Null
@@ -181,6 +176,24 @@ jobs:
           # Stage WebView2Loader.dll
           Copy-Item WebView2Loader.dll -Destination src-tauri/ -Force
           Copy-Item WebView2Loader.dll -Destination src-tauri/resources/ -Force
+
+      - name: Fetch and verify locked GeoIP databases (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GEO_ASSETS_TOKEN: ${{ secrets.GEO_ASSETS_TOKEN }}
+        run: ./scripts/windows/fetch-geo-assets.ps1
+
+      - name: Fetch and verify locked GeoIP databases (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GEO_ASSETS_TOKEN: ${{ secrets.GEO_ASSETS_TOKEN }}
+        run: |
+          if [ -z "$GEO_ASSETS_TOKEN" ]; then
+            echo "REFUSED: secret GEO_ASSETS_TOKEN is not set on this repository. Add it (read-only access to koppot/nebulae-build-assets) or set NEBULAE_GEO_ASSETS_DIR." >&2
+            exit 1
+          fi
+          ./scripts/fetch-geo-assets.sh
 
       - name: Bundle transmission-daemon engine (Windows x64)
         if: runner.os == 'Windows'
@@ -290,7 +303,7 @@ jobs:
           Get-ChildItem src-tauri/resources/vlc | Select-Object -First 10
 
           # Clean up downloaded archives so git status is completely clean
-          Remove-Item -Force geo-databases.tar.gz, licenses.tar.gz, vcrt140-x64.tar.gz, patched-vlc-win64-3.0.23-complete.tar.xz, WebView2Loader.dll -ErrorAction SilentlyContinue
+          Remove-Item -Force licenses.tar.gz, vcrt140-x64.tar.gz, patched-vlc-win64-3.0.23-complete.tar.xz, WebView2Loader.dll -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force jrex, jre.zip -ErrorAction SilentlyContinue
 
       - name: Verify clean worktree before compilation (Windows)

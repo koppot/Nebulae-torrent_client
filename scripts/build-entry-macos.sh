@@ -52,6 +52,12 @@ echo "==> Commit gate passed: HEAD = $HEAD_SHA, worktree clean."
 [ -n "$OUT" ] || OUT="$(dirname "$PWD")/nebulae-mac-out"
 case "$OUT" in "$PWD"|"$PWD"/*) echo "REFUSED: --out must be outside the repository" >&2; exit 1 ;; esac
 
+# --- 1b. Geo assets (locked input; never committed, MaxMind terms) ---------
+# Fetched and hash-verified after the commit gate and BEFORE the compile
+# gates; the GEO gate refuses missing or mismatched files.
+./scripts/fetch-geo-assets.sh
+./scripts/check-geo-assets.sh
+
 # --- 2. Tool checks (nothing is installed) --------------------------------
 for tool in git node pnpm rustc cargo rustup python3 go brew curl tar ditto hdiutil shasum; do
     command -v "$tool" >/dev/null 2>&1 || { echo "REFUSED: missing tool: $tool" >&2; exit 1; }
@@ -153,5 +159,6 @@ echo "sha256: $SHA"
 echo "app zip: $OUT/$DMG_NAME-app.zip"
 echo "commit: $HEAD_SHA  target: $TARGET  version: $VERSION"
 echo "jre: Temurin 21.0.13+9 (pinned, scripts/jre-pins.json key $JRE_KEY)"
+echo "dmg root gate: Nebulae.app, Applications, READ ME FIRST.txt (hash verified), .background/background.png, .VolumeIcon.icns (package-macos-dmg.sh verified all of these on the final image)"
 } | tee "$OUT/BUILD-RECORD.txt"
 echo "Record installer name, size, SHA-256, gate results and duration on the Task 5 report page."

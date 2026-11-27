@@ -198,6 +198,14 @@ else
     status=1
 fi
 
+echo "--- GeoIP databases (required in every package; rules page 2026-11-27)"
+if bash "$SCRIPT_DIR/check-geo-assets.sh" --dir "$RES/geo"; then
+    echo "OK: GeoLite2-ASN.mmdb and GeoLite2-Country.mmdb present, size + SHA-256 verified"
+else
+    echo "FAIL: the geo gate refused the app's geo directory"
+    status=1
+fi
+
 echo
 if [ "$status" -eq 0 ]; then
     echo "=== $APP passed ==="

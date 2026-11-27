@@ -254,6 +254,12 @@ if ($conf.version -ne $ExpectedVersion) {
 }
 Write-Host "==> Version gate passed: $($conf.version)."
 
+# --- 4b. Geo assets (locked input, before the compile gates) ----------------
+# Fetches from the private repo pinned in scripts\geo-assets.lock.json and
+# refuses missing or hash-mismatched files. Installs nothing.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "fetch-geo-assets.ps1")
+if ($LASTEXITCODE -ne 0) { throw "geo asset fetch/gate failed (exit $LASTEXITCODE)" }
+
 # --- 5. Compile gates (must pass BEFORE packaging). ---
 # Native tools write progress to stderr; with ErrorActionPreference=Stop, PowerShell
 # 5.1 turns the first 2>&1 stderr line into a terminating NativeCommandError, so the

@@ -29,6 +29,10 @@ HEAD_SHA=$(git rev-parse HEAD)
 [ "$HEAD_SHA" = "$COMMIT" ] || { echo "REFUSED: HEAD $HEAD_SHA != approved $COMMIT" >&2; exit 1; }
 echo "==> Commit gate passed: HEAD = $HEAD_SHA, worktree clean."
 
+# Geo assets (locked input; fetched and hash-verified before the compile gates).
+./scripts/fetch-geo-assets.sh
+./scripts/check-geo-assets.sh
+
 for tool in git node pnpm rustc cargo python3; do
     command -v "$tool" >/dev/null 2>&1 || { echo "REFUSED: missing tool: $tool" >&2; exit 1; }
 done

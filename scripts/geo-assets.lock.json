@@ -1,0 +1,19 @@
+{
+  "comment": "Locked GeoIP input for every Nebulae package (Windows, macOS, Linux). Pinned to a private repository commit; verified by size and SHA-256 before staging. The .mmdb files are never committed to this repository (MaxMind distribution terms; see the 'Nebulae release package completeness manifest and gate' page). No credentials are stored here.",
+  "repo": "koppot/nebulae-build-assets",
+  "commit": "b4ba23b7d8f1e6dce11e3777082296e272319b66",
+  "files": [
+    {
+      "path": "geo/GeoLite2-ASN.mmdb",
+      "dest": "GeoLite2-ASN.mmdb",
+      "size": 8994581,
+      "sha256": "ab93d4ebe5287ab9a459bcd67f3d5b358e261666c16fd246543c8ba771a78bf4"
+    },
+    {
+      "path": "geo/GeoLite2-Country.mmdb",
+      "dest": "GeoLite2-Country.mmdb",
+      "size": 3395840,
+      "sha256": "54e327d9fe9214e568c5b8f8ce97a7f7e7087b7de10b0560640417695d153797"
+    }
+  ]
+}
