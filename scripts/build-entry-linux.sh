@@ -79,10 +79,14 @@ BASELINE_STATUS="NOT RUN (no baseline passed)"
 if [ -n "$BASELINE" ]; then
     [ -f "$BASELINE" ] || { echo "FAIL: baseline deb not found: $BASELINE" >&2; exit 1; }
     command -v dpkg-deb >/dev/null 2>&1 || { echo "FAIL: dpkg-deb not available" >&2; exit 1; }
-    NEW_DEB=$(ls src-tauri/target/release/bundle/deb/*.deb | head -n 1)
-    TMPB=$(mktemp -d /tmp/nebulae-baseline.XXXXXX)
-    dpkg-deb -x "$BASELINE" "$TMPB/baseline"
-    dpkg-deb -x "$NEW_DEB" "$TMPB/candidate"
+    NEW_DEB=$(ls src-tauri/target/release/bundle/deb/*.deb 2>/dev/null | head -n 1)
+    [ -n "$NEW_DEB" ] || { echo "FAIL: no .deb produced; cannot run the baseline-diff gate" >&2; exit 1; }
+    TMPB=$(mktemp -d /tmp/nebulae-baseline.XXXXXX) || { echo "FAIL: mktemp failed" >&2; exit 1; }
+    if ! dpkg-deb -x "$BASELINE" "$TMPB/baseline" || ! dpkg-deb -x "$NEW_DEB" "$TMPB/candidate"; then
+        rm -rf "$TMPB"
+        echo "FAIL: dpkg-deb could not extract an installer payload" >&2
+        exit 1
+    fi
     if ./scripts/baseline_diff.py \
         --baseline "$TMPB/baseline" \
         --candidate "$TMPB/candidate" \

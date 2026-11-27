@@ -581,6 +581,8 @@ export default function PlayerOverlay() {
     setCastStatus(null);
     setCastDeviceName(null);
     setCastActionLoading(false);
+    setDiscRestream(null);
+    setDiscRestreamError(null);
     wasAtMenuRef.current = false;
     menuConfirmPollsRef.current = 0;
     menuReturnGuardRef.current = null;
@@ -915,6 +917,15 @@ export default function PlayerOverlay() {
       invoke('player_device_discovery_stop').catch(() => {});
     };
   }, [player.open, player.resolvedPath, player.gen, syncViewport]);
+
+  // When the player closes, drop the disc-restream panel state: the backend
+  // stop_session already released the stream.
+  useEffect(() => {
+    if (!player.open) {
+      setDiscRestream(null);
+      setDiscRestreamError(null);
+    }
+  }, [player.open]);
 
   // Listen for playback errors (e.g. AACS decryption failure detected by liveness check).
   useEffect(() => {

@@ -187,15 +187,30 @@ pub fn start(
         return Err(format!("restream play failed (rc={rc})"));
     }
 
-    *state
-        .disc_restream
-        .lock()
-        .map_err(|_| "player state poisoned")? = Some(DiscRestream {
-        media_player: mp as usize,
-        media: media as usize,
-        port,
-        title_index,
-    });
+    // A poisoned slot must not leak the already-playing player: release the
+    // handles before surfacing the error.
+    let stored = match state.disc_restream.lock() {
+        Ok(mut slot) => {
+            *slot = Some(DiscRestream {
+                media_player: mp as usize,
+                media: media as usize,
+                port,
+                title_index,
+            });
+            true
+        }
+        Err(_) => {
+            unsafe {
+                (lib.libvlc_media_player_stop)(mp);
+                (lib.libvlc_media_player_release)(mp);
+                (lib.libvlc_media_release)(media);
+            }
+            false
+        }
+    };
+    if !stored {
+        return Err("player state poisoned: restream player released, not started".into());
+    }
     tracing::info!(
         "[disc-restream] started: mrl={mrl} port={port} title_index={title_index} duration_ms={duration_ms}"
     );
@@ -218,14 +233,19 @@ pub fn stop(state: &PlayerState) {
         .ok()
         .and_then(|mut g| g.take());
     let Some(rs) = existing else { return };
+    // Poisoned lock still yields the data (same policy as `poison` above);
+    // the handles MUST be released or the HTTP stream keeps serving.
     let lib = {
-        let guard = state.lib.lock().map_err(|_| "player state poisoned");
-        match guard {
-            Ok(g) => g.as_ref().cloned(),
-            Err(_) => None,
-        }
+        let guard = state.lib.lock().unwrap_or_else(|p| p.into_inner());
+        guard.as_ref().cloned()
     };
-    let Some(lib) = lib else { return };
+    let Some(lib) = lib else {
+        tracing::error!(
+            "[disc-restream] lib unavailable; restream handles not released (port={})",
+            rs.port
+        );
+        return;
+    };
     let mp_ptr = rs.media_player as *mut std::os::raw::c_void;
     let media_ptr = rs.media as *mut std::os::raw::c_void;
     unsafe {
