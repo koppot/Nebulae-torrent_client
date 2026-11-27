@@ -28,6 +28,11 @@ time.
 - Nothing is installed outside the Applications folder. To remove Nebulae,
   drag it from Applications to the Trash; your data stays in
   `~/Library/Application Support/Nebulae`.
+- After installing an update, macOS may ask again for folder permissions
+  (for example, removable-volume access). This is expected for
+  ad-hoc-signed builds: macOS keys saved permission grants to the app's
+  code-signing identity, and an ad-hoc signature changes with every build.
+  Re-grant the permission once per update; no data is affected.
 
 The same text ships inside every macOS dmg as `READ ME FIRST.txt`
 (source: `docs/macos-install-readme.txt`).
