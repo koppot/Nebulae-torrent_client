@@ -41,6 +41,9 @@ export const TrackerModal: React.FC = () => {
   const [isRelinking, setIsRelinking]     = useState(false);
   const [linkError, setLinkError]         = useState<string | null>(null);
   const [passkeyRevealed, setPasskeyRevealed] = useState(false);
+  // D18: this client's position in the website one-click receive order.
+  const [devicePriority, setDevicePriority] = useState<number>(10);
+  const [prioritySaved, setPrioritySaved]   = useState(false);
 
   useEffect(() => {
     if (showTrackerDashboard) {
@@ -49,6 +52,12 @@ export const TrackerModal: React.FC = () => {
       // Always attempt a live sync when the panel opens so numbers are fresh.
       // The underlying command is rate-limited server-side (1 call / 5 min).
       syncStats();
+      // D18: sync the one-click receive priority from the device registry.
+      invoke<{ priority?: number }>('get_adc_device_info')
+        .then((info) => {
+          if (typeof info?.priority === 'number') setDevicePriority(info.priority);
+        })
+        .catch(() => {});
     } else {
       // Reset local state when the modal closes.
       setPasskeyRevealed(false);
@@ -88,6 +97,20 @@ export const TrackerModal: React.FC = () => {
       setLinkError(typeof err === 'string' ? err : 'Import failed. Check your ADC credentials.');
     } finally {
       setIsLinking(false);
+    }
+  };
+
+  /** Persist a new one-click receive priority (D18). */
+  const saveDevicePriority = async (value: number) => {
+    setDevicePriority(value);
+    try {
+      const applied = await invoke<number>('set_adc_device_priority', { priority: value });
+      setDevicePriority(applied);
+      setPrioritySaved(true);
+      window.setTimeout(() => setPrioritySaved(false), 2500);
+    } catch {
+      // Keep the attempted value; the panel re-syncs from the device registry
+      // on the next open, and the heartbeat advertises the stored priority.
     }
   };
 
@@ -394,6 +417,35 @@ export const TrackerModal: React.FC = () => {
               {linkError && (
                 <p className="text-[11px] text-[#ff6b6b]" role="alert">{linkError}</p>
               )}
+
+              {/* D18: Send to Nebulae receive priority — one-click order among
+                  several connected clients (lowest number is served first). */}
+              <div className="p-3 rounded-lg border border-[#333333] bg-[#1f1f1f] flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold text-white">
+                    Send to Nebulae receive priority
+                  </div>
+                  <p className="text-[10px] text-[#a3a3a3] mt-0.5">
+                    When several Nebulae clients are connected, the website sends a one-click
+                    download to the client with the lowest number.
+                  </p>
+                </div>
+                <select
+                  value={devicePriority}
+                  onChange={(e) => void saveDevicePriority(Number(e.target.value))}
+                  className="shrink-0 rounded bg-[#141414] border border-[#333333] text-white text-[11px] px-2 py-1"
+                  aria-label="Send to Nebulae receive priority"
+                >
+                  <option value={1}>1 — First</option>
+                  <option value={5}>5 — High</option>
+                  <option value={10}>10 — Normal</option>
+                  <option value={50}>50 — Low</option>
+                  <option value={99}>99 — Last</option>
+                </select>
+                {prioritySaved && (
+                  <span className="text-[10px] text-emerald-500 shrink-0">Saved</span>
+                )}
+              </div>
 
               {/* Stats Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono">

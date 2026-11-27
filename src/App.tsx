@@ -42,6 +42,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useRemoteServerStore } from './stores/remoteServerStore';
 
+// D18: localStorage key for the permanent opt-out of the one-click-add
+// default-location notice.
+const ADC_DELIVERY_LOCATION_SUPPRESS_KEY = 'nebulae.adcDeliveryLocationWarningSuppressed';
+
 export const App: React.FC = () => {
   const { splashDismissed, viewMode, setViewMode } = useUiStore();
   const playerOpen = usePlayerStore().open;
@@ -243,6 +247,12 @@ export const App: React.FC = () => {
   const [isImportingMedia, setIsImportingMedia] = useState(false);
   const [openPathErrors, setOpenPathErrors] = useState<string[]>([]);
   const [deliveryFailures, setDeliveryFailures] = useState<DeliveryFailure[]>([]);
+  // D18: notice that a website one-click add used the default download location.
+  const [deliveryAddedNotice, setDeliveryAddedNotice] = useState<{
+    title: string;
+    dir: string;
+    duplicate: boolean;
+  } | null>(null);
   const dismissedDeliveryFailuresRef = useRef(new Set<string>());
   const pendingMediaKeysRef = useRef(new Set<string>());
   const activeMediaKeyRef = useRef<string | null>(null);
@@ -639,9 +649,27 @@ export const App: React.FC = () => {
       },
     );
 
-    safeListen('nebulae://adc-torrent-added', () => {
-      void useTorrentStore.getState().fetchTorrents();
-    });
+    safeListen<{ title?: string | null; download_dir?: string | null; duplicate?: boolean }>(
+      'nebulae://adc-torrent-added',
+      (event) => {
+        void useTorrentStore.getState().fetchTorrents();
+        // D18: a website one-click add lands in the configured default
+        // location; tell the user where, with a permanent opt-out.
+        let suppressed = false;
+        try {
+          suppressed =
+            window.localStorage.getItem(ADC_DELIVERY_LOCATION_SUPPRESS_KEY) === '1';
+        } catch {
+          // localStorage unavailable (private mode): show the notice.
+        }
+        if (suppressed) return;
+        setDeliveryAddedNotice({
+          title: event.payload?.title?.trim() || 'New download',
+          dir: event.payload?.download_dir?.trim() || '',
+          duplicate: Boolean(event.payload?.duplicate),
+        });
+      },
+    );
 
     safeListen<import('./types').TorrentOperationSnapshot>(
       'nebulae://torrent-operation',
@@ -1028,6 +1056,47 @@ export const App: React.FC = () => {
                 {isImportingMedia ? 'Adding…' : 'Add to Library'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {deliveryAddedNotice && (
+        <div
+          role="status"
+          className="fixed bottom-16 right-4 z-[130] w-80 rounded-lg border border-[#463e31] bg-[#211f1c] p-4 shadow-2xl text-white"
+        >
+          <div className="text-xs font-semibold break-words">
+            {deliveryAddedNotice.duplicate
+              ? `Already in Nebulae: ${deliveryAddedNotice.title}`
+              : `Added from the website: ${deliveryAddedNotice.title}`}
+          </div>
+          <div className="mt-1.5 text-[11px] text-[#d4c4a8] break-words">
+            {deliveryAddedNotice.dir
+              ? `Saved to your default download location: ${deliveryAddedNotice.dir}`
+              : 'Saved to your default download location (set in Settings -> Downloads).'}
+          </div>
+          <div className="mt-2.5 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  window.localStorage.setItem(ADC_DELIVERY_LOCATION_SUPPRESS_KEY, '1');
+                } catch {
+                  // localStorage unavailable: dismissal applies to this notice only.
+                }
+                setDeliveryAddedNotice(null);
+              }}
+              className="px-2.5 py-1 rounded-md border border-[#463e31] hover:bg-[#2c2924] text-[11px] font-semibold text-[#e8d9bb]"
+            >
+              Don&apos;t show again
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeliveryAddedNotice(null)}
+              className="px-2.5 py-1 rounded-md border border-[#463e31] hover:bg-[#2c2924] text-[11px] font-semibold text-[#e8d9bb]"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}

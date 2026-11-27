@@ -72,6 +72,9 @@ pub struct AdcDeviceInfo {
     pub device_name: String,
     pub client_type: String,
     pub is_linked: bool,
+    /// D18: this client's position in the ADC one-click receive order
+    /// (lower = served first when several clients are connected).
+    pub priority: u32,
 }
 
 /// Delivery item returned by `POST /api/nebulae/delivery/poll`.
@@ -189,6 +192,22 @@ pub fn get_adc_passkey(db: &Database) -> Option<String> {
 }
 
 /// Synchronously register this device with the ADC tracker API (`POST /api/nebulae/devices/register`).
+/// D18: default receive priority advertised to the ADC device registry.
+/// The website delivers a one-click request to the connected client with the
+/// LOWEST number; several Nebulae clients can order themselves with this.
+pub const DEFAULT_DEVICE_PRIORITY: u32 = 10;
+
+/// The stored receive priority (1..=99, default 10), clamped and tolerant of
+/// a missing or malformed setting so registration never fails over it.
+pub fn device_priority(db: &Database) -> u32 {
+    db.get_setting("adc_device_priority")
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_DEVICE_PRIORITY)
+        .clamp(1, 99)
+}
+
 pub fn register_device_sync(db: &Database) -> Result<String, String> {
     let is_linked = db
         .get_setting("adc_linked")
@@ -227,7 +246,7 @@ pub fn register_device_sync(db: &Database) -> Result<String, String> {
         "device_id": device_id,
         "device_name": device_name,
         "client_type": "local",
-        "priority": 10
+        "priority": device_priority(db)
     });
 
     let resp = client
@@ -508,6 +527,7 @@ fn emit_delivery_added(
     title: &str,
     info_hash: &str,
     duplicate: bool,
+    download_dir: &str,
 ) {
     let notif_title = if duplicate {
         "Nebulae — Already Added"
@@ -532,9 +552,22 @@ fn emit_delivery_added(
                 "title": title,
                 "info_hash": info_hash,
                 "duplicate": duplicate,
+                // D18: the configured default destination, so the frontend can
+                // tell the user WHERE a one-click add landed (with a suppress
+                // option) instead of only that something was added.
+                "download_dir": download_dir,
             }),
         );
     }
+}
+
+/// D18: the configured default download destination, read straight from the
+/// stored settings (no side effects) for the delivery-added warning.
+fn configured_download_dir_for_warning(db: &Database) -> String {
+    crate::commands::settings::load_user_settings_from_db(db)
+        .download_directory
+        .trim()
+        .to_string()
 }
 
 type DeliveryFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -897,7 +930,13 @@ async fn process_delivery_item(
                             );
                             let _ = save_delivery_ledger(db, &mut ledger);
                             emit_delivery_added(
-                                app, queue_id, torrent_id, &title, &info_hash, false,
+                                app,
+                                queue_id,
+                                torrent_id,
+                                &title,
+                                &info_hash,
+                                false,
+                                &configured_download_dir_for_warning(db),
                             );
                             return Ok(info_hash);
                         }
@@ -1013,7 +1052,15 @@ async fn process_delivery_item(
         );
         let _ = save_delivery_ledger(db, &mut ledger);
         clear_delivery_failure(db, &token);
-        emit_delivery_added(app, queue_id, torrent_id, &title, &expected_hash, true);
+        emit_delivery_added(
+            app,
+            queue_id,
+            torrent_id,
+            &title,
+            &expected_hash,
+            true,
+            &configured_download_dir_for_warning(db),
+        );
         return Ok(expected_hash);
     }
 
@@ -1107,7 +1154,15 @@ async fn process_delivery_item(
     }
 
     clear_delivery_failure(db, &token);
-    emit_delivery_added(app, queue_id, torrent_id, &title, &added_hash, false);
+    emit_delivery_added(
+        app,
+        queue_id,
+        torrent_id,
+        &title,
+        &added_hash,
+        false,
+        &configured_download_dir_for_warning(db),
+    );
     Ok(added_hash)
 }
 
@@ -1400,7 +1455,21 @@ pub async fn get_adc_device_info(db: State<'_, Arc<Database>>) -> Result<AdcDevi
         device_name,
         client_type: "local".to_string(),
         is_linked,
+        priority: device_priority(&db),
     })
+}
+
+/// D18: set this client's one-click receive priority (1..=99, lower is
+/// served first). The next device registration heartbeat advertises it.
+#[tauri::command]
+pub async fn set_adc_device_priority(
+    db: State<'_, Arc<Database>>,
+    priority: u32,
+) -> Result<u32, String> {
+    let clamped = priority.clamp(1, 99);
+    db.set_setting("adc_device_priority", &clamped.to_string())
+        .map_err(|e| format!("Could not save receive priority: {e}"))?;
+    Ok(clamped)
 }
 
 #[tauri::command]
@@ -2836,5 +2905,29 @@ mod tests {
         let live: Arc<dyn TorrentEngine> = Arc::new(MockTorrentEngine::new());
         let err = resolve_delivery_route(&db, &live).await.err().unwrap();
         assert!(err.contains("no Nebulae Server URL"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod d18_priority_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn device_priority_defaults_clamps_and_persists() {
+        let db = Database::new(Path::new(":memory:")).expect("create test db");
+        // Fresh profile: the documented default.
+        assert_eq!(device_priority(&db), DEFAULT_DEVICE_PRIORITY);
+        // Malformed stored value falls back to the default.
+        db.set_setting("adc_device_priority", "not-a-number")
+            .unwrap();
+        assert_eq!(device_priority(&db), DEFAULT_DEVICE_PRIORITY);
+        // Stored values are honoured and clamped into 1..=99.
+        db.set_setting("adc_device_priority", "5").unwrap();
+        assert_eq!(device_priority(&db), 5);
+        db.set_setting("adc_device_priority", "0").unwrap();
+        assert_eq!(device_priority(&db), 1);
+        db.set_setting("adc_device_priority", "500").unwrap();
+        assert_eq!(device_priority(&db), 99);
     }
 }
