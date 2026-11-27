@@ -73,6 +73,8 @@ def main() -> int:
     ap.add_argument("--manifest", type=Path, help="Task 1 manifest CSV (optional)")
     ap.add_argument("--report", type=Path)
     ap.add_argument("--keep", action="store_true", help="keep the temp extraction")
+    ap.add_argument("--allow-jre-fallback", action="store_true",
+                    help="accept the fallback JRE (21.0.12+8) instead of the default (21.0.13+9)")
     args = ap.parse_args()
 
     exp = json.loads(args.expected.read_text())
@@ -186,6 +188,36 @@ def main() -> int:
             )
         else:
             rep.add("jre input identified", True, f"Temurin {entry['version']}")
+            default_name = jre_inputs.get("default")
+            default_ver = (jre_inputs.get(default_name) or {}).get("version") if default_name else None
+            if default_ver:
+                is_default = entry["version"] == default_ver
+                rep.add(
+                    "jre is the approved default",
+                    is_default or args.allow_jre_fallback,
+                    f"Temurin {entry['version']}"
+                    + ("" if is_default else
+                       (f" (fallback allowed by --allow-jre-fallback; default is {default_ver})"
+                        if args.allow_jre_fallback else f" (default is {default_ver}; pass --allow-jre-fallback to accept)")),
+                )
+            manifest_name = entry.get("file_manifest")
+            if manifest_name:
+                mf = Path(__file__).resolve().parent / manifest_name
+                frozen = {}
+                for ln in mf.read_text(encoding="utf-8").splitlines():
+                    h, _, n = ln.partition("  ")
+                    if n:
+                        frozen[n] = h
+                got_files = {p.relative_to(jre).as_posix(): p for p in jre.rglob("*") if p.is_file()}
+                missing = sorted(set(frozen) - set(got_files))
+                extra = sorted(set(got_files) - set(frozen))
+                wrong = sorted(n for n in frozen if n in got_files and sha256(got_files[n]) != frozen[n])
+                rep.add(
+                    "jre per-file hashes",
+                    not (missing or extra or wrong),
+                    f"{len(frozen)} frozen files: {len(missing)} missing, {len(extra)} extra, {len(wrong)} differing"
+                    + (f" (e.g. {(wrong or missing or extra)[0]})" if (missing or extra or wrong) else ""),
+                )
             rep.add(
                 "jre file count",
                 jre_files == entry["files"],

@@ -491,12 +491,16 @@ def stage_vlc(cache: Path, inputs: dict, rec: Recorder, patched: Path | None,
     return True
 
 
-def stage_jre(cache: Path, inputs: dict, rec: Recorder, input_name: str = "temurin-jre") -> None:
-    # A12: the JRE is a switchable frozen input. The default stays
-    # temurin-jre (21.0.12+8, the 0.2.8 baseline); the 0.2.7-era 21.0.13+9
-    # build is available as temurin-jre-21013 and is only staged when this
-    # build names it explicitly. Anything else is refused, so a typo can
-    # never silently change the Java runtime.
+DEFAULT_JRE_INPUT = "temurin-jre-21013"
+
+
+def stage_jre(cache: Path, inputs: dict, rec: Recorder, input_name: str = DEFAULT_JRE_INPUT) -> None:
+    # A12: the JRE is a switchable frozen input. The default is
+    # temurin-jre-21013 (21.0.13+9, byte-identical to the JRE the published
+    # 0.2.7 installer shipped; user-approved 2026-11-26). The 0.2.8 baseline
+    # 21.0.12+8 stays available as the fallback temurin-jre and is only staged
+    # when the build names it explicitly. Anything else is refused, so a typo
+    # can never silently change the Java runtime.
     if input_name != "temurin-jre" and not input_name.startswith("temurin-jre-"):
         fail(f"refusing JRE input '{input_name}': only temurin-jre* inputs are staged")
     entry = inputs.get(input_name)
@@ -654,7 +658,7 @@ source tree of this build).
                          Microsoft Visual C++ 2015-2022 runtime DLLs placed
                          next to the Transmission daemon, extracted verbatim
                          from Microsoft's own installer.
-- Eclipse Temurin JRE 21.0.12+8 keeps its own notices in resources/jre/NOTICE
+- Eclipse Temurin JRE (version recorded in resources/jre/release) keeps its own notices in resources/jre/NOTICE
   and resources/jre/legal/ (GPL-2.0 with the Classpath Exception).
 
 Source code for the LGPL/GPL components is available from the upstream
@@ -787,10 +791,10 @@ def main(argv: list[str] | None = None) -> int:
         "they are copied into resources/geo/ in the staged tree")
     ap.add_argument("--require-geo", action="store_true", help="fail the staging run when the "
         "GeoLite2 databases are not provided; release builds must set this")
-    ap.add_argument("--jre-input", default=os.environ.get("NEBULAE_JRE_INPUT", "temurin-jre"),
+    ap.add_argument("--jre-input", default=os.environ.get("NEBULAE_JRE_INPUT", DEFAULT_JRE_INPUT),
         help="which frozen temurin-jre* input from the lock file to stage (A12); "
-        "default temurin-jre (21.0.12+8); the 0.2.7-era alternate is temurin-jre-21013 "
-        "and requires the user's approved JRE-switch decision")
+        "default temurin-jre-21013 (21.0.13+9, the 0.2.7 JRE); the fallback temurin-jre "
+        "(21.0.12+8, the 0.2.8 baseline) also needs verify_installer.py --allow-jre-fallback")
     args = ap.parse_args(argv)
 
     warnings: list[str] = []

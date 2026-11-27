@@ -146,7 +146,7 @@
     }
   },
   "jre_inputs": {
-    "_note": "A12: per-JRE-input verify expectations. The staged input is identified by IMPLEMENTOR_VERSION in resources/jre/release. temurin-jre (21.0.12+8) is the default and 0.2.8 baseline; temurin-jre-21013 (21.0.13+9, the 0.2.7 JRE) is measured from the official Adoptium zip (sha256 2332c0b4..., asset digest checked 2026-11-26) and is only valid in builds the user approved for the JRE switch.",
+    "_note": "A12 (user-approved 2026-11-26): DEFAULT JRE is temurin-jre-21013 (21.0.13+9), byte-identical to the JRE in the published 0.2.7 installer (SHA-256 a3dd9806865d4716ef39381f03f49a54c4826b34f4d8907929013578674a35b5): 315 files, per-file hashes frozen in jre-21013-files.sha256. temurin-jre (21.0.12+8, the 0.2.8 baseline) is the switchable fallback and passes only with verify_installer.py --allow-jre-fallback. The staged input is identified by IMPLEMENTOR_VERSION in resources/jre/release.",
     "temurin-jre": {
       "version": "21.0.12+8",
       "files": 315,
@@ -161,8 +161,11 @@
       "release_size": 1652,
       "release_sha256": "4f1df3e1b759c29b84899c354696827a9a43303703f2cefc08d81240c4929eec",
       "jvm_dll_size": 14003320,
-      "jvm_dll_sha256": "a778dc86bead1b093a557d14aa5b8a26473dfae7cae10b46053a37dfd1ea8e32"
-    }
+      "jvm_dll_sha256": "a778dc86bead1b093a557d14aa5b8a26473dfae7cae10b46053a37dfd1ea8e32",
+      "file_manifest": "jre-21013-files.sha256",
+      "source": "published 0.2.7 installer, resources/jre (315 files)"
+    },
+    "default": "temurin-jre-21013"
   },
   "installer_size_range_bytes": [
     250000000,
