@@ -1000,9 +1000,13 @@ export const useTorrentStore = create<TorrentState>((set, get) => ({
   // the new torrent id. On failure the torrent exists PAUSED (the backend
   // error text says so) and nothing downloads until it is started.
   addTorrentStaged: async (staged: StagedTorrentAdd) => {
-    const id = await invoke<string>('add_torrent_staged', { staged });
-    await get().fetchTorrents();
-    return id;
+    try {
+      return await invoke<string>('add_torrent_staged', { staged });
+    } finally {
+      // Also on failure: the torrent already exists PAUSED and must show in
+      // the list so the user can fix or remove it.
+      await get().fetchTorrents();
+    }
   },
 
   inspectTorrent: async (source?: string, bytes?: number[]) => {
