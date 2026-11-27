@@ -25,6 +25,7 @@ import { listen } from '@tauri-apps/api/event';
 import { DiscStructureInfo } from '../../types';
 import { createMenuMoveGuard, MenuMoveGuard } from '../../lib/menuMoveGuard';
 import { armMenuReturnGuard, evaluateMenuReturnGuard, type MenuReturnGuardState } from '../../lib/menuReturnGuard';
+import { reconcileCast, type CastStatus } from '../../lib/castStatus';
 
 interface DiscoveredDevice {
   id: string;
@@ -963,6 +964,36 @@ export default function PlayerOverlay() {
       invoke('player_device_discovery_stop').catch(() => {});
     };
   }, [player.open, player.resolvedPath, player.gen, syncViewport]);
+
+  // Keep the renderer-cast panel in step with the backend: a session that
+  // ended by itself must not leave "Stop casting" showing, and a live one the
+  // panel forgot (picker closed and reopened) is picked up again.
+  useEffect(() => {
+    if (!player.open || (!showDevicePicker && discCastChannel !== 'renderer')) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const status = await invoke<CastStatus>('player_cast_status');
+        if (cancelled) return;
+        const action = reconcileCast(discCastChannel, status);
+        if (action === 'clear') {
+          setDiscRestream(null);
+          setDiscCastChannel(null);
+        } else if (action === 'adopt') {
+          setDiscRestream({ url: '', port: 0, title_index: 0, duration_ms: 0, kind: 'renderer' });
+          setDiscCastChannel('renderer');
+        }
+      } catch {
+        // non-blocking
+      }
+    };
+    void sync();
+    const timer = window.setInterval(() => void sync(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [player.open, showDevicePicker, discCastChannel]);
 
   // When the player closes, drop the disc-restream panel state: the backend
   // stop_session already released the stream.

@@ -970,6 +970,7 @@ pub fn run() {
             commands::media::player_disc_restream_stop,
             commands::media::player_cast_renderer_start,
             commands::media::player_cast_renderer_stop,
+            commands::media::player_cast_status,
             commands::media::player_airplay_disc_start,
             commands::media::player_device_start,
             commands::media::player_device_return_to_local,

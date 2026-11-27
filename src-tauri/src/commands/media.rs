@@ -4550,6 +4550,23 @@ pub fn player_cast_renderer_start(
     Ok(info)
 }
 
+#[derive(serde::Serialize)]
+pub struct CastStatus {
+    pub active: bool,
+    pub renderer: bool,
+}
+
+/// Whether a restream/renderer cast is still alive, so the UI can drop a
+/// stale "Stop casting" when the backend session is gone.
+#[tauri::command]
+pub fn player_cast_status(state: tauri::State<PlayerState>) -> CastStatus {
+    let s = player::disc_restream::status(&state);
+    CastStatus {
+        active: s.is_some(),
+        renderer: s == Some(true),
+    }
+}
+
 /// Stop the renderer/HLS restream and resume local playback.
 #[tauri::command]
 pub fn player_cast_renderer_stop(state: tauri::State<PlayerState>) -> Result<(), String> {

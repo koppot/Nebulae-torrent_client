@@ -570,6 +570,14 @@ pub fn is_active(state: &PlayerState, session_id: usize) -> bool {
         .is_some_and(|r| r.media_player == session_id)
 }
 
+/// What the UI needs to know about the live restream: `None` when there is
+/// none, otherwise whether it is a libvlc renderer cast.
+pub fn status(state: &PlayerState) -> Option<bool> {
+    poison(&state.disc_restream)
+        .as_ref()
+        .map(|r| r.renderer_item != 0)
+}
+
 /// Wait until `need` HLS segments are servable. Returns at once, not at the
 /// timeout, when the restream is stopped or replaced. The restream mutex is
 /// held only to clone a probe, never while the segment directory is scanned.
@@ -857,6 +865,20 @@ mod tests {
         assert!(!is_active(&state, 5) && is_active(&state, 9));
         stop(&state);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_reports_none_then_hls_session() {
+        let state = PlayerState::default();
+        assert_eq!(status(&state), None);
+        let dir = std::env::temp_dir().join(format!("nebulae-status-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        fake_session(&state, 3, &dir, ended);
+        assert_eq!(status(&state), Some(false));
+        stop(&state);
+        assert_eq!(status(&state), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
