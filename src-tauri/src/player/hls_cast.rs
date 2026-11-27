@@ -108,8 +108,8 @@ fn read_pts(p: &[u8]) -> u64 {
 /// `None` when no video PES with a PTS is present.
 pub fn scan_pts(ts: &[u8]) -> Option<(u64, u64, u32)> {
     let mut scan = PtsScan::default();
-    for p in ts.as_chunks::<TS_PACKET>().0 {
-        scan.packet(p);
+    for k in 0..ts.len() / TS_PACKET {
+        scan.packet(&ts[k * TS_PACKET..(k + 1) * TS_PACKET]);
     }
     scan.finish()
 }
@@ -182,8 +182,8 @@ pub fn scan_pts_file(path: &Path) -> Option<(u64, u64, u32)> {
                 Err(_) => return None,
             }
         }
-        for p in buf[..filled].as_chunks::<TS_PACKET>().0 {
-            scan.packet(p);
+        for k in 0..filled / TS_PACKET {
+            scan.packet(&buf[k * TS_PACKET..(k + 1) * TS_PACKET]);
         }
         if filled < buf.len() {
             break;

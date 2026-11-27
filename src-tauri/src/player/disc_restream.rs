@@ -153,10 +153,11 @@ pub enum PriorLocal {
 }
 
 impl PriorLocal {
-    /// From `libvlc_media_player_get_state` (3 Playing, 4 Paused).
+    /// From `libvlc_media_player_get_state`: Opening (1), Buffering (2) and
+    /// Playing (3) all mean the user is watching; Paused is 4.
     pub fn from_state(state: i32) -> Self {
         match state {
-            3 => Self::Playing,
+            1..=3 => Self::Playing,
             4 => Self::Paused,
             _ => Self::Other,
         }
@@ -906,7 +907,8 @@ mod tests {
             (3, PriorLocal::Playing, true, true),
             (4, PriorLocal::Paused, false, false),
             (0, PriorLocal::Other, false, false),
-            (2, PriorLocal::Other, false, false),
+            (1, PriorLocal::Playing, true, true),
+            (2, PriorLocal::Playing, true, true),
             (5, PriorLocal::Other, false, false),
             (6, PriorLocal::Other, false, false),
             (7, PriorLocal::Other, false, false),
