@@ -536,6 +536,28 @@ def stage_transmission(cache: Path, inputs: dict, rec: Recorder, cab_tool: list[
                      "transmission-4.1.3-x64.msi (official, SHA-256 pinned)")
 
 
+FROZEN_DAEMON_SHA256 = "26b644d7fb5310ab74a358944f76e6dbe847d224b6df633e20b6ba591bd80795"
+DAEMON_PATCH_MARKERS = (b"NEBULAE_INTEREST_KEEPALIVE", b"TRANSMISSION_PEER_ID_PREFIX",
+                        b"TRANSMISSION_PEER_ID_SUFFIX", b"TRANSMISSION_USER_AGENT")
+
+
+def stage_frozen_daemon(daemon: Path, rec: Recorder) -> None:
+    # The MSI carries the STOCK daemon (the rev2/rev3 regression). The release
+    # daemon is the frozen, patched 0.2.8 build; it replaces the MSI copy only
+    # when its SHA-256 matches the pin and all four patch markers are present.
+    if not daemon.is_file():
+        fail(f"--frozen-daemon {daemon} not found")
+    got = hashlib.sha256(daemon.read_bytes()).hexdigest()
+    if got != FROZEN_DAEMON_SHA256:
+        fail(f"frozen daemon {daemon} SHA-256 {got} does not match the pin {FROZEN_DAEMON_SHA256}")
+    blob = daemon.read_bytes()
+    missing = [m.decode() for m in DAEMON_PATCH_MARKERS if m not in blob]
+    if missing:
+        fail(f"frozen daemon is missing Nebulae patch markers: {missing}")
+    target = rec.root / "resources" / "engine" / "transmission" / "transmission-daemon.exe"
+    rec.replace(daemon, target, "transmission-daemon-patched-0.2.8.exe (frozen, SHA-256 pinned, 4 patch markers verified)")
+
+
 def stage_tailscale(cache: Path, inputs: dict, rec: Recorder, cab_tool: list[str]) -> None:
     src = fetch_inputs.ensure("tailscale-msi", inputs["tailscale-msi"], cache)
     dest = rec.root / "resources" / "engine" / "tailscale"
@@ -791,6 +813,9 @@ def main(argv: list[str] | None = None) -> int:
         "they are copied into resources/geo/ in the staged tree")
     ap.add_argument("--require-geo", action="store_true", help="fail the staging run when the "
         "GeoLite2 databases are not provided; release builds must set this")
+    ap.add_argument("--frozen-daemon", type=Path,
+        help="frozen patched daemon (transmission-daemon-patched-0.2.8.exe); replaces the stock MSI daemon "
+        "after a SHA-256 pin and patch-marker check")
     ap.add_argument("--jre-input", default=os.environ.get("NEBULAE_JRE_INPUT", DEFAULT_JRE_INPUT),
         help="which frozen temurin-jre* input from the lock file to stage (A12); "
         "default temurin-jre-21013 (21.0.13+9, the 0.2.7 JRE); the fallback temurin-jre "
@@ -818,6 +843,10 @@ def main(argv: list[str] | None = None) -> int:
         warnings.append("stock VLC staged: the Blu-ray menu repairs (M-01..M-03) are INACTIVE in this tree (NOT RELEASE-READY)")
     stage_jre(args.cache, inputs, rec, args.jre_input)
     stage_transmission(args.cache, inputs, rec, cab_tool)
+    if args.frozen_daemon is not None:
+        stage_frozen_daemon(args.frozen_daemon, rec)
+    else:
+        warnings.append("no --frozen-daemon: the STOCK MSI transmission daemon is staged (NOT RELEASE-READY; verify_installer.py fails it)")
     stage_tailscale(args.cache, inputs, rec, cab_tool)
     stage_vcredist(args.cache, inputs, rec, cab_tool)
     stage_licenses(args.cache, inputs, rec, patched)

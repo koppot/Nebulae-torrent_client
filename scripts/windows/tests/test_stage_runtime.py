@@ -319,6 +319,18 @@ class StageVlcContractTests(Fixture):
         self.vlc_dir = self.scratch / "vlc-modified"
         self.vlc_dir.mkdir(parents=True, exist_ok=True)
         self.rec = stage_runtime.Recorder(self.root)
+        # stage_vlc stages the complete official stock tree first (86d1ec8) and
+        # refuses under 560 stock files, so the fixture supplies a synthetic
+        # pinned stock zip of that size.
+        stock_zip = self.cache / "vlc-stock-fixture.zip"
+        with zipfile.ZipFile(stock_zip, "w") as zf:
+            for i in range(570):
+                zf.writestr(f"{stage_runtime.VLC_PREFIX}stock/file{i}.txt", f"stock {i}")
+        self.inputs = {"vlc-win64": {
+            "file": stock_zip.name,
+            "sha256": hashlib.sha256(stock_zip.read_bytes()).hexdigest(),
+            "bytes": stock_zip.stat().st_size,
+        }}
         # Pinned-plugin lock for the synthetic trees: the "patched" plugin is a PE carrying the marker.
         self.patched_d3d11 = make_pe() + b"\0" + stage_runtime.D3D11_PLUGIN_MARKER + b"\0"
         self.stock_d3d11 = make_pe() + b"stock"
@@ -386,7 +398,7 @@ class StageVlcContractTests(Fixture):
 
     def test_complete_modified_tree_succeeds(self):
         self._create_complete_modified_tree()
-        res = stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+        res = stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertTrue(res)
         self.assertTrue((self.root / "resources" / "vlc" / "libvlc.dll").is_file())
         self.assertTrue((self.root / "resources" / "vlc" / "libvlccore.dll").is_file())
@@ -395,38 +407,38 @@ class StageVlcContractTests(Fixture):
 
     def test_rejects_missing_tree_when_require_modified(self):
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, None, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, None, None, require_modified=True)
         self.assertIn("stock VLC runtime substitution is strictly prohibited", str(ctx.exception))
 
     def test_rejects_partial_overlay_lacking_vlccore(self):
         self._create_complete_modified_tree(with_core=False)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("partial overlay rejected", str(ctx.exception))
         self.assertIn("must include libvlccore.dll", str(ctx.exception))
 
     def test_rejects_missing_bd_jars(self):
         self._create_complete_modified_tree(with_jars=False)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks required BD-J 1.5.0 jar", str(ctx.exception))
 
     def test_rejects_forbidden_stock_jars(self):
         self._create_complete_modified_tree(stock_jars=True)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("forbidden stock BD-J jar", str(ctx.exception))
 
     def test_rejects_missing_provenance_manifest(self):
         self._create_complete_modified_tree(with_manifest=False)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks build provenance manifest", str(ctx.exception))
 
     def test_rejects_non_x64_dll(self):
         self._create_complete_modified_tree(machine=0x14c)  # 32-bit x86
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("not x64 architecture", str(ctx.exception))
 
     def test_audit_rejects_double_resources_nesting(self):
@@ -442,44 +454,44 @@ class StageVlcContractTests(Fixture):
     def test_rejects_corrupt_bdj_jar(self):
         self._create_complete_modified_tree(corrupt_jar=True)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("corrupt or not a valid jar/zip archive", str(ctx.exception))
 
     def test_rejects_modified_tree_without_plugins_dir(self):
         self._create_complete_modified_tree(with_plugins_dir=False)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks a plugins directory", str(ctx.exception))
 
     def test_rejects_incomplete_plugin_suite(self):
         self._create_complete_modified_tree(plugin_count=1)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("contains only", str(ctx.exception))
         self.assertIn("expected complete VLC plugin suite", str(ctx.exception))
 
     def test_rejects_missing_plugin_category(self):
         self._create_complete_modified_tree(with_video_output=False)
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks required plugin category", str(ctx.exception))
 
     def test_rejects_stock_d3d11_plugin(self):
         self._create_complete_modified_tree(d3d11="stock")
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("stock VLC 3.0.23 Direct3D 11 plugin", str(ctx.exception))
 
     def test_rejects_d3d11_plugin_without_tone_mapping(self):
         self._create_complete_modified_tree(d3d11="nomarker")
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("lacks the HDR-to-SDR tone mapping code", str(ctx.exception))
 
     def test_rejects_unpinned_d3d11_plugin(self):
         self._create_complete_modified_tree(d3d11="other")
         with self.assertRaises(stage_runtime.StageError) as ctx:
-            stage_runtime.stage_vlc(self.cache, {}, self.rec, self.vlc_dir, None, require_modified=True)
+            stage_runtime.stage_vlc(self.cache, self.inputs, self.rec, self.vlc_dir, None, require_modified=True)
         self.assertIn("differs from the pinned build", str(ctx.exception))
 
     def test_stage_geo_validates_mmdb_format(self):
@@ -521,6 +533,46 @@ class StageVlcContractTests(Fixture):
         with self.assertRaises(stage_runtime.StageError) as ctx:
             stage_runtime.validate_mmdb_format(bad_file, "GeoLite2-Country")
         self.assertIn("too small to be a valid MMDB file", str(ctx.exception))
+
+
+class FrozenDaemonTests(Fixture):
+    def _staged(self):
+        rec = stage_runtime.Recorder(self.root)
+        dst = self.root / "resources" / "engine" / "transmission"
+        dst.mkdir(parents=True)
+        (dst / "transmission-daemon.exe").write_bytes(b"stock msi daemon")
+        rec.add(dst / "transmission-daemon.exe", "msi")
+        return rec
+
+    def test_rejects_wrong_hash(self):
+        rec = self._staged()
+        d = self.scratch / "d.exe"
+        d.write_bytes(b"x" + b"".join(stage_runtime.DAEMON_PATCH_MARKERS))
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_frozen_daemon(d, rec)
+        self.assertIn("does not match the pin", str(ctx.exception))
+
+    def test_replaces_stock_daemon_when_pin_and_markers_match(self):
+        rec = self._staged()
+        d = self.scratch / "d.exe"
+        d.write_bytes(b"patched " + b"".join(stage_runtime.DAEMON_PATCH_MARKERS))
+        old = stage_runtime.FROZEN_DAEMON_SHA256
+        stage_runtime.FROZEN_DAEMON_SHA256 = hashlib.sha256(d.read_bytes()).hexdigest()
+        self.addCleanup(setattr, stage_runtime, "FROZEN_DAEMON_SHA256", old)
+        stage_runtime.stage_frozen_daemon(d, rec)
+        staged = self.root / "resources" / "engine" / "transmission" / "transmission-daemon.exe"
+        self.assertEqual(staged.read_bytes(), d.read_bytes())
+
+    def test_rejects_missing_markers_even_with_matching_pin(self):
+        rec = self._staged()
+        d = self.scratch / "d.exe"
+        d.write_bytes(b"stock-looking daemon")
+        old = stage_runtime.FROZEN_DAEMON_SHA256
+        stage_runtime.FROZEN_DAEMON_SHA256 = hashlib.sha256(d.read_bytes()).hexdigest()
+        self.addCleanup(setattr, stage_runtime, "FROZEN_DAEMON_SHA256", old)
+        with self.assertRaises(stage_runtime.StageError) as ctx:
+            stage_runtime.stage_frozen_daemon(d, rec)
+        self.assertIn("patch markers", str(ctx.exception))
 
 
 class D3D11LockIdentityTests(unittest.TestCase):
