@@ -194,6 +194,9 @@ export default function PlayerOverlay() {
   const player = usePlayerStore();
   const isWindowsWebView =
     typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
+  // The native AirPlay sender exists on macOS only; Windows and Linux have none.
+  const isMacWebView =
+    typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('mac');
   const nativeMenuPoint = (x: number, y: number) => {
     const scale = isWindowsWebView ? window.devicePixelRatio || 1 : 1;
     return { x: x * scale, y: y * scale };
@@ -2670,14 +2673,18 @@ export default function PlayerOverlay() {
                         </div>
                       )}
                       <div className="flex items-center justify-between pt-1">
-                        <button
-                          type="button"
-                          disabled={discCastLoading !== null}
-                          onClick={() => void startAirplayDisc()}
-                          className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
-                        >
-                          {discCastLoading === 'airplay' ? 'Sending…' : 'Send to AirPlay receiver (experimental)'}
-                        </button>
+                        {isMacWebView ? (
+                          <button
+                            type="button"
+                            disabled={discCastLoading !== null}
+                            onClick={() => void startAirplayDisc()}
+                            className="px-3 py-1.5 text-xs rounded bg-white/15 text-white hover:bg-white/20 transition disabled:opacity-50"
+                          >
+                            {discCastLoading === 'airplay' ? 'Sending…' : 'Send to AirPlay receiver (experimental)'}
+                          </button>
+                        ) : (
+                          <span />
+                        )}
                         <button
                           type="button"
                           onClick={() => {
