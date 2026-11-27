@@ -14,6 +14,7 @@
 
 pub mod airplay_macos;
 pub mod device;
+pub mod disc_restream;
 pub mod engine;
 pub mod output;
 
@@ -140,6 +141,10 @@ pub struct PlayerState {
     /// logged, so the fallback diagnostic is logged once per title, not once
     /// per second.
     pub last_length_fallback_log: Mutex<Option<(u64, i32)>>,
+    /// Active disc restream (Part 6 "Play on Device" for authored discs):
+    /// a SECOND media player + media on the shared libvlc instance streaming
+    /// the main feature over HTTP. `None` when no restream runs.
+    pub disc_restream: Mutex<Option<disc_restream::DiscRestream>>,
     /// DVD title the viewer just asked for with the step-title control. The
     /// main-feature lock (`feature_lock`) takes it so that it follows the
     /// viewer instead of pulling playback back. Cleared with every session.

@@ -645,6 +645,30 @@ pub(crate) fn resolve_poll_timing(
     (time, length, source)
 }
 
+/// Pick the disc's main feature from a title snapshot: the longest title
+/// with a real duration, preferring non-menu titles on ties. Menu titles
+/// (INPUT_TITLE_MENU) are only eligible when nothing else has a duration.
+/// Returns the snapshot INDEX; the caller maps it onto the disc scheme's
+/// title numbering (dvdread titles are 1-based and measured to match the
+/// snapshot index of the feature on Glass Fleet D1: index 1 -> title #1).
+pub(crate) fn main_feature_title(titles: &[TitleSnapshot]) -> Option<usize> {
+    let mut best: Option<(i64, usize, bool)> = None; // (duration, index, is_menu)
+    for (i, t) in titles.iter().enumerate() {
+        if t.duration_ms <= 0 {
+            continue;
+        }
+        let is_menu = t.flags & INPUT_TITLE_MENU != 0;
+        let replace = match best {
+            None => true,
+            Some((d, _, menu)) => t.duration_ms > d || (t.duration_ms == d && menu && !is_menu),
+        };
+        if replace {
+            best = Some((t.duration_ms, i, is_menu));
+        }
+    }
+    best.map(|(_, i, _)| i)
+}
+
 /// Classify the player's current title. `Unknown` when libvlc has no list.
 ///
 /// # Safety
@@ -2015,6 +2039,34 @@ mod tests {
         let (_t, l, src) = resolve_poll_timing(-1, 0, 1, Some((&titles, 1)), Some(1.5));
         assert_eq!(src, PollTimingSource::TitleDurationFallback);
         assert_eq!(l, 7_213_066);
+    }
+
+    // --- main_feature_title: the disc-restream feature picker --------------
+
+    #[test]
+    fn main_feature_picks_the_longest_real_title() {
+        let titles = vec![
+            snap(Some("Menu"), INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE, 0),
+            snap(Some("Feature"), 0, 7_213_066),
+            snap(Some("Extra"), 0, 1_800_000),
+        ];
+        assert_eq!(main_feature_title(&titles), Some(1));
+    }
+
+    #[test]
+    fn main_feature_prefers_non_menu_on_equal_duration() {
+        let titles = vec![
+            snap(Some("Loop"), INPUT_TITLE_MENU, 500_000),
+            snap(Some("Feature"), 0, 500_000),
+        ];
+        assert_eq!(main_feature_title(&titles), Some(1));
+    }
+
+    #[test]
+    fn main_feature_none_without_a_real_title() {
+        assert_eq!(main_feature_title(&[]), None);
+        let menus = vec![snap(Some("Menu"), INPUT_TITLE_MENU, 0)];
+        assert_eq!(main_feature_title(&menus), None);
     }
 
     fn snap(name: Option<&str>, flags: u32, duration_ms: i64) -> TitleSnapshot {

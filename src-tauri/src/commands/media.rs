@@ -777,6 +777,9 @@ pub fn stop_session(app: &tauri::AppHandle, state: &PlayerState) -> u64 {
     // Reset poll diagnostic tracker for fresh session
     *poison(&state.last_logged_poll_state) = None;
     *poison(&state.last_length_fallback_log) = None;
+    // Release the disc restream (its media player lives on the shared
+    // instance being torn down).
+    player::disc_restream::stop(state);
     *poison(&state.feature_lock_request) = None;
     // Reset casting state if an active cast was attached
     {
@@ -4446,6 +4449,41 @@ pub fn player_device_preflight(
         rejection_reason: Some(reason_text.clone()),
         details: reason_text,
     })
+}
+
+/// Start streaming the current disc's main feature over HTTP (Part 6).
+/// Receivers cannot decode authored disc structures and the receiver-native
+/// AirPlay path cannot open them; this exposes VLC's own transcode chain
+/// (measured on the Glass Fleet D1 ISO) as a URL a receiver/player opens.
+#[tauri::command]
+pub fn player_disc_restream_start(
+    state: tauri::State<PlayerState>,
+    port: Option<u16>,
+) -> Result<player::disc_restream::DiscRestreamInfo, String> {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    let resolved = poison(&state.current_resolved)
+        .clone()
+        .ok_or("No media is loaded; start the disc first")?;
+    player::disc_restream::start(
+        &state,
+        &resolved,
+        port.unwrap_or(player::disc_restream::DEFAULT_PORT),
+    )
+}
+
+/// Stop the disc restream and release its media player. Safe to call when
+/// none is running.
+#[tauri::command]
+pub fn player_disc_restream_stop(state: tauri::State<PlayerState>) -> Result<(), String> {
+    let _mp_guard = state
+        .media_player_cell
+        .lock()
+        .map_err(|_| "player state poisoned")?;
+    player::disc_restream::stop(&state);
+    Ok(())
 }
 
 #[tauri::command]
